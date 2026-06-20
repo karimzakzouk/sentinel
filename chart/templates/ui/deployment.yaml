@@ -33,6 +33,8 @@ spec:
               {{- else }}
               value: {{ printf "http://%s-reasoning:8000" .Release.Name | quote }}
               {{- end }}
+            - name: AUTH_TRUST_HOST
+              value: "true"
             - name: SENTINEL_UI_AUTH_MODE
               value: {{ .Values.ui.auth.mode | quote }}
             - name: SENTINEL_UI_PASSWORD
