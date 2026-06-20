@@ -75,8 +75,8 @@ export interface Incident {
       error: string | null;
       k8s_response: Record<string, unknown> | null;
     } | null;
-    agent_trace: Array<Record<string, unknown>>;
-    rewind_events: Array<Record<string, unknown>>;
+    agent_trace: Array<{ agent: string; action?: string; [k: string]: unknown }>;
+    rewind_events: Array<{ raised_by: string; reason: string; [k: string]: unknown }>;
   };
   beta_alpha: number;
   beta_beta: number;
