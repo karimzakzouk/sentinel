@@ -1,9 +1,9 @@
 package sentinel
 
-# Sentinel governance policies.
+# Sentinel governance policies — all in one file to avoid rule conflicts.
 #
-# These policies are loaded by the OPA sidecar. The safety service POSTs the
-# fix proposal + context to /v1/data/sentinel/<decision> and gets back a verdict.
+# The safety service POSTs the fix proposal + context to
+# /v1/data/sentinel/decision and gets back a verdict.
 #
 # Verdicts:
 #   allow                    — go ahead autonomously
@@ -13,6 +13,8 @@ package sentinel
 default allow_fix := false
 default requires_human_approval := false
 default rollback_blocked := false
+default within_blast_radius := true
+default allow_rollback := true
 
 # --- Constants ---
 
@@ -22,7 +24,7 @@ confidence_threshold_autonomous := 0.92
 confidence_threshold_human_review := 0.70
 max_replica_change_pct := 20
 
-# --- Rules ---
+# --- Derived facts ---
 
 is_production_namespace if {
     input.target_namespace in production_namespaces
@@ -36,10 +38,20 @@ exceeds_replica_blast_radius if {
     input.replica_change_pct > max_replica_change_pct
 }
 
+within_blast_radius if {
+    input.replica_change_pct <= max_replica_change_pct
+}
+
 rollback_blocked if {
     input.fix_type == "rollback"
     input.has_schema_migration == true
 }
+
+allow_rollback if {
+    not input.has_schema_migration
+}
+
+# --- Main decision rules ---
 
 allow_fix if {
     not rollback_blocked
@@ -60,22 +72,27 @@ requires_human_approval if {
     not allow_fix
     not rollback_blocked
     input.confidence >= confidence_threshold_human_review
-    some_condition_that_warrants_review
-}
-
-some_condition_that_warrants_review if {
     is_high_risk_service
 }
 
-some_condition_that_warrants_review if {
+requires_human_approval if {
+    not allow_fix
+    not rollback_blocked
+    input.confidence >= confidence_threshold_human_review
     exceeds_replica_blast_radius
 }
 
-some_condition_that_warrants_review if {
+requires_human_approval if {
+    not allow_fix
+    not rollback_blocked
+    input.confidence >= confidence_threshold_human_review
     input.fix_type == "infrastructure"
 }
 
-some_condition_that_warrants_review if {
+requires_human_approval if {
+    not allow_fix
+    not rollback_blocked
+    input.confidence >= confidence_threshold_human_review
     input.fix_type == "rollback"
     is_production_namespace
 }

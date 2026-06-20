@@ -19,7 +19,7 @@
 mode: "core"
 
 image:
-  registry: "ghcr.io/karimzakzoukz"
+  registry: "docker.io/karimzakzouk"
   pullPolicy: IfNotPresent
   pullSecrets: []
 
@@ -168,7 +168,7 @@ ui:
   enabled: true
   image: sentinel/ui
   tag: "1.2.3"
-  replicas: 2
+  replicas: 1
   resources:
     requests: { cpu: 100m, memory: 128Mi }
     limits: { cpu: 500m, memory: 512Mi }
