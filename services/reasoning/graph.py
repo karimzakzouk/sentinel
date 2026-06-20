@@ -112,8 +112,19 @@ def build_graph(*, llm_router: Any, context_fetcher: Any,
     return g.compile()
 
 
+def _unwrap(state: dict[str, Any]) -> dict[str, Any]:
+    """Unwrap state if nodes returned {'state': {...}} instead of the fields directly."""
+    if "state" in state and isinstance(state["state"], dict) and "incident_id" not in state:
+        return state["state"]
+    return state
+
+
 def _after_investigator(state: dict[str, Any]) -> str:
-    s = AgentState.model_validate(state)
+    state = _unwrap(state)
+    try:
+        s = AgentState.model_validate(state)
+    except Exception:
+        return END
     if s.status == "failed":
         return END
     if not s.hypotheses:
@@ -122,7 +133,11 @@ def _after_investigator(state: dict[str, Any]) -> str:
 
 
 def _after_evidence(state: dict[str, Any]) -> str:
-    s = AgentState.model_validate(state)
+    state = _unwrap(state)
+    try:
+        s = AgentState.model_validate(state)
+    except Exception:
+        return END
     if s.status == "failed":
         return END
     # If Evidence Gatherer raised a rewind, go back to Investigator
@@ -136,7 +151,11 @@ def _after_evidence(state: dict[str, Any]) -> str:
 
 
 def _after_analyst(state: dict[str, Any]) -> str:
-    s = AgentState.model_validate(state)
+    state = _unwrap(state)
+    try:
+        s = AgentState.model_validate(state)
+    except Exception:
+        return END
     if s.status == "failed":
         return END
     if s.root_cause is None:

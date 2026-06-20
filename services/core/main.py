@@ -250,7 +250,8 @@ async def lifespan(app: FastAPI):
     tasks.append(asyncio.create_task(_safety_loop(), name="safety"))
     tasks.append(asyncio.create_task(_execution_loop(), name="execution"))
     tasks.append(asyncio.create_task(_feedback_loop(), name="feedback"))
-    log.info("All 6 background tasks started")
+    tasks.append(asyncio.create_task(_crd_watcher_loop(), name="crd_watcher"))
+    log.info("All 7 background tasks started (including CRD watcher)")
 
     log.info("Sentinel Core ready — single-process mode active")
     yield
@@ -275,6 +276,76 @@ app.add_middleware(
 
 
 # ─── Background loops ───────────────────────────────────────────────────────
+
+async def _crd_watcher_loop() -> None:
+    """Watch for SentinelIncident CRs and trigger investigations automatically.
+
+    This replaces the kopf operator in core mode. Every 10 seconds, it lists
+    SentinelIncident CRs and triggers investigations for any that haven't
+    been processed yet (no status.phase set).
+    """
+    from kubernetes import client
+    try:
+        coa = client.CustomObjectsApi()
+    except Exception:
+        log.warning("CRD watcher: K8s API not available")
+        return
+
+    seen: set[str] = set()
+    while True:
+        try:
+            # List SentinelIncident CRs across all namespaces
+            crs = await asyncio.to_thread(
+                coa.list_cluster_custom_object,
+                group="sentinel.io",
+                version="v1alpha1",
+                plural="sentinelincidents",
+            )
+            for item in crs.get("items", []):
+                name = item["metadata"]["name"]
+                ns = item["metadata"]["namespace"]
+                key = f"{ns}/{name}"
+                if key in seen:
+                    continue
+                # Check if already processed (has status.phase)
+                status = item.get("status", {})
+                if status.get("phase"):
+                    seen.add(key)
+                    continue
+                # New incident — trigger investigation
+                spec = item.get("spec", {})
+                service = spec.get("service", "unknown")
+                svc_ns = spec.get("namespace", ns)
+                reason = spec.get("reason", "triggered by CRD")
+                log.info("CRD watcher: new SentinelIncident %s (service=%s, reason=%s)", key, service, reason)
+                # Build a synthetic anomaly cluster and publish it
+                from sentinel_common import Anomaly, AnomalyCluster, Severity
+                anomaly = Anomaly(
+                    signal_id=uuid4(),
+                    service=service,
+                    namespace=svc_ns,
+                    detector="crd_watcher",
+                    score=0.8,
+                    dimensions={"manual": 1.0},
+                    explanation=f"SentinelIncident CR: {reason}",
+                )
+                cluster = AnomalyCluster(
+                    service=service,
+                    namespace=svc_ns,
+                    anomalies=[anomaly],
+                    summary=f"SentinelIncident: {reason}",
+                    severity=Severity.WARNING,
+                )
+                if bus is not None:
+                    await bus.publish_model(settings.kafka_topic_anomalies, cluster, key=service)
+                seen.add(key)
+            await asyncio.sleep(10)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            log.warning("CRD watcher error: %s", e)
+            await asyncio.sleep(15)
+
 
 async def _ingestion_loop() -> None:
     """Watch K8s events + (optionally) poll Prometheus/Loki, normalize, publish signals."""
@@ -719,6 +790,11 @@ async def update_runtime_settings(update: SettingsUpdate) -> dict[str, Any]:
                 settings.llm_fast_model = value
             elif field == "llm_frontier_model":
                 settings.llm_frontier_model = value
+        # Re-create the LLM router if any LLM settings changed
+        if any(f in changed for f in ("llm_provider", "llm_api_key", "llm_fast_model", "llm_frontier_model")):
+            global llm_router
+            llm_router = LLMRouter(settings)
+            log.info("LLM router re-created with provider=%s, model=%s", settings.llm_provider, settings.llm_frontier_model)
     # Persist to K8s ConfigMap + Secret (survives pod restarts)
     if settings_store is not None and settings_store.available:
         try:
