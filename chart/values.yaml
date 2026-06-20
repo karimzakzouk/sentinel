@@ -19,7 +19,7 @@
 mode: "core"
 
 image:
-  registry: "docker.io/karimzakzouk"
+  registry: "ghcr.io/karimzakzoukz"
   pullPolicy: IfNotPresent
   pullSecrets: []
 

@@ -61,6 +61,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to Docker Hub
+        if: ${{ secrets.DOCKERHUB_TOKEN != '' }}
         uses: docker/login-action@v3
         with:
           registry: ${{ env.DH_REGISTRY }}
@@ -97,15 +98,14 @@ jobs:
             type=raw,value=${{ steps.version.outputs.version }}
             type=raw,value=latest
 
-      - name: Build and push ${{ matrix.service }} (both registries)
+      - name: Build and push ${{ matrix.service }}
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ${{ matrix.dockerfile }}
           push: true
-          tags: |
-            ${{ steps.meta-dh.outputs.tags }}
-            ${{ steps.meta-ghcr.outputs.tags }}
+          # Push to both registries if Docker Hub token is set, otherwise GHCR only
+          tags: ${{ secrets.DOCKERHUB_TOKEN != '' && format('{0}\n{1}', steps.meta-dh.outputs.tags, steps.meta-ghcr.outputs.tags) || steps.meta-ghcr.outputs.tags }}
           labels: ${{ steps.meta-dh.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

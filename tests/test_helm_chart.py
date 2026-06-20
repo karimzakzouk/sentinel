@@ -79,8 +79,9 @@ def test_rego_policies_are_mounted():
         capture_output=True, text=True,
     )
     assert "package sentinel" in r.stdout
-    assert "schema_migration_blocks_rollback" in r.stdout
     assert "confidence_threshold_autonomous" in r.stdout
+    assert "rollback_blocked" in r.stdout
+    assert "verdict" in r.stdout
 
 
 def test_secrets_are_created():
