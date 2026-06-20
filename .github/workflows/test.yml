@@ -21,13 +21,18 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
+          # Install the common package (real editable install)
           pip install -e services/common
-          pip install -e services/ingestion -e services/detection -e services/reasoning \
-                      -e services/safety -e services/execution -e services/feedback \
-                      -e services/operator
-          pip install pytest pytest-asyncio
+          # Install all runtime + test deps directly (avoids the flat-layout
+          # setuptools issue when installing services/* as packages)
+          pip install pytest pytest-asyncio langgraph langchain-openai openai \
+                      pygithub kubernetes kopf weaviate-client scikit-learn \
+                      httpx tenacity "sqlalchemy[asyncio]" asyncpg fastapi \
+                      uvicorn aiokafka prometheus-client
 
       - name: Run pytest
+        env:
+          PYTHONPATH: services/common:services/ingestion:services/detection:services/reasoning:services/safety:services/execution:services/feedback:services/operator
         run: pytest tests/ --tb=short -v
 
   helm-lint:
