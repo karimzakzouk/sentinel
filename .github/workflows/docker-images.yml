@@ -108,16 +108,15 @@ jobs:
           context: .
           file: ${{ matrix.dockerfile }}
           push: true
-          tags: ${{ env.DH_REGISTRY }}/${{ env.DH_OWNER }}/sentinel/${{ matrix.service }}:${{ steps.version.outputs.version }},${{ env.DH_REGISTRY }}/${{ env.DH_OWNER }}/sentinel/${{ matrix.service }}:latest
+          tags: ${{ env.DH_REGISTRY }}/${{ env.DH_OWNER }}/sentinel-${{ matrix.service }}:${{ steps.version.outputs.version }},${{ env.DH_REGISTRY }}/${{ env.DH_OWNER }}/sentinel-${{ matrix.service }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
           platforms: linux/amd64
-          # Uses DOCKERHUB_TOKEN secret for auth — only runs when DOCKERHUB_ENABLED var is 'true'
 
       - name: Summary
         run: |
           echo "### Built and pushed: ${{ matrix.service }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Docker Hub: \`docker.io/${{ env.DH_OWNER }}/sentinel/${{ matrix.service }}:${{ steps.version.outputs.version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "Docker Hub: \`docker.io/${{ env.DH_OWNER }}/sentinel-${{ matrix.service }}:${{ steps.version.outputs.version }}\`" >> $GITHUB_STEP_SUMMARY
           echo "GHCR:       \`ghcr.io/${{ env.GHCR_OWNER }}/sentinel/${{ matrix.service }}:${{ steps.version.outputs.version }}\`" >> $GITHUB_STEP_SUMMARY
           echo "Also tagged as: \`latest\` on both registries" >> $GITHUB_STEP_SUMMARY
