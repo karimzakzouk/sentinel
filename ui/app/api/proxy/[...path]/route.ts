@@ -12,9 +12,9 @@ const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://sentinel-api:80
 
 export async function GET(
   req: NextRequest,
-  { params }: { params: Promise<{ path: string[] }> },
+  ctx: { params: Promise<{ path: string[] }> },
 ) {
-  const { path } = await params;
+  const { path } = await ctx.params;
   const url = `${API_BASE}/${path.join("/")}?${req.nextUrl.searchParams.toString()}`;
   try {
     const r = await fetch(url, { cache: "no-store" });
@@ -33,9 +33,9 @@ export async function GET(
 
 export async function POST(
   req: NextRequest,
-  { params }: { params: Promise<{ path: string[] }> },
+  ctx: { params: Promise<{ path: string[] }> },
 ) {
-  const { path } = await params;
+  const { path } = await ctx.params;
   const url = `${API_BASE}/${path.join("/")}`;
   const body = await req.text();
   try {
