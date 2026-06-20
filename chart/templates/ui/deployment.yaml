@@ -35,6 +35,10 @@ spec:
               {{- end }}
             - name: AUTH_TRUST_HOST
               value: "true"
+            - name: HOSTNAME
+              value: "0.0.0.0"
+            - name: PORT
+              value: "3000"
             - name: SENTINEL_UI_AUTH_MODE
               value: {{ .Values.ui.auth.mode | quote }}
             - name: SENTINEL_UI_PASSWORD
