@@ -46,6 +46,7 @@ def test_helm_template_distributed_mode():
     r = subprocess.run(
         [HELM_BIN, "template", str(CHART_DIR),
          "--set", "mode=distributed",
+         "--set", "kafka.enabled=true",
          "--set", "sentinel.githubToken=test",
          "--set", "sentinel.llm.apiKey=test"],
         capture_output=True, text=True,
