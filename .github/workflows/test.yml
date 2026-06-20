@@ -30,6 +30,14 @@ jobs:
                       httpx tenacity "sqlalchemy[asyncio]" asyncpg fastapi \
                       uvicorn aiokafka prometheus-client
 
+      - name: Build chart dependencies (for helm template tests)
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.3
+
+      - name: Build chart dependencies
+        run: helm dependency build chart/
+
       - name: Run pytest
         env:
           PYTHONPATH: services/common:services/ingestion:services/detection:services/reasoning:services/safety:services/execution:services/feedback:services/operator
