@@ -96,8 +96,8 @@ export function useIncident(id: string) {
 }
 
 export function useMetrics() {
-  return useSWR<{ services: Record<string, unknown>; layers: Record<string, unknown> }>(
-    "/api/proxy/metrics",
+  return useSWR<{ active: number; resolved_24h: number; failed: number; total: number }>(
+    "/api/proxy/metrics-summary",
     fetcher,
     { refreshInterval: 5000 },
   );

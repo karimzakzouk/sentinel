@@ -662,7 +662,7 @@ class SettingsUpdate(BaseModel):
     panic_connections_threshold: int | None = None
 
 
-@app.get("/api/settings")
+@app.get("/settings")
 async def get_runtime_settings() -> dict[str, Any]:
     """Return current runtime settings (with secrets masked)."""
     out = dict(RUNTIME_SETTINGS)
@@ -676,7 +676,7 @@ async def get_runtime_settings() -> dict[str, Any]:
     return out
 
 
-@app.post("/api/settings")
+@app.post("/settings")
 async def update_runtime_settings(update: SettingsUpdate) -> dict[str, str]:
     """Update runtime settings. Changes apply immediately (no restart needed
     for most settings; LLM provider changes take effect on the next LLM call).
