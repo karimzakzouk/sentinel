@@ -204,10 +204,8 @@ postgres:
       size: 10Gi
 
 kafka:
-  enabled: true
-  # Strimzi Kafka operator must be installed. The chart declares it as a
-  # Helm dependency; if you already have it, set this to false and provide
-  # your own Kafka bootstrap servers below.
+  # Disabled in core mode (default). Set to true ONLY if mode=distributed.
+  enabled: false
   bootstrapServers: "sentinel-kafka-bootstrap:9092"
   topicPrefix: "sentinel"
   replicas: 3

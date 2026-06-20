@@ -26,7 +26,9 @@ dependencies:
     version: "15.5.0"
     repository: "https://charts.bitnami.com/bitnami"
     condition: postgres.enabled
+    optional: true
   - name: weaviate
     version: "17.8.2"
     repository: "https://weaviate.github.io/weaviate-helm"
     condition: weaviate.enabled
+    optional: true
