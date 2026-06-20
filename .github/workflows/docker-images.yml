@@ -97,8 +97,7 @@ jobs:
           push: true
           tags: ${{ steps.meta-ghcr.outputs.tags }}
           labels: ${{ steps.meta-ghcr.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          no-cache: true
           platforms: linux/amd64
 
       - name: Build and push ${{ matrix.service }} (Docker Hub)
