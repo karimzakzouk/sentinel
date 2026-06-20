@@ -45,9 +45,18 @@ export interface Incident {
     } | null;
     fix_proposal: {
       fix_type: string;
+      target_service: string;
+      target_namespace: string;
       description: string;
-      pr_url: string | null;
-      pr_number: number | null;
+      repo: string | null;
+      base_branch: string | null;
+      branch_name: string | null;
+      files_to_change: Array<{ path: string; new_content: string }>;
+      pr_title: string | null;
+      pr_body: string | null;
+      k8s_action: Record<string, unknown> | null;
+      tf_workspace: string | null;
+      requires_sandbox: boolean;
       proposed_confidence: number;
     } | null;
     governance_decision: {
@@ -59,8 +68,12 @@ export interface Incident {
     execution_result: {
       success: boolean;
       pr_url: string | null;
+      pr_number: number | null;
+      pr_branch: string | null;
       sandbox_verified: boolean;
+      sandbox_summary: string | null;
       error: string | null;
+      k8s_response: Record<string, unknown> | null;
     } | null;
     agent_trace: Array<Record<string, unknown>>;
     rewind_events: Array<Record<string, unknown>>;
