@@ -1,8 +1,14 @@
 name: Release
 
-# Triggered when you push a tag like `v1.0.2`. Builds the Helm chart,
-# packages it as a .tgz, attaches it to a GitHub Release, and updates
-# the gh-pages branch so `helm repo add sentinel https://...` picks it up.
+# ONE workflow that does EVERYTHING:
+# 1. Run tests
+# 2. Build all Docker images → push to Docker Hub + GHCR
+# 3. Package Helm chart → attach to GitHub Release
+# 4. Publish Helm repo to GitHub Pages
+#
+# Triggered when you push a tag like `v1.5.1`.
+# After this, you just: helm repo update && helm install
+
 on:
   push:
     tags:
@@ -10,13 +16,103 @@ on:
 
 permissions:
   contents: write
+  packages: write
   pages: write
   id-token: write
-  packages: write
+
+env:
+  DH_REGISTRY: docker.io
+  DH_OWNER: karimzakzouk
+  GHCR_REGISTRY: ghcr.io
+  GHCR_OWNER: karimzakzoukz
 
 jobs:
-  release:
-    name: Build & publish release
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.3
+      - name: Install deps
+        run: |
+          pip install -e services/common
+          pip install pytest pytest-asyncio langgraph langchain-openai openai \
+            pygithub kubernetes kopf weaviate-client scikit-learn httpx tenacity \
+            "sqlalchemy[asyncio]" asyncpg fastapi uvicorn aiokafka prometheus-client
+      - name: Build chart deps
+        run: |
+          rm -f chart/Chart.lock
+          helm dependency update chart/
+      - name: Helm lint
+        run: helm lint chart/
+      - name: Pytest
+        env:
+          PYTHONPATH: services/common:services/ingestion:services/detection:services/reasoning:services/safety:services/execution:services/feedback:services/core
+        run: pytest tests/ --tb=short -v
+
+  build-images:
+    name: Build ${{ matrix.service }}
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { service: core,       dockerfile: services/core/Dockerfile }
+          - { service: ui,         dockerfile: ui/Dockerfile }
+          - { service: ingestion,  dockerfile: services/ingestion/Dockerfile }
+          - { service: detection,  dockerfile: services/detection/Dockerfile }
+          - { service: reasoning,  dockerfile: services/reasoning/Dockerfile }
+          - { service: safety,     dockerfile: services/safety/Dockerfile }
+          - { service: execution,  dockerfile: services/execution/Dockerfile }
+          - { service: feedback,   dockerfile: services/feedback/Dockerfile }
+          - { service: operator,   dockerfile: services/operator/Dockerfile }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.DH_REGISTRY }}
+          username: ${{ env.DH_OWNER }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.GHCR_REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push (both registries)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: |
+            ${{ env.DH_REGISTRY }}/${{ env.DH_OWNER }}/sentinel-${{ matrix.service }}:${{ steps.version.outputs.version }}
+            ${{ env.DH_REGISTRY }}/${{ env.DH_OWNER }}/sentinel-${{ matrix.service }}:latest
+            ${{ env.GHCR_REGISTRY }}/${{ env.GHCR_OWNER }}/sentinel/${{ matrix.service }}:${{ steps.version.outputs.version }}
+            ${{ env.GHCR_REGISTRY }}/${{ env.GHCR_OWNER }}/sentinel/${{ matrix.service }}:latest
+          no-cache: true
+          platforms: linux/amd64
+
+  publish-chart:
+    name: Publish Helm chart
+    needs: build-images
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -28,110 +124,53 @@ jobs:
         with:
           version: v3.16.3
 
-      - name: Build chart dependencies
-        run: helm dependency build chart/
-
-      - name: Lint chart
-        run: helm lint chart/
-
-      - name: Read chart version
+      - name: Get version from tag
         id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+
+      - name: Build chart deps
         run: |
-          CHART_VERSION=$(yq -r '.version' chart/Chart.yaml)
-          APP_VERSION=$(yq -r '.appVersion' chart/Chart.yaml)
-          echo "chart_version=$CHART_VERSION" >> $GITHUB_OUTPUT
-          echo "app_version=$APP_VERSION" >> $GITHUB_OUTPUT
-          echo "Chart version: $CHART_VERSION, App version: $APP_VERSION"
+          rm -f chart/Chart.lock
+          helm dependency update chart/
 
       - name: Package chart
         run: |
-          mkdir -p packages
-          helm package chart/ -d packages/ --version ${{ steps.version.outputs.chart_version }}
-          ls -la packages/
-
-      - name: Generate release notes
-        id: notes
-        run: |
-          cat > /tmp/notes.md <<EOF
-          ## Sentinel ${{ github.ref_name }}
-
-          ### Install
-
-          \`\`\`bash
-          # 1. Copy the example values file
-          cp examples/my-values.yaml my-values.yaml
-
-          # 2. Edit it — fill in githubToken, llm.apiKey, pick your llm.provider
-          $EDITOR my-values.yaml
-
-          # 3. Install
-          helm repo add sentinel https://karimzakzoukz.github.io/sentinel/
-          helm install sentinel sentinel/sentinel \\
-            -f my-values.yaml \\
-            --namespace sentinel --create-namespace
-
-          # 4. Watch it come up
-          kubectl -n sentinel get pods -w
-
-          # 5. Open the UI
-          kubectl -n sentinel port-forward svc/sentinel-ui 8080:80
-          \`\`\`
-
-          See \`examples/my-values.yaml\` in the repo for all configuration options
-          (LLM provider, observability URLs, ingress, storage, governance thresholds).
-          EOF
+          helm package chart/ -d /tmp/ --version ${{ steps.version.outputs.version }}
+          ls -la /tmp/sentinel-*.tgz
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           name: Sentinel ${{ github.ref_name }}
-          body_path: /tmp/notes.md
-          files: packages/sentinel-${{ steps.version.outputs.chart_version }}.tgz
+          body: |
+            ## Install
+
+            ```bash
+            helm repo add sentinel https://karimzakzoukz.github.io/sentinel/
+            helm repo update
+            helm install sentinel sentinel/sentinel --version ${{ steps.version.outputs.version }} \
+              --namespace sentinel --create-namespace \
+              --set sentinel.githubToken=YOUR_GITHUB_TOKEN \
+              --set sentinel.llm.apiKey=YOUR_LLM_API_KEY \
+              --set sentinel.llm.provider=gemini
+            ```
+
+            Then: `kubectl -n sentinel port-forward svc/sentinel-ui 8080:80`
+          files: /tmp/sentinel-${{ steps.version.outputs.version }}.tgz
           generate_release_notes: true
 
-  publish-helm-repo:
-    name: Publish to GitHub Pages (Helm repo)
-    needs: release
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Set up Helm
-        uses: azure/setup-helm@v4
-        with:
-          version: v3.16.3
-
-      - name: Build chart dependencies
-        run: helm dependency build chart/
-
-      - name: Package chart
+      - name: Publish to GitHub Pages (Helm repo)
         run: |
-          mkdir -p gh-pages
-          helm package chart/ -d gh-pages/ --version $(yq -r '.version' chart/Chart.yaml)
-          # Copy the landing page so visiting the root URL doesn't 404
-          cp chart/gh-pages-index.html gh-pages/index.html
-
-      - name: Download previously published charts
-        run: |
-          # Try to fetch existing index.yaml from gh-pages branch
+          git config user.email "actions@github.com"
+          git config user.name "GitHub Actions"
           git fetch origin gh-pages:gh-pages 2>/dev/null || true
-          if git show gh-pages:index.yaml > /dev/null 2>&1; then
-            git show gh-pages:index.yaml > gh-pages/index.yaml
-            git show gh-pages:sentinel-*.tgz > gh-pages/ 2>/dev/null || true
-          fi
-
-      - name: Rebuild Helm repo index
-        run: |
-          cd gh-pages
+          git checkout gh-pages 2>/dev/null || git checkout --orphan gh-pages
+          git checkout main -- chart/gh-pages-index.html
+          cp chart/gh-pages-index.html index.html
+          cp /tmp/sentinel-${{ steps.version.outputs.version }}.tgz .
           helm repo index . --url https://karimzakzoukz.github.io/sentinel/
-          ls -la
-
-      - name: Deploy to GitHub Pages
-        uses: peaceiris/actions-gh-pages@v4
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: gh-pages
-          keep_files: true
+          touch .nojekyll
+          git add -A
+          git commit -m "Publish chart v${{ steps.version.outputs.version }}" || true
+          git push origin gh-pages --force
