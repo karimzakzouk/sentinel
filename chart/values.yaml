@@ -1,7 +1,16 @@
-# Sentinel — Helm Chart Values
+# Sentinel - Helm Chart Values
 #
 # Default values are tuned for a small production cluster (3+ nodes).
 # Override with --set or -f values-prod.yaml.
+#
+# Quick start:
+#   helm repo add sentinel https://karimzakzoukz.github.io/sentinel/
+#   helm pull sentinel/sentinel --version 1.1.1 --untar
+#   cd sentinel
+#   cp values-example.yaml my-values.yaml
+#   $EDITOR my-values.yaml      # fill in githubToken, llm.apiKey, pick provider
+#   helm install sentinel . -f my-values.yaml --namespace sentinel --create-namespace
+#
 
 # Global image registry — defaults to GitHub Container Registry (GHCR)
 # where Sentinel's images are auto-published by CI/CD. Override only if
