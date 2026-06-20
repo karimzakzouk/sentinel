@@ -29,6 +29,33 @@ spec:
           env:
             - name: NEXT_PUBLIC_API_BASE_URL
               value: {{ printf "http://%s-reasoning:8000" .Release.Name | quote }}
+            - name: SENTINEL_UI_AUTH_MODE
+              value: {{ .Values.ui.auth.mode | quote }}
+            - name: SENTINEL_UI_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "sentinel.fullname" . }}-ui-secrets
+                  key: password
+                  optional: true
+            - name: NEXTAUTH_URL
+              value: {{ printf "http://%s-ui:80" .Release.Name | quote }}
+            - name: NEXTAUTH_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "sentinel.fullname" . }}-ui-secrets
+                  key: nextauthSecret
+                  optional: true
+            {{- if eq .Values.ui.auth.mode "github" }}
+            - name: GITHUB_CLIENT_ID
+              value: {{ .Values.ui.auth.githubClientId | quote }}
+            - name: GITHUB_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "sentinel.fullname" . }}-ui-secrets
+                  key: githubClientSecret
+            - name: SENTINEL_UI_AUTH_ORG
+              value: {{ .Values.ui.auth.githubOrg | quote }}
+            {{- end }}
           ports:
             - containerPort: 3000
               name: http

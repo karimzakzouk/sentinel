@@ -1,10 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Bell, Search } from "lucide-react";
+import { Bell, Search, LogOut } from "lucide-react";
+import { useSession, signOut } from "next-auth/react";
 
 export function TopBar() {
   const [time, setTime] = useState<string>("");
+  const { data: session } = useSession();
   useEffect(() => {
     const tick = () =>
       setTime(new Date().toLocaleTimeString("en-US", { hour12: false }));
@@ -37,6 +39,20 @@ export function TopBar() {
           <Bell size={14} />
           <span className="absolute top-1 right-1 w-2 h-2 bg-[var(--color-danger)] rounded-full" />
         </button>
+        {session?.user && (
+          <div className="flex items-center gap-2 text-xs">
+            <span className="text-[var(--color-text-dim)]">
+              {session.user.name || session.user.email}
+            </span>
+            <button
+              onClick={() => signOut({ callbackUrl: "/login" })}
+              className="p-1.5 hover:bg-[var(--color-panel-2)] rounded"
+              title="Sign out"
+            >
+              <LogOut size={14} />
+            </button>
+          </div>
+        )}
       </div>
     </header>
   );

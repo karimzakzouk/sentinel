@@ -111,6 +111,8 @@ jobs:
         run: |
           mkdir -p gh-pages
           helm package chart/ -d gh-pages/ --version $(yq -r '.version' chart/Chart.yaml)
+          # Copy the landing page so visiting the root URL doesn't 404
+          cp chart/gh-pages-index.html gh-pages/index.html
 
       - name: Download previously published charts
         run: |

@@ -151,6 +151,15 @@ ui:
   resources:
     requests: { cpu: 100m, memory: 128Mi }
     limits: { cpu: 500m, memory: 512Mi }
+  # Auth: disabled (default, dev only) | credentials (shared password) | github (GitHub OAuth + org check)
+  # WARNING: chart refuses to install with mode=disabled if ingress.enabled=true
+  auth:
+    mode: "disabled"
+    password: ""           # for mode=credentials
+    githubClientId: ""     # for mode=github
+    githubClientSecret: "" # for mode=github
+    githubOrg: ""          # only members of this org can sign in
+    nextauthSecret: ""     # required for credentials/github modes — `openssl rand -base64 32`
 
 # OPA sidecar — runs the governance policies
 opa:
