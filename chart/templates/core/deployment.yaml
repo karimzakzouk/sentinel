@@ -72,7 +72,7 @@ spec:
         - name: opa
           image: {{ printf "%s:%s" .Values.opa.image .Values.opa.tag | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          args: ["run", "--server", "--addr=0.0.0.0:8181", "/policies"]
+          args: ["run", "--server", "--addr=0.0.0.0:8181", "--ignore=.*", "/policies"]
           ports:
             - containerPort: 8181
               name: opa
