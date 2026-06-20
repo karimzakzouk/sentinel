@@ -42,15 +42,21 @@ app.kubernetes.io/component: {{ $service }}
 
 {{/*
 Image reference: registry/image:tag
+If tag is empty or "latest", uses the chart's appVersion automatically.
+This ensures chart v1.4.2 pulls image v1.4.2 — no more version mismatches.
 */}}
 {{- define "sentinel.image" -}}
 {{- $root := index . 0 -}}
 {{- $svc := index . 1 -}}
 {{- $cfg := index $root.Values $svc -}}
+{{- $tag := $cfg.tag -}}
+{{- if or (eq $tag "") (eq $tag "latest") -}}
+{{- $tag = $root.Chart.AppVersion -}}
+{{- end -}}
 {{- if $root.Values.image.registry -}}
-{{- printf "%s/%s:%s" $root.Values.image.registry $cfg.image $cfg.tag -}}
+{{- printf "%s/%s:%s" $root.Values.image.registry $cfg.image $tag -}}
 {{- else -}}
-{{- printf "%s:%s" $cfg.image $cfg.tag -}}
+{{- printf "%s:%s" $cfg.image $tag -}}
 {{- end -}}
 {{- end -}}
 
