@@ -33,6 +33,12 @@ spec:
             {{- include "sentinel.commonEnv" . | nindent 12 }}
             - name: PORT
               value: "8000"
+            - name: SENTINEL_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: SENTINEL_RELEASE_NAME
+              value: {{ .Release.Name | quote }}
             - name: PROMETHEUS_URL
               value: {{ .Values.ingestion.env.prometheusUrl | default "" | quote }}
             - name: LOKI_URL

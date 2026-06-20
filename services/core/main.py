@@ -68,6 +68,7 @@ from sandbox import SandboxRunner
 from weaviate_client import WeaviateStore
 from beta_tracker import BetaTracker
 from postmortem import PostmortemGenerator
+from settings_store import SettingsStore
 
 logging.basicConfig(
     level=logging.INFO,
@@ -106,6 +107,9 @@ sandbox: SandboxRunner | None = None
 weaviate: WeaviateStore | None = None
 beta_tracker: BetaTracker | None = None
 postmortem_gen: PostmortemGenerator | None = None
+
+# Settings persistence
+settings_store: SettingsStore | None = None
 
 # Background tasks
 tasks: list[asyncio.Task] = []
@@ -160,6 +164,32 @@ async def lifespan(app: FastAPI):
 
     log.info("Starting Sentinel Core (single-process mode)")
     _load_settings_from_env()
+
+    # Load persisted settings from K8s ConfigMap + Secret (overrides env vars)
+    global settings_store
+    namespace = os.getenv("SENTINEL_NAMESPACE", "sentinel")
+    release_name = os.getenv("SENTINEL_RELEASE_NAME", "sentinel")
+    settings_store = SettingsStore(namespace=namespace, name_prefix=release_name)
+    if settings_store.available:
+        persisted = await settings_store.load()
+        if persisted:
+            log.info("Applying %d persisted settings from K8s", len(persisted))
+            RUNTIME_SETTINGS.update(persisted)
+            # Apply to the Settings object
+            if "production_namespaces" in persisted:
+                settings.production_namespaces = persisted["production_namespaces"]
+            if "write_namespaces" in persisted:
+                settings.write_namespaces = persisted["write_namespaces"]
+            if "github_token" in persisted:
+                settings.github_token = persisted["github_token"]
+            if "llm_api_key" in persisted:
+                settings.llm_api_key = persisted["llm_api_key"]
+            if "llm_provider" in persisted:
+                settings.llm_provider = persisted["llm_provider"]
+            if "llm_fast_model" in persisted:
+                settings.llm_fast_model = persisted["llm_fast_model"]
+            if "llm_frontier_model" in persisted:
+                settings.llm_frontier_model = persisted["llm_frontier_model"]
 
     # 1. In-memory message bus (replaces Kafka)
     bus = KafkaBus(brokers="", schema_registry=None)
@@ -689,9 +719,15 @@ async def update_runtime_settings(update: SettingsUpdate) -> dict[str, str]:
                 settings.llm_fast_model = value
             elif field == "llm_frontier_model":
                 settings.llm_frontier_model = value
-    # Persist to env (so it survives pod restart — for production use a ConfigMap)
-    # This is in-memory only in core mode; for persistence use the chart's ConfigMap
-    log.info("Settings updated: %s", changed)
+    # Persist to K8s ConfigMap + Secret (survives pod restarts)
+    if settings_store is not None and settings_store.available:
+        try:
+            await settings_store.save(RUNTIME_SETTINGS)
+            log.info("Settings persisted to K8s: %s", changed)
+        except Exception as e:
+            log.warning("Settings persist failed: %s", e)
+    else:
+        log.info("Settings updated (in-memory only): %s", changed)
     return {"status": "updated", "changed": changed}
 
 
