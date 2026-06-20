@@ -8,7 +8,7 @@
  */
 import type { NextRequest } from "next/server";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://sentinel-api:8000";
+const API_BASE = process.env.API_BASE_URL || process.env.NEXT_PUBLIC_API_BASE_URL || "http://sentinel-core:8000";
 
 export async function GET(
   req: NextRequest,

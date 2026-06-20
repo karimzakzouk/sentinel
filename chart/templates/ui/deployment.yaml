@@ -33,6 +33,12 @@ spec:
               {{- else }}
               value: {{ printf "http://%s-reasoning:8000" .Release.Name | quote }}
               {{- end }}
+            - name: API_BASE_URL
+              {{- if eq .Values.mode "core" }}
+              value: {{ printf "http://%s-core:8000" .Release.Name | quote }}
+              {{- else }}
+              value: {{ printf "http://%s-reasoning:8000" .Release.Name | quote }}
+              {{- end }}
             - name: AUTH_TRUST_HOST
               value: "true"
             - name: HOSTNAME
