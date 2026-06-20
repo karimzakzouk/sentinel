@@ -5,16 +5,19 @@
 #
 # Quick start:
 #   helm repo add sentinel https://karimzakzoukz.github.io/sentinel/
-#   helm pull sentinel/sentinel --version 1.1.1 --untar
+#   helm pull sentinel/sentinel --version 1.2.0 --untar
 #   cd sentinel
 #   cp values-example.yaml my-values.yaml
 #   $EDITOR my-values.yaml      # fill in githubToken, llm.apiKey, pick provider
 #   helm install sentinel . -f my-values.yaml --namespace sentinel --create-namespace
 #
+# --- DEPLOYMENT MODE ---
+# core         = ONE pod running all 6 layers + Postgres + Weaviate (default)
+#                Plug-and-play. No Kafka. ~3 pods. ~30s startup.
+# distributed  = 7 service pods + Kafka + Zookeeper + OPA + Postgres + Weaviate
+#                For horizontal scaling. Requires Strimzi operator.
+mode: "core"
 
-# Global image registry — defaults to GitHub Container Registry (GHCR)
-# where Sentinel's images are auto-published by CI/CD. Override only if
-# you've built and pushed to your own registry.
 image:
   registry: "ghcr.io/karimzakzoukz"
   pullPolicy: IfNotPresent
@@ -85,6 +88,15 @@ sentinel:
   tfSlackWebhook: ""
 
 # Per-service configuration
+core:
+  enabled: true
+  image: sentinel/core
+  tag: "1.2.0"
+  replicas: 1
+  resources:
+    requests: { cpu: 200m, memory: 512Mi }
+    limits: { cpu: 2000m, memory: 2Gi }
+
 ingestion:
   enabled: true
   image: sentinel/ingestion

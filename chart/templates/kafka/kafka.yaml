@@ -1,3 +1,4 @@
+{{- if eq .Values.mode "distributed" -}}
 {{- if .Values.kafka.enabled -}}
 # Strimzi Kafka cluster
 # The Strimzi operator must be installed in the cluster before this. It's
@@ -152,4 +153,6 @@ spec:
     app.kubernetes.io/name: schema-registry
     app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
+{{- end -}}
+
 {{- end -}}

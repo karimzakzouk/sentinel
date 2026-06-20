@@ -31,11 +31,30 @@ def test_helm_template_renders():
     assert r.returncode == 0, f"helm template failed:\n{r.stderr}"
     # Should produce a substantial amount of YAML
     assert len(r.stdout) > 1000
-    # Should include all expected kinds
+    # Core mode (default) should include these
     for kind in ["Deployment", "Service", "ConfigMap", "Secret",
                  "ClusterRole", "ClusterRoleBinding",
-                 "CustomResourceDefinition", "Kafka", "KafkaTopic"]:
+                 "CustomResourceDefinition"]:
         assert f"kind: {kind}" in r.stdout, f"Missing kind: {kind}"
+    # Core mode should NOT include Kafka
+    assert "kind: Kafka" not in r.stdout, "Kafka should not be in core mode"
+    assert "kind: KafkaTopic" not in r.stdout, "KafkaTopic should not be in core mode"
+
+
+def test_helm_template_distributed_mode():
+    """In distributed mode, Kafka + all service pods should be present."""
+    r = subprocess.run(
+        [HELM_BIN, "template", str(CHART_DIR),
+         "--set", "mode=distributed",
+         "--set", "sentinel.githubToken=test",
+         "--set", "sentinel.llm.apiKey=test"],
+        capture_output=True, text=True,
+    )
+    assert r.returncode == 0, f"helm template failed:\n{r.stderr}"
+    assert "kind: Kafka" in r.stdout
+    assert "kind: KafkaTopic" in r.stdout
+    # Should have all 7 service deployments + UI + OPA
+    assert r.stdout.count("kind: Deployment") >= 9
 
 
 def test_crd_is_present():

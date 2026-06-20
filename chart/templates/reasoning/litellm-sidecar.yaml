@@ -1,3 +1,4 @@
+{{- if eq .Values.mode "distributed" -}}
 {{- if eq .Values.sentinel.llm.provider "litellm" -}}
 # Optional LiteLLM proxy deployment.
 #
@@ -99,4 +100,6 @@ spec:
   selector:
     app.kubernetes.io/name: litellm
     app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end -}}
+
 {{- end -}}

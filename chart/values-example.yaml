@@ -1,18 +1,25 @@
 # ============================================================================
-# Sentinel — my-values.yaml
+# Sentinel - my-values.yaml
 # ============================================================================
 # Copy this file, edit the values, install with:
 #
-#   cp examples/my-values.yaml my-values.yaml
-#   $EDITOR my-values.yaml     # fill in your keys / URLs
 #   helm repo add sentinel https://karimzakzoukz.github.io/sentinel/
-#   helm install sentinel sentinel/sentinel \
-#     -f my-values.yaml \
-#     --namespace sentinel --create-namespace
+#   helm pull sentinel/sentinel --version 1.2.0 --untar
+#   cd sentinel
+#   cp values-example.yaml my-values.yaml
+#   $EDITOR my-values.yaml     # fill in your keys / URLs
+#   helm install sentinel . -f my-values.yaml --namespace sentinel --create-namespace
 #
 # Docker images are auto-published to ghcr.io/karimzakzoukz/sentinel/* by
-# CI/CD — no need to build or push anything yourself.
+# CI/CD - no need to build or push anything yourself.
+#
+# DEPLOYMENT MODE:
+#   mode: core         (default) ONE pod running all 6 layers. No Kafka.
+#                       Plug-and-play. ~3 pods, ~30s startup.
+#   mode: distributed  7 service pods + Kafka + Zookeeper + Strimzi operator.
+#                       For horizontal scaling. Read docs first.
 # ============================================================================
+mode: "core"
 
 sentinel:
   # ────────────────────────────────────────────────────────────────────────

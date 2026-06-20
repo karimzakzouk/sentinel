@@ -9,6 +9,7 @@ const NAV = [
   { href: "/incidents", label: "Incidents", icon: Shield },
   { href: "/policies", label: "Policies", icon: FileText },
   { href: "/runbooks", label: "Runbooks", icon: BookOpen },
+  { href: "/settings", label: "Settings", icon: Settings },
 ];
 
 export function Sidebar() {

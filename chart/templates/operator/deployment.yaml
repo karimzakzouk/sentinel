@@ -1,3 +1,4 @@
+{{- if eq .Values.mode "distributed" -}}
 {{- if .Values.operator.enabled -}}
 apiVersion: apps/v1
 kind: Deployment
@@ -56,4 +57,6 @@ spec:
           affinity:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+{{- end -}}
+
 {{- end -}}

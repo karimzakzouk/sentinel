@@ -28,7 +28,11 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
             - name: NEXT_PUBLIC_API_BASE_URL
+              {{- if eq .Values.mode "core" }}
+              value: {{ printf "http://%s-core:8000" .Release.Name | quote }}
+              {{- else }}
               value: {{ printf "http://%s-reasoning:8000" .Release.Name | quote }}
+              {{- end }}
             - name: SENTINEL_UI_AUTH_MODE
               value: {{ .Values.ui.auth.mode | quote }}
             - name: SENTINEL_UI_PASSWORD
