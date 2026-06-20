@@ -12,8 +12,7 @@ from typing import Any, Optional
 from uuid import UUID
 
 import sqlalchemy as sa
-from sqlalchemy.engine import AsyncEngine
-from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 logger = logging.getLogger(__name__)
 
