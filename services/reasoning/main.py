@@ -142,8 +142,14 @@ async def _process_cluster(cluster: AnomalyCluster) -> None:
     await incident_store.upsert(incident.model_dump(mode="json"))
 
     try:
-        # Run the graph. LangGraph returns the final state.
-        final_state = await graph.ainvoke(state.model_dump(mode="json"))
+        # Run the graph with a hard timeout. If the LLM hangs or the rewind
+        # loop spins forever, we kill the investigation and mark it failed.
+        # Default: 5 minutes. Configurable via SENTINEL_INVESTIGATION_TIMEOUT.
+        timeout = int(os.getenv("SENTINEL_INVESTIGATION_TIMEOUT", "300"))
+        final_state = await asyncio.wait_for(
+            graph.ainvoke(state.model_dump(mode="json")),
+            timeout=timeout,
+        )
         # Validate the final state with Pydantic
         state = AgentState.model_validate(final_state)
         incident.state = state
@@ -161,7 +167,22 @@ async def _process_cluster(cluster: AnomalyCluster) -> None:
     except ValidationError as ve:
         log.error("State validation failed: %s", ve)
         incident.status = IncidentStatus.FAILED
+        incident.state.error = f"validation_error: {ve}"
         await incident_store.upsert(incident.model_dump(mode="json"))
+    except asyncio.TimeoutError:
+        log.error("Investigation timed out after %ss", timeout)
+        incident.status = IncidentStatus.FAILED
+        incident.state.status = IncidentStatus.FAILED
+        incident.state.error = f"investigation_timeout: exceeded {timeout}s"
+        incident.state.agent_trace.append({
+            "agent": "orchestrator",
+            "action": "timeout",
+            "timeout_seconds": timeout,
+        })
+        incident.touch()
+        await incident_store.upsert(incident.model_dump(mode="json"))
+        await event_store.append(incident_id, "reasoning", "investigation_timeout",
+                                  payload={"timeout_seconds": timeout})
     except Exception as e:  # noqa: BLE001
         log.exception("Reasoning graph failed: %s", e)
         incident.status = IncidentStatus.FAILED

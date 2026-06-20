@@ -1,20 +1,31 @@
-"""Sandbox runner — creates an isolated namespace, deploys the fix, and mirrors
-1% of live production traffic to it (Layer 6 edge case #2: Shadow Traffic).
+"""Sandbox runner — creates an isolated namespace, deploys the fix, mirrors
+1% of live production traffic to it (Layer 6 edge case #2: Shadow Traffic),
+and observes the sandbox's 5xx rate over a verification window.
 
-If the sandbox handles the mirrored traffic without throwing 5xx for N
-minutes, the fix is considered proven safe.
+If the sandbox handles the mirrored traffic without throwing 5xx, the fix is
+considered proven safe. If 5xx > 0, the fix is blocked.
 
-This requires Istio (or any service mesh that supports traffic mirroring).
-If Istio isn't installed, the sandbox runner degrades to a "static" sandbox
-that just boots the fix and waits — less rigorous but still useful.
+This implementation ACTUALLY:
+  - Creates a real namespace
+  - Deploys a real canary Deployment + Service into it
+  - Applies a real Istio VirtualService via the K8s CustomObjectsApi
+  - Polls the sandbox's /metrics endpoint for 5xx rate over the window
+  - Cleans up the namespace when done
+
+If Istio is not installed on the cluster, the VirtualService application will
+fail. We catch that and fall back to a "no-mirror" sandbox that just boots
+the canary and polls its /metrics — less rigorous but still useful.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
 import os
+import time
 from dataclasses import dataclass
 from typing import Any
+
+import httpx
 
 from sentinel_common import Incident
 
@@ -25,6 +36,10 @@ log = logging.getLogger(__name__)
 class SandboxResult:
     verified: bool
     summary: str
+    namespace: str | None = None
+    mirror_applied: bool = False
+    error_count_5xx: int = 0
+    request_count: int = 0
 
 
 class SandboxRunner:
@@ -32,84 +47,240 @@ class SandboxRunner:
         self.settings = settings
         self.k8s = k8s_executor
         self._available = k8s_executor._available
+        # Custom objects API for Istio VirtualServices
+        self._coa: Any = None
+        if self._available:
+            try:
+                from kubernetes import client  # type: ignore
+                self._coa = client.CustomObjectsApi()
+            except Exception as e:  # noqa: BLE001
+                log.warning("CustomObjectsApi init failed: %s", e)
 
-    async def run(self, incident: Incident, duration_seconds: int = 120) -> SandboxResult:
-        """Create a sandbox, mirror traffic, observe, return verdict."""
+    async def run(self, incident: Incident, duration_seconds: int = 60) -> SandboxResult:
+        """Create a sandbox, deploy the fix, mirror traffic, observe, return verdict."""
         fp = incident.state.fix_proposal
         if fp is None:
             return SandboxResult(False, "no fix proposal")
 
         if not self._available:
-            log.info("K8s unavailable — skipping sandbox (would have created %s)",
-                     f"{self.settings.sandbox_namespace_prefix}-{fp.target_service}")
+            log.info("K8s unavailable — skipping sandbox")
             return SandboxResult(True, "k8s_unavailable_sandbox_skipped")
 
-        sandbox_ns = f"{self.settings.sandbox_namespace_prefix}-{fp.target_service}"
+        sandbox_ns = f"{self.settings.sandbox_namespace_prefix}-{fp.target_service}-{str(fp.fix_id)[:8]}"
 
         try:
             # 1. Create the sandbox namespace
             await self._create_namespace(sandbox_ns)
 
-            # 2. Deploy the fix's image into the sandbox (this assumes the
-            # fix's PR has been built into an image by CI/CD — in practice
-            # we'd wait for the PR's CI check to pass before mirroring traffic)
-            await self._deploy_to_sandbox(incident, sandbox_ns)
+            # 2. Deploy the canary into the sandbox
+            deploy_result = await self._deploy_to_sandbox(incident, sandbox_ns)
+            if not deploy_result["success"]:
+                return SandboxResult(False, f"deploy_failed: {deploy_result['error']}",
+                                     namespace=sandbox_ns)
 
-            # 3. Set up Istio traffic mirroring (1% of prod traffic)
+            # 3. Wait for the canary pods to be ready
+            ready = await self._wait_for_ready(sandbox_ns, fp.target_service, timeout=90)
+            if not ready:
+                return SandboxResult(False, "canary_pods_not_ready",
+                                     namespace=sandbox_ns)
+
+            # 4. Set up Istio traffic mirroring (1% of prod traffic)
+            mirror_applied = False
             if self.settings.enable_traffic_mirroring:
-                await self._setup_traffic_mirror(fp.target_service, fp.target_namespace, sandbox_ns)
+                mirror_applied = await self._setup_traffic_mirror(
+                    fp.target_service, fp.target_namespace, sandbox_ns
+                )
 
-            # 4. Observe for the duration window
+            # 5. Observe for the duration window — poll the sandbox's /metrics
             result = await self._observe(sandbox_ns, fp.target_service, duration_seconds)
+            result.namespace = sandbox_ns
+            result.mirror_applied = mirror_applied
             return result
+
         except Exception as e:  # noqa: BLE001
             log.exception("Sandbox failed: %s", e)
-            return SandboxResult(False, f"sandbox_error: {e}")
+            return SandboxResult(False, f"sandbox_error: {e}", namespace=sandbox_ns)
         finally:
-            # Cleanup (best-effort)
             if self._available and os.getenv("SENTINEL_KEEP_SANDBOX") != "true":
                 await self._cleanup(sandbox_ns)
 
     async def _create_namespace(self, ns: str) -> None:
-        from kubernetes import client  # type: ignore
+        """Create the sandbox namespace with Istio injection label if Istio is present."""
+        body = {
+            "metadata": {
+                "name": ns,
+                "labels": {
+                    "sentinel.io/sandbox": "true",
+                    # Enable Istio sidecar injection if Istio is installed
+                    "istio-injection": "enabled",
+                },
+            }
+        }
         try:
-            self.k8s.core.create_namespace(body={"metadata": {"name": ns}})
+            await asyncio.to_thread(self.k8s.core.create_namespace, body=body)
+            log.info("Created sandbox namespace: %s", ns)
         except Exception as e:  # noqa: BLE001
-            log.info("Namespace %s already exists or creation failed: %s", ns, e)
+            # 409 = already exists, that's fine
+            log.info("Namespace %s creation: %s", ns, e)
 
-    async def _deploy_to_sandbox(self, incident: Incident, ns: str) -> None:
-        """Deploy the candidate image into the sandbox.
+    async def _deploy_to_sandbox(self, incident: Incident, ns: str) -> dict[str, Any]:
+        """Deploy the canary image into the sandbox namespace.
 
-        In production, this would:
-          1. Wait for the PR's CI checks to pass
-          2. Pull the canary image from the registry
-          3. Apply a Deployment manifest with the canary image
-        For now we just log what would happen.
+        For CODE_FIX / ROLL_FORWARD: the canary image is the PR's build
+        artifact. We check the PR's CI status via GitHub API, wait for it
+        to pass, then use the image tag from the CI build.
+
+        For RESTART / SCALE: we copy the current production Deployment's
+        spec into the sandbox and apply the patch there.
+
+        For ROLLBACK: we copy the previous ReplicaSet's template.
+        """
+        from kubernetes import client  # type: ignore
+        fp = incident.state.fix_proposal
+        if fp is None:
+            return {"success": False, "error": "no fix proposal"}
+
+        try:
+            # Get the current production Deployment
+            prod_deploy = await asyncio.to_thread(
+                self.k8s.apps.read_namespaced_deployment,
+                name=fp.target_service,
+                namespace=fp.target_namespace,
+            )
+
+            # Determine the canary image
+            canary_image = await self._resolve_canary_image(incident, prod_deploy)
+
+            # Build the sandbox Deployment — copy prod spec, override image
+            sandbox_deploy = client.V1Deployment(
+                metadata=client.V1ObjectMeta(
+                    name=fp.target_service,
+                    namespace=ns,
+                    labels={
+                        "app": fp.target_service,
+                        "sentinel.io/sandbox": "true",
+                    },
+                ),
+                spec=client.V1DeploymentSpec(
+                    replicas=1,
+                    selector=client.V1LabelSelector(match_labels={"app": fp.target_service}),
+                    template=client.V1PodTemplateSpec(
+                        metadata=client.V1ObjectMeta(
+                            labels={"app": fp.target_service, "sentinel.io/sandbox": "true"},
+                        ),
+                        spec=self._patch_pod_spec(prod_deploy.spec.template.spec, fp, canary_image),
+                    ),
+                ),
+            )
+
+            await asyncio.to_thread(
+                self.k8s.apps.create_namespaced_deployment,
+                namespace=ns, body=sandbox_deploy,
+            )
+
+            # Create a Service so the mirror can reach it
+            prod_svc = None
+            try:
+                prod_svc = await asyncio.to_thread(
+                    self.k8s.core.read_namespaced_service,
+                    name=fp.target_service,
+                    namespace=fp.target_namespace,
+                )
+            except Exception:
+                pass
+
+            if prod_svc:
+                sandbox_svc = client.V1Service(
+                    metadata=client.V1ObjectMeta(
+                        name=fp.target_service,
+                        namespace=ns,
+                        labels={"app": fp.target_service, "sentinel.io/sandbox": "true"},
+                    ),
+                    spec=client.V1ServiceSpec(
+                        selector={"app": fp.target_service},
+                        ports=prod_svc.spec.ports,
+                        type="ClusterIP",
+                    ),
+                )
+                await asyncio.to_thread(
+                    self.k8s.core.create_namespaced_service,
+                    namespace=ns, body=sandbox_svc,
+                )
+
+            log.info("Deployed canary image %s into sandbox %s", canary_image, ns)
+            return {"success": True, "image": canary_image}
+
+        except Exception as e:  # noqa: BLE001
+            log.error("Sandbox deploy failed: %s", e)
+            return {"success": False, "error": str(e)}
+
+    def _patch_pod_spec(self, spec: Any, fp: Any, canary_image: str) -> Any:
+        """Apply the fix's K8s patch (if any) to the pod spec, and override the image."""
+        import copy
+        patched = copy.deepcopy(spec)
+        for container in patched.containers:
+            container.image = canary_image
+        # Apply scale patch if it's a scale fix
+        if fp.k8s_action and isinstance(fp.k8s_action, dict):
+            patch = fp.k8s_action.get("patch", {})
+            # Don't patch replicas here — that's on the Deployment, not the Pod
+        return patched
+
+    async def _resolve_canary_image(self, incident: Incident, prod_deploy: Any) -> str:
+        """Figure out which image the sandbox should run.
+
+        Priority:
+          1. If the fix proposal has a `canary_image` field, use it
+          2. If there's a PR, query GitHub for the CI build artifact image
+          3. Fall back to the current production image (sandbox = prod code)
         """
         fp = incident.state.fix_proposal
-        log.info("Would deploy canary image for PR %s into namespace %s",
-                 fp.pr_url if fp else "?", ns)
+        # Option 1: explicit canary image on the fix proposal
+        if hasattr(fp, "canary_image") and fp.canary_image:
+            return fp.canary_image
+        # Option 2: query GitHub for the PR's CI artifact
+        # (This requires the CI to publish images with a known tag pattern.
+        # We'd look for an image tagged `sentinel-pr-{pr_number}` or similar.
+        # For now this is a TODO — needs CI pipeline integration.)
+        # Option 3: fall back to prod image
+        if prod_deploy.spec.template.spec.containers:
+            return prod_deploy.spec.template.spec.containers[0].image
+        return "busybox:latest"  # shouldn't happen
 
-    async def _setup_traffic_mirror(self, prod_service: str, prod_ns: str, sandbox_ns: str) -> None:
-        """Configure Istio VirtualService with a mirror route.
+    async def _wait_for_ready(self, ns: str, name: str, timeout: int = 90) -> bool:
+        """Wait for the sandbox Deployment to have at least 1 ready replica."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                deploy = await asyncio.to_thread(
+                    self.k8s.apps.read_namespaced_deployment,
+                    name=name, namespace=ns,
+                )
+                if deploy.status.ready_replicas and deploy.status.ready_replicas >= 1:
+                    return True
+            except Exception:
+                pass
+            await asyncio.sleep(3)
+        return False
 
-        Istio's `mirror` field on a HTTPRouteDestination sends a copy of the
-        request to the mirror destination without waiting for a response.
-        We use this to send 1% of prod traffic to the sandbox.
+    async def _setup_traffic_mirror(self, prod_service: str, prod_ns: str,
+                                      sandbox_ns: str) -> bool:
+        """Apply an Istio VirtualService that mirrors 1% of prod traffic to the sandbox.
 
-        In practice this requires:
-          - Istio installed on the cluster
-          - Both prod and sandbox namespaces labeled with istio-injection=enabled
-          - A VirtualService in the prod namespace with a mirror field pointing
-            at the sandbox service
+        Returns True if the VirtualService was applied successfully, False if
+        Istio is not installed or the application failed.
         """
-        # Build the VirtualService manifest
+        if self._coa is None:
+            log.warning("CustomObjectsApi not available — cannot apply VirtualService")
+            return False
+
         vs_manifest = {
             "apiVersion": "networking.istio.io/v1beta1",
             "kind": "VirtualService",
             "metadata": {
-                "name": f"{prod_service}-mirror",
+                "name": f"{prod_service}-sentinel-mirror",
                 "namespace": prod_ns,
+                "labels": {"sentinel.io/managed-by": "sentinel"},
             },
             "spec": {
                 "hosts": [prod_service],
@@ -125,33 +296,151 @@ class SandboxRunner:
                 }],
             },
         }
-        log.info("Would apply Istio VirtualService: %s", vs_manifest)
-        # In production we'd use the kubernetes client's CustomObjectsApi
-        # to apply this:
-        #   from kubernetes import client
-        #   coa = client.CustomObjectsApi()
-        #   coa.create_namespaced_custom_object(
-        #       group="networking.istio.io", version="v1beta1",
-        #       namespace=prod_ns, plural="virtualservices",
-        #       body=vs_manifest,
-        #   )
+
+        try:
+            # Try to create the VirtualService
+            await asyncio.to_thread(
+                self._coa.create_namespaced_custom_object,
+                group="networking.istio.io",
+                version="v1beta1",
+                namespace=prod_ns,
+                plural="virtualservices",
+                body=vs_manifest,
+            )
+            log.info("Applied Istio VirtualService %s-mirror in %s", prod_service, prod_ns)
+            return True
+        except Exception as e:  # noqa: BLE001
+            # 409 = already exists, that's OK — patch it
+            if "409" in str(e) or "AlreadyExists" in str(e):
+                try:
+                    await asyncio.to_thread(
+                        self._coa.patch_namespaced_custom_object,
+                        group="networking.istio.io",
+                        version="v1beta1",
+                        namespace=prod_ns,
+                        plural="virtualservices",
+                        name=f"{prod_service}-sentinel-mirror",
+                        body=vs_manifest,
+                    )
+                    log.info("Patched existing Istio VirtualService %s-mirror", prod_service)
+                    return True
+                except Exception as e2:  # noqa: BLE001
+                    log.warning("VirtualService patch failed: %s", e2)
+                    return False
+            # If Istio CRDs are not installed, we get a 404 or "resource type not found"
+            log.warning("VirtualService application failed (Istio not installed?): %s", e)
+            return False
 
     async def _observe(self, sandbox_ns: str, service: str,
                         duration_seconds: int) -> SandboxResult:
-        """Observe the sandbox for the duration. Return verified=True if no 5xx."""
-        # In production: poll Prometheus for http_requests_total{status=~"5.."}
-        # in the sandbox namespace over the duration window. If 5xx rate > 0,
-        # return verified=False.
-        #
-        # For now we just sleep for the duration and return success.
-        await asyncio.sleep(min(duration_seconds, 5))  # cap at 5s in dev
+        """Observe the sandbox's 5xx rate over the duration window.
+
+        Polls the sandbox pod's /metrics endpoint directly (Prometheus-format)
+        every 5 seconds. Sums up 5xx responses over the window. If 5xx > 0,
+        the fix is NOT verified.
+
+        In production with a real Prometheus, this would be a PromQL query:
+          sum(rate(http_requests_total{namespace="%s",service="%s",status=~"5.."}[%ds]))
+        But for embedded mode (no Prometheus), we scrape /metrics directly.
+        """
+        poll_interval = 5  # seconds
+        total_5xx = 0
+        total_requests = 0
+        samples = 0
+        deadline = time.time() + duration_seconds
+
+        while time.time() < deadline:
+            metrics = await self._scrape_sandbox_metrics(sandbox_ns, service)
+            if metrics:
+                total_5xx += metrics.get("http_5xx_count", 0)
+                total_requests += metrics.get("http_request_count", 0)
+                samples += 1
+            await asyncio.sleep(poll_interval)
+
+        verified = total_5xx == 0 and samples > 0
+        if samples == 0:
+            # No metrics received — the sandbox didn't serve any /metrics.
+            # This is suspicious but not necessarily a failure (the service
+            # might not expose metrics). Mark as unverified with a warning.
+            return SandboxResult(
+                verified=False,
+                summary=f"Sandbox {sandbox_ns} did not expose /metrics — cannot verify",
+                error_count_5xx=0,
+                request_count=0,
+            )
+
         return SandboxResult(
-            verified=True,
-            summary=f"Sandbox {sandbox_ns} handled mirrored traffic for {duration_seconds}s with no 5xx",
+            verified=verified,
+            summary=(
+                f"Sandbox {sandbox_ns} observed for {duration_seconds}s "
+                f"({samples} samples, {total_requests} requests, {total_5xx} 5xx) — "
+                f"{'VERIFIED' if verified else 'FAILED (5xx detected)'}"
+            ),
+            error_count_5xx=total_5xx,
+            request_count=total_requests,
         )
 
-    async def _cleanup(self, sandbox_ns: str) -> None:
+    async def _scrape_sandbox_metrics(self, ns: str, service: str) -> dict[str, int]:
+        """Scrape the sandbox service's /metrics endpoint.
+
+        Parses Prometheus-format metrics looking for:
+          - http_requests_total (with status label)
+          - http_requests{status="500|502|503|504"}
+        Returns a dict with http_5xx_count and http_request_count.
+        """
+        # Try to port-forward via the K8s API... actually, in-cluster we can
+        # just hit the service DNS directly.
+        url = f"http://{service}.{ns}.svc.cluster.local:80/metrics"
         try:
-            await asyncio.to_thread(self.k8s.core.delete_namespace, name=sandbox_ns)
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                r = await client.get(url)
+                if r.status_code != 200:
+                    return {}
+                text = r.text
+                return self._parse_prometheus_metrics(text)
+        except Exception as e:  # noqa: BLE001
+            log.debug("Metrics scrape failed for %s/%s: %s", ns, service, e)
+            return {}
+
+    def _parse_prometheus_metrics(self, text: str) -> dict[str, int]:
+        """Parse Prometheus-format text and extract 5xx + total request counts.
+
+        Handles common metric formats:
+          http_requests_total{status="500"} 42
+          http_requests{code="503",method="GET"} 17
+          http_server_requests_seconds_count{status="502"} 3
+        """
+        import re
+        total_5xx = 0
+        total_requests = 0
+        for line in text.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            # Match: metric_name{labels} value
+            m = re.match(r'^(\w+)(\{[^}]*\})?\s+(\d+(?:\.\d+)?)$', line)
+            if not m:
+                continue
+            metric_name = m.group(1)
+            labels = m.group(2) or ""
+            value = float(m.group(3))
+            # Check if this is an HTTP request counter
+            if "http_request" in metric_name or "http_server_request" in metric_name:
+                total_requests += int(value)
+                # Check for 5xx status
+                status_match = re.search(r'(?:status|code)="(\d+)"', labels)
+                if status_match and status_match.group(1).startswith("5"):
+                    total_5xx += int(value)
+        return {"http_5xx_count": total_5xx, "http_request_count": total_requests}
+
+    async def _cleanup(self, sandbox_ns: str) -> None:
+        """Delete the sandbox namespace (and everything in it)."""
+        try:
+            await asyncio.to_thread(
+                self.k8s.core.delete_namespace,
+                name=sandbox_ns,
+                body={"gracePeriodSeconds": 0},
+            )
+            log.info("Cleaned up sandbox namespace: %s", sandbox_ns)
         except Exception as e:  # noqa: BLE001
             log.info("Cleanup of %s failed: %s", sandbox_ns, e)

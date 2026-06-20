@@ -10,48 +10,115 @@ metadata:
     {{- toYaml . | nindent 4 }}
   {{- end }}
 ---
+# READ-ONLY ClusterRole — Sentinel needs to watch pods/events/deployments
+# across the whole cluster to detect anomalies. This is safe.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ include "sentinel.fullname" . }}
+  name: {{ include "sentinel.fullname" . }}-reader
   labels:
     {{- include "sentinel.labels" . | nindent 4 }}
 rules:
-  # Operator needs to read pods, deployments, events across all namespaces
+  # Read-only access to core resources everywhere
   - apiGroups: [""]
     resources: ["pods", "pods/log", "services", "configmaps", "events", "namespaces", "secrets"]
     verbs: ["get", "list", "watch"]
+  # Read-only access to apps resources everywhere
   - apiGroups: ["apps"]
     resources: ["deployments", "replicasets", "statefulsets"]
-    verbs: ["get", "list", "watch", "patch", "update"]
-  # Execution layer needs to restart/scale deployments
-  - apiGroups: ["apps"]
-    resources: ["deployments/scale"]
-    verbs: ["get", "patch", "update"]
-  # Operator manages the SentinelIncident CRD
-  - apiGroups: ["sentinel.io"]
-    resources: ["sentinelincidents"]
-    verbs: ["*"]
-  # Sandbox runner needs to create namespaces + Istio VirtualServices
-  - apiGroups: [""]
-    resources: ["namespaces"]
-    verbs: ["create", "delete", "get", "list"]
+    verbs: ["get", "list", "watch"]
+  # Read-only access to networking.istio.io (for checking existing VirtualServices)
   - apiGroups: ["networking.istio.io"]
     resources: ["virtualservices", "destinationrules"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+    verbs: ["get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ include "sentinel.fullname" . }}
+  name: {{ include "sentinel.fullname" . }}-reader
   labels:
     {{- include "sentinel.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: {{ include "sentinel.fullname" . }}
+  name: {{ include "sentinel.fullname" . }}-reader
 subjects:
   - kind: ServiceAccount
     name: {{ .Values.serviceAccount.name | default (include "sentinel.fullname" .) }}
     namespace: {{ .Release.Namespace }}
-{{- end -}}
+---
+# CRD ClusterRole — Sentinel manages its own SentinelIncident CRD cluster-wide
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "sentinel.fullname" . }}-crd-manager
+  labels:
+    {{- include "sentinel.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["sentinel.io"]
+    resources: ["sentinelincidents"]
+    verbs: ["*"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "sentinel.fullname" . }}-crd-manager
+  labels:
+    {{- include "sentinel.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "sentinel.fullname" . }}-crd-manager
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.serviceAccount.name | default (include "sentinel.fullname" .) }}
+    namespace: {{ .Release.Namespace }}
+---
+# WRITE Role — only granted in namespaces listed in sentinel.rbac.writeNamespaces.
+# Default: empty (Sentinel is read-only — can detect and investigate but NOT fix).
+# To enable autonomous fixes, add namespaces here:
+#   sentinel:
+#     rbac:
+#       writeNamespaces:
+#         - prod
+#         - staging
+{{- range $ns := .Values.sentinel.rbac.writeNamespaces }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "sentinel.fullname" $ }}-writer
+  namespace: {{ $ns }}
+  labels:
+    {{- include "sentinel.labels" $ | nindent 4 }}
+rules:
+  # Write access to deployments (for restart/scale/rollback)
+  - apiGroups: ["apps"]
+    resources: ["deployments", "deployments/scale", "replicasets"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+  # Create sandbox namespaces + deploy canaries
+  - apiGroups: [""]
+    resources: ["namespaces", "pods", "services", "configmaps"]
+    verbs: ["create", "delete", "get", "list", "watch", "patch", "update"]
+  # Apply Istio VirtualServices for traffic mirroring
+  - apiGroups: ["networking.istio.io"]
+    resources: ["virtualservices", "destinationrules"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "sentinel.fullname" $ }}-writer
+  namespace: {{ $ns }}
+  labels:
+    {{- include "sentinel.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "sentinel.fullname" $ }}-writer
+subjects:
+  - kind: ServiceAccount
+    name: {{ $.Values.serviceAccount.name | default (include "sentinel.fullname" $) }}
+    namespace: {{ $.Release.Namespace }}
+{{- end }}
+{{- end }}

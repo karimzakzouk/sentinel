@@ -111,6 +111,23 @@ async def _execute_incident(incident: Incident) -> None:
     if fp is None:
         return
 
+    # Security check: verify Sentinel is allowed to write in this namespace
+    if not settings.can_write_to(fp.target_namespace):
+        log.warning("Execution denied — namespace %s not in write allowlist", fp.target_namespace)
+        incident.state.status = IncidentStatus.ESCALATED
+        incident.status = IncidentStatus.ESCALATED
+        incident.state.agent_trace.append({
+            "agent": "execution",
+            "action": "denied",
+            "reason": f"namespace_not_in_write_allowlist: {fp.target_namespace}",
+        })
+        incident.touch()
+        await incident_store.upsert(incident.model_dump(mode="json"))
+        await event_store.append(incident.incident_id, "execution", "execution_denied",
+                                  payload={"reason": "namespace_not_in_write_allowlist",
+                                           "namespace": fp.target_namespace})
+        return
+
     incident.state.status = IncidentStatus.EXECUTING
     incident.status = IncidentStatus.EXECUTING
     incident.touch()

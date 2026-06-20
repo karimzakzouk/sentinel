@@ -16,8 +16,29 @@ sentinel:
   # The GitHub token Sentinel uses to clone repos, open PRs, and pull CD
   # history. REQUIRED for code_fix / roll_forward actions.
   githubToken: ""
+
+  # --- Secret backend ---
+  # plain    — plain K8s Secret (dev only, NOT for production)
+  # sealed   — Bitnami sealed-secrets (user provides encrypted SealedSecret YAML)
+  # external — external-secrets.io (user provides ExternalSecret YAML for Vault/AWS SM/GCP SM)
+  secrets:
+    backend: "plain"
+    # For backend=sealed: paste your SealedSecret manifest here (encrypted with kubeseal)
+    sealedYaml: ""
+    # For backend=external: paste your ExternalSecret manifest here
+    externalSecretYaml: ""
+
   # Comma-separated list of namespaces Sentinel treats as production.
   productionNamespaces: "prod,production,payments"
+
+  # RBAC — namespaces where Sentinel is allowed to WRITE (apply fixes).
+  # Empty = read-only mode (Sentinel detects + investigates but never fixes).
+  # Add namespaces here to enable autonomous remediation.
+  rbac:
+    writeNamespaces: []
+    # writeNamespaces:
+    #   - prod
+    #   - staging
   # Confidence thresholds for autonomous execution
   confidenceThresholdAutonomous: 0.92
   confidenceThresholdHumanReview: 0.70
@@ -200,3 +221,30 @@ ingress:
 nodeSelector: {}
 tolerations: []
 affinity: {}
+
+# NetworkPolicy — deny-by-default, only allow Sentinel namespace + needed egress
+networkPolicy:
+  enabled: false  # set to true in production
+
+# Postgres HA — production should use 2+ replicas + backups
+postgres:
+  enabled: true
+  auth:
+    username: sentinel
+    password: sentinel  # CHANGE IN PRODUCTION
+    database: sentinel
+  primary:
+    persistence:
+      size: 10Gi
+  # HA settings (uncomment for production)
+  # architecture: replication
+  # readReplicas:
+  #   replicaCount: 1
+  # Backup CronJob — runs pg_dump every 6 hours, uploads to S3
+  backup:
+    enabled: false  # set to true in production
+    schedule: "0 */6 * * *"
+    s3Bucket: ""
+    s3Prefix: "sentinel-backups"
+    awsAccessKeyId: ""
+    awsSecretAccessKey: ""

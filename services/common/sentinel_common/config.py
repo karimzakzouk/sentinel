@@ -75,6 +75,9 @@ class Settings(BaseSettings):
 
     # --- Safety ---
     production_namespaces: str = Field(default="prod,production,payments")
+    # Namespaces where Sentinel is allowed to apply fixes. Empty = read-only.
+    # Set via SENTINEL_WRITE_NAMESPACES env var (comma-separated).
+    write_namespaces: str = Field(default="")
     high_risk_replica_pct: int = Field(default=20)
     confidence_threshold_autonomous: float = Field(default=0.92)
     confidence_threshold_human_review: float = Field(default=0.70)
@@ -94,6 +97,18 @@ class Settings(BaseSettings):
     @property
     def production_namespace_list(self) -> list[str]:
         return [n.strip() for n in self.production_namespaces.split(",") if n.strip()]
+
+    @property
+    def write_namespace_list(self) -> list[str]:
+        """Namespaces where Sentinel is allowed to apply fixes. Empty = read-only."""
+        return [n.strip() for n in self.write_namespaces.split(",") if n.strip()]
+
+    def can_write_to(self, namespace: str) -> bool:
+        """Check if Sentinel is allowed to apply fixes in this namespace."""
+        allowed = self.write_namespace_list
+        if not allowed:
+            return False
+        return namespace in allowed
 
     # --- Provider -> base URL mapping ---
     # Maps known provider names to their OpenAI-compatible endpoints.

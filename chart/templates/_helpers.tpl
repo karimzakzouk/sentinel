@@ -86,6 +86,8 @@ Standard env vars shared by all Python services.
       key: githubToken
 - name: SENTINEL_PRODUCTION_NAMESPACES
   value: {{ .Values.sentinel.productionNamespaces | quote }}
+- name: SENTINEL_WRITE_NAMESPACES
+  value: {{ join "," .Values.sentinel.rbac.writeNamespaces | quote }}
 - name: SENTINEL_CONFIDENCE_THRESHOLD_AUTONOMOUS
   value: {{ .Values.sentinel.confidenceThresholdAutonomous | quote }}
 - name: SENTINEL_CONFIDENCE_THRESHOLD_HUMAN_REVIEW
