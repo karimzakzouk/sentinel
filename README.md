@@ -183,19 +183,22 @@ Waiting 5 minutes for an LLM to generate hypotheses is unacceptable during a mas
 
 ## CI/CD
 
-GitHub Actions handle everything:
+GitHub Actions handle everything — you never build Docker images or package Helm charts yourself:
 
 - **`test.yml`** — runs on every push/PR. Executes pytest, `helm lint`, `helm template` with default + litellm providers, validates `examples/my-values.yaml`.
+- **`docker-images.yml`** — runs when you push a `v*.*.*` tag. Builds all 8 service images (ingestion, detection, reasoning, safety, execution, feedback, operator, ui) and pushes them to GitHub Container Registry at `ghcr.io/karimzakzoukz/sentinel/*`. Also tags `:latest`.
 - **`release.yml`** — runs when you push a `v*.*.*` tag. Packages the Helm chart, creates a GitHub Release with the .tgz attached, and publishes to GitHub Pages so `helm repo add sentinel https://karimzakzoukz.github.io/sentinel/` works.
+
+The chart defaults to pulling images from GHCR — no manual image building needed.
 
 To cut a new release:
 
 ```bash
-# Bump chart version in chart/Chart.yaml + appVersion
-git commit -am "Bump to v1.0.3"
-git tag v1.0.3
+# Bump chart version in chart/Chart.yaml + appVersion + image tags in values.yaml
+git commit -am "Bump to v1.0.5"
+git tag v1.0.5
 git push origin main --tags
-# GitHub Actions builds + publishes the release automatically
+# GitHub Actions builds all 8 Docker images + Helm chart + Release automatically
 ```
 
 ---

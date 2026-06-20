@@ -1,0 +1,103 @@
+name: Build & Publish Docker Images
+
+# Builds all 8 Sentinel service images and pushes them to GitHub Container
+# Registry (ghcr.io). Triggered on every release tag (v*.*.*) so the chart
+# version always matches the image versions.
+#
+# Images published:
+#   ghcr.io/karimzakzoukz/sentinel/ingestion:<version>
+#   ghcr.io/karimzakzoukz/sentinel/detection:<version>
+#   ghcr.io/karimzakzoukz/sentinel/reasoning:<version>
+#   ghcr.io/karimzakzoukz/sentinel/safety:<version>
+#   ghcr.io/karimzakzoukz/sentinel/execution:<version>
+#   ghcr.io/karimzakzoukz/sentinel/feedback:<version>
+#   ghcr.io/karimzakzoukz/sentinel/operator:<version>
+#   ghcr.io/karimzakzoukz/sentinel/ui:<version>
+#
+# Also tags `:latest` on the latest release.
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  # Allow manual trigger for testing without cutting a release
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Image tag (defaults to chart version)"
+        required: false
+        default: "dev"
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_OWNER: karimzakzoukz
+
+jobs:
+  build:
+    name: Build ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [ingestion, detection, reasoning, safety, execution, feedback, operator, ui]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read chart version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.version }}" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            # Strip the leading 'v' from the tag (v1.0.4 -> 1.0.4)
+            VERSION="${GITHUB_REF_NAME#v}"
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata for image
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/sentinel/${{ matrix.service }}
+          tags: |
+            type=raw,value=${{ steps.version.outputs.version }}
+            type=raw,value=latest
+          labels: |
+            org.opencontainers.image.title=Sentinel ${{ matrix.service }}
+            org.opencontainers.image.description=Sentinel autonomous AI SRE — ${{ matrix.service }} service
+            org.opencontainers.image.source=https://github.com/karimzakzoukz/sentinel
+            org.opencontainers.image.licenses=MIT
+
+      - name: Build and push ${{ matrix.service }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: services/${{ matrix.service }}/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          # Build platform — Sentinel runs in K8s clusters, almost always amd64
+          platforms: linux/amd64
+
+      - name: Summary
+        run: |
+          echo "### Built and pushed: ${{ matrix.service }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Image: \`ghcr.io/${{ env.IMAGE_OWNER }}/sentinel/${{ matrix.service }}:${{ steps.version.outputs.version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "Also tagged as: \`latest\`" >> $GITHUB_STEP_SUMMARY

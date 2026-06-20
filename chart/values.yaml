@@ -3,11 +3,11 @@
 # Default values are tuned for a small production cluster (3+ nodes).
 # Override with --set or -f values-prod.yaml.
 
-# Global image registry — empty by default means Docker Hub.
+# Global image registry — defaults to GitHub Container Registry (GHCR)
+# where Sentinel's images are auto-published by CI/CD. Override only if
+# you've built and pushed to your own registry.
 image:
-  registry: ""
-  # If you build & push to a private registry, set:
-  # registry: ghcr.io/your-org
+  registry: "ghcr.io/karimzakzoukz"
   pullPolicy: IfNotPresent
   pullSecrets: []
 
@@ -58,7 +58,7 @@ sentinel:
 ingestion:
   enabled: true
   image: sentinel/ingestion
-  tag: "1.0.0"
+  tag: "1.0.4"
   replicas: 1
   resources:
     requests: { cpu: 100m, memory: 256Mi }
@@ -71,7 +71,7 @@ ingestion:
 detection:
   enabled: true
   image: sentinel/detection
-  tag: "1.0.0"
+  tag: "1.0.4"
   replicas: 1
   resources:
     requests: { cpu: 200m, memory: 512Mi }
@@ -80,7 +80,7 @@ detection:
 reasoning:
   enabled: true
   image: sentinel/reasoning
-  tag: "1.0.0"
+  tag: "1.0.4"
   replicas: 1
   resources:
     requests: { cpu: 200m, memory: 512Mi }
@@ -89,7 +89,7 @@ reasoning:
 safety:
   enabled: true
   image: sentinel/safety
-  tag: "1.0.0"
+  tag: "1.0.4"
   replicas: 1
   resources:
     requests: { cpu: 100m, memory: 256Mi }
@@ -98,7 +98,7 @@ safety:
 execution:
   enabled: true
   image: sentinel/execution
-  tag: "1.0.0"
+  tag: "1.0.4"
   replicas: 1
   resources:
     requests: { cpu: 100m, memory: 256Mi }
@@ -107,7 +107,7 @@ execution:
 feedback:
   enabled: true
   image: sentinel/feedback
-  tag: "1.0.0"
+  tag: "1.0.4"
   replicas: 1
   resources:
     requests: { cpu: 100m, memory: 256Mi }
@@ -116,7 +116,7 @@ feedback:
 operator:
   enabled: true
   image: sentinel/operator
-  tag: "1.0.0"
+  tag: "1.0.4"
   replicas: 1
   resources:
     requests: { cpu: 100m, memory: 128Mi }
@@ -125,7 +125,7 @@ operator:
 ui:
   enabled: true
   image: sentinel/ui
-  tag: "1.0.0"
+  tag: "1.0.4"
   replicas: 2
   resources:
     requests: { cpu: 100m, memory: 128Mi }

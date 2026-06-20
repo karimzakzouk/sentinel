@@ -10,9 +10,8 @@
 #     -f my-values.yaml \
 #     --namespace sentinel --create-namespace
 #
-# Or install from a release tarball:
-#   helm install sentinel https://github.com/karimzakzoukz/sentinel/releases/download/v1.0.2/sentinel-1.0.2.tgz \
-#     -f my-values.yaml --namespace sentinel --create-namespace
+# Docker images are auto-published to ghcr.io/karimzakzoukz/sentinel/* by
+# CI/CD — no need to build or push anything yourself.
 # ============================================================================
 
 sentinel:
