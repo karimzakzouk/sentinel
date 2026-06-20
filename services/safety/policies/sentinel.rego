@@ -4,17 +4,12 @@ package sentinel
 #
 # The safety service POSTs the fix proposal + context to
 # /v1/data/sentinel/decision and gets back a verdict.
-#
-# Verdicts:
-#   allow                    — go ahead autonomously
-#   require_human_approval  — post to approval channel, wait for click
-#   deny                     — hard block (e.g. rollback blocked by schema migration)
+
+import rego.v1
 
 default allow_fix := false
 default requires_human_approval := false
 default rollback_blocked := false
-default within_blast_radius := true
-default allow_rollback := true
 
 # --- Constants ---
 
@@ -38,17 +33,9 @@ exceeds_replica_blast_radius if {
     input.replica_change_pct > max_replica_change_pct
 }
 
-within_blast_radius if {
-    input.replica_change_pct <= max_replica_change_pct
-}
-
 rollback_blocked if {
     input.fix_type == "rollback"
     input.has_schema_migration == true
-}
-
-allow_rollback if {
-    not input.has_schema_migration
 }
 
 # --- Main decision rules ---
