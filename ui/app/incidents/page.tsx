@@ -11,7 +11,7 @@ export default function IncidentsPage() {
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold">All Incidents</h1>
         <div className="text-xs text-[var(--color-text-dim)]">
-          {(incidents || []).length} total
+          {(Array.isArray(incidents) ? incidents : []).length} total
         </div>
       </div>
       <div className="panel">
@@ -34,7 +34,7 @@ export default function IncidentsPage() {
                 </tr>
               </thead>
               <tbody>
-                {(incidents || []).map((inc) => (
+                {(Array.isArray(incidents) ? incidents : []).map((inc) => (
                   <tr key={inc.incident_id}>
                     <td className="whitespace-nowrap text-[var(--color-text-dim)] text-xs">
                       {timeAgo(inc.created_at)}

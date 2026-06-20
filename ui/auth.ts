@@ -1,25 +1,8 @@
 /**
- * NextAuth configuration — supports 3 auth modes:
- *
- * 1. disabled (default) — no auth, anyone can access the UI.
- *    For dev / air-gapped clusters behind a VPN.
- *
- * 2. credentials — single shared password. Set SENTINEL_UI_PASSWORD env var.
- *    Simple, no OIDC setup needed. Good for small teams.
- *
- * 3. github — GitHub OAuth. Users sign in with their GitHub account.
- *    Requires GITHUB_CLIENT_ID + GITHUB_CLIENT_SECRET + SENTINEL_UI_AUTH_ORG
- *    (only members of that GitHub org can sign in).
- *
- * Configure via the Helm chart:
- *   ui:
- *     auth:
- *       mode: "credentials" | "github" | "disabled"
- *       password: "..."  # for credentials mode
- *       githubOrg: "..."  # for github mode
- *
- * The chart refuses to install with mode=disabled if ingress.enabled=true
- * (you can't expose the UI to the internet without auth).
+ * Sentinel auth — supports 3 modes:
+ *   disabled  — no auth (dev only)
+ *   credentials — shared password
+ *   github    — GitHub OAuth + org membership check
  */
 import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
@@ -38,9 +21,7 @@ if (authMode === "credentials") {
       },
       async authorize(credentials) {
         const expected = process.env.SENTINEL_UI_PASSWORD;
-        if (!expected) {
-          return null;
-        }
+        if (!expected) return null;
         if (credentials?.password === expected) {
           return { id: "1", name: "Sentinel Operator", email: "sentinel@local" };
         }
@@ -59,29 +40,33 @@ if (authMode === "github") {
   );
 }
 
-export const { handlers, auth, signIn, signOut } = NextAuth({
-  providers,
-  session: { strategy: "jwt" },
+// Build the NextAuth config. When disabled, we add a dummy provider
+// to avoid the "no providers" error. The authorized callback still
+// returns true for all requests in disabled mode.
+const dummyProvider = Credentials({
+  id: "disabled",
+  name: "Disabled",
+  credentials: {},
+  async authorize() { return null; },
+});
+
+const config = {
+  providers: providers.length > 0 ? providers : [dummyProvider],
+  session: { strategy: "jwt" as const },
   trustHost: true,
-  pages: {
-    signIn: "/login",
-  },
+  pages: { signIn: "/login" },
   callbacks: {
-    async authorized({ auth, request }) {
-      // If auth is disabled, allow everything
+    async authorized({ auth, request }: any) {
       if (authMode === "disabled") return true;
-      // Otherwise require a session
       const isLoggedIn = !!auth?.user;
       const isLoginPage = request.nextUrl.pathname.startsWith("/login");
       if (isLoginPage) return true;
       return isLoggedIn;
     },
-    async signIn({ user, account }) {
-      // For GitHub mode, restrict to a specific org
+    async signIn({ user, account }: any) {
       if (authMode === "github" && account?.provider === "github") {
         const allowedOrg = process.env.SENTINEL_UI_AUTH_ORG;
         if (!allowedOrg) return false;
-        // Check org membership via GitHub API
         const username = account?.username || user?.name;
         if (!username) return false;
         try {
@@ -89,7 +74,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
             `https://api.github.com/orgs/${allowedOrg}/members/${username}`,
             { headers: { Authorization: `token ${account.access_token}` } }
           );
-          return res.status === 204; // 204 = member, 404 = not a member
+          return res.status === 204;
         } catch {
           return false;
         }
@@ -97,4 +82,6 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       return true;
     },
   },
-});
+};
+
+export const { handlers, auth, signIn, signOut } = NextAuth(config);

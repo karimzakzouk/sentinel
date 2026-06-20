@@ -9,13 +9,16 @@ export default function DashboardPage() {
   const { data: incidents, isLoading } = useIncidents();
   const { data: metrics } = useMetrics();
 
-  const active = (incidents || []).filter((i) =>
+  // Ensure incidents is always an array (API might return an error object)
+  const incidentList = Array.isArray(incidents) ? incidents : [];
+
+  const active = incidentList.filter((i) =>
     ["detected", "investigating", "root_caused", "fix_proposed", "governance_review", "approved", "executing"].includes(i.status)
   );
-  const resolved = (incidents || []).filter((i) =>
+  const resolved = incidentList.filter((i) =>
     ["verified", "resolved"].includes(i.status)
   );
-  const failed = (incidents || []).filter((i) =>
+  const failed = incidentList.filter((i) =>
     ["failed", "rejected", "escalated"].includes(i.status)
   );
 
@@ -44,7 +47,7 @@ export default function DashboardPage() {
         <StatCard
           icon={GitPullRequest}
           label="PRs Opened (24h)"
-          value={(incidents || []).filter((i) => i.state?.execution_result?.pr_url).length}
+          value={incidentList.filter((i) => i.state?.execution_result?.pr_url).length}
           accent="text-[var(--color-warning)]"
         />
       </div>
@@ -140,7 +143,7 @@ export default function DashboardPage() {
               <h2>Recent PRs Opened</h2>
             </div>
             <div className="panel-body space-y-2">
-              {(incidents || [])
+              {incidentList
                 .filter((i) => i.state?.execution_result?.pr_url)
                 .slice(0, 5)
                 .map((inc) => (
