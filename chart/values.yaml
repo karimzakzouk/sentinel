@@ -1,0 +1,182 @@
+# Sentinel — Helm Chart Values
+#
+# Default values are tuned for a small production cluster (3+ nodes).
+# Override with --set or -f values-prod.yaml.
+
+# Global image registry — empty by default means Docker Hub.
+image:
+  registry: ""
+  # If you build & push to a private registry, set:
+  # registry: ghcr.io/your-org
+  pullPolicy: IfNotPresent
+  pullSecrets: []
+
+# All Sentinel services share these settings
+sentinel:
+  # The GitHub token Sentinel uses to clone repos, open PRs, and pull CD
+  # history. REQUIRED for code_fix / roll_forward actions.
+  githubToken: ""
+  # Comma-separated list of namespaces Sentinel treats as production.
+  productionNamespaces: "prod,production,payments"
+  # Confidence thresholds for autonomous execution
+  confidenceThresholdAutonomous: 0.92
+  confidenceThresholdHumanReview: 0.70
+  # Panic-button thresholds (Layer 6 edge case #6)
+  panicCpuThresholdPct: 95.0
+  panicConnectionsThreshold: 9000
+  # LLM settings (OpenAI-compatible API)
+  llm:
+    baseUrl: "https://api.z.ai/api/paas/v4"
+    apiKey: ""
+    fastModel: "glm-4-flash"
+    frontierModel: "glm-4.5"
+  # Slack webhook for governance approvals + terraform plan notifications
+  approvalWebhookUrl: ""
+  tfSlackWebhook: ""
+
+# Per-service configuration
+ingestion:
+  enabled: true
+  image: sentinel/ingestion
+  tag: "1.0.0"
+  replicas: 1
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: 500m, memory: 512Mi }
+  env:
+    prometheusUrl: ""    # e.g. http://prometheus-server.monitoring.svc
+    lokiUrl: ""
+    jaegerUrl: ""
+
+detection:
+  enabled: true
+  image: sentinel/detection
+  tag: "1.0.0"
+  replicas: 1
+  resources:
+    requests: { cpu: 200m, memory: 512Mi }
+    limits: { cpu: 1000m, memory: 1Gi }
+
+reasoning:
+  enabled: true
+  image: sentinel/reasoning
+  tag: "1.0.0"
+  replicas: 1
+  resources:
+    requests: { cpu: 200m, memory: 512Mi }
+    limits: { cpu: 2000m, memory: 2Gi }
+
+safety:
+  enabled: true
+  image: sentinel/safety
+  tag: "1.0.0"
+  replicas: 1
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: 500m, memory: 512Mi }
+
+execution:
+  enabled: true
+  image: sentinel/execution
+  tag: "1.0.0"
+  replicas: 1
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: 500m, memory: 512Mi }
+
+feedback:
+  enabled: true
+  image: sentinel/feedback
+  tag: "1.0.0"
+  replicas: 1
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: 500m, memory: 512Mi }
+
+operator:
+  enabled: true
+  image: sentinel/operator
+  tag: "1.0.0"
+  replicas: 1
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { cpu: 500m, memory: 256Mi }
+
+ui:
+  enabled: true
+  image: sentinel/ui
+  tag: "1.0.0"
+  replicas: 2
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { cpu: 500m, memory: 512Mi }
+
+# OPA sidecar — runs the governance policies
+opa:
+  enabled: true
+  image: openpolicyagent/opa
+  tag: "1.0.0-static"
+  port: 8181
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { cpu: 200m, memory: 256Mi }
+
+# Infrastructure dependencies (toggle off if you bring your own)
+postgres:
+  enabled: true
+  auth:
+    username: sentinel
+    password: sentinel
+    database: sentinel
+  primary:
+    persistence:
+      size: 10Gi
+
+kafka:
+  enabled: true
+  # Strimzi Kafka operator must be installed. The chart declares it as a
+  # Helm dependency; if you already have it, set this to false and provide
+  # your own Kafka bootstrap servers below.
+  bootstrapServers: "sentinel-kafka-bootstrap:9092"
+  topicPrefix: "sentinel"
+  replicas: 3
+  schemaRegistry:
+    enabled: true
+    image: confluentinc/cp-schema-registry
+    tag: "7.7.0"
+    port: 8081
+
+weaviate:
+  enabled: true
+  # Defaults to the Weaviate Helm chart values
+  storage:
+    size: 20Gi
+
+# Service account + RBAC
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+rbac:
+  create: true
+  # Operator needs cluster-wide read on pods/deployments/events + write on
+  # the SentinelIncident CRD. Tighten in production if needed.
+  clusterScope: true
+
+# Ingress for the UI
+ingress:
+  enabled: false
+  className: nginx
+  annotations: {}
+  hosts:
+    - host: sentinel.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# Node selector / tolerations / affinity (applied to all services)
+nodeSelector: {}
+tolerations: []
+affinity: {}

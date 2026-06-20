@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.coverage
+*.egg-info/
+.eggs/
+node_modules/
+.next/
+.env
+.env.local
+*.log
+.DS_Store
+charts/
+chart/charts/
+chart/Chart.lock

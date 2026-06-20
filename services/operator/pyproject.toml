@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sentinel-operator"
+version = "1.0.0"
+description = "Sentinel K8s operator (kopf-based)"
+requires-python = ">=3.10"
+dependencies = [
+    "kopf>=1.37",
+    "kubernetes>=29",
+    "httpx>=0.27",
+    "sentinel-common @ file:../common",
+]

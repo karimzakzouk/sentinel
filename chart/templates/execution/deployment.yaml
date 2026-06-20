@@ -1,0 +1,1 @@
+{{ include "sentinel.deployment" (list "execution" .) }}
