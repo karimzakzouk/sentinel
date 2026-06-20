@@ -677,7 +677,7 @@ async def get_runtime_settings() -> dict[str, Any]:
 
 
 @app.post("/settings")
-async def update_runtime_settings(update: SettingsUpdate) -> dict[str, str]:
+async def update_runtime_settings(update: SettingsUpdate) -> dict[str, Any]:
     """Update runtime settings. Changes apply immediately (no restart needed
     for most settings; LLM provider changes take effect on the next LLM call).
     """
