@@ -54,10 +54,10 @@ from sqlalchemy.ext.asyncio import create_async_engine
 # Import the core logic from each service (not the FastAPI apps — those have
 # their own lifespans and would conflict)
 from normalizer import Normalizer
-from detection.detectors.isolation_forest import IsolationForestDetector
-from detection.detectors.cusum import CUSUMDetector
-from detection.detectors.rules import RulesDetector
-from detection.detectors.clusterer import AnomalyClusterer
+from detectors.isolation_forest import IsolationForestDetector
+from detectors.cusum import CUSUMDetector
+from detectors.rules import RulesDetector
+from detectors.clusterer import AnomalyClusterer
 from graph import build_graph
 from context import ContextFetcher
 from llm import LLMRouter
