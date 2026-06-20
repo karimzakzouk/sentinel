@@ -2,8 +2,8 @@ apiVersion: v2
 name: sentinel
 description: Sentinel — The Autonomous AI Site Reliability Engineer. Detect, diagnose, fix, verify.
 type: application
-version: 1.2.4
-appVersion: "1.2.4"
+version: 1.2.5
+appVersion: "1.2.5"
 home: https://github.com/karimzakzoukz/sentinel
 sources:
   - https://github.com/karimzakzoukz/sentinel
@@ -21,11 +21,6 @@ dependencies:
     version: "0.43.0"
     repository: "https://strimzi.io/charts/"
     condition: kafka.enabled
-    optional: true
-  - name: postgresql
-    version: "16.7.27"
-    repository: "https://charts.bitnami.com/bitnami"
-    condition: postgres.enabled
     optional: true
   - name: weaviate
     version: "17.8.2"

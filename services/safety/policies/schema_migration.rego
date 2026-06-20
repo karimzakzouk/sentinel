@@ -13,7 +13,12 @@ allow_rollback if {
     not input.has_schema_migration
 }
 
-deny_rollback_reason := "schema_migration_blocks_rollback" if {
+deny_rollback_reason if {
+    input.has_schema_migration
+    input.fix_type == "rollback"
+}
+
+deny_rollback_reason contains "schema_migration_blocks_rollback" if {
     input.has_schema_migration
     input.fix_type == "rollback"
 }
