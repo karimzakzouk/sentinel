@@ -189,8 +189,9 @@ All configuration is in `chart/values.yaml`. Key settings:
 | Key | Default | Description |
 |-----|---------|-------------|
 | `sentinel.githubToken` | `""` | **Required** for code-fix PRs |
+| `sentinel.llm.provider` | `zai` | `openai` / `zai` / `gemini` / `ollama` / `vllm` / `litellm` / `azure` / `custom` |
+| `sentinel.llm.baseUrl` | `""` | If empty, derived from `provider`. Set explicitly for `azure`/`custom` |
 | `sentinel.llm.apiKey` | `""` | **Required** for reasoning |
-| `sentinel.llm.baseUrl` | `https://api.z.ai/api/paas/v4` | Any OpenAI-compatible endpoint |
 | `sentinel.llm.fastModel` | `glm-4-flash` | Used for log parsing, evidence gathering |
 | `sentinel.llm.frontierModel` | `glm-4.5` | Used for root-cause synthesis, code patches |
 | `sentinel.productionNamespaces` | `prod,production,payments` | Comma-separated — OPA enforces stricter rules here |
@@ -201,6 +202,123 @@ All configuration is in `chart/values.yaml`. Key settings:
 | `ingestion.env.lokiUrl` | `""` | Your Loki URL |
 | `ingestion.env.jaegerUrl` | `""` | Your Jaeger URL |
 | `ingress.enabled` | `false` | Enable the UI ingress |
+
+### Picking your LLM provider
+
+Sentinel uses the OpenAI Python SDK with `AsyncOpenAI(base_url=..., api_key=...)`. **Any OpenAI-compatible endpoint works.** Set `sentinel.llm.provider` to one of the known providers and Sentinel auto-configures the base URL — or set `sentinel.llm.baseUrl` directly for anything else.
+
+#### OpenAI (GPT-4o, GPT-4o-mini)
+
+```bash
+helm install sentinel ./sentinel-1.0.0.tgz \
+  --namespace sentinel --create-namespace \
+  --set sentinel.githubToken=$GITHUB_TOKEN \
+  --set sentinel.llm.provider=openai \
+  --set sentinel.llm.apiKey=$OPENAI_API_KEY \
+  --set sentinel.llm.fastModel=gpt-4o-mini \
+  --set sentinel.llm.frontierModel=gpt-4o
+```
+
+#### Google Gemini (gemini-2.0-flash, gemini-2.5-pro)
+
+Google ships a native OpenAI-compatible endpoint:
+
+```bash
+helm install sentinel ./sentinel-1.0.0.tgz \
+  --namespace sentinel --create-namespace \
+  --set sentinel.githubToken=$GITHUB_TOKEN \
+  --set sentinel.llm.provider=gemini \
+  --set sentinel.llm.apiKey=$GEMINI_API_KEY \
+  --set sentinel.llm.fastModel=gemini-2.0-flash \
+  --set sentinel.llm.frontierModel=gemini-2.5-pro
+```
+
+#### Anthropic Claude (claude-3-5-sonnet, claude-3-5-haiku)
+
+Anthropic does **not** provide a native OpenAI-compatible endpoint. You need a proxy. Sentinel ships with an optional LiteLLM sidecar — set `provider=litellm` and the chart auto-deploys it:
+
+```bash
+helm install sentinel ./sentinel-1.0.0.tgz \
+  --namespace sentinel --create-namespace \
+  --set sentinel.githubToken=$GITHUB_TOKEN \
+  --set sentinel.llm.provider=litellm \
+  --set sentinel.llm.apiKey=$ANTHROPIC_API_KEY \
+  --set sentinel.llm.fastModel=anthropic/claude-3-5-haiku-20241022 \
+  --set sentinel.llm.frontierModel=anthropic/claude-3-5-sonnet-20241022
+```
+
+The LiteLLM sidecar receives Sentinel's OpenAI-format calls and translates them to Anthropic's native format.
+
+#### z.ai GLM (default — glm-4.5, glm-4-flash)
+
+```bash
+helm install sentinel ./sentinel-1.0.0.tgz \
+  --namespace sentinel --create-namespace \
+  --set sentinel.githubToken=$GITHUB_TOKEN \
+  --set sentinel.llm.provider=zai \
+  --set sentinel.llm.apiKey=$ZAI_API_KEY \
+  --set sentinel.llm.fastModel=glm-4-flash \
+  --set sentinel.llm.frontierModel=glm-4.5
+```
+
+#### Ollama (local models — llama3.1, qwen2.5, etc.)
+
+For fully air-gapped deployments. Run Ollama anywhere reachable from the cluster:
+
+```bash
+helm install sentinel ./sentinel-1.0.0.tgz \
+  --namespace sentinel --create-namespace \
+  --set sentinel.githubToken=$GITHUB_TOKEN \
+  --set sentinel.llm.provider=ollama \
+  --set sentinel.llm.baseUrl=http://ollama.ollama.svc.cluster.local:11434/v1 \
+  --set sentinel.llm.apiKey=dummy \
+  --set sentinel.llm.fastModel=qwen2.5:7b \
+  --set sentinel.llm.frontierModel=qwen2.5:32b
+```
+
+#### vLLM (self-hosted HuggingFace models)
+
+```bash
+helm install sentinel ./sentinel-1.0.0.tgz \
+  --namespace sentinel --create-namespace \
+  --set sentinel.githubToken=$GITHUB_TOKEN \
+  --set sentinel.llm.provider=vllm \
+  --set sentinel.llm.baseUrl=http://vllm.vllm.svc.cluster.local:8000/v1 \
+  --set sentinel.llm.apiKey=dummy \
+  --set sentinel.llm.fastModel=Qwen/Qwen2.5-7B-Instruct \
+  --set sentinel.llm.frontierModel=Qwen/Qwen2.5-72B-Instruct
+```
+
+#### Azure OpenAI
+
+```bash
+helm install sentinel ./sentinel-1.0.0.tgz \
+  --namespace sentinel --create-namespace \
+  --set sentinel.githubToken=$GITHUB_TOKEN \
+  --set sentinel.llm.provider=azure \
+  --set sentinel.llm.baseUrl=https://myresource.openai.azure.com \
+  --set sentinel.llm.apiKey=$AZURE_OPENAI_KEY \
+  --set sentinel.llm.fastModel=gpt-4o-mini \
+  --set sentinel.llm.frontierModel=gpt-4o
+```
+
+#### AWS Bedrock (Claude on Bedrock, etc.)
+
+Use the LiteLLM sidecar:
+
+```bash
+helm install sentinel ./sentinel-1.0.0.tgz \
+  --namespace sentinel --create-namespace \
+  --set sentinel.githubToken=$GITHUB_TOKEN \
+  --set sentinel.llm.provider=litellm \
+  --set sentinel.llm.apiKey=$AWS_BEDROCK_KEY \
+  --set sentinel.llm.fastModel=bedrock/anthropic.claude-3-5-haiku-20241022-v1:0 \
+  --set sentinel.llm.frontierModel=bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0
+```
+
+#### Any other provider (Mistral, Cohere, Together, Groq, etc.)
+
+Either find their OpenAI-compatible endpoint URL and set `provider=custom` + `baseUrl`, or run LiteLLM and set `provider=litellm`.
 
 Override with `--set` or a custom `values.yaml`:
 

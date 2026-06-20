@@ -37,9 +37,25 @@ class Settings(BaseSettings):
     opa_url: str = Field(default="http://sentinel-opa:8181")
 
     # --- LLM ---
-    # Default to z-ai-web-dev-sdk-compatible OpenAI endpoint. Override with
-    # SENTINEL_LLM_BASE_URL / SENTINEL_LLM_API_KEY for production.
-    llm_base_url: str = Field(default="https://api.z.ai/api/paas/v4")
+    # Sentinel uses the OpenAI Python SDK with AsyncOpenAI(base_url=...).
+    # This means ANY OpenAI-compatible endpoint works. Set `llm_provider` to
+    # one of the known providers below and Sentinel will auto-configure the
+    # correct base URL. Or set `llm_base_url` directly for anything else.
+    #
+    # Known providers (case-insensitive):
+    #   openai      -> https://api.openai.com/v1
+    #   zai         -> https://api.z.ai/api/paas/v4
+    #   gemini      -> https://generativelanguage.googleapis.com/v1beta/openai
+    #   anthropic   -> REQUIRES PROXY (Anthropic has no native OpenAI endpoint)
+    #                  Use litellm: https://docs.litellm.ai/docs/proxy/server
+    #                  Then set llm_base_url to your litellm URL.
+    #   azure       -> https://<resource>.openai.azure.com (set llm_base_url)
+    #   ollama      -> http://ollama:11434/v1
+    #   vllm        -> http://vllm:8000/v1
+    #   bedrock     -> REQUIRES PROXY (use litellm)
+    #   custom      -> use llm_base_url
+    llm_provider: str = Field(default="zai")
+    llm_base_url: str = Field(default="")  # if empty, derived from llm_provider
     llm_api_key: str = Field(default="")
     llm_fast_model: str = Field(default="glm-4-flash")
     llm_frontier_model: str = Field(default="glm-4.5")
@@ -78,6 +94,35 @@ class Settings(BaseSettings):
     @property
     def production_namespace_list(self) -> list[str]:
         return [n.strip() for n in self.production_namespaces.split(",") if n.strip()]
+
+    # --- Provider -> base URL mapping ---
+    # Maps known provider names to their OpenAI-compatible endpoints.
+    # Anthropic and Bedrock have NO native OpenAI endpoint — you must run a
+    # proxy (LiteLLM is recommended) and set llm_base_url to point at it.
+    PROVIDER_BASE_URLS: dict[str, str] = {
+        "openai":    "https://api.openai.com/v1",
+        "zai":       "https://api.z.ai/api/paas/v4",
+        "gemini":    "https://generativelanguage.googleapis.com/v1beta/openai",
+        "azure":     "",  # must be set explicitly: https://<resource>.openai.azure.com
+        "ollama":    "http://ollama:11434/v1",
+        "vllm":      "http://vllm:8000/v1",
+        "litellm":   "http://litellm:4000/v1",  # default LiteLLM proxy port
+        "custom":    "",  # must be set explicitly
+    }
+
+    @property
+    def resolved_base_url(self) -> str:
+        """Return the actual base URL to use, deriving from provider if needed."""
+        if self.llm_base_url:
+            return self.llm_base_url
+        provider = self.llm_provider.lower()
+        url = self.PROVIDER_BASE_URLS.get(provider, "")
+        if not url:
+            # Unknown provider with no explicit base_url — fall back to z.ai
+            # but warn. Anthropic/Bedrock users MUST set llm_base_url to their
+            # LiteLLM proxy URL.
+            return "https://api.z.ai/api/paas/v4"
+        return url
 
 
 @lru_cache

@@ -28,8 +28,12 @@ log = logging.getLogger(__name__)
 class LLMRouter:
     def __init__(self, settings: Any):
         self.settings = settings
+        # Use the resolved base URL — picks the right endpoint based on
+        # settings.llm_provider (openai, gemini, zai, ollama, vllm, etc.)
+        # or whatever the user explicitly set in llm_base_url.
+        base_url = settings.resolved_base_url if hasattr(settings, "resolved_base_url") else settings.llm_base_url
         self.client = AsyncOpenAI(
-            base_url=settings.llm_base_url,
+            base_url=base_url,
             api_key=settings.llm_api_key or "missing",
         )
         self.fast_model = settings.llm_fast_model

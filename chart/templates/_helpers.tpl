@@ -66,6 +66,8 @@ Standard env vars shared by all Python services.
   value: {{ printf "http://%s-weaviate:8080" .Release.Name | quote }}
 - name: SENTINEL_OPA_URL
   value: {{ printf "http://%s-opa:8181" .Release.Name | quote }}
+- name: SENTINEL_LLM_PROVIDER
+  value: {{ .Values.sentinel.llm.provider | quote }}
 - name: SENTINEL_LLM_BASE_URL
   value: {{ .Values.sentinel.llm.baseUrl | quote }}
 - name: SENTINEL_LLM_API_KEY

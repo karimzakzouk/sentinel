@@ -41,8 +41,9 @@ omit it. Use the agent_trace and evidence arrays to build the Timeline."""
 class PostmortemGenerator:
     def __init__(self, settings: Any):
         self.settings = settings
+        base_url = settings.resolved_base_url if hasattr(settings, "resolved_base_url") else settings.llm_base_url
         self.client = AsyncOpenAI(
-            base_url=settings.llm_base_url,
+            base_url=base_url,
             api_key=settings.llm_api_key or "missing",
         )
 

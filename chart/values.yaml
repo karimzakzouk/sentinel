@@ -24,9 +24,29 @@ sentinel:
   # Panic-button thresholds (Layer 6 edge case #6)
   panicCpuThresholdPct: 95.0
   panicConnectionsThreshold: 9000
-  # LLM settings (OpenAI-compatible API)
+  # LLM settings — Sentinel uses the OpenAI Python SDK with AsyncOpenAI(base_url=...),
+  # so ANY OpenAI-compatible endpoint works.
+  #
+  # Pick a provider by setting `provider`. Sentinel will auto-configure the
+  # correct base URL. Supported:
+  #   - openai     (https://api.openai.com/v1)
+  #   - zai        (https://api.z.ai/api/paas/v4) — DEFAULT
+  #   - gemini     (https://generativelanguage.googleapis.com/v1beta/openai)
+  #   - ollama     (http://ollama:11434/v1)
+  #   - vllm       (http://vllm:8000/v1)
+  #   - litellm    (http://litellm:4000/v1) — use this for Anthropic, Bedrock,
+  #                 or any non-OpenAI provider (LiteLLM proxies the call)
+  #   - azure      (set baseUrl explicitly to https://<resource>.openai.azure.com)
+  #   - custom     (set baseUrl explicitly)
+  #
+  # For Anthropic: Anthropic has NO native OpenAI-compatible endpoint.
+  # Run LiteLLM as a sidecar or separate service:
+  #   docker run -p 4000:4000 -e ANTHROPIC_API_KEY=sk-ant-xxx \
+  #     ghcr.io/berriai/litellm:main-latest --model claude-3-5-sonnet-20241022
+  # Then set provider=litellm and fastModel/frontierModel to the LiteLLM model names.
   llm:
-    baseUrl: "https://api.z.ai/api/paas/v4"
+    provider: "zai"
+    baseUrl: ""        # if empty, derived from provider
     apiKey: ""
     fastModel: "glm-4-flash"
     frontierModel: "glm-4.5"
