@@ -184,7 +184,7 @@ export default function DashboardPage() {
 }
 
 function StatCard({ icon: Icon, label, value, accent }: {
-  icon: React.ComponentType<{ size?: number; className?: string }>;
+  icon: React.ComponentType<{ size?: number; className?: string; style?: React.CSSProperties }>;
   label: string;
   value: number;
   accent: string;
@@ -204,7 +204,7 @@ function StatCard({ icon: Icon, label, value, accent }: {
 
 function LayerHealth({ name, icon: Icon, status, detail }: {
   name: string;
-  icon: React.ComponentType<{ size?: number; className?: string }>;
+  icon: React.ComponentType<{ size?: number; className?: string; style?: React.CSSProperties }>;
   status: "ok" | "warn" | "danger";
   detail: string;
 }) {
