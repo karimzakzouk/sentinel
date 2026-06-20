@@ -1,0 +1,144 @@
+# ============================================================================
+# Sentinel — my-values.yaml
+# ============================================================================
+# Copy this file, edit the values, install with:
+#
+#   cp examples/my-values.yaml my-values.yaml
+#   $EDITOR my-values.yaml     # fill in your keys / URLs
+#   helm repo add sentinel https://karimzakzoukz.github.io/sentinel/
+#   helm install sentinel sentinel/sentinel \
+#     -f my-values.yaml \
+#     --namespace sentinel --create-namespace
+#
+# Or install from a release tarball:
+#   helm install sentinel https://github.com/karimzakzoukz/sentinel/releases/download/v1.0.2/sentinel-1.0.2.tgz \
+#     -f my-values.yaml --namespace sentinel --create-namespace
+# ============================================================================
+
+sentinel:
+  # ────────────────────────────────────────────────────────────────────────
+  # SECRETS — fill these in
+  # ────────────────────────────────────────────────────────────────────────
+
+  # GitHub Personal Access Token with `repo` scope.
+  # Create at: https://github.com/settings/tokens
+  # Required for: code-fix Pull Requests, CI/CD history collection
+  githubToken: "REPLACE_ME"
+
+  # LLM API key. The key from whichever provider you pick below.
+  llm:
+    apiKey: "REPLACE_ME"
+
+  # ────────────────────────────────────────────────────────────────────────
+  # LLM PROVIDER — pick one and (if needed) edit the model names
+  # ────────────────────────────────────────────────────────────────────────
+  #
+  # Sentinel uses the OpenAI Python SDK, so ANY OpenAI-compatible endpoint
+  # works. Set `provider` to one of:
+  #
+  #   openai     — https://api.openai.com/v1
+  #   gemini     — https://generativelanguage.googleapis.com/v1beta/openai
+  #   zai        — https://api.z.ai/api/paas/v4  (DEFAULT)
+  #   ollama     — local models, set baseUrl below
+  #   vllm       — self-hosted HuggingFace, set baseUrl below
+  #   litellm    — for Anthropic Claude / AWS Bedrock (auto-deploys LiteLLM sidecar)
+  #   azure      — Azure OpenAI, set baseUrl below
+  #   custom     — any OpenAI-compatible endpoint, set baseUrl below
+  #
+  # Provider-specific notes:
+  #   - For Anthropic: provider=litellm, set model names to "anthropic/claude-..."
+  #   - For Bedrock:    provider=litellm, set model names to "bedrock/anthropic.claude-..."
+  #   - For Ollama:     apiKey can be "dummy"
+  #   - For vLLM:       apiKey can be "dummy"
+  # ────────────────────────────────────────────────────────────────────────
+
+  llm:
+    provider: "openai"            # ← CHANGE THIS to your provider
+    baseUrl: ""                   # leave empty for known providers; set explicitly for azure/ollama/vllm/custom
+    fastModel: "gpt-4o-mini"      # ← used for log parsing, evidence gathering (cheap & fast)
+    frontierModel: "gpt-4o"       # ← used for root-cause synthesis, code patches (smart)
+
+  # Common provider/model combos (uncomment the one you want):
+  #
+  # ── OpenAI ──────────────────────────────────────────────────────────────
+  # provider: "openai", fastModel: "gpt-4o-mini", frontierModel: "gpt-4o"
+  #
+  # ── Google Gemini ───────────────────────────────────────────────────────
+  # provider: "gemini", fastModel: "gemini-2.0-flash", frontierModel: "gemini-2.5-pro"
+  #
+  # ── Anthropic Claude (auto-deploys LiteLLM sidecar) ─────────────────────
+  # provider: "litellm", fastModel: "anthropic/claude-3-5-haiku-20241022",
+  #                       frontierModel: "anthropic/claude-3-5-sonnet-20241022"
+  #
+  # ── z.ai GLM ────────────────────────────────────────────────────────────
+  # provider: "zai", fastModel: "glm-4-flash", frontierModel: "glm-4.5"
+  #
+  # ── Ollama (air-gapped, local models) ───────────────────────────────────
+  # provider: "ollama", baseUrl: "http://ollama.ollama.svc.cluster.local:11434/v1",
+  # apiKey: "dummy", fastModel: "qwen2.5:7b", frontierModel: "qwen2.5:32b"
+  #
+  # ── vLLM (self-hosted HuggingFace) ──────────────────────────────────────
+  # provider: "vllm", baseUrl: "http://vllm.vllm.svc.cluster.local:8000/v1",
+  # apiKey: "dummy", fastModel: "Qwen/Qwen2.5-7B-Instruct",
+  #                       frontierModel: "Qwen/Qwen2.5-72B-Instruct"
+  #
+  # ── Azure OpenAI ────────────────────────────────────────────────────────
+  # provider: "azure", baseUrl: "https://YOUR-RESOURCE.openai.azure.com",
+  # fastModel: "gpt-4o-mini", frontierModel: "gpt-4o"
+  #
+  # ── AWS Bedrock (Claude via LiteLLM) ────────────────────────────────────
+  # provider: "litellm", fastModel: "bedrock/anthropic.claude-3-5-haiku-20241022-v1:0",
+  #                       frontierModel: "bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0"
+
+  # ────────────────────────────────────────────────────────────────────────
+  # SAFETY & GOVERNANCE — keep these unless you know what you're doing
+  # ────────────────────────────────────────────────────────────────────────
+  productionNamespaces: "prod,production,payments"
+  confidenceThresholdAutonomous: 0.92   # fixes above this run without asking
+  confidenceThresholdHumanReview: 0.70  # fixes below this are denied entirely
+  panicCpuThresholdPct: 95.0            # CPU% that triggers the deterministic fast-path
+  panicConnectionsThreshold: 9000
+
+  # ────────────────────────────────────────────────────────────────────────
+  # OPTIONAL — Slack webhooks
+  # Format: https://hooks.slack.com/services/<ID>
+  # ────────────────────────────────────────────────────────────────────────
+  # approvalWebhookUrl: "REPLACE_WITH_SLACK_WEBHOOK"
+  # tfSlackWebhook: "REPLACE_WITH_SLACK_WEBHOOK"
+
+# ────────────────────────────────────────────────────────────────────────────
+# OBSERVABILITY — point Sentinel at your existing stack (optional but recommended)
+# ────────────────────────────────────────────────────────────────────────────
+ingestion:
+  env:
+    # Leave empty to disable a collector. Sentinel still works with just K8s events.
+    prometheusUrl: ""   # e.g. "http://prometheus-server.monitoring.svc"
+    lokiUrl: ""         # e.g. "http://loki.monitoring.svc"
+    jaegerUrl: ""       # e.g. "http://jaeger-query.observability.svc"
+
+# ────────────────────────────────────────────────────────────────────────────
+# INGRESS — expose the UI (optional)
+# ────────────────────────────────────────────────────────────────────────────
+# ingress:
+#   enabled: true
+#   className: nginx
+#   hosts:
+#     - host: sentinel.yourcompany.com
+#       paths:
+#         - path: /
+#           pathType: Prefix
+#   tls:
+#     - secretName: sentinel-tls
+#       hosts:
+#         - sentinel.yourcompany.com
+
+# ────────────────────────────────────────────────────────────────────────────
+# STORAGE — bump these for production workloads (optional)
+# ────────────────────────────────────────────────────────────────────────────
+# postgres:
+#   primary:
+#     persistence:
+#       size: 50Gi
+# weaviate:
+#   storage:
+#     size: 100Gi

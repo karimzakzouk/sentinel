@@ -1,0 +1,135 @@
+name: Release
+
+# Triggered when you push a tag like `v1.0.2`. Builds the Helm chart,
+# packages it as a .tgz, attaches it to a GitHub Release, and updates
+# the gh-pages branch so `helm repo add sentinel https://...` picks it up.
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+  packages: write
+
+jobs:
+  release:
+    name: Build & publish release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.3
+
+      - name: Build chart dependencies
+        run: helm dependency build chart/
+
+      - name: Lint chart
+        run: helm lint chart/
+
+      - name: Read chart version
+        id: version
+        run: |
+          CHART_VERSION=$(yq -r '.version' chart/Chart.yaml)
+          APP_VERSION=$(yq -r '.appVersion' chart/Chart.yaml)
+          echo "chart_version=$CHART_VERSION" >> $GITHUB_OUTPUT
+          echo "app_version=$APP_VERSION" >> $GITHUB_OUTPUT
+          echo "Chart version: $CHART_VERSION, App version: $APP_VERSION"
+
+      - name: Package chart
+        run: |
+          mkdir -p packages
+          helm package chart/ -d packages/ --version ${{ steps.version.outputs.chart_version }}
+          ls -la packages/
+
+      - name: Generate release notes
+        id: notes
+        run: |
+          cat > /tmp/notes.md <<EOF
+          ## Sentinel ${{ github.ref_name }}
+
+          ### Install
+
+          \`\`\`bash
+          # 1. Copy the example values file
+          cp examples/my-values.yaml my-values.yaml
+
+          # 2. Edit it — fill in githubToken, llm.apiKey, pick your llm.provider
+          $EDITOR my-values.yaml
+
+          # 3. Install
+          helm repo add sentinel https://karimzakzoukz.github.io/sentinel/
+          helm install sentinel sentinel/sentinel \\
+            -f my-values.yaml \\
+            --namespace sentinel --create-namespace
+
+          # 4. Watch it come up
+          kubectl -n sentinel get pods -w
+
+          # 5. Open the UI
+          kubectl -n sentinel port-forward svc/sentinel-ui 8080:80
+          \`\`\`
+
+          See \`examples/my-values.yaml\` in the repo for all configuration options
+          (LLM provider, observability URLs, ingress, storage, governance thresholds).
+          EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Sentinel ${{ github.ref_name }}
+          body_path: /tmp/notes.md
+          files: packages/sentinel-${{ steps.version.outputs.chart_version }}.tgz
+          generate_release_notes: true
+
+  publish-helm-repo:
+    name: Publish to GitHub Pages (Helm repo)
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.3
+
+      - name: Build chart dependencies
+        run: helm dependency build chart/
+
+      - name: Package chart
+        run: |
+          mkdir -p gh-pages
+          helm package chart/ -d gh-pages/ --version $(yq -r '.version' chart/Chart.yaml)
+
+      - name: Download previously published charts
+        run: |
+          # Try to fetch existing index.yaml from gh-pages branch
+          git fetch origin gh-pages:gh-pages 2>/dev/null || true
+          if git show gh-pages:index.yaml > /dev/null 2>&1; then
+            git show gh-pages:index.yaml > gh-pages/index.yaml
+            git show gh-pages:sentinel-*.tgz > gh-pages/ 2>/dev/null || true
+          fi
+
+      - name: Rebuild Helm repo index
+        run: |
+          cd gh-pages
+          helm repo index . --url https://karimzakzoukz.github.io/sentinel/
+          ls -la
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: gh-pages
+          keep_files: true
