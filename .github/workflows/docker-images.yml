@@ -43,7 +43,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        service: [ingestion, detection, reasoning, safety, execution, feedback, operator, ui]
+        include:
+          - { service: ingestion,  dockerfile: services/ingestion/Dockerfile }
+          - { service: detection,  dockerfile: services/detection/Dockerfile }
+          - { service: reasoning,  dockerfile: services/reasoning/Dockerfile }
+          - { service: safety,     dockerfile: services/safety/Dockerfile }
+          - { service: execution,  dockerfile: services/execution/Dockerfile }
+          - { service: feedback,   dockerfile: services/feedback/Dockerfile }
+          - { service: operator,   dockerfile: services/operator/Dockerfile }
+          - { service: ui,         dockerfile: ui/Dockerfile }
     steps:
       - uses: actions/checkout@v4
 
@@ -86,7 +94,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: services/${{ matrix.service }}/Dockerfile
+          file: ${{ matrix.dockerfile }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
