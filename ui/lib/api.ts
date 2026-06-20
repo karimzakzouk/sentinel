@@ -62,7 +62,7 @@ export interface Incident {
     governance_decision: {
       verdict: string;
       confidence_at_decision: number;
-      rules_evaluated: Array<Record<string, unknown>>;
+      rules_evaluated: Array<{ rule: string; result: boolean }>;
       rollback_blocked_reason: string | null;
     } | null;
     execution_result: {

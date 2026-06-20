@@ -215,8 +215,8 @@ export default function IncidentDetailPage() {
                 <div className="w-2 h-2 rounded-full bg-[var(--color-accent)] mt-1.5 flex-shrink-0" />
                 <div className="flex-1">
                   <div className="flex items-center gap-2">
-                    <span className="text-[var(--color-accent)]">{entry.agent}</span>
-                    {entry.action && <span className="text-[var(--color-text-dim)]">/ {entry.action}</span>}
+                    <span className="text-[var(--color-accent)]">{String(entry.agent ?? "")}</span>
+                    {entry.action && <span className="text-[var(--color-text-dim)]">/ {String(entry.action)}</span>}
                   </div>
                   <pre className="text-[var(--color-text-dim)] mt-1 whitespace-pre-wrap">
                     {JSON.stringify(entry, null, 2)}
@@ -231,7 +231,7 @@ export default function IncidentDetailPage() {
                 </div>
                 {(inc.state.rewind_events || []).map((e, i) => (
                   <div key={i} className="text-xs font-mono text-[var(--color-text-dim)]">
-                    {e.raised_by}: {e.reason}
+                    {String(e.raised_by ?? "")}: {String(e.reason ?? "")}
                   </div>
                 ))}
               </div>
