@@ -16,7 +16,7 @@ default rollback_blocked := false
 production_namespaces := {"prod", "production", "payments"}
 high_risk_services := {"payment-api", "billing-api", "auth-service"}
 confidence_threshold_autonomous := 0.92
-confidence_threshold_human_review := 0.70
+confidence_threshold_human_review := 0.10
 max_replica_change_pct := 20
 
 # --- Derived facts ---
