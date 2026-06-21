@@ -159,9 +159,13 @@ class Normalizer:
         ev = raw.get("event", {})
         # K8s Event object shape (v1)
         involved = ev.get("involvedObject", {}) or {}
-        kind = involved.get("kind", "")
-        name = involved.get("name", "")
-        ns = involved.get("namespace", "default")
+        # Use `or` not `.get(key, default)` because some K8s events have
+        # namespace=None (cluster-scoped objects). `.get` returns None when
+        # the key exists but the value is None — Pydantic then rejects None
+        # for a str field.
+        kind = involved.get("kind") or ""
+        name = involved.get("name") or "unknown"
+        ns = involved.get("namespace") or "default"
         # Resolve service from labels on the involved object — Sentinel looks
         # for the standard app.kubernetes.io/name label.
         labels = ev.get("metadata", {}).get("labels", {}) or {}
