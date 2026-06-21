@@ -171,7 +171,7 @@ class Normalizer:
             or name
             or "unknown"
         )
-        return Signal(
+        sig = Signal(
             source=SignalSource.K8S_EVENTS,
             service=service,
             namespace=ns,
@@ -186,10 +186,16 @@ class Normalizer:
                 "count": ev.get("count", 1),
                 "annotations": ev.get("metadata", {}).get("annotations", {}),
             },
-            # If the pod had a sentinel.io/repo annotation, capture it for the
-            # reasoning layer's auto-discovery.
+            # If the pod had a sentinel.io/git_commit annotation, capture it.
             git_commit=(ev.get("metadata", {}).get("annotations", {}) or {}).get("sentinel.io/git_commit"),
         )
+        # Augment payload with workload annotations (collected by the
+        # K8sEventsCollector from the involved Deployment/Pod). These flow
+        # through to the Anomaly schema's `annotations` field and the
+        # Fix Proposer's `_discover_repo()` reads `sentinel.io/repo` from here.
+        workload_annotations = ev.get("workloadAnnotations", {}) or {}
+        sig.payload["workload_annotations"] = workload_annotations
+        return sig
 
     # ---------------- CD History ----------------
     def _norm_cd(self, raw: dict[str, Any]) -> Signal:

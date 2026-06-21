@@ -202,6 +202,131 @@ async def _query_jaeger(query: str, context_fetcher: Any) -> dict[str, Any]:
 
 
 async def _query_k8s(query: str, context_fetcher: Any) -> dict[str, Any]:
-    # The reasoning service doesn't have direct K8s API access — that's the
-    # operator's job. We'd send a request to the operator's API.
-    return {"note": "K8s queries are routed through the operator; not yet implemented in this node"}
+    """Query the Kubernetes API for evidence.
+
+    Supports query formats:
+      - "namespace:N kind:K [labelSelector:K=V] [fieldSelector:K=V] [limit:N]"
+        → lists resources of kind K in namespace N
+      - "events:namespace:N [fieldSelector:K=V] [limit:N]"
+        → lists recent events for the namespace (useful for BackOff, FailedScheduling, etc.)
+      - "logs:namespace:N pod:P [container:C] [limitBytes:N] [sinceSeconds:N]"
+        → fetches pod logs (truncated to 4KB to stay within LLM context budget)
+
+    Returns the raw K8s API response as a dict. Errors are returned as
+    {"error": "..."} so the Analyst can mark the evidence as weak.
+    """
+    import os
+    import re
+    try:
+        from kubernetes import client
+        from kubernetes.client import ApiClient
+        from kubernetes.config import load_incluster_config
+    except ImportError:
+        return {"error": "kubernetes python client not installed"}
+
+    # Load in-cluster config (the reasoning pod's service account)
+    try:
+        load_incluster_config()
+    except Exception:
+        # Fall back to kubeconfig if running outside cluster (dev mode)
+        try:
+            from kubernetes.config import load_kube_config
+            load_kube_config()
+        except Exception as e:
+            return {"error": f"no k8s config available: {e}"}
+
+    # Parse the query string
+    parts = dict(re.findall(r"(\w+):(\S+)", query))
+    namespace = parts.get("namespace", "default")
+    kind = parts.get("kind", "").lower()
+    limit = int(parts.get("limit", "50"))
+
+    api = ApiClient()
+
+    try:
+        # Events endpoint (most useful for incident investigation)
+        if kind == "event" or "events:" in query:
+            v1 = client.CoreV1Api(api)
+            field_selector = parts.get("fieldSelector", "")
+            kwargs = {"limit": limit}
+            if field_selector:
+                kwargs["field_selector"] = field_selector
+            events = v1.list_namespaced_event(namespace, **kwargs)
+            return {
+                "items": [
+                    {
+                        "name": e.metadata.name,
+                        "reason": e.reason,
+                        "message": e.message,
+                        "last_timestamp": e.last_timestamp.isoformat() if e.last_timestamp else None,
+                        "count": e.count,
+                        "involved_object": f"{e.involved_object.kind}/{e.involved_object.name}",
+                        "type": e.type,
+                    }
+                    for e in events.items[:limit]
+                ],
+                "count": len(events.items),
+            }
+
+        # Pod logs
+        if kind == "log" or "logs:" in query:
+            pod = parts.get("pod")
+            if not pod:
+                return {"error": "logs query requires 'pod:P' parameter"}
+            v1 = client.CoreV1Api(api)
+            kwargs = {"timestamps": True}
+            if "container" in parts:
+                kwargs["container"] = parts["container"]
+            if "sinceSeconds" in parts:
+                kwargs["since_seconds"] = int(parts["sinceSeconds"])
+            if "limitBytes" in parts:
+                kwargs["limit_bytes"] = int(parts["limitBytes"])
+            else:
+                kwargs["limit_bytes"] = 4096  # cap at 4KB for LLM context budget
+            log_text = v1.read_namespaced_pod_log(pod, namespace, **kwargs)
+            return {"pod": pod, "namespace": namespace, "log_tail": log_text[-4000:] if log_text else ""}
+
+        # Generic list (pods, deployments, etc.)
+        if kind in ("pod", "pods"):
+            v1 = client.CoreV1Api(api)
+            kwargs = {"limit": limit}
+            if "labelSelector" in parts:
+                kwargs["label_selector"] = parts["labelSelector"]
+            if "fieldSelector" in parts:
+                kwargs["field_selector"] = parts["fieldSelector"]
+            pods = v1.list_namespaced_pod(namespace, **kwargs)
+            return {
+                "items": [
+                    {
+                        "name": p.metadata.name,
+                        "phase": p.status.phase,
+                        "restart_count": sum(cs.restart_count for cs in (p.status.container_statuses or [])),
+                        "ready": all(cs.ready for cs in (p.status.container_statuses or [])) if p.status.container_statuses else False,
+                        "image": [cs.image for cs in (p.status.container_statuses or [])],
+                        "node": p.spec.node_name,
+                    }
+                    for p in pods.items[:limit]
+                ],
+                "count": len(pods.items),
+            }
+
+        if kind in ("deployment", "deployments"):
+            apps = client.AppsV1Api(api)
+            deps = apps.list_namespaced_deployment(namespace, limit=limit)
+            return {
+                "items": [
+                    {
+                        "name": d.metadata.name,
+                        "replicas": d.spec.replicas,
+                        "ready_replicas": d.status.ready_replicas or 0,
+                        "image": [c.image for c in d.spec.template.spec.containers],
+                        "conditions": [{"type": c.type, "status": c.status, "reason": c.reason} for c in (d.status.conditions or [])],
+                    }
+                    for d in deps.items[:limit]
+                ],
+                "count": len(deps.items),
+            }
+
+        return {"error": f"unsupported k8s kind: {kind!r}. Use 'event', 'pod', 'deployment', or 'log'."}
+    except Exception as e:
+        return {"error": f"k8s query failed: {type(e).__name__}: {e}"}

@@ -122,6 +122,15 @@ class Anomaly(BaseModel):
     score: float = Field(..., ge=0.0, le=1.0, description="Anomaly score 0..1")
     dimensions: dict[str, float] = Field(default_factory=dict, description="Metric->value at anomaly time")
     explanation: str = Field(default="")
+    # K8s annotations from the affected workload (e.g. Deployment/StatefulSet).
+    # Populated by the ingestion layer's K8s collector. Used by downstream
+    # agents to discover the GitHub repo, runbook URLs, team ownership, etc.
+    # Standard keys:
+    #   sentinel.io/repo        — "github.com/owner/repo" (used by Fix Proposer)
+    #   sentinel.io/runbook     — URL to the service's runbook
+    #   sentinel.io/team        — owning team name (for governance routing)
+    #   sentinel.io/ignore      — "true" to opt this workload out of Sentinel
+    annotations: dict[str, str] = Field(default_factory=dict)
 
 
 class AnomalyCluster(BaseModel):
@@ -140,6 +149,9 @@ class AnomalyCluster(BaseModel):
     # of downstream 504s.
     trace_id: Optional[str] = None
     severity: Severity = Severity.WARNING
+    # Aggregated annotations from all member anomalies (last-write-wins).
+    # Convenience field so downstream agents don't have to iterate.
+    annotations: dict[str, str] = Field(default_factory=dict)
 
 
 # ---------- Layer 3: Reasoning ----------

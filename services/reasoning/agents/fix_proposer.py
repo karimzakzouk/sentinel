@@ -135,17 +135,33 @@ async def fix_proposer_node(state: AgentState, *, llm_router: Any,
 def _discover_repo(state: AgentState) -> str | None:
     """Discover the GitHub repo for this service.
 
-    In production the operator sets this on the AgentState before invoking
-    the graph — it reads the K8s annotation `sentinel.io/repo` from the pod.
-    For now, we just return whatever's set on the cluster's first anomaly.
+    Reads the `sentinel.io/repo` annotation from the cluster (aggregated from
+    member anomalies' K8s workload annotations by the ingestion layer).
+
+    Standard annotation values:
+      - "github.com/owner/repo"   — full GitHub URL
+      - "owner/repo"              — short form, treated as github.com
+      - "" / missing              — repo unknown, returns None
+
+    Returns None if no annotation is present. In that case the Fix Proposer
+    will still produce a FixProposal, but the Execution layer will not be
+    able to open a PR — the incident will be escalated for human review.
     """
-    # Look for a sentinel.io/repo annotation on any signal — this would be
-    # populated by the ingestion layer's K8s collector
+    annotations = state.cluster.annotations or {}
     for a in state.cluster.anomalies:
-        # signal_id is what we have — the actual signal payload is in the DB.
-        # In production the operator pre-fetches this and sets it on state.
-        pass
-    return None  # Operator will fill this in
+        annotations = {**a.annotations, **annotations}
+
+    repo = annotations.get("sentinel.io/repo", "").strip()
+    if not repo:
+        return None
+
+    # Normalize: accept both "github.com/owner/repo" and "owner/repo"
+    if repo.startswith("github.com/"):
+        repo = "https://" + repo
+    elif "/" in repo and not repo.startswith("http"):
+        repo = "https://github.com/" + repo
+
+    return repo if repo.startswith("http") else None
 
 
 def _build_user_message(state: AgentState) -> str:
