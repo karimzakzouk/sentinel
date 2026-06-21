@@ -652,7 +652,7 @@ async def _safety_evaluate(incident: Incident, opa: Any) -> None:
     incident.touch()
     await incident_store.upsert(incident.model_dump(mode="json"))
     await event_store.append(incident.incident_id, "safety", "governance_decision",
-                              agent="safety", payload=decision.model_dump())
+                              agent="safety", payload=decision.model_dump(mode="json"))
 
 
 async def _execution_loop() -> None:

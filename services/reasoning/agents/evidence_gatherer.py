@@ -89,7 +89,7 @@ async def evidence_gatherer_node(state: AgentState, *, llm_router: Any,
         })
         await event_store.append(incident_id, "reasoning", "rewind_event",
                                   agent="evidence_gatherer",
-                                  payload=ev.model_dump())
+                                  payload=ev.model_dump(mode="json"))
         return state.model_dump(mode="json")
 
     # 3. Execute each query
@@ -125,7 +125,7 @@ async def evidence_gatherer_node(state: AgentState, *, llm_router: Any,
     })
     await event_store.append(incident_id, "reasoning", "evidence_gathered",
                               agent="evidence_gatherer",
-                              payload={"evidence": [e.model_dump() for e in new_evidence]})
+                              payload={"evidence": [e.model_dump(mode="json") for e in new_evidence]})
 
     return state.model_dump(mode="json")
 

@@ -63,7 +63,7 @@ async def analyst_node(state: AgentState, *, llm_router: Any,
         state.rewind_events.append(RewindEvent(
             raised_by="analyst",
             reason="all_hypotheses_falsified",
-            new_context={"falsified_hypotheses": [h.model_dump() for h in state.hypotheses]},
+            new_context={"falsified_hypotheses": [h.model_dump(mode="json") for h in state.hypotheses]},
         ))
         state.hypotheses = []
         state.agent_trace.append({"agent": "analyst", "action": "rewind_all_falsified"})
@@ -122,7 +122,7 @@ async def analyst_node(state: AgentState, *, llm_router: Any,
     })
     await event_store.append(incident_id, "reasoning", "root_cause_identified",
                               agent="analyst",
-                              payload={"root_cause": state.root_cause.model_dump(),
+                              payload={"root_cause": state.root_cause.model_dump(mode="json"),
                                        "falsified_hypotheses": [h.h_id for h in state.hypotheses if h.falsified]})
 
     return state.model_dump(mode="json")

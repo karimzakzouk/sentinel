@@ -128,7 +128,7 @@ async def fix_proposer_node(state: AgentState, *, llm_router: Any,
     })
     await event_store.append(incident_id, "reasoning", "fix_proposed",
                               agent="fix_proposer",
-                              payload={"fix_proposal": proposal.model_dump()})
+                              payload={"fix_proposal": proposal.model_dump(mode="json")})
 
     return state.model_dump(mode="json")
 

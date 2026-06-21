@@ -155,6 +155,12 @@ class EventStore:
 
     async def append(self, incident_id: UUID, layer: str, event_type: str,
                      agent: Optional[str] = None, payload: Optional[dict[str, Any]] = None) -> None:
+        # Defensive JSON sanitization: convert any datetime/UUID/Decimal objects
+        # to JSON-safe types before inserting into the JSONB column. This prevents
+        # "Object of type datetime is not JSON serializable" errors when callers
+        # forget to use model_dump(mode="json").
+        import json
+        safe_payload = json.loads(json.dumps(payload or {}, default=str))
         async with self.engine.begin() as conn:
             await conn.execute(events_table.insert().values(
                 incident_id=incident_id,
@@ -162,7 +168,7 @@ class EventStore:
                 layer=layer,
                 agent=agent,
                 event_type=event_type,
-                payload=payload or {},
+                payload=safe_payload,
             ))
 
     async def for_incident(self, incident_id: UUID) -> list[dict[str, Any]]:

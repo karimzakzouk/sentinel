@@ -119,7 +119,7 @@ async def investigator_node(state: AgentState, *, llm_router: Any,
         })
         await event_store.append(incident_id, "reasoning", "hypotheses_formed",
                                   agent="investigator",
-                                  payload={"hypotheses": [h.model_dump() for h in new_hyps]})
+                                  payload={"hypotheses": [h.model_dump(mode="json") for h in new_hyps]})
     except (ValidationError, ValueError) as ve:
         log.error("Hypothesis validation failed: %s", ve)
         state.status = IncidentStatus.FAILED

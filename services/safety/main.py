@@ -180,7 +180,7 @@ async def _process_incident(incident: Incident) -> None:
         ))
 
     await event_store.append(incident.incident_id, "safety", "governance_decision",
-                              agent="safety", payload=decision.model_dump())
+                              agent="safety", payload=decision.model_dump(mode="json"))
 
     # Route
     if verdict == GovernanceVerdict.ALLOW:
