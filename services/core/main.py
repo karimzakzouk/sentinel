@@ -277,6 +277,100 @@ app.add_middleware(
 
 # ─── Background loops ───────────────────────────────────────────────────────
 
+# Annotation keys Sentinel recognizes on workloads
+_SENTINEL_ANNOTATION_KEYS = (
+    "sentinel.io/repo",
+    "sentinel.io/runbook",
+    "sentinel.io/team",
+    "sentinel.io/ignore",
+    "sentinel.io/owner",
+    "sentinel.io/criticality",
+)
+
+
+async def _lookup_workload_annotations(service: str, namespace: str) -> dict[str, str]:
+    """Look up sentinel.io/* annotations from the workload matching `service`.
+
+    Tries (in order):
+      1. Deployment named exactly `service` or `service-sentinel-sim` (Helm convention)
+      2. Deployment with label app.kubernetes.io/name=service
+      3. StatefulSet named `service`
+      4. Any Pod with label app.kubernetes.io/name=service (and walks up to its owner)
+
+    Returns {} if K8s API is unavailable or no matching workload is found.
+    Logs at debug level so it doesn't spam — this runs for every CR.
+    """
+    from kubernetes import client
+    try:
+        apps = client.AppsV1Api()
+        core = client.CoreV1Api()
+    except Exception:
+        return {}
+
+    # Try a few likely Deployment names
+    candidate_names = {service, f"{service}-sentinel-sim"}
+    annotations: dict[str, str] = {}
+
+    # 1. Try by name (most common — Helm chart names deployments predictably)
+    for name in candidate_names:
+        try:
+            dep = await asyncio.to_thread(apps.read_namespaced_deployment, name, namespace)
+            ann = dep.metadata.annotations or {}
+            annotations.update({k: v for k, v in ann.items() if k in _SENTINEL_ANNOTATION_KEYS})
+            # Also check pod template annotations
+            tmpl_ann = dep.spec.template.metadata.annotations or {}
+            annotations.update({k: v for k, v in tmpl_ann.items() if k in _SENTINEL_ANNOTATION_KEYS})
+            if annotations:
+                return annotations
+        except Exception:
+            pass  # not found, try next
+
+    # 2. Try by label selector
+    try:
+        deps = await asyncio.to_thread(
+            apps.list_namespaced_deployment, namespace,
+            label_selector=f"app.kubernetes.io/name={service}",
+        )
+        for dep in (deps.items or [])[:1]:  # just take the first match
+            ann = dep.metadata.annotations or {}
+            annotations.update({k: v for k, v in ann.items() if k in _SENTINEL_ANNOTATION_KEYS})
+            tmpl_ann = dep.spec.template.metadata.annotations or {}
+            annotations.update({k: v for k, v in tmpl_ann.items() if k in _SENTINEL_ANNOTATION_KEYS})
+            if annotations:
+                return annotations
+    except Exception:
+        pass
+
+    # 3. Try StatefulSet by name
+    for name in candidate_names:
+        try:
+            sts = await asyncio.to_thread(apps.read_namespaced_stateful_set, name, namespace)
+            ann = sts.metadata.annotations or {}
+            annotations.update({k: v for k, v in ann.items() if k in _SENTINEL_ANNOTATION_KEYS})
+            tmpl_ann = sts.spec.template.metadata.annotations or {}
+            annotations.update({k: v for k, v in tmpl_ann.items() if k in _SENTINEL_ANNOTATION_KEYS})
+            if annotations:
+                return annotations
+        except Exception:
+            pass
+
+    # 4. Try Pods (last resort)
+    try:
+        pods = await asyncio.to_thread(
+            core.list_namespaced_pod, namespace,
+            label_selector=f"app.kubernetes.io/name={service}",
+        )
+        for pod in (pods.items or [])[:1]:
+            ann = pod.metadata.annotations or {}
+            annotations.update({k: v for k, v in ann.items() if k in _SENTINEL_ANNOTATION_KEYS})
+            if annotations:
+                return annotations
+    except Exception:
+        pass
+
+    return annotations
+
+
 async def _crd_watcher_loop() -> None:
     """Watch for SentinelIncident CRs and trigger investigations automatically.
 
@@ -317,7 +411,22 @@ async def _crd_watcher_loop() -> None:
                 service = spec.get("service", "unknown")
                 svc_ns = spec.get("namespace", ns)
                 reason = spec.get("reason", "triggered by CRD")
+                repo_from_spec = spec.get("repo")  # CR allows caller to specify the repo directly
                 log.info("CRD watcher: new SentinelIncident %s (service=%s, reason=%s)", key, service, reason)
+
+                # Discover sentinel.io/* annotations from the affected workload
+                # so the Fix Proposer can find the GitHub repo. Walks:
+                #   1. spec.repo (if set on the CR — highest priority)
+                #   2. sentinel.io/repo annotation on the Deployment/StatefulSet
+                #      matching `service` in namespace `svc_ns`
+                #   3. sentinel.io/repo annotation on any Pod owned by that Deployment
+                workload_annotations = await _lookup_workload_annotations(service, svc_ns)
+                if repo_from_spec:
+                    workload_annotations["sentinel.io/repo"] = repo_from_spec
+                if workload_annotations:
+                    log.info("CRD watcher: discovered annotations for %s: %s",
+                             service, list(workload_annotations.keys()))
+
                 # Build a synthetic anomaly cluster and publish it
                 from sentinel_common import Anomaly, AnomalyCluster, Severity
                 anomaly = Anomaly(
@@ -328,6 +437,7 @@ async def _crd_watcher_loop() -> None:
                     score=0.8,
                     dimensions={"manual": 1.0},
                     explanation=f"SentinelIncident CR: {reason}",
+                    annotations=workload_annotations,
                 )
                 cluster = AnomalyCluster(
                     service=service,
@@ -335,6 +445,7 @@ async def _crd_watcher_loop() -> None:
                     anomalies=[anomaly],
                     summary=f"SentinelIncident: {reason}",
                     severity=Severity.WARNING,
+                    annotations=workload_annotations,
                 )
                 if bus is not None:
                     await bus.publish_model(settings.kafka_topic_anomalies, cluster, key=service)
@@ -790,11 +901,15 @@ async def update_runtime_settings(update: SettingsUpdate) -> dict[str, Any]:
                 settings.llm_fast_model = value
             elif field == "llm_frontier_model":
                 settings.llm_frontier_model = value
-        # Re-create the LLM router if any LLM settings changed
-        if any(f in changed for f in ("llm_provider", "llm_api_key", "llm_fast_model", "llm_frontier_model")):
-            global llm_router
-            llm_router = LLMRouter(settings)
-            log.info("LLM router re-created with provider=%s, model=%s", settings.llm_provider, settings.llm_frontier_model)
+    # Re-create the LLM router ONCE after all field updates (was previously
+    # inside the per-field loop — caused up to 4 re-creations if all LLM
+    # settings changed at once, and the `global llm_router` declaration was
+    # being re-evaluated per iteration which is a Python smell).
+    if any(f in changed for f in ("llm_provider", "llm_api_key", "llm_fast_model", "llm_frontier_model")):
+        global llm_router
+        llm_router = LLMRouter(settings)
+        log.info("LLM router re-created with provider=%s, model=%s",
+                 settings.llm_provider, settings.llm_frontier_model)
     # Persist to K8s ConfigMap + Secret (survives pod restarts)
     if settings_store is not None and settings_store.available:
         try:

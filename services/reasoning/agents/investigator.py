@@ -16,6 +16,7 @@ from pydantic import ValidationError
 
 from sentinel_common import Hypothesis, RewindEvent
 from sentinel_common.schemas import AgentState
+from agents._repo_discovery import _discover_repo_from_state
 
 log = logging.getLogger(__name__)
 
@@ -70,10 +71,12 @@ async def investigator_node(state: AgentState, *, llm_router: Any,
     similar = await context_fetcher.retrieve_similar_incidents(cluster, top_k=5)
     state.retrieved_incidents = similar
 
-    # 4. Auto-discover repo from K8s annotations (handled by operator before
-    # this point — for now, we use any repo we can find from the cluster's
-    # namespace+service naming convention).
-    repo = state.cluster.service  # placeholder; operator should set this
+    # 4. Auto-discover the GitHub repo from the cluster's annotations.
+    # The ingestion layer (or CRD watcher, for manual triggers) populates
+    # state.cluster.annotations with sentinel.io/repo. Without this, we
+    # can't fetch source code and the Investigator has no code context
+    # to form hypotheses against.
+    repo = _discover_repo_from_state(state)
 
     # 5. Fetch the source code for the files we identified
     fetched = await context_fetcher.fetch_files_for_cluster(cluster, repo=repo)
