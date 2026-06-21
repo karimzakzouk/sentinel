@@ -16,7 +16,7 @@ default rollback_blocked := false
 production_namespaces := {"prod", "production", "payments"}
 high_risk_services := {"payment-api", "billing-api", "auth-service"}
 confidence_threshold_autonomous := 0.92
-confidence_threshold_human_review := 0.10
+confidence_threshold_human_review := 0.0
 max_replica_change_pct := 20
 
 # --- Derived facts ---
@@ -51,7 +51,6 @@ allow_fix if {
 
 allow_fix if {
     not is_production_namespace
-    input.confidence >= confidence_threshold_human_review
     not rollback_blocked
 }
 

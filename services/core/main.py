@@ -54,7 +54,15 @@ from sqlalchemy.ext.asyncio import create_async_engine
 # Import the core logic from each service (not the FastAPI apps — those have
 # their own lifespans and would conflict)
 from normalizer import Normalizer
-from detectors.isolation_forest import IsolationForestDetector
+# IsolationForestDetector requires scikit-learn (150 MB). In core mode we
+# don't need it — the CRD watcher + rules detector handle incidents. Make
+# the import conditional so the core image can be smaller.
+try:
+    from detectors.isolation_forest import IsolationForestDetector
+    HAS_SKLEARN = True
+except ImportError:
+    IsolationForestDetector = None  # type: ignore
+    HAS_SKLEARN = False
 from detectors.cusum import CUSUMDetector
 from detectors.rules import RulesDetector
 from detectors.clusterer import AnomalyClusterer
@@ -207,7 +215,12 @@ async def lifespan(app: FastAPI):
     log.info("Database initialized")
 
     # 3. Detectors
-    if_detector = IsolationForestDetector(contamination=0.05, min_samples=50)
+    if HAS_SKLEARN and IsolationForestDetector is not None:
+        if_detector = IsolationForestDetector(contamination=0.05, min_samples=50)
+        log.info("IsolationForest detector initialized")
+    else:
+        if_detector = None
+        log.info("IsolationForest detector skipped (scikit-learn not installed)")
     cusum_detector = CUSUMDetector(threshold=5.0, drift=0.02)
     rules_detector = RulesDetector(
         cpu_critical_pct=settings.panic_cpu_threshold_pct,
@@ -496,7 +509,7 @@ async def _ingestion_loop() -> None:
 
 async def _detection_loop() -> None:
     """Consume signals, run detectors, publish anomaly clusters."""
-    assert bus is not None and if_detector is not None and cusum_detector is not None
+    assert bus is not None and cusum_detector is not None
     assert rules_detector is not None and clusterer is not None
     consumer = bus.consumer(settings.kafka_topic_signals, "sentinel-core-detection")
     try:
@@ -504,9 +517,11 @@ async def _detection_loop() -> None:
             try:
                 sig = Signal.model_validate_json(raw if isinstance(raw, bytes) else raw.value)
                 anomalies = []
-                af = await if_detector.observe(sig)
-                if af:
-                    anomalies.append(af)
+                # Isolation Forest is optional (requires scikit-learn)
+                if if_detector is not None:
+                    af = await if_detector.observe(sig)
+                    if af:
+                        anomalies.append(af)
                 for cf in await cusum_detector.observe(sig):
                     anomalies.append(cf)
                 for rf in await rules_detector.observe(sig):

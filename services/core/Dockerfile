@@ -1,11 +1,9 @@
-FROM python:3.12-slim
+# ── Builder stage: install deps ──────────────────────────────────────────
+FROM python:3.12-slim AS builder
 
-# Install system deps for kubernetes client + weaviate + sklearn
+# Install only the minimum system deps needed for pip builds
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    unzip curl ca-certificates git \
-    && curl -sL https://releases.hashicorp.com/terraform/1.9.5/terraform_1.9.5_linux_amd64.zip -o /tmp/tf.zip \
-    && unzip /tmp/tf.zip -d /usr/local/bin \
-    && rm /tmp/tf.zip \
+    curl ca-certificates \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -14,16 +12,36 @@ WORKDIR /app
 COPY services/common /tmp/common
 RUN pip install --no-cache-dir /tmp/common
 
-# Install ALL service dependencies in one layer
+# Install ONLY the deps core mode actually needs.
+# Removed (moved to their respective service images or not needed in core mode):
+#   - scikit-learn + scipy + numpy → only used by IsolationForestDetector
+#     (detection image). Core mode uses rules-based detector only.
+#   - kopf + aiokafka → only for distributed mode (Kafka). Core mode uses
+#     in-memory bus.
+#   - Terraform binary → only for infrastructure fix type. Not used in core mode.
 RUN pip install --no-cache-dir \
     fastapi uvicorn httpx tenacity \
     langgraph langchain-openai openai \
-    pygithub kubernetes kopf \
-    weaviate-client scikit-learn numpy \
-    "sqlalchemy[asyncio]" asyncpg aiokafka \
+    pygithub kubernetes \
+    weaviate-client \
+    "sqlalchemy[asyncio]" asyncpg \
     prometheus-client pydantic-settings
 
-# Copy all the service code
+# ── Runtime stage: minimal image, no build tools ────────────────────────
+FROM python:3.12-slim AS runtime
+
+# Only install runtime deps (no build tools like gcc)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy installed Python packages from builder
+COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
+
+# Copy all the service code (only ~500 KB total)
 COPY services/common /app/services/common
 COPY services/ingestion /app/services/ingestion
 COPY services/detection /app/services/detection
