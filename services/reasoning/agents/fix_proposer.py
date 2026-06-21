@@ -62,7 +62,7 @@ async def fix_proposer_node(state: AgentState, *, llm_router: Any,
         log.warning("Fix Proposer called without root cause")
         state.status = IncidentStatus.FAILED
         state.error = "fix_proposer_no_root_cause"
-        return {"state": state.model_dump(mode="json")}
+        return state.model_dump(mode="json")
 
     rc = state.root_cause
 
@@ -92,7 +92,7 @@ async def fix_proposer_node(state: AgentState, *, llm_router: Any,
             log.error("Fix Proposer LLM call failed: %s", e)
             state.status = IncidentStatus.FAILED
             state.error = f"fix_proposer_llm_failure: {e}"
-            return {"state": state.model_dump(mode="json")}
+            return state.model_dump(mode="json")
 
         try:
             fix_type = FixType(result.get("fix_type", "code_fix"))
@@ -129,7 +129,7 @@ async def fix_proposer_node(state: AgentState, *, llm_router: Any,
                               agent="fix_proposer",
                               payload={"fix_proposal": proposal.model_dump()})
 
-    return {"state": state.model_dump(mode="json")}
+    return state.model_dump(mode="json")
 
 
 def _discover_repo(state: AgentState) -> str | None:

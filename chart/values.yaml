@@ -193,16 +193,8 @@ opa:
     limits: { cpu: 200m, memory: 256Mi }
 
 # Infrastructure dependencies (toggle off if you bring your own)
-postgres:
-  enabled: true
-  auth:
-    username: sentinel
-    password: sentinel
-    database: sentinel
-  primary:
-    persistence:
-      size: 10Gi
-
+# Note: full postgres configuration (including backup settings) is below —
+# see the second `postgres:` block. Don't add another one here.
 kafka:
   # Disabled in core mode (default). Set to true ONLY if mode=distributed.
   enabled: false

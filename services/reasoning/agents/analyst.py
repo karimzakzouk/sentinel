@@ -34,7 +34,7 @@ async def analyst_node(state: AgentState, *, llm_router: Any,
         log.warning("Analyst called with no hypotheses")
         state.status = IncidentStatus.FAILED
         state.error = "analyst_no_hypotheses"
-        return {"state": state.model_dump(mode="json")}
+        return state.model_dump(mode="json")
 
     # 1. Falsify: any hypothesis with strong contradicting evidence is dead.
     for h in state.hypotheses:
@@ -70,7 +70,7 @@ async def analyst_node(state: AgentState, *, llm_router: Any,
         await event_store.append(incident_id, "reasoning", "rewind_event",
                                   agent="analyst",
                                   payload={"reason": "all_hypotheses_falsified"})
-        return {"state": state.model_dump(mode="json")}
+        return state.model_dump(mode="json")
 
     survivors.sort(key=lambda h: h.confidence, reverse=True)
     survivor = survivors[0]
@@ -125,7 +125,7 @@ async def analyst_node(state: AgentState, *, llm_router: Any,
                               payload={"root_cause": state.root_cause.model_dump(),
                                        "falsified_hypotheses": [h.h_id for h in state.hypotheses if h.falsified]})
 
-    return {"state": state.model_dump(mode="json")}
+    return state.model_dump(mode="json")
 
 
 def _is_strong_result(result: dict[str, Any]) -> bool:

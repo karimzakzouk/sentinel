@@ -59,7 +59,7 @@ async def evidence_gatherer_node(state: AgentState, *, llm_router: Any,
     incident_id = state.incident_id
     if not state.hypotheses:
         log.warning("Evidence Gatherer called with no hypotheses")
-        return {"state": state.model_dump(mode="json")}
+        return state.model_dump(mode="json")
 
     # 1. Ask LLM for the evidence queries
     user_msg = _build_user_message(state)
@@ -69,7 +69,7 @@ async def evidence_gatherer_node(state: AgentState, *, llm_router: Any,
         log.error("Evidence Gatherer LLM call failed: %s", e)
         state.status = "failed"
         state.error = f"evidence_gatherer_llm_failure: {e}"
-        return {"state": state.model_dump(mode="json")}
+        return state.model_dump(mode="json")
 
     # 2. Check for rewind (Layer 6 edge case #3)
     rewind = result.get("rewind")
@@ -90,7 +90,7 @@ async def evidence_gatherer_node(state: AgentState, *, llm_router: Any,
         await event_store.append(incident_id, "reasoning", "rewind_event",
                                   agent="evidence_gatherer",
                                   payload=ev.model_dump())
-        return {"state": state.model_dump(mode="json")}
+        return state.model_dump(mode="json")
 
     # 3. Execute each query
     queries = result.get("evidence_queries", [])
@@ -127,7 +127,7 @@ async def evidence_gatherer_node(state: AgentState, *, llm_router: Any,
                               agent="evidence_gatherer",
                               payload={"evidence": [e.model_dump() for e in new_evidence]})
 
-    return {"state": state.model_dump(mode="json")}
+    return state.model_dump(mode="json")
 
 
 def _build_user_message(state: AgentState) -> str:

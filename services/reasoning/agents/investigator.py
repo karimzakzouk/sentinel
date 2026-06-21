@@ -89,7 +89,7 @@ async def investigator_node(state: AgentState, *, llm_router: Any,
         log.error("Investigator LLM call failed: %s", e)
         state.status = "failed"
         state.error = f"investigator_llm_failure: {e}"
-        return {"state": state.model_dump(mode="json")}
+        return state.model_dump(mode="json")
 
     # 8. Parse + validate hypotheses
     try:
@@ -121,9 +121,9 @@ async def investigator_node(state: AgentState, *, llm_router: Any,
         log.error("Hypothesis validation failed: %s", ve)
         state.status = "failed"
         state.error = f"hypothesis_validation: {ve}"
-        return {"state": state.model_dump(mode="json")}
+        return state.model_dump(mode="json")
 
-    return {"state": state.model_dump(mode="json")}
+    return state.model_dump(mode="json")
 
 
 def _build_user_message(state: AgentState, anchor: dict[str, Any] | None,

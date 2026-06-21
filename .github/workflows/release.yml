@@ -164,13 +164,25 @@ jobs:
         run: |
           git config user.email "actions@github.com"
           git config user.name "GitHub Actions"
-          git fetch origin gh-pages:gh-pages 2>/dev/null || true
-          git checkout gh-pages 2>/dev/null || git checkout --orphan gh-pages
-          git checkout main -- chart/gh-pages-index.html
-          cp chart/gh-pages-index.html index.html
+
+          # Clone gh-pages into a separate directory so we don't have to
+          # switch the main worktree's branch (which previously broke on
+          # `git checkout main -- chart/gh-pages-index.html` because the local
+          # `main` ref doesn't exist after actions/checkout + branch switch).
+          rm -rf /tmp/gh-pages
+          git clone --branch gh-pages --depth 1 \
+            https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} \
+            /tmp/gh-pages 2>/dev/null || mkdir -p /tmp/gh-pages
+
+          cd /tmp/gh-pages
+          git config user.email "actions@github.com"
+          git config user.name "GitHub Actions"
+          cp ${GITHUB_WORKSPACE}/chart/gh-pages-index.html index.html
           cp /tmp/sentinel-${{ steps.version.outputs.version }}.tgz .
           helm repo index . --url https://karimzakzoukz.github.io/sentinel/
           touch .nojekyll
           git add -A
           git commit -m "Publish chart v${{ steps.version.outputs.version }}" || true
-          git push origin gh-pages --force
+          git push https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} gh-pages --force
+
+          cd ${GITHUB_WORKSPACE}

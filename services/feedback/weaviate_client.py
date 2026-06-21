@@ -59,8 +59,9 @@ class WeaviateStore:
             host = self.settings.weaviate_url.replace("http://", "").replace("https://", "")
             hostname, _, port = host.partition(":")
             self._client = weaviate.connect_to_local(
-                hostname=hostname or "sentinel-weaviate",
+                host=hostname or "sentinel-weaviate",
                 port=int(port) if port else 8080,
+                skip_init_checks=True,
             )
             return self._client
         except Exception as e:  # noqa: BLE001
