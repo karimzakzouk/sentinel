@@ -133,10 +133,76 @@ def _extract_json(text: str) -> dict[str, Any]:
         except (json.JSONDecodeError, Exception):
             continue
 
+    # Fallback: try to repair truncated JSON (LLM hit max_tokens mid-response)
+    for candidate in candidates:
+        try:
+            repaired = _repair_truncated_json(candidate)
+            if repaired:
+                return json.loads(repaired)
+        except (json.JSONDecodeError, Exception):
+            continue
+
     # Last resort: return empty dict so the caller doesn't crash.
     # The agent will see no hypotheses/evidence and can handle it gracefully.
     log.error("Could not parse JSON from LLM response: %s", text[:200])
     return {}
+
+
+def _repair_truncated_json(text: str) -> str | None:
+    """Attempt to repair JSON that was truncated mid-response.
+
+    When an LLM hits max_tokens, the JSON gets cut off mid-string or mid-object.
+    This function tries to close open strings, arrays, and objects to make it
+    parseable. Returns None if it can't be repaired.
+    """
+    import re
+
+    # Find the start of the JSON object
+    start = text.find('{')
+    if start == -1:
+        return None
+
+    snippet = text[start:]
+
+    # Count unclosed braces, brackets, and strings
+    in_string = False
+    escape_next = False
+    open_braces = 0
+    open_brackets = 0
+
+    for i, c in enumerate(snippet):
+        if escape_next:
+            escape_next = False
+            continue
+        if c == '\\':
+            escape_next = True
+            continue
+        if c == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if c == '{':
+            open_braces += 1
+        elif c == '}':
+            open_braces -= 1
+        elif c == '[':
+            open_brackets += 1
+        elif c == ']':
+            open_brackets -= 1
+
+    # If we're in an unclosed string, close it
+    if in_string:
+        snippet += '"'
+
+    # Remove any trailing comma (would be invalid after closing)
+    snippet = re.sub(r',\s*$', '', snippet.rstrip())
+
+    # Close open brackets and braces
+    snippet += ']' * max(open_brackets, 0)
+    snippet += '}' * max(open_braces, 0)
+
+    return snippet
 
 
 def _clean_json_quirks(text: str) -> str:

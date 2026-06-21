@@ -87,7 +87,7 @@ async def investigator_node(state: AgentState, *, llm_router: Any,
 
     # 7. Call LLM
     try:
-        result = await llm_router.frontier_json(SYSTEM_PROMPT, user_msg, max_tokens=2500)
+        result = await llm_router.frontier_json(SYSTEM_PROMPT, user_msg, max_tokens=4000)
     except Exception as e:  # noqa: BLE001
         log.error("Investigator LLM call failed: %s", e)
         state.status = IncidentStatus.FAILED

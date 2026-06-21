@@ -64,7 +64,7 @@ async def evidence_gatherer_node(state: AgentState, *, llm_router: Any,
     # 1. Ask LLM for the evidence queries
     user_msg = _build_user_message(state)
     try:
-        result = await llm_router.fast_json(SYSTEM_PROMPT, user_msg, max_tokens=2000)
+        result = await llm_router.fast_json(SYSTEM_PROMPT, user_msg, max_tokens=4000)
     except Exception as e:  # noqa: BLE001
         log.error("Evidence Gatherer LLM call failed: %s", e)
         # Don't fail the whole investigation — continue with no evidence.
