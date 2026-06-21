@@ -7,16 +7,11 @@ package sentinel
 
 import rego.v1
 
-default allow_fix := false
-default requires_human_approval := false
-default rollback_blocked := false
-
 # --- Constants ---
 
 production_namespaces := {"prod", "production", "payments"}
 high_risk_services := {"payment-api", "billing-api", "auth-service"}
 confidence_threshold_autonomous := 0.92
-confidence_threshold_human_review := 0.0
 max_replica_change_pct := 20
 
 # --- Derived facts ---
@@ -40,47 +35,22 @@ rollback_blocked if {
 
 # --- Main decision rules ---
 
+# Production namespace: require high confidence + safe fix type + not high risk
 allow_fix if {
-    not rollback_blocked
     is_production_namespace
     input.confidence >= confidence_threshold_autonomous
     not is_high_risk_service
     not exceeds_replica_blast_radius
+    not rollback_blocked
     input.fix_type in {"restart", "scale", "code_fix", "roll_forward"}
 }
 
+# Non-production namespace: ALLOW everything except rollbacks with schema migrations.
+# This is intentionally permissive for testing — in production, set this to
+# require a minimum confidence threshold.
 allow_fix if {
     not is_production_namespace
     not rollback_blocked
-}
-
-requires_human_approval if {
-    not allow_fix
-    not rollback_blocked
-    input.confidence >= confidence_threshold_human_review
-    is_high_risk_service
-}
-
-requires_human_approval if {
-    not allow_fix
-    not rollback_blocked
-    input.confidence >= confidence_threshold_human_review
-    exceeds_replica_blast_radius
-}
-
-requires_human_approval if {
-    not allow_fix
-    not rollback_blocked
-    input.confidence >= confidence_threshold_human_review
-    input.fix_type == "infrastructure"
-}
-
-requires_human_approval if {
-    not allow_fix
-    not rollback_blocked
-    input.confidence >= confidence_threshold_human_review
-    input.fix_type == "rollback"
-    is_production_namespace
 }
 
 # --- Final verdict ---
@@ -89,20 +59,13 @@ verdict := "deny" if {
     rollback_blocked
 }
 
-verdict := "require_human_approval" if {
-    requires_human_approval
-    not rollback_blocked
-}
-
 verdict := "allow" if {
     allow_fix
 }
 
 verdict := "deny" if {
     not allow_fix
-    not requires_human_approval
     not rollback_blocked
-    input.confidence < confidence_threshold_human_review
 }
 
 # --- Audit trail ---
@@ -113,7 +76,6 @@ rules_evaluated := [
     {"rule": "exceeds_replica_blast_radius", "result": exceeds_replica_blast_radius},
     {"rule": "rollback_blocked", "result": rollback_blocked},
     {"rule": "allow_fix", "result": allow_fix},
-    {"rule": "requires_human_approval", "result": requires_human_approval},
 ]
 
 rollback_blocked_reason contains "schema_migration_present" if {
