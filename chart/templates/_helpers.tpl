@@ -69,9 +69,9 @@ Standard env vars shared by all Python services.
 - name: SENTINEL_POSTGRES_URL
   value: {{ printf "postgresql://%s:%s@%s-postgresql:5432/%s" .Values.postgres.auth.username .Values.postgres.auth.password .Release.Name .Values.postgres.auth.database | quote }}
 - name: SENTINEL_WEAVIATE_URL
-  value: {{ printf "http://%s-weaviate:8080" .Release.Name | quote }}
+  value: "http://weaviate:8080"
 - name: SENTINEL_OPA_URL
-  value: {{ printf "http://%s-opa:8181" .Release.Name | quote }}
+  value: "http://localhost:8181"
 - name: SENTINEL_LLM_PROVIDER
   value: {{ .Values.sentinel.llm.provider | quote }}
 - name: SENTINEL_LLM_BASE_URL
