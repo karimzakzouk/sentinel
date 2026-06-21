@@ -46,7 +46,7 @@ spec:
             - name: JAEGER_URL
               value: {{ .Values.ingestion.env.jaegerUrl | default "" | quote }}
             - name: SENTINEL_INVESTIGATION_TIMEOUT
-              value: "300"
+              value: "600"
           ports:
             - containerPort: 8000
               name: http

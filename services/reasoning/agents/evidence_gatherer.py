@@ -13,6 +13,7 @@ with the new context.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any
@@ -99,12 +100,17 @@ async def evidence_gatherer_node(state: AgentState, *, llm_router: Any,
                                   payload=ev.model_dump(mode="json"))
         return state.model_dump(mode="json")
 
-    # 3. Execute each query
+    # 3. Execute each query (with per-query timeout to prevent hanging)
     queries = result.get("evidence_queries", [])
     new_evidence: list[Evidence] = []
     for i, q in enumerate(queries):
         try:
-            result_data = await _execute_query(q.get("query", {}), context_fetcher)
+            # 15-second timeout per query — prevents the investigation from
+            # hanging if a K8s API call or Loki/Prometheus query gets stuck.
+            result_data = await asyncio.wait_for(
+                _execute_query(q.get("query", {}), context_fetcher),
+                timeout=15.0,
+            )
             ev = Evidence(
                 e_id=f"E{i+1}",
                 source=q.get("query", {}).get("type", "unknown"),
@@ -114,6 +120,16 @@ async def evidence_gatherer_node(state: AgentState, *, llm_router: Any,
                 contradicts_hypothesis_id=q.get("hypothesis_id") if q.get("supports_or_contradicts") == "contradicts" else None,
             )
             new_evidence.append(ev)
+        except asyncio.TimeoutError:
+            log.warning("Evidence query %d timed out after 15s", i+1)
+            new_evidence.append(Evidence(
+                e_id=f"E{i+1}",
+                source=q.get("query", {}).get("type", "unknown"),
+                query=json.dumps(q.get("query", {})),
+                result={"error": "query timed out after 15s"},
+                supports_hypothesis_id=q.get("hypothesis_id") if q.get("supports_or_contradicts") == "supports" else None,
+                contradicts_hypothesis_id=q.get("hypothesis_id") if q.get("supports_or_contradicts") == "contradicts" else None,
+            ))
         except Exception as e:  # noqa: BLE001
             log.warning("Evidence query failed: %s", e)
             new_evidence.append(Evidence(
