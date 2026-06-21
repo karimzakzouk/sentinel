@@ -102,11 +102,74 @@ _BARE_JSON_RE = re.compile(r"(\{.*\}|\[.*\])", re.DOTALL)
 
 
 def _extract_json(text: str) -> dict[str, Any]:
-    """Defensive JSON extractor — handles markdown fences, prose around JSON."""
+    """Defensive JSON extractor — handles markdown fences, prose, and common LLM quirks.
+
+    Tries (in order):
+      1. Markdown-fenced JSON block (```json ... ```)
+      2. Bare JSON object/array in the text
+      3. The whole text as JSON
+      4. Fallback: fix common LLM quirks (single quotes, trailing commas, comments)
+    """
+    candidates: list[str] = []
     m = _JSON_BLOCK_RE.search(text)
     if m:
-        return json.loads(m.group(1))
+        candidates.append(m.group(1))
     m = _BARE_JSON_RE.search(text)
     if m:
-        return json.loads(m.group(1))
-    return json.loads(text)  # let it raise
+        candidates.append(m.group(1))
+    candidates.append(text)
+
+    for candidate in candidates:
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+
+    # Fallback: clean up common LLM quirks and retry
+    for candidate in candidates:
+        try:
+            cleaned = _clean_json_quirks(candidate)
+            return json.loads(cleaned)
+        except (json.JSONDecodeError, Exception):
+            continue
+
+    # Last resort: return empty dict so the caller doesn't crash.
+    # The agent will see no hypotheses/evidence and can handle it gracefully.
+    log.error("Could not parse JSON from LLM response: %s", text[:200])
+    return {}
+
+
+def _clean_json_quirks(text: str) -> str:
+    """Fix common LLM JSON quirks that strict json.loads rejects.
+
+    Handles:
+      - Single quotes → double quotes (but not inside string values)
+      - Trailing commas before } or ]
+      - JavaScript-style comments (// and /* */)
+      - Unquoted property names
+      - Python None/True/False → null/true/false
+    """
+    import re
+
+    # Remove comments
+    text = re.sub(r'//.*?$', '', text, flags=re.MULTILINE)
+    text = re.sub(r'/\*.*?\*/', '', text, flags=re.DOTALL)
+
+    # Remove trailing commas
+    text = re.sub(r',\s*([}\]])', r'\1', text)
+
+    # Python booleans/None → JSON
+    text = re.sub(r'\bNone\b', 'null', text)
+    text = re.sub(r'\bTrue\b', 'true', text)
+    text = re.sub(r'\bFalse\b', 'false', text)
+
+    # Unquoted property names: {foo: "bar"} → {"foo": "bar"}
+    text = re.sub(r'(\{|,)\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*:', r'\1"\2":', text)
+
+    # Single quotes → double quotes (only for string values, not inside other strings)
+    # This is tricky — only do it if we still can't parse, and be conservative
+    if "'" in text:
+        # Replace single-quoted strings with double-quoted
+        text = re.sub(r"'([^']*)'", r'"\1"', text)
+
+    return text

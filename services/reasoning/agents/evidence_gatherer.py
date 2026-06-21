@@ -67,8 +67,15 @@ async def evidence_gatherer_node(state: AgentState, *, llm_router: Any,
         result = await llm_router.fast_json(SYSTEM_PROMPT, user_msg, max_tokens=2000)
     except Exception as e:  # noqa: BLE001
         log.error("Evidence Gatherer LLM call failed: %s", e)
-        state.status = "failed"
-        state.error = f"evidence_gatherer_llm_failure: {e}"
+        # Don't fail the whole investigation — continue with no evidence.
+        # The Analyst will pick the top hypothesis by prior confidence.
+        # This is more resilient than crashing.
+        state.evidence = []
+        state.agent_trace.append({
+            "agent": "evidence_gatherer",
+            "action": "llm_failed_no_evidence",
+            "error": str(e)[:200],
+        })
         return state.model_dump(mode="json")
 
     # 2. Check for rewind (Layer 6 edge case #3)
