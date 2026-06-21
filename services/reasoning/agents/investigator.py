@@ -15,7 +15,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from sentinel_common import Hypothesis, RewindEvent
-from sentinel_common.schemas import AgentState
+from sentinel_common.schemas import AgentState, IncidentStatus
 from agents._repo_discovery import _discover_repo_from_state
 
 log = logging.getLogger(__name__)
@@ -90,7 +90,7 @@ async def investigator_node(state: AgentState, *, llm_router: Any,
         result = await llm_router.frontier_json(SYSTEM_PROMPT, user_msg, max_tokens=2500)
     except Exception as e:  # noqa: BLE001
         log.error("Investigator LLM call failed: %s", e)
-        state.status = "failed"
+        state.status = IncidentStatus.FAILED
         state.error = f"investigator_llm_failure: {e}"
         return state.model_dump(mode="json")
 
@@ -122,7 +122,7 @@ async def investigator_node(state: AgentState, *, llm_router: Any,
                                   payload={"hypotheses": [h.model_dump() for h in new_hyps]})
     except (ValidationError, ValueError) as ve:
         log.error("Hypothesis validation failed: %s", ve)
-        state.status = "failed"
+        state.status = IncidentStatus.FAILED
         state.error = f"hypothesis_validation: {ve}"
         return state.model_dump(mode="json")
 

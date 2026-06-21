@@ -323,9 +323,13 @@ class ContextFetcher:
             return self._weaviate
         try:
             import weaviate  # type: ignore
+            # weaviate-client v4.x uses host= (not hostname=)
+            host = self.settings.weaviate_url.replace("http://", "").replace("https://", "").split(":")[0]
+            port = int(self.settings.weaviate_url.split(":")[-1]) if ":" in self.settings.weaviate_url else 8080
             self._weaviate = weaviate.connect_to_local(
-                hostname=self.settings.weaviate_url.replace("http://", "").split(":")[0],
-                port=int(self.settings.weaviate_url.split(":")[-1]) if ":" in self.settings.weaviate_url else 8080,
+                host=host or "sentinel-weaviate",
+                port=port,
+                skip_init_checks=True,
             )
             return self._weaviate
         except Exception as e:  # noqa: BLE001
