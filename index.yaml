@@ -3,7 +3,7 @@ entries:
   sentinel:
   - apiVersion: v2
     appVersion: 1.5.4
-    created: "2026-06-21T19:03:34.551745951Z"
+    created: "2026-06-21T19:09:10.811688489Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -15,7 +15,7 @@ entries:
       version: 17.8.2
     description: Sentinel — The Autonomous AI Site Reliability Engineer. Detect, diagnose,
       fix, verify.
-    digest: 217563bf4ea3e115eebf033ca4975df55fc90192f06096aea6af1d8024811d40
+    digest: bf5b777318339060349159f140fde6c72e675b339c5f533901d0a7337ccffab3
     home: https://github.com/karimzakzoukz/sentinel
     keywords:
     - sre
@@ -35,7 +35,7 @@ entries:
     version: 1.5.4
   - apiVersion: v2
     appVersion: 1.5.0
-    created: "2026-06-21T19:03:34.541969561Z"
+    created: "2026-06-21T19:09:10.802690013Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -67,7 +67,7 @@ entries:
     version: 1.5.0
   - apiVersion: v2
     appVersion: 1.4.2
-    created: "2026-06-21T19:03:34.53185403Z"
+    created: "2026-06-21T19:09:10.794143544Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -99,7 +99,7 @@ entries:
     version: 1.4.2
   - apiVersion: v2
     appVersion: 1.4.1
-    created: "2026-06-21T19:03:34.522250567Z"
+    created: "2026-06-21T19:09:10.784590453Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -131,7 +131,7 @@ entries:
     version: 1.4.1
   - apiVersion: v2
     appVersion: 1.4.0
-    created: "2026-06-21T19:03:34.512352375Z"
+    created: "2026-06-21T19:09:10.773728601Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -163,7 +163,7 @@ entries:
     version: 1.4.0
   - apiVersion: v2
     appVersion: 1.3.9
-    created: "2026-06-21T19:03:34.503323837Z"
+    created: "2026-06-21T19:09:10.763589265Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -195,7 +195,7 @@ entries:
     version: 1.3.9
   - apiVersion: v2
     appVersion: 1.3.3
-    created: "2026-06-21T19:03:34.494129476Z"
+    created: "2026-06-21T19:09:10.752660375Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -225,4 +225,4 @@ entries:
     urls:
     - https://karimzakzoukz.github.io/sentinel/sentinel-1.3.5.tgz
     version: 1.3.5
-generated: "2026-06-21T19:03:34.483696199Z"
+generated: "2026-06-21T19:09:10.738062716Z"
