@@ -79,7 +79,15 @@ async def evidence_gatherer_node(state: AgentState, *, llm_router: Any,
         })
         return state.model_dump(mode="json")
 
-    # 2. Check for rewind (Layer 6 edge case #3)
+    # 2. Normalize the result — LLMs sometimes return a list instead of an object.
+    # If result is a list, try to extract the first dict element. If it's not a
+    # dict at all, treat it as empty (no evidence queries, no rewind).
+    if isinstance(result, list):
+        result = result[0] if result and isinstance(result[0], dict) else {}
+    if not isinstance(result, dict):
+        result = {}
+
+    # 3. Check for rewind (Layer 6 edge case #3)
     rewind = result.get("rewind")
     if rewind:
         log.info("RewindEvent raised by Evidence Gatherer: %s", rewind.get("reason"))

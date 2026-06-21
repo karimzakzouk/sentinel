@@ -96,6 +96,11 @@ async def investigator_node(state: AgentState, *, llm_router: Any,
 
     # 8. Parse + validate hypotheses
     try:
+        # Normalize: LLMs sometimes return a list instead of an object
+        if isinstance(result, list):
+            result = result[0] if result and isinstance(result[0], dict) else {}
+        if not isinstance(result, dict):
+            result = {}
         raw_hyps = result.get("hypotheses", [])
         new_hyps: list[Hypothesis] = []
         for i, h in enumerate(raw_hyps[:5], start=1):

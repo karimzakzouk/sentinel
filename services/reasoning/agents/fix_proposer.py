@@ -96,6 +96,11 @@ async def fix_proposer_node(state: AgentState, *, llm_router: Any,
             return state.model_dump(mode="json")
 
         try:
+            # Normalize: LLMs sometimes return a list instead of an object
+            if isinstance(result, list):
+                result = result[0] if result and isinstance(result[0], dict) else {}
+            if not isinstance(result, dict):
+                result = {}
             fix_type = FixType(result.get("fix_type", "code_fix"))
         except ValueError:
             fix_type = FixType.CODE_FIX
