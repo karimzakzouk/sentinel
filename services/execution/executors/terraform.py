@@ -76,7 +76,7 @@ class TerraformExecutor:
         # 4. Post to Slack with a link to the UI for approval
         await self._post_plan_to_slack(incident, plan_id, plan_result.stdout)
 
-        result.tf_plan_url = f"http://sentinel-ui/admin/tf/{plan_id}"
+        result.tf_plan_url = f"{settings.ui_url}/admin/tf/{plan_id}"
         result.success = True  # The plan succeeded; apply is pending
         return result
 
@@ -123,7 +123,7 @@ class TerraformExecutor:
                 }},
                 {"type": "actions", "elements": [
                     {"type": "button", "text": {"type": "plain_text", "text": "Review & Apply"},
-                     "url": f"http://sentinel-ui/admin/tf/{plan_id}"},
+                     "url": f"{settings.ui_url}/admin/tf/{plan_id}"},
                 ]},
             ],
         }

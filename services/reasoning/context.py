@@ -141,16 +141,11 @@ class ContextFetcher:
                 continue
             if c.startswith("/lib/") or c.startswith("/opt/"):
                 continue
-            # Strip common Docker WORKDIR prefixes so the path matches the
-            # repo structure. e.g. /app/app/main.py → app/main.py
-            # Common WORKDIRs: /app, /workspace, /home/app, /srv
-            for prefix in ["/app/", "/workspace/", "/home/app/", "/srv/"]:
-                if c.startswith(prefix):
-                    c = c[len(prefix):]
-                    break
-            # Also strip a leading slash if it's an absolute path
+            # Strip leading slash for absolute paths
             if c.startswith("/") and not c.startswith("//"):
                 c = c[1:]
+            # Don't hardcode WORKDIR prefixes — the fetch_file_from_repo
+            # method will try progressively shorter paths to find the file.
             # We require either:
             #   - a slash (file path), OR
             #   - 3+ dot-separated parts (Java class file like com.acme.Foo.java)
@@ -166,21 +161,43 @@ class ContextFetcher:
     # ---------------- Targeted Code Fetch ----------------
 
     async def fetch_file_from_repo(self, repo: str, path: str, ref: str = "HEAD") -> str | None:
-        """Fetch a single file from GitHub via the API."""
+        """Fetch a single file from GitHub via the API.
+
+        Tries progressively shorter paths to handle Docker WORKDIR prefixes.
+        e.g. for path 'app/app/main.py', tries:
+          1. app/app/main.py
+          2. app/main.py
+          3. main.py
+        Returns the first match, or None if all fail. This works for ANY
+        project structure without hardcoding WORKDIR prefixes.
+        """
         if self._gh is None:
             log.warning("GitHub client not configured — can't fetch %s/%s", repo, path)
             return None
         try:
             gh_repo = self._gh.get_repo(repo)
-            try:
-                content = gh_repo.get_contents(path, ref=ref)
-                if isinstance(content, list):
-                    return None  # directory listing, not a file
-                import base64
-                return base64.b64decode(content.content).decode("utf-8", errors="replace")
-            except Exception as e:  # noqa: BLE001
-                log.info("File %s not found in %s@%s: %s", path, repo, ref, e)
-                return None
+            # Build list of paths to try: original, then strip one dir at a time
+            paths_to_try = [path]
+            parts = path.split("/")
+            for i in range(1, len(parts)):
+                shorter = "/".join(parts[i:])
+                if shorter and shorter != paths_to_try[-1]:
+                    paths_to_try.append(shorter)
+
+            for try_path in paths_to_try:
+                try:
+                    content = gh_repo.get_contents(try_path, ref=ref)
+                    if isinstance(content, list):
+                        continue  # directory listing, not a file
+                    import base64
+                    result = base64.b64decode(content.content).decode("utf-8", errors="replace")
+                    if try_path != path:
+                        log.info("File found at %s (stripped from %s)", try_path, path)
+                    return result
+                except Exception:
+                    continue
+            log.info("File %s not found in %s@%s (tried %d path variants)", path, repo, ref, len(paths_to_try))
+            return None
         except Exception as e:  # noqa: BLE001
             log.warning("Repo %s fetch failed: %s", repo, e)
             return None
@@ -338,8 +355,15 @@ class ContextFetcher:
     # ---------------- Weaviate client ----------------
 
     def _get_weaviate(self) -> Any:
+        # Don't cache None — Weaviate might become available later
+        # (it takes 30+ seconds to start). Retry on every call.
         if self._weaviate is not None:
-            return self._weaviate
+            # Verify the connection is still alive
+            try:
+                self._weaviate.collections.get("Incident")
+                return self._weaviate
+            except Exception:
+                self._weaviate = None  # connection died, retry
         try:
             import weaviate  # type: ignore
             # weaviate-client v4.x uses host= (not hostname=)

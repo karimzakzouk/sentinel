@@ -363,14 +363,13 @@ class SandboxRunner:
           3. Fall back to the current production image (sandbox = prod code)
         """
         fp = incident.state.fix_proposal
-        # Option 1: explicit canary image on the fix proposal
+        # The execution layer sets fp.canary_image after the Kaniko build.
+        # If it's set, use it — this is the image with the fix applied.
         if hasattr(fp, "canary_image") and fp.canary_image:
             return fp.canary_image
-        # Option 2: query GitHub for the PR's CI artifact
-        # (This requires the CI to publish images with a known tag pattern.
-        # We'd look for an image tagged `sentinel-pr-{pr_number}` or similar.
-        # For now this is a TODO — needs CI pipeline integration.)
-        # Option 3: fall back to prod image
+        # No canary image — this means Kaniko build was skipped or failed.
+        # Fall back to prod image (sandbox will test the CURRENT code, not the fix).
+        # This is intentionally a fallback — the PR will get "needs-review".
         if prod_deploy.spec.template.spec.containers:
             return prod_deploy.spec.template.spec.containers[0].image
         return "busybox:latest"  # shouldn't happen

@@ -224,8 +224,19 @@ def _compute_replica_pct(fp: Any) -> int:
     replicas = patch.get("spec", {}).get("replicas")
     if replicas is None:
         return 0
-    # We don't know the current replica count from here — assume 5 for the calc
-    current = 5
+    # Get the current replica count from the actual deployment
+    try:
+        from kubernetes import client
+        apps = client.AppsV1Api()
+        deploy = apps.read_namespaced_deployment(
+            name=fp.target_service,
+            namespace=fp.target_namespace,
+        )
+        current = deploy.spec.replicas or 1
+    except Exception:
+        current = replicas  # fallback: assume no change
+    if current == 0:
+        return 100 if replicas > 0 else 0
     return int(abs(replicas - current) / current * 100)
 
 
@@ -252,10 +263,10 @@ async def _post_approval_request(incident: Incident, decision: GovernanceDecisio
             {"type": "actions", "elements": [
                 {"type": "button", "text": {"type": "plain_text", "text": "Approve"},
                  "style": "primary", "value": decision.approval_request_id,
-                 "url": f"http://sentinel-ui/approve/{decision.approval_request_id}"},
+                 "url": f"{settings.ui_url}/approve/{decision.approval_request_id}"},
                 {"type": "button", "text": {"type": "plain_text", "text": "Deny"},
                  "style": "danger", "value": decision.approval_request_id,
-                 "url": f"http://sentinel-ui/deny/{decision.approval_request_id}"},
+                 "url": f"{settings.ui_url}/deny/{decision.approval_request_id}"},
             ]},
         ],
     }

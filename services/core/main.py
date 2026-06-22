@@ -936,6 +936,10 @@ async def _execute_incident(incident: Incident) -> None:
         incident.status = incident.state.status
         log.info("Incident %s execution %s", incident.incident_id,
                  "succeeded" if result.success else "failed")
+        # Publish to resolved topic so the feedback loop can pick it up
+        # (beta tracker, Weaviate, postmortem generation)
+        await bus.publish_model(settings.kafka_topic_resolved, incident, key=incident.cluster.service)
+        log.info("Incident %s published to resolved topic", incident.incident_id)
     except Exception as e:
         log.exception("Execution failed: %s", e)
         result.success = False
@@ -975,7 +979,7 @@ async def _feedback_loop() -> None:
     """Consume completed incidents, update Beta tracker, store in Weaviate, write postmortem."""
     assert bus is not None and incident_store is not None and event_store is not None
     assert weaviate is not None and beta_tracker is not None and postmortem_gen is not None
-    consumer = bus.consumer(settings.kafka_topic_incidents, "sentinel-core-feedback")
+    consumer = bus.consumer(settings.kafka_topic_resolved, "sentinel-core-feedback")
     try:
         async for raw in consumer:
             try:

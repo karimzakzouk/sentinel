@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     kafka_topic_anomalies: str = Field(default="sentinel.anomalies")
     kafka_topic_incidents: str = Field(default="sentinel.incidents")
     kafka_topic_fixes: str = Field(default="sentinel.fixes")
+    kafka_topic_resolved: str = Field(default="sentinel.resolved")
     kafka_topic_deadletter: str = Field(default="sentinel.deadletter")
     schema_registry_url: str = Field(default="http://sentinel-schema-registry:8081")
 
@@ -76,6 +77,9 @@ class Settings(BaseSettings):
     # --- Terraform ---
     tf_workspace_dir: str = Field(default="/data/terraform")
     tf_slack_webhook: Optional[str] = None
+    # External URL for the Sentinel UI (used in Slack approval buttons + TF plan links)
+    # Set this to the ingress URL or port-forward URL so Slack can reach it.
+    ui_url: str = Field(default="http://sentinel-ui", description="External URL for the Sentinel UI")
 
     # --- Safety ---
     production_namespaces: str = Field(default="prod,production,payments")

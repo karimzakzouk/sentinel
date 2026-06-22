@@ -34,8 +34,10 @@ main.handleRequest(...)
 main.main()
     /app/cmd/server/main.go:23 +0x1c8"""
         files = cf.parse_stack_trace(trace)
-        assert "/app/pkg/api/handler.go" in files
-        assert "/app/cmd/server/main.go" in files
+        # The parser strips Docker WORKDIR prefixes (/app/) so paths match
+        # the repo structure. /app/pkg/api/handler.go → pkg/api/handler.go
+        assert "pkg/api/handler.go" in files
+        assert "cmd/server/main.go" in files
 
     def test_extracts_java_files(self):
         cf = ContextFetcher(settings=MagicMock(), llm_router=MagicMock())
