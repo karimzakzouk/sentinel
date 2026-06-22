@@ -160,7 +160,7 @@ class ContextFetcher:
 
     # ---------------- Targeted Code Fetch ----------------
 
-    async def fetch_file_from_repo(self, repo: str, path: str, ref: str = "HEAD") -> str | None:
+    async def fetch_file_from_repo(self, repo: str, path: str, ref: str = "HEAD") -> tuple[str, str] | None:
         """Fetch a single file from GitHub via the API.
 
         Tries progressively shorter paths to handle Docker WORKDIR prefixes.
@@ -168,8 +168,10 @@ class ContextFetcher:
           1. app/app/main.py
           2. app/main.py
           3. main.py
-        Returns the first match, or None if all fail. This works for ANY
-        project structure without hardcoding WORKDIR prefixes.
+        Returns (repo_path, content) for the first match, or None if all fail.
+        The repo_path is the path that actually worked in the repo — this is
+        used as the key in fetched_code so the Fix Proposer uses the correct
+        path in files_to_change.
         """
         if self._gh is None:
             log.warning("GitHub client not configured — can't fetch %s/%s", repo, path)
@@ -193,7 +195,7 @@ class ContextFetcher:
                     result = base64.b64decode(content.content).decode("utf-8", errors="replace")
                     if try_path != path:
                         log.info("File found at %s (stripped from %s)", try_path, path)
-                    return result
+                    return (try_path, result)
                 except Exception:
                     continue
             log.info("File %s not found in %s@%s (tried %d path variants)", path, repo, ref, len(paths_to_try))
@@ -238,39 +240,16 @@ class ContextFetcher:
         tasks = [self.fetch_file_from_repo(repo, p) for p in candidate_files[:10]]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         out: dict[str, str] = {}
-        for path, content in zip(candidate_files, results):
-            if isinstance(content, str) and content:
-                # fetch_file_from_repo tries progressively shorter paths.
-                # The content is the file, but the KEY should be the path
-                # that actually worked in the repo (not the container path
-                # from the stack trace). We need to return the repo path
-                # so the Fix Proposer uses the correct path in files_to_change.
-                # Since fetch_file_from_repo doesn't return which path worked,
-                # we use the original path but strip any prefix that doesn't
-                # look like a repo path. The progressive path finder already
-                # found the file — we just need the right key.
-                #
-                # The key insight: if the path has a duplicate directory segment
-                # (e.g. "app/app/main.py"), the repo path is the shorter version
-                # ("app/main.py"). We find the shortest suffix that's a valid
-                # repo path by checking for duplicate segments.
-                repo_path = path
-                parts = path.split("/")
-                for i in range(1, len(parts)):
-                    shorter = "/".join(parts[i:])
-                    if shorter and shorter != path:
-                        # Check if this shorter path has a duplicate segment
-                        # (e.g. "app/main.py" from "app/app/main.py")
-                        if len(parts) > i and parts[i-1] == parts[i]:
-                            repo_path = shorter
-                            break
-                        # Also just try the shorter path as the key — the
-                        # fetch_file_from_repo already confirmed the file
-                        # exists at some shorter path, so use the shortest
-                        # reasonable one (strip one directory level)
-                        repo_path = shorter
-                        break
-                out[repo_path] = content
+        for path, result in zip(candidate_files, results):
+            # fetch_file_from_repo now returns (repo_path, content) or None.
+            # The repo_path is the path that actually worked in the repo
+            # (found via progressive path stripping). This is the correct
+            # key for fetched_code — the Fix Proposer uses it to set the
+            # path in files_to_change.
+            if isinstance(result, tuple) and len(result) == 2:
+                repo_path, content = result
+                if content:
+                    out[repo_path] = content
         return out
 
     # ---------------- RAG: Weaviate ----------------

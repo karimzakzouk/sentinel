@@ -272,23 +272,34 @@ class SandboxRunner:
                 except Exception:
                     pass
 
-            if prod_svc:
-                sandbox_svc = client.V1Service(
-                    metadata=client.V1ObjectMeta(
-                        name=fp.target_service,
-                        namespace=ns,
-                        labels={"app": fp.target_service, "sentinel.io/sandbox": "true"},
-                    ),
-                    spec=client.V1ServiceSpec(
-                        selector={"app": fp.target_service},
-                        ports=prod_svc.spec.ports,
-                        type="ClusterIP",
-                    ),
-                )
+            # Always create a Service in the sandbox namespace so Level 2
+            # verification can reach the canary pod. We don't need to copy
+            # the prod Service — just create one that routes to the canary
+            # on port 80 → container port 8000 (or whatever the prod Service uses).
+            sandbox_ports = [client.V1ServicePort(port=80, target_port=8000, protocol="TCP", name="http")]
+            if prod_svc and prod_svc.spec.ports:
+                sandbox_ports = prod_svc.spec.ports
+
+            sandbox_svc = client.V1Service(
+                metadata=client.V1ObjectMeta(
+                    name=fp.target_service,
+                    namespace=ns,
+                    labels={"app": fp.target_service, "sentinel.io/sandbox": "true"},
+                ),
+                spec=client.V1ServiceSpec(
+                    selector={"app": fp.target_service},
+                    ports=sandbox_ports,
+                    type="ClusterIP",
+                ),
+            )
+            try:
                 await asyncio.to_thread(
                     self.k8s.core.create_namespaced_service,
                     namespace=ns, body=sandbox_svc,
                 )
+                log.info("Created sandbox Service %s in %s", fp.target_service, ns)
+            except Exception as e:
+                log.debug("Sandbox Service creation: %s", e)
 
             log.info("Deployed canary image %s into sandbox %s", canary_image, ns)
             return {"success": True, "image": canary_image}
