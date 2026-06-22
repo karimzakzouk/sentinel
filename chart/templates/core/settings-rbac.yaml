@@ -1,4 +1,8 @@
-{{- if eq .Values.mode "core" -}}
+{{/*
+Settings manager Role + RoleBinding — lets Sentinel read/write ConfigMaps +
+Secrets in its own namespace (for runtime settings persistence via the
+SettingsStore).
+*/}}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -29,4 +33,3 @@ subjects:
   - kind: ServiceAccount
     name: {{ .Values.serviceAccount.name | default (include "sentinel.fullname" .) }}
     namespace: {{ .Release.Namespace }}
-{{- end -}}

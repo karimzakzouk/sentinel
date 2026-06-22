@@ -1,0 +1,137 @@
+{{/*
+RBAC for Sentinel core — ServiceAccount + Role/ClusterRole.
+
+Sentinel needs:
+  - Read pods/deployments/events/statefulsets/services/configmaps/secrets in any
+    namespace where it might investigate (default: cluster-wide)
+  - Read/write SentinelIncident CRs cluster-wide (so users can create them in any ns)
+  - Create namespaces + deployments + services + configmaps + pods for sandbox
+    canary verification (in any namespace — sandboxes are created dynamically)
+  - Create pods + configmaps in its own namespace (for Kaniko build jobs)
+  - Read/write ConfigMaps + Secrets in its own namespace (settings persistence)
+
+Cluster-scope is the default because Sentinel fundamentally needs cluster-wide
+read access to investigate incidents. Set rbac.clusterScope=false to use
+namespace-scoped RBAC (advanced — requires manual Role setup in each namespace
+Sentinel should operate in).
+*/}}
+{{- if .Values.serviceAccount.create -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.serviceAccount.name | default (include "sentinel.fullname" .) }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "sentinel.labels" . | nindent 4 }}
+  {{- with .Values.serviceAccount.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}
+
+---
+{{/*
+Cluster-scoped RBAC — default. Sentinel needs cluster-wide read on
+pods/deployments/events + write on SentinelIncident CRs (which can be created
+in any namespace).
+*/}}
+{{- if and .Values.rbac.create .Values.rbac.clusterScope }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "sentinel.fullname" . }}
+  labels:
+    {{- include "sentinel.labels" . | nindent 4 }}
+rules:
+  # Read all K8s resources Sentinel needs to investigate incidents
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "services", "configmaps", "secrets", "events", "namespaces", "nodes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
+    verbs: ["get", "list", "watch"]
+  # Read + write deployments (for sandbox canary) + rollouts (rollback)
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets"]
+    verbs: ["create", "update", "patch", "delete"]
+  # Create namespaces for sandboxes
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["create", "delete"]
+  # Create pods + configmaps + services in any namespace (for Kaniko builds + sandbox canaries)
+  - apiGroups: [""]
+    resources: ["pods", "configmaps", "services"]
+    verbs: ["create", "update", "patch", "delete", "get", "list", "watch"]
+  # SentinelIncident CRD — full CRUD cluster-wide
+  - apiGroups: ["sentinel.io"]
+    resources: ["sentinelincidents"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["sentinel.io"]
+    resources: ["sentinelincidents/status"]
+    verbs: ["get", "update", "patch"]
+  # Istio VirtualServices (for traffic mirroring in sandbox)
+  - apiGroups: ["networking.istio.io"]
+    resources: ["virtualservices"]
+    verbs: ["create", "update", "patch", "delete", "get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "sentinel.fullname" . }}
+  labels:
+    {{- include "sentinel.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "sentinel.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.serviceAccount.name | default (include "sentinel.fullname" .) }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
+
+---
+{{/*
+Namespace-scoped RBAC — only when rbac.clusterScope=false.
+Grants Sentinel full access in its own namespace (for Kaniko builds + settings).
+For investigating incidents in OTHER namespaces, the user must manually create
+RoleBindings there.
+*/}}
+{{- if and .Values.rbac.create (not .Values.rbac.clusterScope) }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "sentinel.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "sentinel.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "services", "configmaps", "secrets", "events"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "replicasets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["sentinel.io"]
+    resources: ["sentinelincidents"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["sentinel.io"]
+    resources: ["sentinelincidents/status"]
+    verbs: ["get", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "sentinel.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "sentinel.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "sentinel.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.serviceAccount.name | default (include "sentinel.fullname" .) }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

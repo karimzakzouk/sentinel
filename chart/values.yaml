@@ -218,11 +218,12 @@ serviceAccount:
 
 rbac:
   create: true
-  # v2.0.0 default: namespace-scoped RBAC. Sentinel only needs read access to
-  # pods/deployments/events across the cluster + write access to the SentinelIncident
-  # CRD in its own namespace. Set clusterScope=true ONLY if you need Sentinel to
-  # watch SentinelIncident CRs across all namespaces (advanced use case).
-  clusterScope: false
+  # Sentinel needs cluster-wide read on pods/deployments/events to investigate
+  # incidents in any namespace, plus write on SentinelIncident CRs (which users
+  # can create in any namespace). clusterScope=true grants this.
+  # Set clusterScope=false for namespace-scoped RBAC (advanced — requires manual
+  # RoleBindings in every namespace Sentinel should operate in).
+  clusterScope: true
 
 # Ingress for the UI
 ingress:
