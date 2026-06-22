@@ -1,0 +1,247 @@
+// Package repo provides repository cloning + local search for the agent pipeline.
+// v3.0.2: replaces the GitHub API file-fetch approach with a local clone,
+// exactly like SWE-agent / OpenHands / Aider do it.
+//
+// The flow:
+//   1. Clone the repo (shallow, --depth 1) to a temp dir using go-git (pure Go)
+//   2. Walk the file tree, filter noise (node_modules, vendor, .git, etc.)
+//   3. LLM round 1: "what should I search for?" → returns search queries
+//   4. Run searches locally (Go regexp over cloned files) — instant, no API
+//   5. LLM round 2: "given these results, what's the root cause + which files?" → returns hypotheses + file paths
+//   6. Read those files from disk (zero API calls)
+//   7. Clean up the temp dir
+package repo
+
+import (
+	"context"
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
+)
+
+// Cloner clones a GitHub repo to a local temp dir using go-git (pure Go, no CGO).
+type Cloner struct {
+	githubToken string
+}
+
+// NewCloner creates a Cloner.
+func NewCloner(githubToken string) *Cloner {
+	return &Cloner{githubToken: githubToken}
+}
+
+// Clone clones a repo to a temp dir. Returns the local path.
+// Uses --depth 1 for speed (we don't need history, just the current state).
+func (c *Cloner) Clone(ctx context.Context, repo, branch string) (string, error) {
+	if branch == "" {
+		branch = "main"
+	}
+
+	// Create temp dir
+	tmpDir, err := os.MkdirTemp("", "sentinel-repo-*")
+	if err != nil {
+		return "", fmt.Errorf("create temp dir: %w", err)
+	}
+
+	// Build the clone URL with token auth (if private)
+	cloneURL := fmt.Sprintf("https://github.com/%s.git", repo)
+	if c.githubToken != "" {
+		cloneURL = fmt.Sprintf("https://x-access-token:%s@github.com/%s.git", c.githubToken, repo)
+	}
+
+	// Clone with depth 1 (shallow)
+	cloneCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+
+	_, err = git.PlainCloneContext(cloneCtx, tmpDir, false, &git.CloneOptions{
+		URL:           cloneURL,
+		Depth:         1,
+		SingleBranch:  true,
+		ReferenceName: plumbing.NewBranchReferenceName(branch),
+	})
+	if err != nil {
+		// Try without SingleBranch (some repos don't have the branch directly fetchable)
+		_, err = git.PlainCloneContext(cloneCtx, tmpDir, false, &git.CloneOptions{
+			URL:   cloneURL,
+			Depth: 1,
+		})
+		if err != nil {
+			os.RemoveAll(tmpDir)
+			return "", fmt.Errorf("clone %s@%s: %w", repo, branch, err)
+		}
+	}
+
+	return tmpDir, nil
+}
+
+// Cleanup removes the cloned repo.
+func (c *Cloner) Cleanup(path string) {
+	_ = os.RemoveAll(path)
+}
+
+// WalkTree returns the file paths in the cloned repo, filtered + capped.
+// Filters out: .git/, node_modules/, vendor/, dist/, build/, __pycache__/,
+// *.pyc, *.lock, etc. Caps at maxFiles to avoid huge repos.
+func WalkTree(root string, maxFiles int) ([]string, error) {
+	if maxFiles <= 0 {
+		maxFiles = 500
+	}
+
+	var paths []string
+	ignoreDirs := map[string]bool{
+		".git": true, "node_modules": true, "vendor": true, "dist": true,
+		"build": true, "__pycache__": true, ".next": true, ".cache": true,
+		".pytest_cache": true, "target": true, ".idea": true, ".vscode": true,
+	}
+	ignoreExts := map[string]bool{
+		".pyc": true, ".pyo": true, ".lock": true, ".bin": true, ".exe": true,
+		".dll": true, ".so": true, ".dylib": true,
+		".png": true, ".jpg": true, ".jpeg": true, ".gif": true, ".svg": true, ".ico": true,
+		".pdf": true, ".zip": true, ".tar": true, ".gz": true,
+		".woff": true, ".woff2": true, ".ttf": true, ".eot": true,
+	}
+
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			if ignoreDirs[d.Name()] {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if len(paths) >= maxFiles {
+			return filepath.SkipAll
+		}
+
+		name := d.Name()
+		ext := strings.ToLower(filepath.Ext(name))
+		if ignoreExts[ext] {
+			return nil
+		}
+		if name == "package-lock.json" || name == "yarn.lock" || name == "pnpm-lock.yaml" ||
+			name == "go.sum" || name == ".gitignore" || name == ".gitattributes" ||
+			name == ".DS_Store" || name == "LICENSE" {
+			return nil
+		}
+
+		relPath, err := filepath.Rel(root, path)
+		if err != nil {
+			return nil
+		}
+		paths = append(paths, relPath)
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	sort.Strings(paths)
+	return paths, nil
+}
+
+// SearchResult is one match from a local search query.
+type SearchResult struct {
+	Path    string `json:"path"`
+	Line    int    `json:"line"`
+	Column  int    `json:"column"`
+	Match   string `json:"match"`
+	Context string `json:"context"`
+}
+
+// Search runs a regexp search over the cloned repo. Returns up to maxResults
+// matches across all files. Searches file contents (not just names).
+func Search(root string, pattern string, maxResults int) ([]SearchResult, error) {
+	if maxResults <= 0 {
+		maxResults = 50
+	}
+
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, fmt.Errorf("invalid pattern %q: %w", pattern, err)
+	}
+
+	var results []SearchResult
+
+	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		if len(results) >= maxResults {
+			return filepath.SkipAll
+		}
+
+		info, _ := d.Info()
+		if info.Size() > 500*1024 {
+			return nil
+		}
+		ext := strings.ToLower(filepath.Ext(path))
+		if isBinaryExt(ext) {
+			return nil
+		}
+
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+
+		relPath, _ := filepath.Rel(root, path)
+		lines := strings.Split(string(data), "\n")
+
+		for lineNum, line := range lines {
+			if len(results) >= maxResults {
+				return filepath.SkipAll
+			}
+			matches := re.FindStringIndex(line)
+			if matches != nil {
+				context := strings.TrimSpace(line)
+				if len(context) > 200 {
+					context = context[:200] + "..."
+				}
+				matchStr := line[matches[0]:matches[1]]
+				results = append(results, SearchResult{
+					Path:    relPath,
+					Line:    lineNum + 1,
+					Column:  matches[0] + 1,
+					Match:   matchStr,
+					Context: context,
+				})
+			}
+		}
+		return nil
+	})
+
+	return results, err
+}
+
+// ReadFile reads a file from the cloned repo.
+func ReadFile(root, relPath string) (string, error) {
+	fullPath := filepath.Join(root, relPath)
+	data, err := os.ReadFile(fullPath)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+func isBinaryExt(ext string) bool {
+	switch ext {
+	case ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".pdf",
+		".zip", ".tar", ".gz", ".bz2", ".7z",
+		".woff", ".woff2", ".ttf", ".eot", ".otf",
+		".mp3", ".mp4", ".avi", ".mov", ".webm",
+		".exe", ".dll", ".so", ".dylib", ".bin",
+		".pyc", ".pyo", ".class", ".jar", ".war":
+		return true
+	}
+	return false
+}
