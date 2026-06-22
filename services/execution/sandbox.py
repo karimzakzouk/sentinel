@@ -79,7 +79,7 @@ class SandboxRunner:
                                      namespace=sandbox_ns)
 
             # 3. Wait for the canary pods to be ready
-            ready = await self._wait_for_ready(sandbox_ns, fp.target_service, timeout=90)
+            ready = await self._wait_for_ready(sandbox_ns, fp.target_service, timeout=180)
             if not ready:
                 return SandboxResult(False, "canary_pods_not_ready",
                                      namespace=sandbox_ns)

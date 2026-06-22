@@ -554,6 +554,21 @@ async def _crd_watcher_loop() -> None:
                 if bus is not None:
                     await bus.publish_model(settings.kafka_topic_anomalies, cluster, key=service)
                 seen.add(key)
+                # Patch the CR status to mark it as processing so a pod
+                # restart doesn't re-trigger it. The status.phase check
+                # at the top of the loop will skip it next time.
+                try:
+                    await asyncio.to_thread(
+                        coa.patch_namespaced_custom_object_status,
+                        group="sentinel.io",
+                        version="v1alpha1",
+                        namespace=ns,
+                        plural="sentinelincidents",
+                        name=name,
+                        body={"status": {"phase": "investigating"}},
+                    )
+                except Exception as e:
+                    log.debug("Could not patch CR status: %s", e)
             await asyncio.sleep(10)
         except asyncio.CancelledError:
             break

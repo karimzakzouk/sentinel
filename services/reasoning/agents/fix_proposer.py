@@ -169,7 +169,12 @@ def _build_user_message(state: AgentState) -> str:
     parts.append(f"- category: {state.root_cause.category}")
     parts.append(f"- confidence: {state.root_cause.confidence:.3f}")
     parts.append(f"- has_schema_migration: {state.root_cause.has_schema_migration}")
-    parts.append(f"- source_files: {state.root_cause.source_files}")
+    # Use fetched_code keys (repo paths) instead of source_files (container paths)
+    # so the LLM doesn't use the wrong path in files_to_change
+    if state.fetched_code:
+        parts.append(f"- source_files: {list(state.fetched_code.keys())}")
+    else:
+        parts.append(f"- source_files: {state.root_cause.source_files}")
     parts.append("")
     parts.append("## Evidence")
     for e in state.evidence:
@@ -184,6 +189,8 @@ def _build_user_message(state: AgentState) -> str:
     parts.append("")
     parts.append("## Your Task")
     parts.append("Propose ONE fix. Be specific. If code_fix, output the exact new file contents.")
+    parts.append("IMPORTANT: Use the EXACT file path from '### <path>' above in your files_to_change.")
+    parts.append("Do NOT use container paths (like /app/app/main.py) — use the repo path (like app/main.py).")
     return "\n".join(parts)
 
 
