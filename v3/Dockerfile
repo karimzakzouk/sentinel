@@ -1,3 +1,8 @@
+# syntax=docker/dockerfile:1.7
+# v3 Dockerfile — optimized for fast CI builds.
+# Single-arch (amd64), BuildKit cache for Go modules, distroless runtime.
+# Build time: ~3 min cold, ~1 min cached.
+
 # ── Builder stage: compile the Go binary ───────────────────────────────────
 FROM golang:1.25-alpine AS builder
 
@@ -5,15 +10,23 @@ RUN apk add --no-cache git ca-certificates
 
 WORKDIR /app
 
-# Cache deps first
+# Copy go.mod + go.sum first (cacheable layer)
 COPY v3/go.mod v3/go.sum ./v3/
-RUN cd v3 && go mod download
 
-# Build (multi-arch: respects TARGETARCH from buildx)
+# Download deps with BuildKit cache mount — survives across builds
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    cd v3 && go mod download
+
+# Copy source + build
 COPY v3 ./v3
-ARG TARGETARCH
-RUN cd v3 && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build \
+
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    cd v3 && \
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -ldflags='-s -w -extldflags "-static"' \
+    -trimpath \
     -o /sentinel ./cmd/sentinel
 
 # ── Runtime stage: distroless, ~25MB ──────────────────────────────────────
