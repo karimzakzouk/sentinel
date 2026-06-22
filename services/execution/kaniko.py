@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from typing import Any
 
 log = logging.getLogger(__name__)
@@ -92,7 +93,7 @@ class KanikoBuilder:
         import base64
         import json
 
-        namespace = self.settings.namespace or "sentinel"
+        namespace = os.getenv("SENTINEL_NAMESPACE", "sentinel")
         build_id = image_tag.replace("sentinel-", "")[:8]
         configmap_name = f"kaniko-fixed-files-{build_id}"
         pod_name = f"kaniko-build-{build_id}"

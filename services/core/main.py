@@ -744,6 +744,17 @@ async def _execute_incident(incident: Incident) -> None:
                 await incident_store.upsert(incident.model_dump(mode="json"))
                 return
 
+            # Guard: if no files were pushed, the PR will fail with "No commits"
+            if branch_info.get("files_changed", 0) == 0:
+                log.warning("No files in fix proposal — LLM may have returned truncated JSON")
+                result.error = "no_files_in_fix_proposal (LLM response may have been truncated)"
+                incident.state.execution_result = result
+                incident.state.status = IncidentStatus.FAILED
+                incident.status = IncidentStatus.FAILED
+                incident.touch()
+                await incident_store.upsert(incident.model_dump(mode="json"))
+                return
+
             # 2. Build the canary image with Kaniko (if Docker Hub creds available)
             sandbox_verified = False
             sandbox_summary = "skipped (no Docker Hub credentials)"

@@ -95,7 +95,7 @@ async def fix_proposer_node(state: AgentState, *, llm_router: Any,
         # 2. Ask LLM for the fix
         user_msg = _build_user_message(state)
         try:
-            result = await llm_router.frontier_json(SYSTEM_PROMPT, user_msg, max_tokens=3500)
+            result = await llm_router.frontier_json(SYSTEM_PROMPT, user_msg, max_tokens=6000)
         except Exception as e:  # noqa: BLE001
             log.error("Fix Proposer LLM call failed: %s", e)
             state.status = IncidentStatus.FAILED
@@ -189,7 +189,7 @@ async def _llm_code_fix(state: AgentState, proposal: FixProposal,
     """For roll_forward cases, ask LLM for the actual code patch."""
     user_msg = _build_user_message(state)
     try:
-        result = await llm_router.frontier_json(SYSTEM_PROMPT, user_msg, max_tokens=3500)
+        result = await llm_router.frontier_json(SYSTEM_PROMPT, user_msg, max_tokens=6000)
         proposal.files_to_change = result.get("files_to_change", [])
         proposal.description = result.get("description", proposal.description)
     except Exception as e:  # noqa: BLE001
