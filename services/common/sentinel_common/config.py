@@ -69,6 +69,10 @@ class Settings(BaseSettings):
     github_api_url: str = Field(default="https://api.github.com")
     github_default_reviewer: Optional[str] = None
 
+    # --- Docker Hub (for Kaniko sandbox image builder) ---
+    docker_hub_username: str = Field(default="karimzakzouk")
+    docker_hub_token: str = Field(default="", description="Docker Hub PAT for Kaniko to push canary images")
+
     # --- Terraform ---
     tf_workspace_dir: str = Field(default="/data/terraform")
     tf_slack_webhook: Optional[str] = None

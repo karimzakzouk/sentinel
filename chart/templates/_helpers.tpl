@@ -90,6 +90,14 @@ Standard env vars shared by all Python services.
     secretKeyRef:
       name: {{ include "sentinel.fullname" . }}-secrets
       key: githubToken
+- name: SENTINEL_DOCKER_HUB_TOKEN
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "sentinel.fullname" . }}-secrets
+      key: dockerHubToken
+      optional: true
+- name: SENTINEL_DOCKER_HUB_USERNAME
+  value: {{ .Values.sentinel.dockerHubUsername | default "karimzakzouk" | quote }}
 - name: SENTINEL_PRODUCTION_NAMESPACES
   value: {{ .Values.sentinel.productionNamespaces | quote }}
 - name: SENTINEL_WRITE_NAMESPACES

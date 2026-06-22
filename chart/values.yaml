@@ -29,6 +29,13 @@ sentinel:
   # history. REQUIRED for code_fix / roll_forward actions.
   githubToken: ""
 
+  # Docker Hub credentials for Kaniko (sandbox image builder).
+  # Kaniko builds canary images with the fix applied, then pushes them to
+  # Docker Hub so the sandbox can pull and test them.
+  # REQUIRED for sandbox verification (without this, sandbox is skipped).
+  dockerHubUsername: "karimzakzouk"
+  dockerHubToken: ""
+
   # --- Secret backend ---
   # plain    — plain K8s Secret (dev only, NOT for production)
   # sealed   — Bitnami sealed-secrets (user provides encrypted SealedSecret YAML)

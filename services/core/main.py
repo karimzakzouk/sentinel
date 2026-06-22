@@ -730,27 +730,100 @@ async def _execute_incident(incident: Incident) -> None:
     result = ExecutionResult(fix_id=fp.fix_id, fix_type=fp.fix_type, success=False,
                               started_at=datetime.now(timezone.utc))
     try:
-        # Sandbox first
-        if fp.requires_sandbox and settings.enable_traffic_mirroring:
-            sb = await sandbox.run(incident)
-            result.sandbox_verified = sb.verified
-            result.sandbox_summary = sb.summary
-            if not sb.verified:
-                result.success = False
-                result.error = f"sandbox_failed: {sb.summary}"
+        if fp.fix_type in (FixType.CODE_FIX, FixType.ROLL_FORWARD):
+            # ── Code fix flow: branch → build → sandbox → PR ──
+            # 1. Create branch + push the fix
+            log.info("Phase 1: Preparing fix branch...")
+            branch_info = await gh_exec.prepare_branch(incident)
+            if not branch_info.get("success"):
+                result.error = f"branch_preparation_failed: {branch_info.get('error')}"
                 incident.state.execution_result = result
                 incident.state.status = IncidentStatus.FAILED
                 incident.status = IncidentStatus.FAILED
                 incident.touch()
                 await incident_store.upsert(incident.model_dump(mode="json"))
                 return
-        # Execute
-        if fp.fix_type in (FixType.CODE_FIX, FixType.ROLL_FORWARD):
-            result = await gh_exec.execute(incident, result)
+
+            # 2. Build the canary image with Kaniko (if Docker Hub creds available)
+            sandbox_verified = False
+            sandbox_summary = "skipped (no Docker Hub credentials)"
+
+            if settings.docker_hub_token:
+                log.info("Phase 2: Building canary image with Kaniko...")
+                try:
+                    from kaniko import KanikoBuilder
+                    from kubernetes import client as k8s_client
+
+                    kaniko = KanikoBuilder(
+                        settings,
+                        k8s_client.AppsV1Api(),
+                        k8s_client.CoreV1Api(),
+                    )
+
+                    # Determine the image name + tag
+                    # Image name comes from the prod deployment's image
+                    # (e.g. "karimzakzouk/sentinel-sim")
+                    prod_image = await _get_prod_image(fp.target_service, fp.target_namespace)
+                    if prod_image:
+                        image_name = prod_image.split(":")[0]
+                        image_tag = f"sentinel-{str(fp.fix_id)[:8]}"
+
+                        # Build fixed files dict from the fix proposal
+                        fixed_files = {
+                            fc["path"]: fc["new_content"]
+                            for fc in fp.files_to_change
+                            if "path" in fc and "new_content" in fc
+                        }
+
+                        canary_image = await kaniko.build(
+                            repo=branch_info["repo"],
+                            branch=branch_info["branch_name"],
+                            fixed_files=fixed_files,
+                            image_name=image_name,
+                            image_tag=image_tag,
+                        )
+                        log.info("Canary image built: %s", canary_image)
+
+                        # 3. Run sandbox with the canary image
+                        log.info("Phase 3: Running sandbox verification...")
+                        fp.canary_image = canary_image
+                        sb = await sandbox.run(incident)
+                        sandbox_verified = sb.verified
+                        sandbox_summary = sb.summary
+                        log.info("Sandbox result: verified=%s (%s)", sandbox_verified, sandbox_summary)
+                    else:
+                        sandbox_summary = "skipped (could not find prod image)"
+                        log.warning("Skipping sandbox: could not find prod image for %s", fp.target_service)
+                except Exception as e:
+                    sandbox_summary = f"sandbox_error: {e}"
+                    log.exception("Sandbox build/verification failed: %s", e)
+            else:
+                log.info("Skipping sandbox (no Docker Hub credentials set)")
+
+            # 4. Open the PR (regardless of sandbox outcome)
+            log.info("Phase 4: Opening PR...")
+            result = await gh_exec.open_pr(incident, branch_info, sandbox_verified, sandbox_summary)
+
         elif fp.fix_type in (FixType.RESTART, FixType.SCALE):
+            # For restart/scale: sandbox first (test config change), then apply
+            if fp.requires_sandbox and settings.enable_traffic_mirroring:
+                sb = await sandbox.run(incident)
+                result.sandbox_verified = sb.verified
+                result.sandbox_summary = sb.summary
+                if not sb.verified:
+                    result.success = False
+                    result.error = f"sandbox_failed: {sb.summary}"
+                    incident.state.execution_result = result
+                    incident.state.status = IncidentStatus.FAILED
+                    incident.status = IncidentStatus.FAILED
+                    incident.touch()
+                    await incident_store.upsert(incident.model_dump(mode="json"))
+                    return
             result = await k8s_exec.execute(incident, result)
+
         elif fp.fix_type == FixType.ROLLBACK:
             result = await k8s_exec.rollback(incident, result)
+
         elif fp.fix_type == FixType.INFRASTRUCTURE:
             result = await tf_exec.execute(incident, result)
 
@@ -769,6 +842,30 @@ async def _execute_incident(incident: Incident) -> None:
 
     incident.touch()
     await incident_store.upsert(incident.model_dump(mode="json"))
+
+
+async def _get_prod_image(service: str, namespace: str) -> str | None:
+    """Get the current production image for a service by looking up its Deployment."""
+    from kubernetes import client
+    try:
+        apps = client.AppsV1Api()
+        # Try by label app.kubernetes.io/name=service (Helm standard)
+        deps = await asyncio.to_thread(
+            apps.list_namespaced_deployment,
+            namespace=namespace,
+            label_selector=f"app.kubernetes.io/name={service}",
+        )
+        if deps.items:
+            return deps.items[0].spec.template.spec.containers[0].image
+        # Try by exact name
+        try:
+            dep = await asyncio.to_thread(apps.read_namespaced_deployment, name=service, namespace=namespace)
+            return dep.spec.template.spec.containers[0].image
+        except Exception:
+            pass
+    except Exception as e:
+        log.warning("Could not find prod image for %s: %s", service, e)
+    return None
 
 
 async def _feedback_loop() -> None:

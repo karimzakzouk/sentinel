@@ -209,6 +209,9 @@ class FixProposal(BaseModel):
     )
     pr_title: Optional[str] = None
     pr_body: Optional[str] = None
+    # Canary image for sandbox verification (set by the execution layer
+    # after the branch is pushed + CI builds the image)
+    canary_image: Optional[str] = Field(default=None, description="Image tag for sandbox canary, e.g. 'karimzakzouk/sentinel-sim:sentinel-abc123'")
     # For restart/scale: K8s API params
     k8s_action: Optional[dict[str, Any]] = Field(default=None, description="e.g. {kind:'Deployment', patch:{spec:{replicas:10}}}")
     # For infrastructure: terraform
