@@ -630,7 +630,25 @@ async def _safety_evaluate(incident: Incident, opa: Any) -> None:
         "actor": "sentinel",
     }
     try:
-        result = await opa.decide("sentinel/decision", opa_input)
+        # Query the verdict directly — the 'decision' object rule doesn't
+        # always evaluate correctly via POST /v1/data/sentinel/decision.
+        # Querying sentinel/verdict returns the string directly.
+        verdict_result = await opa.decide("sentinel/verdict", opa_input)
+        # verdict_result is {"result": "allow"} or {"result": "deny"} etc.
+        # The OPAClient.decide already extracts .get("result", {}),
+        # so verdict_result is the string "allow" / "deny" / etc.
+        verdict_str = verdict_result if isinstance(verdict_result, str) else (
+            verdict_result.get("verdict") if isinstance(verdict_result, dict) else "deny"
+        )
+        # Also get the rules_evaluated for audit
+        rules_result = await opa.decide("sentinel/rules_evaluated", opa_input)
+        rollback_result = await opa.decide("sentinel/rollback_blocked", opa_input)
+        result = {
+            "verdict": verdict_str,
+            "rules_evaluated": rules_result if isinstance(rules_result, list) else [],
+            "confidence_at_decision": fp.proposed_confidence,
+            "rollback_blocked": bool(rollback_result) if not isinstance(rollback_result, dict) else False,
+        }
     except Exception as e:
         log.warning("OPA failed: %s — treating as require_human_approval", e)
         result = {"verdict": "require_human_approval", "rules_evaluated": [], "confidence_at_decision": fp.proposed_confidence, "rollback_blocked": False}

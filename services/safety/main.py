@@ -130,9 +130,20 @@ async def _process_incident(incident: Incident) -> None:
         "actor": "sentinel",
     }
 
-    # Query OPA
+    # Query OPA — query verdict directly (decision object rule is unreliable)
     try:
-        result = await opa.decide("sentinel/decision", opa_input)
+        verdict_result = await opa.decide("sentinel/verdict", opa_input)
+        verdict_str = verdict_result if isinstance(verdict_result, str) else (
+            verdict_result.get("verdict") if isinstance(verdict_result, dict) else "deny"
+        )
+        rules_result = await opa.decide("sentinel/rules_evaluated", opa_input)
+        rollback_result = await opa.decide("sentinel/rollback_blocked", opa_input)
+        result = {
+            "verdict": verdict_str,
+            "rules_evaluated": rules_result if isinstance(rules_result, list) else [],
+            "confidence_at_decision": fp.proposed_confidence,
+            "rollback_blocked": bool(rollback_result) if not isinstance(rollback_result, dict) else False,
+        }
     except Exception as e:  # noqa: BLE001
         log.error("OPA decision failed: %s", e)
         # Fail safe — treat as require_human_approval
