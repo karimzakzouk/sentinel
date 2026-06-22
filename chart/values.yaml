@@ -1,235 +1,87 @@
-# Sentinel - Helm Chart Values
+# Sentinel v3 — Helm Chart Values
 #
-# Default values are tuned for a small production cluster (3+ nodes).
-# Override with --set or -f values-prod.yaml.
+# v3 is a single Go binary in a single pod. No Postgres, no Weaviate, no UI,
+# no OPA sidecar. ~20MB image, ~50MB RAM at idle.
 #
-# Quick start:
-#   helm repo add sentinel https://karimzakzoukz.github.io/sentinel/
-#   helm pull sentinel/sentinel --version 1.2.0 --untar
-#   cd sentinel
-#   cp values-example.yaml my-values.yaml
-#   $EDITOR my-values.yaml      # fill in githubToken, llm.apiKey, pick provider
-#   helm install sentinel . -f my-values.yaml --namespace sentinel --create-namespace
-#
-# --- DEPLOYMENT MODE ---
-# Sentinel runs in a single-process "core" mode: ONE pod running all 6 layers
-# (ingestion, detection, reasoning, safety, execution, feedback) plus Postgres
-# and Weaviate. ~3 pods total, ~30s startup. No Kafka, no operators required.
-#
-# (v2.0.0 removed the deprecated distributed/Kafka mode. If you need horizontal
-# scaling, run multiple core replicas behind a leader-election lock — see
-# docs/scaling.md.)
+# Install:
+#   helm install sentinel sentinel/sentinel --version 3.0.0 -n sentinel --create-namespace \
+#     --set sentinel.githubToken=YOUR_GITHUB_TOKEN \
+#     --set sentinel.llm.apiKey=YOUR_LLM_API_KEY
 
 image:
   registry: "docker.io/karimzakzouk"
+  repository: "sentinel-v3"
+  tag: "3.0.0"
   pullPolicy: IfNotPresent
-  pullSecrets: []
 
-# All Sentinel services share these settings
 sentinel:
-  # The GitHub token Sentinel uses to clone repos, open PRs, and pull CD
-  # history. REQUIRED for code_fix / roll_forward actions.
+  # GitHub token — REQUIRED for code_fix / roll_forward (opens PRs)
   githubToken: ""
 
-  # Docker Hub credentials for Kaniko (sandbox image builder).
-  # Kaniko builds canary images with the fix applied, then pushes them to
-  # Docker Hub so the sandbox can pull and test them.
-  # REQUIRED for sandbox verification (without this, sandbox is skipped).
-  dockerHubUsername: "karimzakzouk"
-  dockerHubToken: ""
-
-  # --- Secret backend ---
-  # plain    — plain K8s Secret (dev only, NOT for production)
-  # sealed   — Bitnami sealed-secrets (user provides encrypted SealedSecret YAML)
-  # external — external-secrets.io (user provides ExternalSecret YAML for Vault/AWS SM/GCP SM)
-  secrets:
-    backend: "plain"
-    # For backend=sealed: paste your SealedSecret manifest here (encrypted with kubeseal)
-    sealedYaml: ""
-    # For backend=external: paste your ExternalSecret manifest here
-    externalSecretYaml: ""
-
-  # Comma-separated list of namespaces Sentinel treats as production.
-  productionNamespaces: "prod,production,payments"
-
-  # RBAC — namespaces where Sentinel is allowed to WRITE (apply fixes).
-  # Empty = read-only mode (Sentinel detects + investigates but never fixes).
-  # Add namespaces here to enable autonomous remediation.
-  rbac:
-    writeNamespaces: []
-    # writeNamespaces:
-    #   - prod
-    #   - staging
-  # Confidence thresholds for autonomous execution
-  confidenceThresholdAutonomous: 0.92
-  confidenceThresholdHumanReview: 0.70
-  # Panic-button thresholds (Layer 6 edge case #6)
-  panicCpuThresholdPct: 95.0
-  panicConnectionsThreshold: 9000
-  # LLM settings — Sentinel uses the OpenAI Python SDK with AsyncOpenAI(base_url=...),
-  # so ANY OpenAI-compatible endpoint works.
-  #
-  # Pick a provider by setting `provider`. Sentinel will auto-configure the
-  # correct base URL. Supported:
-  #   - openai     (https://api.openai.com/v1)
-  #   - zai        (https://api.z.ai/api/paas/v4) — DEFAULT
-  #   - gemini     (https://generativelanguage.googleapis.com/v1beta/openai)
-  #   - ollama     (http://ollama:11434/v1)
-  #   - vllm       (http://vllm:8000/v1)
-  #   - litellm    (http://litellm:4000/v1) — use this for Anthropic, Bedrock,
-  #                 or any non-OpenAI provider (LiteLLM proxies the call)
-  #   - azure      (set baseUrl explicitly to https://<resource>.openai.azure.com)
-  #   - custom     (set baseUrl explicitly)
-  #
-  # For Anthropic: Anthropic has NO native OpenAI-compatible endpoint.
-  # Run LiteLLM as a sidecar or separate service:
-  #   docker run -p 4000:4000 -e ANTHROPIC_API_KEY=sk-ant-xxx \
-  #     ghcr.io/berriai/litellm:main-latest --model claude-3-5-sonnet-20241022
-  # Then set provider=litellm and fastModel/frontierModel to the LiteLLM model names.
+  # LLM settings — any OpenAI-compatible endpoint
   llm:
-    provider: "zai"
-    baseUrl: ""        # if empty, derived from provider
+    provider: "zai"           # openai, zai, gemini, ollama, vllm, litellm, custom
+    baseUrl: ""               # if empty, derived from provider
     apiKey: ""
     fastModel: "glm-4-flash"
     frontierModel: "glm-4.5"
-  # Slack webhook for governance approvals (REQUIRE_HUMAN_APPROVAL verdicts)
-  approvalWebhookUrl: ""
 
-# Per-service configuration
-core:
-  enabled: true
-  image: sentinel-core
-  tag: "latest"
-  replicas: 1
-  resources:
-    requests: { cpu: 200m, memory: 512Mi }
-    limits: { cpu: 2000m, memory: 2Gi }
+  # Docker Hub creds for Kaniko sandbox image builder
+  dockerHubUsername: ""
+  dockerHubToken: ""
 
-ingestion:
-  enabled: true
-  image: sentinel-ingestion
-  tag: "latest"
-  replicas: 1
-  resources:
-    requests: { cpu: 100m, memory: 256Mi }
-    limits: { cpu: 500m, memory: 512Mi }
-  env:
-    prometheusUrl: ""    # e.g. http://prometheus-server.monitoring.svc
-    lokiUrl: ""
-    jaegerUrl: ""
+  # RBAC — namespaces where Sentinel can WRITE (apply fixes)
+  rbac:
+    writeNamespaces: []
+    # writeNamespaces:
+    #   - sim
+    #   - staging
 
-detection:
-  enabled: true
-  image: sentinel-detection
-  tag: "latest"
-  replicas: 1
-  resources:
-    requests: { cpu: 200m, memory: 512Mi }
-    limits: { cpu: 1000m, memory: 1Gi }
+  # Namespaces treated as production (stricter governance)
+  productionNamespaces: "prod,production,payments"
 
-reasoning:
-  enabled: true
-  image: sentinel-reasoning
-  tag: "latest"
-  replicas: 1
-  resources:
-    requests: { cpu: 200m, memory: 512Mi }
-    limits: { cpu: 2000m, memory: 2Gi }
+  # Confidence thresholds
+  confidenceThresholdAutonomous: 0.92
+  confidenceThresholdHumanReview: 0.70
 
-safety:
-  enabled: true
-  image: sentinel-safety
-  tag: "latest"
-  replicas: 1
-  resources:
-    requests: { cpu: 100m, memory: 256Mi }
-    limits: { cpu: 500m, memory: 512Mi }
+  # Panic button thresholds
+  panicCpuThresholdPct: 95.0
+  panicConnectionsThreshold: 9000
 
-execution:
-  enabled: true
-  image: sentinel-execution
-  tag: "latest"
-  replicas: 1
-  resources:
-    requests: { cpu: 100m, memory: 256Mi }
-    limits: { cpu: 500m, memory: 512Mi }
+# Resource limits — v3 is much smaller than v2
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
 
-feedback:
-  enabled: true
-  image: sentinel-feedback
-  tag: "latest"
-  replicas: 1
-  resources:
-    requests: { cpu: 100m, memory: 256Mi }
-    limits: { cpu: 500m, memory: 512Mi }
-
-ui:
-  enabled: true
-  image: sentinel-ui
-  tag: "latest"
-  replicas: 1
-  resources:
-    requests: { cpu: 100m, memory: 128Mi }
-    limits: { cpu: 500m, memory: 512Mi }
-  # Auth modes:
-  #   disabled   — no auth (dev ONLY; chart refuses to install if ingress.enabled=true)
-  #   credentials — shared password (auto-generated if empty, printed to helm install output)
-  #   github     — GitHub OAuth + org check
-  #
-  # v2.0.0 default: credentials with an auto-generated password. Override
-  # `password` to set your own. The chart will print the chosen password at
-  # install time so you can log in.
-  auth:
-    mode: "credentials"
-    password: ""           # auto-generated if empty
-    githubClientId: ""     # for mode=github
-    githubClientSecret: "" # for mode=github
-    githubOrg: ""          # only members of this org can sign in
-    nextauthSecret: ""     # required for credentials/github modes — auto-generated if empty
-
-# Sandbox (canary image verification)
-sandbox:
-  enabled: true  # Set to false to skip sandbox verification entirely
-
-# OPA sidecar — runs the governance policies
-opa:
-  enabled: true
-  image: openpolicyagent/opa
-  tag: "1.0.0-static"
-  port: 8181
-  resources:
-    requests: { cpu: 50m, memory: 64Mi }
-    limits: { cpu: 200m, memory: 256Mi }
-
-# Weaviate — vector DB for incident memory (RAG over past incidents).
-# ON by default in v2.0.0. The memory is the product — keep it on unless your
-# cluster is too small to afford 1GB RAM + 20GB disk.
-weaviate:
-  enabled: true
-  # Defaults to the Weaviate Helm chart values
-  storage:
-    size: 20Gi
+# Storage for SQLite (incident store + vector memory)
+storage:
+  size: 5Gi
 
 # Service account + RBAC
 serviceAccount:
   create: true
   name: ""
-  annotations: {}
 
 rbac:
   create: true
-  # Sentinel needs cluster-wide read on pods/deployments/events to investigate
-  # incidents in any namespace, plus write on SentinelIncident CRs (which users
-  # can create in any namespace). clusterScope=true grants this.
-  # Set clusterScope=false for namespace-scoped RBAC (advanced — requires manual
-  # RoleBindings in every namespace Sentinel should operate in).
+  # v3 needs cluster-wide read on pods/deployments/events + write on
+  # SentinelIncident CRs (can be created in any namespace)
   clusterScope: true
 
-# Ingress for the UI
+# NetworkPolicy — deny by default, allow only needed egress.
+# OFF by default in v3.0.1+ — k3s dev clusters often have CNI quirks that
+# break egress to the K8s API (10.43.0.1:443). Enable for production.
+networkPolicy:
+  enabled: false
+
+# Ingress (optional)
 ingress:
   enabled: false
   className: nginx
-  annotations: {}
   hosts:
     - host: sentinel.local
       paths:
@@ -237,38 +89,6 @@ ingress:
           pathType: Prefix
   tls: []
 
-# Node selector / tolerations / affinity (applied to all services)
 nodeSelector: {}
 tolerations: []
 affinity: {}
-
-# NetworkPolicy — deny-by-default, only allow Sentinel namespace + needed egress.
-# ON by default in v2.0.0. Set to false if your cluster doesn't support NetworkPolicy
-# (e.g. some managed Kubernetes flavors without CNI support).
-networkPolicy:
-  enabled: true
-
-# Postgres — Sentinel's incident store. v2.0.0 generates a random password
-# at install time and prints it to `helm install` output. To use your own,
-# set `postgres.auth.password` explicitly.
-postgres:
-  enabled: true
-  auth:
-    username: sentinel
-    password: ""  # auto-generated if empty
-    database: sentinel
-  primary:
-    persistence:
-      size: 10Gi
-  # HA settings (uncomment for production)
-  # architecture: replication
-  # readReplicas:
-  #   replicaCount: 1
-  # Backup CronJob — runs pg_dump every 6 hours, uploads to S3
-  backup:
-    enabled: false
-    schedule: "0 */6 * * *"
-    s3Bucket: ""
-    s3Prefix: "sentinel-backups"
-    awsAccessKeyId: ""
-    awsSecretAccessKey: ""
