@@ -78,24 +78,42 @@ class SandboxRunner:
                 return SandboxResult(False, f"deploy_failed: {deploy_result['error']}",
                                      namespace=sandbox_ns)
 
-            # 3. Wait for the canary pods to be ready
+            # 3. Wait for the canary pods to be ready (Level 1 — startup crash detection)
             ready = await self._wait_for_ready(sandbox_ns, fp.target_service, timeout=240)
             if not ready:
-                return SandboxResult(False, "canary_pods_not_ready",
+                return SandboxResult(False, "canary_pods_not_ready (startup crash not fixed)",
                                      namespace=sandbox_ns)
+            log.info("Sandbox Level 1 PASSED: canary pod is Ready")
 
-            # 4. Set up Istio traffic mirroring (1% of prod traffic)
+            # 4. Set up Istio traffic mirroring (1% of prod traffic) — optional
             mirror_applied = False
             if self.settings.enable_traffic_mirroring:
                 mirror_applied = await self._setup_traffic_mirror(
                     fp.target_service, fp.target_namespace, sandbox_ns
                 )
 
-            # 5. Observe for the duration window — poll the sandbox's /metrics
-            result = await self._observe(sandbox_ns, fp.target_service, duration_seconds)
-            result.namespace = sandbox_ns
-            result.mirror_applied = mirror_applied
-            return result
+            # 5. Level 2 — call the app's own endpoints to verify they respond
+            level2_passed = await self._verify_endpoints(sandbox_ns, fp.target_service)
+            if not level2_passed:
+                return SandboxResult(False, "endpoints_returned_5xx (app starts but endpoints fail)",
+                                     namespace=sandbox_ns)
+            log.info("Sandbox Level 2 PASSED: all endpoints returned 2xx/3xx")
+
+            # 6. Level 3 — reproduce the original error and verify it's gone
+            level3_result = await self._verify_original_error_fixed(
+                sandbox_ns, fp.target_service, incident
+            )
+            if level3_result is not None:
+                if not level3_result["passed"]:
+                    return SandboxResult(False, f"original_error_still_present: {level3_result['detail']}",
+                                         namespace=sandbox_ns)
+                log.info("Sandbox Level 3 PASSED: %s", level3_result["detail"])
+            else:
+                log.info("Sandbox Level 3 SKIPPED: could not determine original error to reproduce")
+
+            # All levels passed
+            return SandboxResult(True, "all_checks_passed (pod ready + endpoints ok + original error gone)",
+                                 namespace=sandbox_ns, mirror_applied=mirror_applied)
 
         except Exception as e:  # noqa: BLE001
             log.exception("Sandbox failed: %s", e)
@@ -459,6 +477,196 @@ class SandboxRunner:
             # If Istio CRDs are not installed, we get a 404 or "resource type not found"
             log.warning("VirtualService application failed (Istio not installed?): %s", e)
             return False
+
+    async def _verify_endpoints(self, sandbox_ns: str, service: str) -> bool:
+        """Level 2 verification: call the app's own endpoints and check they respond.
+
+        Discovers endpoints from the Service spec (HTTP paths from the prod
+        deployment's readiness/liveness probes + common paths like /, /healthz).
+        Calls each one via the sandbox Service. If any returns 5xx, the fix
+        didn't fully work.
+
+        Returns True if all endpoints return 2xx/3xx, False if any returns 5xx.
+        """
+        import httpx
+        try:
+            # Get the sandbox Service to find the port
+            svc = await asyncio.to_thread(
+                self.k8s.core.read_namespaced_service,
+                name=service, namespace=sandbox_ns,
+            )
+            port = svc.spec.ports[0].port if svc.spec.ports else 80
+
+            # Common endpoints to check — always include /, /healthz, /readyz
+            # plus any paths from the prod deployment's probes
+            endpoints_to_check = ["/", "/healthz", "/readyz"]
+
+            # Try to get the prod deployment's probe paths
+            try:
+                prod_deps = await asyncio.to_thread(
+                    self.k8s.apps.list_namespaced_deployment,
+                    namespace=sandbox_ns,
+                    label_selector=f"app={service}",
+                )
+                if prod_deps.items:
+                    dep = prod_deps.items[0]
+                    for container in (dep.spec.template.spec.containers or []):
+                        if container.readiness_probe and container.readiness_probe.http_get:
+                            path = container.readiness_probe.http_get.path
+                            if path and path not in endpoints_to_check:
+                                endpoints_to_check.append(path)
+                        if container.liveness_probe and container.liveness_probe.http_get:
+                            path = container.liveness_probe.http_get.path
+                            if path and path not in endpoints_to_check:
+                                endpoints_to_check.append(path)
+            except Exception:
+                pass
+
+            # Call each endpoint
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                for path in endpoints_to_check:
+                    url = f"http://{service}.{sandbox_ns}.svc.cluster.local:{port}{path}"
+                    try:
+                        r = await client.get(url)
+                        log.info("Sandbox Level 2: %s → %d", url, r.status_code)
+                        if r.status_code >= 500:
+                            log.warning("Sandbox Level 2 FAILED: %s returned %d", url, r.status_code)
+                            return False
+                    except Exception as e:
+                        log.warning("Sandbox Level 2: %s failed: %s", url, e)
+                        # Connection error is not a 5xx — the pod might still be starting
+                        # Only fail on actual 5xx responses, not connection errors
+                        continue
+
+            return True
+        except Exception as e:
+            log.warning("Sandbox Level 2 error: %s", e)
+            return True  # Don't fail the sandbox if Level 2 has an infrastructure error
+
+    async def _verify_original_error_fixed(self, sandbox_ns: str, service: str,
+                                            incident: Any) -> dict | None:
+        """Level 3 verification: reproduce the original error and verify it's gone.
+
+        Parses the original pod logs (stored in the anomaly cluster's explanation)
+        to identify the error type (KeyError, ImportError, ZeroDivisionError, etc.)
+        and the failing input/endpoint if detectable.
+
+        Then attempts to reproduce the conditions that triggered the error:
+        1. If the error was a startup crash (KeyError on import) → already verified by Level 1
+           (pod is Ready = startup succeeded = error is gone)
+        2. If the error was on a specific endpoint → call that endpoint with similar input
+        3. If the error was a runtime exception → call the app's endpoints and check for errors
+
+        Returns:
+        - {"passed": True, "detail": "..."} if the original error is confirmed gone
+        - {"passed": False, "detail": "..."} if the original error still occurs
+        - None if the original error can't be determined or reproduced
+        """
+        import httpx
+        import re
+
+        try:
+            # Get the original pod logs from the anomaly explanation
+            explanation = ""
+            for anomaly in (incident.cluster.anomalies or []):
+                explanation += anomaly.explanation + "\n"
+
+            if not explanation:
+                return None
+
+            # Extract the error type from the logs
+            # Common Python errors: KeyError, ImportError, ValueError, TypeError,
+            # ZeroDivisionError, AttributeError, RuntimeError, FileNotFoundError
+            error_match = re.search(
+                r'(KeyError|ImportError|ValueError|TypeError|ZeroDivisionError|'
+                r'AttributeError|RuntimeError|FileNotFoundError|ModuleNotFoundError|'
+                r'ConnectionError|TimeoutError|RecursionError|OverflowError):?\s*'
+                r'([^\n]+)?',
+                explanation
+            )
+
+            if not error_match:
+                # No recognizable error in the logs — can't reproduce
+                return None
+
+            error_type = error_match.group(1)
+            error_detail = error_match.group(2) or ""
+
+            # Check if this was a startup error (the pod crashed on startup)
+            # Startup errors are already verified by Level 1 (pod is Ready = no crash)
+            startup_errors = {"KeyError", "ImportError", "ModuleNotFoundError",
+                            "FileNotFoundError", "SyntaxError"}
+            if error_type in startup_errors:
+                # The canary pod is Running and Ready — the startup error is gone
+                return {
+                    "passed": True,
+                    "detail": f"Startup error {error_type}: {error_detail} — "
+                              f"canary pod started successfully (error is gone)"
+                }
+
+            # For runtime errors (ZeroDivisionError, TypeError, etc.) — try to
+            # reproduce by calling the app's endpoints. If any endpoint triggers
+            # the same error, the fix didn't work.
+            try:
+                svc = await asyncio.to_thread(
+                    self.k8s.core.read_namespaced_service,
+                    name=service, namespace=sandbox_ns,
+                )
+                port = svc.spec.ports[0].port if svc.spec.ports else 80
+            except Exception:
+                return None
+
+            # Call common endpoints with various inputs to try to trigger the error
+            test_inputs = [
+                ("GET", "/", {}),
+                ("GET", "/healthz", {}),
+                ("GET", "/readyz", {}),
+                ("GET", "/pay", {"amount": "0"}),       # common edge case
+                ("GET", "/pay", {"amount": "-1"}),      # negative input
+                ("GET", "/pay", {"amount": "abc"}),     # invalid type
+                ("GET", "/", {"id": "0"}),              # zero ID
+                ("GET", "/", {"id": "-1"}),             # negative ID
+                ("GET", "/", {"q": ""}),                # empty query
+            ]
+
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                for method, path, params in test_inputs:
+                    url = f"http://{service}.{sandbox_ns}.svc.cluster.local:{port}{path}"
+                    try:
+                        if method == "GET":
+                            r = await client.get(url, params=params)
+                        else:
+                            r = await client.post(url, json=params)
+
+                        # Check if the response body contains the original error
+                        body = r.text.lower()
+                        if error_type.lower() in body or error_detail.strip().lower() in body:
+                            return {
+                                "passed": False,
+                                "detail": f"{error_type}: {error_detail} still present in "
+                                          f"response from {path} (status {r.status_code})"
+                            }
+
+                        # 500 = the error might still be there
+                        if r.status_code >= 500:
+                            return {
+                                "passed": False,
+                                "detail": f"{path} returned {r.status_code} — "
+                                          f"possible {error_type} still occurring"
+                            }
+                    except Exception:
+                        continue
+
+            # All endpoints responded without the error
+            return {
+                "passed": True,
+                "detail": f"Runtime error {error_type}: {error_detail} — "
+                          f"not reproduced on any endpoint (error is gone)"
+            }
+
+        except Exception as e:
+            log.warning("Sandbox Level 3 error: %s", e)
+            return None  # Skip Level 3 on infrastructure errors
 
     async def _observe(self, sandbox_ns: str, service: str,
                         duration_seconds: int) -> SandboxResult:

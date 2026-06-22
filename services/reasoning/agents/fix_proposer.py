@@ -115,6 +115,27 @@ async def fix_proposer_node(state: AgentState, *, llm_router: Any,
         except ValueError:
             fix_type = FixType.CODE_FIX
 
+        raw_files = result.get("files_to_change", [])
+        # Fix file paths: the LLM often uses container paths (e.g. "app/app/main.py")
+        # instead of repo paths (e.g. "app/main.py"). We match each path against
+        # the fetched_code keys (which are the correct repo paths) and replace
+        # if there's a suffix match. This is generic — works for any project.
+        if state.fetched_code:
+            fixed_files = []
+            for fc in raw_files:
+                path = fc.get("path", "")
+                matched = False
+                for repo_path in state.fetched_code.keys():
+                    # Check if the LLM path ends with the repo path
+                    # (e.g. "app/app/main.py" ends with "app/main.py")
+                    if path.endswith(repo_path) and path != repo_path:
+                        log.info("Fixing file path: %s → %s (matched fetched_code)", path, repo_path)
+                        fc["path"] = repo_path
+                        matched = True
+                        break
+                fixed_files.append(fc)
+            raw_files = fixed_files
+
         proposal = FixProposal(
             fix_type=fix_type,
             target_service=state.cluster.service,
@@ -122,7 +143,7 @@ async def fix_proposer_node(state: AgentState, *, llm_router: Any,
             description=result.get("description", ""),
             repo=_discover_repo(state),
             k8s_action=result.get("k8s_action"),
-            files_to_change=result.get("files_to_change", []),
+            files_to_change=raw_files,
             dockerfile_path=result.get("dockerfile_path", "Dockerfile"),
             pr_title=result.get("pr_title") or f"[Sentinel] {fix_type.value} for {state.cluster.service}",
             pr_body=result.get("pr_body") or _build_pr_body(state, rc, fix_type=fix_type.value),
