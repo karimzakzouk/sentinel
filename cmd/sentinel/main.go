@@ -41,7 +41,7 @@ func main() {
                 listenAddr = *addr
         }
 
-        log.Printf("[main] Sentinel v3.0.0 starting")
+        log.Printf("[main] Sentinel %s starting", Version)
         log.Printf("[main] LLM: %s (model: %s)", cfg.LLMProvider, cfg.LLMFrontierModel)
         log.Printf("[main] SQLite: %s", cfg.SQLitePath)
         log.Printf("[main] API: %s", listenAddr)
