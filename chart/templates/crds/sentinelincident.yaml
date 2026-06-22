@@ -37,8 +37,8 @@ spec:
                   description: Optional human-readable description
                 trigger:
                   type: string
-                  description: What created this incident (operator_crashloop_watch, manual, alertmanager)
-                  enum: [manual, operator_crashloop_watch, alertmanager]
+                  description: What created this incident (crd_watcher, manual, alertmanager)
+                  enum: [manual, crd_watcher, alertmanager]
                 repo:
                   type: string
                   description: GitHub repo (auto-discovered from pod annotations if not set)

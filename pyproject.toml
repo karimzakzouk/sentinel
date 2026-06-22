@@ -1,13 +1,102 @@
-[tool.pytest.ini_options]
-asyncio_mode = "auto"
-testpaths = ["tests"]
-pythonpath = [
-    "services/common",
-    "services/ingestion",
-    "services/detection",
-    "services/reasoning",
-    "services/safety",
-    "services/execution",
-    "services/feedback",
-    "services/operator",
+[project]
+name = "sentinel"
+version = "2.0.0"
+description = "Sentinel — The Autonomous AI Site Reliability Engineer"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+authors = [{ name = "Sentinel" }]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+extend-exclude = [
+    "chart",
+    "ui",
+    "scripts",
+    ".venv",
+    "build",
 ]
+
+[tool.ruff.lint]
+select = [
+    "E",     # pycodestyle errors
+    "W",     # pycodestyle warnings
+    "F",     # pyflakes
+    "I",     # isort
+    "B",     # flake8-bugbear
+    "C4",    # flake8-comprehensions
+    "UP",    # pyupgrade
+    "N",     # pep8-naming
+    "SIM",   # flake8-simplify
+    "RUF",   # ruff-specific
+    "S",     # bandit (security)
+    "ASYNC", # flake8-async
+]
+ignore = [
+    "E501",      # line too long (formatter handles)
+    "S101",      # use of assert (fine in tests)
+    "S104",      # 0.0.0.0 binding (we're a server)
+    "S108",      # /tmp usage (fine for kaniko)
+    "S603",      # subprocess call (we use it for git)
+    "S607",      # partial path in subprocess (we control it)
+    "B008",      # function call in default arg (FastAPI Depends pattern)
+    "B904",      # raise from in except (we do this where it matters)
+    "SIM108",    # ternary instead of if-else (readability)
+    "RUF001",    # ambiguous unicode (we use checkmarks intentionally)
+    "RUF002",
+    "RUF003",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S", "PLR", "C901"]
+"services/**/executors/*.py" = ["S"]
+"services/execution/kaniko.py" = ["S"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+
+[tool.ruff.lint.isort]
+known-first-party = ["sentinel_common", "agents", "detectors", "collectors", "executors"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = false
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+disallow_untyped_defs = false  # enable per-module later
+disallow_incomplete_defs = false
+check_untyped_defs = true
+namespace_packages = true
+explicit_package_bases = true
+mypy_path = "services/common:services/ingestion:services/detection:services/reasoning:services/safety:services/execution:services/feedback:services/core"
+exclude = ["chart/", "ui/", "scripts/", "build/"]
+
+[[tool.mypy.overrides]]
+module = "sentinel_common.*"
+strict = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+
+[[tool.mypy.overrides]]
+module = ["kubernetes.*", "github.*", "weaviate.*", "langgraph.*", "kopf.*", "aiokafka.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-ra --strict-markers"
+markers = [
+    "integration: marks tests that require a real K8s cluster (deselect with '-m \"not integration\"')",
+]
+
+[tool.coverage.run]
+source = ["services"]
+omit = ["*/tests/*", "*/__init__.py"]
+
+[tool.coverage.report]
+exclude_lines = ["pragma: no cover", "if TYPE_CHECKING:", "raise NotImplementedError"]

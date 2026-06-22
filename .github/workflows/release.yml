@@ -42,8 +42,18 @@ jobs:
         run: |
           pip install -e services/common
           pip install pytest pytest-asyncio langgraph langchain-openai openai \
-            pygithub kubernetes kopf weaviate-client scikit-learn httpx tenacity \
-            "sqlalchemy[asyncio]" asyncpg fastapi uvicorn aiokafka prometheus-client
+            pygithub kubernetes weaviate-client scikit-learn httpx tenacity structlog \
+            "sqlalchemy[asyncio]" asyncpg fastapi uvicorn prometheus-client
+      - name: Ruff lint
+        run: |
+          pip install ruff
+          ruff check services/ tests/
+      - name: Ruff format check
+        run: ruff format --check services/ tests/
+      - name: Mypy (common)
+        run: |
+          pip install mypy
+          mypy services/common/sentinel_common/
       - name: Build chart deps
         run: |
           rm -f chart/Chart.lock
@@ -53,7 +63,7 @@ jobs:
       - name: Pytest
         env:
           PYTHONPATH: services/common:services/ingestion:services/detection:services/reasoning:services/safety:services/execution:services/feedback:services/core
-        run: pytest tests/ --tb=short -v
+        run: pytest tests/ --tb=short -v -m "not integration"
 
   build-images:
     name: Build ${{ matrix.service }}
@@ -65,13 +75,6 @@ jobs:
         include:
           - { service: core,       dockerfile: services/core/Dockerfile }
           - { service: ui,         dockerfile: ui/Dockerfile }
-          - { service: ingestion,  dockerfile: services/ingestion/Dockerfile }
-          - { service: detection,  dockerfile: services/detection/Dockerfile }
-          - { service: reasoning,  dockerfile: services/reasoning/Dockerfile }
-          - { service: safety,     dockerfile: services/safety/Dockerfile }
-          - { service: execution,  dockerfile: services/execution/Dockerfile }
-          - { service: feedback,   dockerfile: services/feedback/Dockerfile }
-          - { service: operator,   dockerfile: services/operator/Dockerfile }
     steps:
       - uses: actions/checkout@v4
 
@@ -177,7 +180,7 @@ jobs:
           cd /tmp/gh-pages
           git config user.email "actions@github.com"
           git config user.name "GitHub Actions"
-          cp ${GITHUB_WORKSPACE}/chart/gh-pages-index.html index.html
+          cp ${GITHUB_WORKSPACE}/chart/gh-pages-index.html index.html 2>/dev/null || true
           cp /tmp/sentinel-${{ steps.version.outputs.version }}.tgz .
           helm repo index . --url https://karimzakzoukz.github.io/sentinel/
           touch .nojekyll

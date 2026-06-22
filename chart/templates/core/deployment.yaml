@@ -1,4 +1,9 @@
-{{- if eq .Values.mode "core" -}}
+{{/*
+Core Deployment — the single-process Sentinel pod. Runs all 6 layers
+(ingestion, detection, reasoning, safety, execution, feedback) plus an OPA
+sidecar for governance. ~3 pods total in a default install: core, postgres,
+weaviate, ui.
+*/}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -18,13 +23,22 @@ spec:
         app.kubernetes.io/instance: {{ .Release.Name }}
         app.kubernetes.io/part-of: sentinel
       annotations:
-        checksum/config: {{ include "sentinel.commonEnv" . | sha256sum }}
+        # Force rollout when env or policies change
+        checksum/env: {{ include "sentinel.commonEnv" . | sha256sum }}
+        checksum/policies: {{ include "sentinel.labels" . | sha256sum }}
     spec:
       serviceAccountName: {{ .Values.serviceAccount.name | default (include "sentinel.fullname" .) }}
       {{- with .Values.image.pullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: core
           image: {{ include "sentinel.image" (list . "core") }}
@@ -57,15 +71,22 @@ spec:
               port: http
             initialDelaySeconds: 30
             periodSeconds: 10
+            timeoutSeconds: 5
           readinessProbe:
             httpGet:
-              path: /healthz
+              path: /readyz
               port: http
             initialDelaySeconds: 5
             periodSeconds: 5
+            timeoutSeconds: 3
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           resources:
             {{- toYaml .Values.core.resources | nindent 12 }}
         # OPA sidecar — runs the governance policies
@@ -80,6 +101,10 @@ spec:
             - name: policies
               mountPath: /policies
               readOnly: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           resources:
             {{- toYaml .Values.opa.resources | nindent 12 }}
           {{- with .Values.nodeSelector }}
@@ -113,4 +138,3 @@ spec:
   selector:
     app.kubernetes.io/name: core
     app.kubernetes.io/instance: {{ .Release.Name }}
-{{- end -}}

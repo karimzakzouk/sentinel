@@ -1,11 +1,8 @@
 FROM python:3.12-slim AS base
 
-# Install terraform CLI for the terraform executor
+# Runtime deps for git operations (Kaniko clone-and-patch path uses git)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    unzip curl ca-certificates git \
-    && curl -sL https://releases.hashicorp.com/terraform/1.9.5/terraform_1.9.5_linux_amd64.zip -o /tmp/tf.zip \
-    && unzip /tmp/tf.zip -d /usr/local/bin \
-    && rm /tmp/tf.zip \
+    ca-certificates git \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -21,6 +18,8 @@ COPY services/execution /app
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
 
-EXPOSE 8000
+# Run as non-root
+RUN useradd -r -u 1000 -g root nonroot && chown -R nonroot:root /app
+USER 1000
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+EXPOSE 8000
