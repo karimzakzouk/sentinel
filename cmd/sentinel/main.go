@@ -18,6 +18,7 @@ import (
         "github.com/karimzakzoukz/sentinel/v3/internal/agents"
         "github.com/karimzakzoukz/sentinel/v3/internal/api"
         "github.com/karimzakzoukz/sentinel/v3/internal/config"
+        "github.com/karimzakzoukz/sentinel/v3/internal/detection"
         "github.com/karimzakzoukz/sentinel/v3/internal/executors"
         "github.com/karimzakzoukz/sentinel/v3/internal/feedback"
         "github.com/karimzakzoukz/sentinel/v3/internal/k8s"
@@ -189,6 +190,54 @@ func main() {
         go func() {
                 log.Printf("[main] CRD watcher started")
                 w.Run(ctx)
+        }()
+
+        // 9. Start the autonomous detection layer (live log streaming + pod status)
+        detectionHandler := func(service, namespace, reason, podLogs string) {
+                log.Printf("[detection] auto-triggered incident: %s/%s — %s", namespace, service, reason)
+
+                // Look up workload annotations for repo + branch
+                annotations, _ := k8sClient.LookupWorkloadAnnotations(ctx, service, namespace)
+                if annotations == nil {
+                        annotations = map[string]string{}
+                }
+
+                // Build the anomaly cluster (same structure as CRD watcher)
+                explanation := fmt.Sprintf("Auto-detected incident: %s", reason)
+                if podLogs != "" {
+                        explanation += fmt.Sprintf("\n\n## Pod Logs (last 8KB)\n%s", podLogs)
+                }
+
+                cluster := schemas.AnomalyCluster{
+                        ClusterID: uuid.New(),
+                        Service:   service,
+                        Namespace: namespace,
+                        Anomalies: []schemas.Anomaly{
+                                {
+                                        AnomalyID:   uuid.New(),
+                                        SignalID:    uuid.New(),
+                                        Service:     service,
+                                        Namespace:   namespace,
+                                        Detector:    "auto_detection",
+                                        Score:       0.9,
+                                        Dimensions:  map[string]float64{"auto": 1.0},
+                                        Explanation: explanation,
+                                        Annotations: annotations,
+                                },
+                        },
+                        Summary:     reason,
+                        Severity:    schemas.SeverityWarning,
+                        Annotations: annotations,
+                }
+
+                // Run the same handler as the CRD watcher
+                handler(ctx, cluster, "auto-detected", namespace)
+        }
+
+        detector := detection.New(k8sClient.Clientset(), detectionHandler, "")
+        go func() {
+                log.Printf("[main] detection layer started (live log streaming + pod status)")
+                detector.Run(ctx)
         }()
 
         go func() {

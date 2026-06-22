@@ -214,6 +214,30 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
                 }
                 fetched[path] = content
         }
+
+        // 9. FALLBACK: If the LLM returned 0 files, try files from the stack trace
+        if len(fetched) == 0 {
+                log.Printf("[investigator] LLM returned 0 files — falling back to stack trace parsing")
+                stackFiles := k8s.ParseStackTrace(podLogs)
+                // Also try files from search results
+                for _, r := range allResults {
+                        stackFiles = append(stackFiles, r.Path)
+                }
+                for _, path := range stackFiles {
+                        if _, alreadyRead := fetched[path]; alreadyRead {
+                                continue
+                        }
+                        content, err := repo.ReadFile(repoPath, path)
+                        if err != nil {
+                                continue
+                        }
+                        fetched[path] = content
+                        if len(fetched) >= 5 {
+                                break
+                        }
+                }
+        }
+
         log.Printf("[investigator] fetched %d files: %v", len(fetched), keysOf(fetched))
 
         state.Hypotheses = newHyps
