@@ -82,26 +82,27 @@ class TestGitHubExecutor:
         executor.gh = mock_gh
 
         inc = _make_incident()
-        fp = inc.state.fix_proposal
-        result = ExecutionResult(
-            fix_id=fp.fix_id,
-            fix_type=FixType.CODE_FIX,
-            success=False,
-        )
 
-        # Run
-        out = await executor.execute(inc, result)
-
-        # Verify the PR was opened
-        assert out.success is True
-        assert out.pr_url == "https://github.com/test/repo/pull/1"
-        assert out.pr_number == 1
-        assert out.pr_branch == "sentinel/test-branch"
+        # Phase 1: prepare_branch
+        branch_info = await executor.prepare_branch(inc)
+        assert branch_info["success"] is True
+        assert branch_info["branch_name"] == "sentinel/test-branch"
+        assert branch_info["repo"] == "test/repo"
 
         # Verify the branch was created from base SHA
         mock_repo.create_git_ref.assert_called_once()
         # Verify the file was created (since get_contents raised 404)
         mock_repo.create_file.assert_called_once()
+
+        # Phase 2: open_pr (sandbox verified=True)
+        result = await executor.open_pr(inc, branch_info, sandbox_verified=True, sandbox_summary="passed")
+
+        # Verify the PR was opened
+        assert result.success is True
+        assert result.pr_url == "https://github.com/test/repo/pull/1"
+        assert result.pr_number == 1
+        assert result.pr_branch == "sentinel/test-branch"
+        assert result.sandbox_verified is True
 
     def test_no_repo_returns_error(self):
         asyncio.run(self._test_no_repo())
@@ -114,12 +115,13 @@ class TestGitHubExecutor:
 
         inc = _make_incident()
         inc.state.fix_proposal.repo = None
-        fp = inc.state.fix_proposal
-        result = ExecutionResult(
-            fix_id=fp.fix_id,
-            fix_type=FixType.CODE_FIX,
-            success=False,
-        )
-        out = await executor.execute(inc, result)
-        assert out.success is False
-        assert "no_repo" in out.error
+
+        # prepare_branch should fail
+        branch_info = await executor.prepare_branch(inc)
+        assert branch_info["success"] is False
+        assert "no_repo" in branch_info["error"]
+
+        # open_pr should also fail
+        result = await executor.open_pr(inc, branch_info, sandbox_verified=False)
+        assert result.success is False
+        assert "branch_preparation_failed" in result.error
