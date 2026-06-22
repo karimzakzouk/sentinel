@@ -13,37 +13,41 @@ Kafka topic, evaluates each fix against the OPA policies, and:
 Every decision — allow, require_human_approval, or deny — is persisted to
 the `governance_decisions` table for compliance audits.
 """
+
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "common"))
 
+import httpx
+import sqlalchemy as sa
+import uvicorn
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-import httpx
-import uvicorn
+from sqlalchemy.ext.asyncio import create_async_engine
 
 from sentinel_common import (
-    GovernanceDecision, GovernanceVerdict, Incident, IncidentStatus,
-    FixType,
+    GovernanceDecision,
+    GovernanceVerdict,
+    Incident,
+    IncidentStatus,
 )
 from sentinel_common.config import get_settings
-from sentinel_common.kafka_client import KafkaBus, SchemaRegistry
 from sentinel_common.db import (
-    IncidentStore, EventStore, GovernanceDecision as _GDecisionModel,
-    init_db, governance_decisions_table,
+    EventStore,
+    IncidentStore,
+    governance_decisions_table,
+    init_db,
 )
+from sentinel_common.kafka_client import KafkaBus, SchemaRegistry
 from sentinel_common.opa import OPAClient
-from sqlalchemy.ext.asyncio import create_async_engine
-import sqlalchemy as sa
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("sentinel.safety")
@@ -97,13 +101,11 @@ async def _consumer_loop() -> None:
     try:
         async for raw in consumer:
             try:
-                incident = Incident.model_validate_json(
-                    raw if isinstance(raw, bytes) else raw.value
-                )
+                incident = Incident.model_validate_json(raw if isinstance(raw, bytes) else raw.value)
                 if incident.state.fix_proposal is None:
                     continue
                 asyncio.create_task(_process_incident(incident))
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 log.warning("Failed to process incident: %s", e)
     except asyncio.CancelledError:
         log.info("Consumer cancelled")
@@ -133,8 +135,10 @@ async def _process_incident(incident: Incident) -> None:
     # Query OPA — query verdict directly (decision object rule is unreliable)
     try:
         verdict_result = await opa.decide("sentinel/verdict", opa_input)
-        verdict_str = verdict_result if isinstance(verdict_result, str) else (
-            verdict_result.get("verdict") if isinstance(verdict_result, dict) else "deny"
+        verdict_str = (
+            verdict_result
+            if isinstance(verdict_result, str)
+            else (verdict_result.get("verdict") if isinstance(verdict_result, dict) else "deny")
         )
         rules_result = await opa.decide("sentinel/rules_evaluated", opa_input)
         rollback_result = await opa.decide("sentinel/rollback_blocked", opa_input)
@@ -144,7 +148,7 @@ async def _process_incident(incident: Incident) -> None:
             "confidence_at_decision": fp.proposed_confidence,
             "rollback_blocked": bool(rollback_result) if not isinstance(rollback_result, dict) else False,
         }
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         log.error("OPA decision failed: %s", e)
         # Fail safe — treat as require_human_approval
         result = {
@@ -171,27 +175,32 @@ async def _process_incident(incident: Incident) -> None:
     )
 
     incident.state.governance_decision = decision
-    incident.state.agent_trace.append({
-        "agent": "safety",
-        "verdict": verdict.value,
-        "rules": decision.rules_evaluated,
-    })
+    incident.state.agent_trace.append(
+        {
+            "agent": "safety",
+            "verdict": verdict.value,
+            "rules": decision.rules_evaluated,
+        }
+    )
 
     # Persist decision to governance_decisions table for audit
     async with engine.begin() as conn:
-        await conn.execute(governance_decisions_table.insert().values(
-            incident_id=incident.incident_id,
-            ts=datetime.now(timezone.utc),
-            verdict=verdict.value,
-            rules_evaluated=decision.rules_evaluated,
-            confidence_at_decision=decision.confidence_at_decision,
-            approval_request_id=decision.approval_request_id,
-            approval_channel=decision.approval_channel,
-            rollback_blocked_reason=decision.rollback_blocked_reason,
-        ))
+        await conn.execute(
+            governance_decisions_table.insert().values(
+                incident_id=incident.incident_id,
+                ts=datetime.now(UTC),
+                verdict=verdict.value,
+                rules_evaluated=decision.rules_evaluated,
+                confidence_at_decision=decision.confidence_at_decision,
+                approval_request_id=decision.approval_request_id,
+                approval_channel=decision.approval_channel,
+                rollback_blocked_reason=decision.rollback_blocked_reason,
+            )
+        )
 
-    await event_store.append(incident.incident_id, "safety", "governance_decision",
-                              agent="safety", payload=decision.model_dump(mode="json"))
+    await event_store.append(
+        incident.incident_id, "safety", "governance_decision", agent="safety", payload=decision.model_dump(mode="json")
+    )
 
     # Route
     if verdict == GovernanceVerdict.ALLOW:
@@ -205,8 +214,7 @@ async def _process_incident(incident: Incident) -> None:
         incident.status = IncidentStatus.GOVERNANCE_REVIEW
         # Post to approval channel
         await _post_approval_request(incident, decision)
-        log.info("Incident %s requires human approval — posted to %s",
-                 incident.incident_id, decision.approval_channel)
+        log.info("Incident %s requires human approval — posted to %s", incident.incident_id, decision.approval_channel)
     else:  # DENY
         incident.state.status = IncidentStatus.ESCALATED
         incident.status = IncidentStatus.ESCALATED
@@ -227,6 +235,7 @@ def _compute_replica_pct(fp: Any) -> int:
     # Get the current replica count from the actual deployment
     try:
         from kubernetes import client
+
         apps = client.AppsV1Api()
         deploy = apps.read_namespaced_deployment(
             name=fp.target_service,
@@ -251,34 +260,50 @@ async def _post_approval_request(incident: Incident, decision: GovernanceDecisio
     payload = {
         "text": f"Sentinel approval required: {fp.fix_type.value} on {fp.target_service}",
         "blocks": [
-            {"type": "section", "text": {"type": "mrkdwn", "text":
-                f"*Sentinel Governance Approval Required*\n"
-                f"• Incident: `{incident.incident_id}`\n"
-                f"• Service: `{fp.target_service}` (ns: `{fp.target_namespace}`)\n"
-                f"• Fix type: `{fp.fix_type.value}`\n"
-                f"• Confidence: `{fp.proposed_confidence:.3f}`\n"
-                f"• Root cause: {rc.statement if rc else 'unknown'}\n"
-                f"• Approval ID: `{decision.approval_request_id}`"
-            }},
-            {"type": "actions", "elements": [
-                {"type": "button", "text": {"type": "plain_text", "text": "Approve"},
-                 "style": "primary", "value": decision.approval_request_id,
-                 "url": f"{settings.ui_url}/approve/{decision.approval_request_id}"},
-                {"type": "button", "text": {"type": "plain_text", "text": "Deny"},
-                 "style": "danger", "value": decision.approval_request_id,
-                 "url": f"{settings.ui_url}/deny/{decision.approval_request_id}"},
-            ]},
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*Sentinel Governance Approval Required*\n"
+                    f"• Incident: `{incident.incident_id}`\n"
+                    f"• Service: `{fp.target_service}` (ns: `{fp.target_namespace}`)\n"
+                    f"• Fix type: `{fp.fix_type.value}`\n"
+                    f"• Confidence: `{fp.proposed_confidence:.3f}`\n"
+                    f"• Root cause: {rc.statement if rc else 'unknown'}\n"
+                    f"• Approval ID: `{decision.approval_request_id}`",
+                },
+            },
+            {
+                "type": "actions",
+                "elements": [
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "Approve"},
+                        "style": "primary",
+                        "value": decision.approval_request_id,
+                        "url": f"{settings.ui_url}/approve/{decision.approval_request_id}",
+                    },
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "Deny"},
+                        "style": "danger",
+                        "value": decision.approval_request_id,
+                        "url": f"{settings.ui_url}/deny/{decision.approval_request_id}",
+                    },
+                ],
+            },
         ],
     }
     try:
         async with httpx.AsyncClient(timeout=10.0) as c:
             r = await c.post(webhook, json=payload)
             r.raise_for_status()
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         log.warning("Approval webhook post failed: %s", e)
 
 
 # ---------- HTTP API for human approval callbacks ----------
+
 
 class ApprovalResponse(BaseModel):
     approval_request_id: str

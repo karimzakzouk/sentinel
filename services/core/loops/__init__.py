@@ -9,6 +9,7 @@ Each loop is a single async function that runs forever (until cancelled):
   - feedback_loop     — resolved incidents → Beta tracker + Weaviate + postmortem
   - crd_watcher_loop  — SentinelIncident CRs → anomaly clusters (manual trigger)
 """
+
 from __future__ import annotations
 
 from .crd_watcher import crd_watcher_loop

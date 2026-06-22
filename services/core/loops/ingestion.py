@@ -3,16 +3,17 @@
 Normalizes raw telemetry into Signal objects and publishes them to the
 anomalies... wait, to the signals topic.
 """
+
 from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 log = logging.getLogger(__name__)
 
 
-async def ingestion_loop(bus: Any, normalizer: Any, runtime_settings: Any, settings: Any) -> None:  # noqa: ANN401
+async def ingestion_loop(bus: Any, normalizer: Any, runtime_settings: Any, settings: Any) -> None:
     """Watch K8s events + (optionally) poll Prometheus/Loki, normalize, publish signals."""
     from collectors.k8s_events import K8sEventsCollector
 
@@ -20,7 +21,7 @@ async def ingestion_loop(bus: Any, normalizer: Any, runtime_settings: Any, setti
     last_run = 0.0
     while True:
         try:
-            now = datetime.now(timezone.utc).timestamp()
+            now = datetime.now(UTC).timestamp()
             if now - last_run >= 15:
                 last_run = now
                 raw_batch = []
@@ -47,4 +48,4 @@ async def ingestion_loop(bus: Any, normalizer: Any, runtime_settings: Any, setti
 
 
 # Avoid circular import
-from typing import Any  # noqa: E402
+from typing import Any

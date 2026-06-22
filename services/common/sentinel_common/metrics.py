@@ -16,11 +16,11 @@ Metrics exposed:
   sentinel_execution_duration_seconds{fix_type}    — histogram
   sentinel_incident_investigation_duration_seconds — histogram
 """
+
 from __future__ import annotations
 
-from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
 from fastapi import Response
-
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
 
 # --- Counters ---
 INCIDENTS_TOTAL = Counter(
@@ -115,9 +115,9 @@ COST_PER_1K_TOKENS = {
 }
 
 
-def record_llm_call(model: str, agent: str, outcome: str,
-                    input_tokens: int = 0, output_tokens: int = 0,
-                    duration_seconds: float = 0.0) -> None:
+def record_llm_call(
+    model: str, agent: str, outcome: str, input_tokens: int = 0, output_tokens: int = 0, duration_seconds: float = 0.0
+) -> None:
     """Record an LLM API call — call this after every LLM interaction."""
     LLM_CALLS_TOTAL.labels(model=model, agent=agent, outcome=outcome).inc()
     if input_tokens:

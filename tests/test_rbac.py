@@ -1,6 +1,8 @@
 """Tests for the namespace write-allowlist — verifies Sentinel denies fixes
 in namespaces not listed in writeNamespaces."""
+
 import os
+
 from sentinel_common.config import Settings
 
 

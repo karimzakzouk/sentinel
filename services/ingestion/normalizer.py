@@ -4,16 +4,12 @@ The normalizer is the heart of Layer 1. It knows how to map each source's
 shape (Prometheus alert, Loki log line, K8s event, Jaeger span) into the
 canonical Signal envelope.
 """
+
 from __future__ import annotations
 
-import base64
-import json
 import logging
 import re
-import zlib
-from datetime import datetime, timezone
 from typing import Any
-from uuid import uuid4
 
 from sentinel_common import Signal, SignalSource
 
@@ -49,12 +45,7 @@ class Normalizer:
         alert = raw.get("alert", {})
         labels = alert.get("labels", {}) or alert.get("commonLabels", {}) or {}
         annotations = alert.get("annotations", {}) or alert.get("commonAnnotations", {}) or {}
-        service = (
-            labels.get("service")
-            or labels.get("job")
-            or annotations.get(ANNOTATION_SERVICE)
-            or "unknown"
-        )
+        service = labels.get("service") or labels.get("job") or annotations.get(ANNOTATION_SERVICE) or "unknown"
         return Signal(
             source=SignalSource.PROMETHEUS,
             service=service,
@@ -91,18 +82,9 @@ class Normalizer:
         return self._loki_signal(labels, line, log_entry)
 
     def _loki_signal(self, labels: dict[str, str], line: str, log_entry: dict[str, Any]) -> Signal:
-        service = (
-            labels.get("service")
-            or labels.get("app")
-            or labels.get("job")
-            or "unknown"
-        )
+        service = labels.get("service") or labels.get("app") or labels.get("job") or "unknown"
         # Try to extract a trace_id from common logging patterns
-        trace_id = (
-            labels.get("trace_id")
-            or labels.get("traceId")
-            or _extract_trace_id_from_line(line)
-        )
+        trace_id = labels.get("trace_id") or labels.get("traceId") or _extract_trace_id_from_line(line)
         return Signal(
             source=SignalSource.LOKI,
             service=service,
@@ -169,12 +151,7 @@ class Normalizer:
         # Resolve service from labels on the involved object — Sentinel looks
         # for the standard app.kubernetes.io/name label.
         labels = ev.get("metadata", {}).get("labels", {}) or {}
-        service = (
-            labels.get("app.kubernetes.io/name")
-            or labels.get("app")
-            or name
-            or "unknown"
-        )
+        service = labels.get("app.kubernetes.io/name") or labels.get("app") or name or "unknown"
         sig = Signal(
             source=SignalSource.K8S_EVENTS,
             service=service,

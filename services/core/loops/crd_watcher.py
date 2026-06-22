@@ -6,6 +6,7 @@ set (replaced by status.phase on the CR, which is already there).
 
 Falls back to polling if the watch fails (network blip, K8s API restart).
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -41,6 +42,7 @@ async def crd_watcher_loop(bus: Any, settings: Any, runtime_settings: Any) -> No
 
 async def _watch_stream(coa: Any, watch_mod: Any, bus: Any, settings: Any, runtime_settings: Any) -> None:
     """Stream SentinelIncident CRs via Watch(). Blocks until the stream breaks."""
+
     # kubernetes.watch.Watch().stream() is a blocking generator — run it in a thread.
     def _consume() -> None:
         w = watch_mod.Watch()
@@ -91,7 +93,7 @@ async def _handle_event(
     log.info("CRD watcher: new SentinelIncident %s (service=%s, reason=%s)", f"{ns}/{name}", service, reason)
 
     # Discover sentinel.io/* annotations from the affected workload
-    from .k8s_compat import lookup_workload_annotations, fetch_crashing_pod_logs
+    from .k8s_compat import fetch_crashing_pod_logs, lookup_workload_annotations
 
     workload_annotations = await lookup_workload_annotations(service, svc_ns)
     if repo_from_spec:
@@ -99,7 +101,8 @@ async def _handle_event(
     if workload_annotations:
         log.info(
             "CRD watcher: discovered annotations for %s: %s",
-            service, list(workload_annotations.keys()),
+            service,
+            list(workload_annotations.keys()),
         )
 
     # Fetch REAL pod logs from the crashing pods

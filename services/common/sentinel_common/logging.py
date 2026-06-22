@@ -17,6 +17,7 @@ To bind context (e.g. incident_id) for all logs in a coroutine:
     log.info("investigation_started")  # includes incident_id, service, namespace
     clear_context()
 """
+
 from __future__ import annotations
 
 import logging
@@ -26,10 +27,11 @@ from typing import Any
 
 try:
     import structlog
+
     HAS_STRUCTLOG = True
 except ImportError:
     HAS_STRUCTLOG = False
-    structlog = None  # type: ignore
+    structlog = None
 
 _CONFIGURED = False
 
@@ -69,7 +71,8 @@ def configure_logging(*, json_output: bool | None = None, level: str = "INFO") -
     ]
 
     structlog.configure(
-        processors=shared_processors + [
+        processors=shared_processors
+        + [
             structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
         ],
         logger_factory=structlog.stdlib.LoggerFactory(),
@@ -82,9 +85,11 @@ def configure_logging(*, json_output: bool | None = None, level: str = "INFO") -
         foreign_pre_chain=shared_processors,
         processors=[
             structlog.stdlib.ProcessorFormatter.remove_processors_meta,
-            (structlog.processors.JSONRenderer()
-             if json_output
-             else structlog.dev.ConsoleRenderer(colors=sys.stderr.isatty())),
+            (
+                structlog.processors.JSONRenderer()
+                if json_output
+                else structlog.dev.ConsoleRenderer(colors=sys.stderr.isatty())
+            ),
         ],
     )
 

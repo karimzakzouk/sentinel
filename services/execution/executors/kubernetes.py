@@ -1,4 +1,5 @@
 """Kubernetes executor — restart / scale / rollback via the K8s API."""
+
 from __future__ import annotations
 
 import asyncio
@@ -26,7 +27,7 @@ class K8sExecutor:
             self.apps = client.AppsV1Api()
             self.core = client.CoreV1Api()
             self._available = True
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             log.warning("K8s executor not available (running in dev mode): %s", e)
             self.apps = None
             self.core = None
@@ -58,23 +59,25 @@ class K8sExecutor:
                     "spec": {
                         "template": {
                             "metadata": {
-                                "annotations": {
-                                    "kubectl.kubernetes.io/restartedAt": datetime.utcnow().isoformat()
-                                }
+                                "annotations": {"kubectl.kubernetes.io/restartedAt": datetime.utcnow().isoformat()}
                             }
                         }
                     }
                 }
                 await asyncio.to_thread(
                     self.apps.patch_namespaced_deployment,
-                    name=name, namespace=namespace, body=restart_patch,
+                    name=name,
+                    namespace=namespace,
+                    body=restart_patch,
                 )
                 result.k8s_response = {"action": "restart", "deployment": name, "namespace": namespace}
                 result.success = True
             elif fp.fix_type == FixType.SCALE:
                 await asyncio.to_thread(
                     self.apps.patch_namespaced_deployment,
-                    name=name, namespace=namespace, body=patch,
+                    name=name,
+                    namespace=namespace,
+                    body=patch,
                 )
                 result.k8s_response = {"action": "scale", "deployment": name, "namespace": namespace, "patch": patch}
                 result.success = True
@@ -87,7 +90,7 @@ class K8sExecutor:
             result.error = f"k8s_api_error: {e}"
             result.k8s_response = {"status": e.status, "body": e.body}
             return result
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             result.success = False
             result.error = str(e)
             return result
@@ -128,7 +131,11 @@ class K8sExecutor:
                 result.error = f"no_replica_sets_found_for_{name}"
                 return result
             # Sort by revision descending, pick the second one (previous)
-            sorted_rs = sorted(rs.items, key=lambda x: x.metadata.annotations.get("deployment.kubernetes.io/revision", "0"), reverse=True)
+            sorted_rs = sorted(
+                rs.items,
+                key=lambda x: x.metadata.annotations.get("deployment.kubernetes.io/revision", "0"),
+                reverse=True,
+            )
             if len(sorted_rs) < 2:
                 result.success = False
                 result.error = "no_previous_revision_to_rollback_to"
@@ -136,7 +143,8 @@ class K8sExecutor:
             prev_template = sorted_rs[1].spec.template
             await asyncio.to_thread(
                 self.apps.patch_namespaced_deployment,
-                name=name, namespace=namespace,
+                name=name,
+                namespace=namespace,
                 body={"spec": {"template": prev_template}},
             )
             result.k8s_response = {"action": "rollback", "deployment": name, "namespace": namespace}
@@ -146,11 +154,11 @@ class K8sExecutor:
             result.success = False
             result.error = f"k8s_api_error: {e}"
             return result
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             result.success = False
             result.error = str(e)
             return result
 
 
 # Import inside the function to avoid the unused-import warning at module level
-from datetime import datetime  # noqa: E402
+from datetime import datetime

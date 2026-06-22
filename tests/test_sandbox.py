@@ -1,25 +1,39 @@
 """Tests for the real sandbox runner — verifies it actually calls the K8s API
 and Istio CustomObjectsApi, and actually polls metrics."""
+
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 from uuid import uuid4
 
-import pytest
+from execution.sandbox import SandboxResult, SandboxRunner
 
 from sentinel_common import (
-    Anomaly, AnomalyCluster, AgentState, ExecutionResult, FixProposal,
-    FixType, Incident, IncidentStatus, RootCause, Severity,
+    AgentState,
+    Anomaly,
+    AnomalyCluster,
+    FixProposal,
+    FixType,
+    Incident,
+    IncidentStatus,
+    RootCause,
+    Severity,
 )
-from execution.sandbox import SandboxRunner, SandboxResult
 
 
 def _make_incident() -> Incident:
     cluster = AnomalyCluster(
-        service="api", namespace="default",
-        anomalies=[Anomaly(
-            signal_id=uuid4(), service="api", namespace="default",
-            detector="test", score=0.9, dimensions={},
-        )],
+        service="api",
+        namespace="default",
+        anomalies=[
+            Anomaly(
+                signal_id=uuid4(),
+                service="api",
+                namespace="default",
+                detector="test",
+                score=0.9,
+                dimensions={},
+            )
+        ],
         summary="test",
         severity=Severity.WARNING,
     )
@@ -39,8 +53,7 @@ def _make_incident() -> Incident:
         fix_proposal=fp,
         status=IncidentStatus.APPROVED,
     )
-    return Incident(incident_id=uuid4(), cluster=cluster, state=state,
-                    status=IncidentStatus.APPROVED)
+    return Incident(incident_id=uuid4(), cluster=cluster, state=state, status=IncidentStatus.APPROVED)
 
 
 class TestSandboxPrometheusParser:

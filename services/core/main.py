@@ -14,10 +14,10 @@ The FastAPI app also serves the HTTP routes defined in app.py:
   - /api/settings (GET/POST)
   - /admin/investigate
 """
+
 from __future__ import annotations
 
 import asyncio
-import logging
 import os
 import sys
 from contextlib import asynccontextmanager
@@ -28,41 +28,42 @@ _ROOT = os.path.dirname(os.path.abspath(__file__))
 for svc in ["common", "ingestion", "detection", "reasoning", "safety", "execution", "feedback"]:
     sys.path.insert(0, os.path.join(_ROOT, "..", svc))
 
+import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-import uvicorn
-
-from sentinel_common import IncidentStatus  # noqa: F401 — re-exported for tests
-from sentinel_common.config import get_settings
-from sentinel_common.kafka_client import KafkaBus, _InMemoryBus
-from sentinel_common.db import IncidentStore, EventStore, BetaStore, init_db
-from sentinel_common.logging import configure_logging, get_logger
-from sqlalchemy.ext.asyncio import create_async_engine
 
 # Layer imports
 from normalizer import Normalizer
+from sqlalchemy.ext.asyncio import create_async_engine
+
+from sentinel_common import IncidentStatus  # noqa: F401 — re-exported for tests
+from sentinel_common.config import get_settings
+from sentinel_common.db import BetaStore, EventStore, IncidentStore, init_db
+from sentinel_common.kafka_client import KafkaBus, _InMemoryBus
+from sentinel_common.logging import configure_logging, get_logger
+
 try:
     from detectors.isolation_forest import IsolationForestDetector
+
     HAS_SKLEARN = True
 except ImportError:
     IsolationForestDetector = None  # type: ignore
     HAS_SKLEARN = False
+from beta_tracker import BetaTracker
+from context import ContextFetcher
+from graph import build_graph
+from llm import LLMRouter
+from postmortem import PostmortemGenerator
+from sandbox import SandboxRunner
+from settings_store import SettingsStore
+from weaviate_client import WeaviateStore
+
+from detectors.clusterer import AnomalyClusterer
 from detectors.cusum import CUSUMDetector
 from detectors.rules import RulesDetector
-from detectors.clusterer import AnomalyClusterer
-from graph import build_graph
-from context import ContextFetcher
-from llm import LLMRouter
-from executors.kubernetes import K8sExecutor
 from executors.github import GitHubExecutor
-from sandbox import SandboxRunner
-from weaviate_client import WeaviateStore
-from beta_tracker import BetaTracker
-from postmortem import PostmortemGenerator
-from settings_store import SettingsStore
+from executors.kubernetes import K8sExecutor
 
-# Local module imports
-from .runtime_settings import RuntimeSettings, apply_runtime_to_settings, load_from_env
 from .app import router as api_router
 from .loops import (
     crd_watcher_loop,
@@ -73,6 +74,9 @@ from .loops import (
     reasoning_loop,
     safety_loop,
 )
+
+# Local module imports
+from .runtime_settings import apply_runtime_to_settings, load_from_env
 
 configure_logging()
 log = get_logger("sentinel.core")
@@ -204,37 +208,71 @@ async def lifespan(app: FastAPI):
     log.info("Feedback layer initialized")
 
     # 7. Start background tasks — one per layer
-    _tasks.append(asyncio.create_task(
-        ingestion_loop(bus, app_state["normalizer"], runtime, settings), name="ingestion",
-    ))
-    _tasks.append(asyncio.create_task(
-        detection_loop(bus, app_state["cusum_detector"], app_state["rules_detector"],
-                       app_state["clusterer"], app_state["if_detector"], settings),
-        name="detection",
-    ))
-    _tasks.append(asyncio.create_task(
-        reasoning_loop(bus, app_state["graph"], app_state["incident_store"],
-                       app_state["event_store"], settings),
-        name="reasoning",
-    ))
-    _tasks.append(asyncio.create_task(
-        safety_loop(bus, app_state["incident_store"], app_state["event_store"], settings),
-        name="safety",
-    ))
-    _tasks.append(asyncio.create_task(
-        execution_loop(bus, app_state["incident_store"], app_state["event_store"],
-                       app_state["k8s_exec"], app_state["gh_exec"], app_state["sandbox"], settings),
-        name="execution",
-    ))
-    _tasks.append(asyncio.create_task(
-        feedback_loop(bus, app_state["incident_store"], app_state["event_store"],
-                      app_state["weaviate"], app_state["beta_tracker"],
-                      app_state["postmortem_gen"], settings),
-        name="feedback",
-    ))
-    _tasks.append(asyncio.create_task(
-        crd_watcher_loop(bus, settings, runtime), name="crd_watcher",
-    ))
+    _tasks.append(
+        asyncio.create_task(
+            ingestion_loop(bus, app_state["normalizer"], runtime, settings),
+            name="ingestion",
+        )
+    )
+    _tasks.append(
+        asyncio.create_task(
+            detection_loop(
+                bus,
+                app_state["cusum_detector"],
+                app_state["rules_detector"],
+                app_state["clusterer"],
+                app_state["if_detector"],
+                settings,
+            ),
+            name="detection",
+        )
+    )
+    _tasks.append(
+        asyncio.create_task(
+            reasoning_loop(bus, app_state["graph"], app_state["incident_store"], app_state["event_store"], settings),
+            name="reasoning",
+        )
+    )
+    _tasks.append(
+        asyncio.create_task(
+            safety_loop(bus, app_state["incident_store"], app_state["event_store"], settings),
+            name="safety",
+        )
+    )
+    _tasks.append(
+        asyncio.create_task(
+            execution_loop(
+                bus,
+                app_state["incident_store"],
+                app_state["event_store"],
+                app_state["k8s_exec"],
+                app_state["gh_exec"],
+                app_state["sandbox"],
+                settings,
+            ),
+            name="execution",
+        )
+    )
+    _tasks.append(
+        asyncio.create_task(
+            feedback_loop(
+                bus,
+                app_state["incident_store"],
+                app_state["event_store"],
+                app_state["weaviate"],
+                app_state["beta_tracker"],
+                app_state["postmortem_gen"],
+                settings,
+            ),
+            name="feedback",
+        )
+    )
+    _tasks.append(
+        asyncio.create_task(
+            crd_watcher_loop(bus, settings, runtime),
+            name="crd_watcher",
+        )
+    )
     app_state["loops_started"] = True
     app_state["ready"] = True
     log.info("All 7 background tasks started (including CRD watcher)")

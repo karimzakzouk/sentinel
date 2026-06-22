@@ -3,6 +3,7 @@
 v2.0.0: removed distributed-mode test (mode flag is gone). Tests now run
 `helm dependency build` first to fetch the weaviate subchart.
 """
+
 import os
 import shutil
 import subprocess
@@ -21,7 +22,9 @@ def _build_chart_deps():
         pytest.skip("helm not installed")
     subprocess.run(
         [HELM_BIN, "dependency", "build", str(CHART_DIR)],
-        capture_output=True, text=True, check=False,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     yield
 
@@ -30,7 +33,8 @@ def test_helm_lint():
     """helm lint must pass on the chart."""
     r = subprocess.run(
         [HELM_BIN, "lint", str(CHART_DIR)],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     assert r.returncode == 0, f"helm lint failed:\n{r.stderr}\n{r.stdout}"
     assert "1 chart(s) linted, 0 chart(s) failed" in r.stdout
@@ -39,18 +43,26 @@ def test_helm_lint():
 def test_helm_template_renders():
     """helm template must produce valid K8s manifests."""
     r = subprocess.run(
-        [HELM_BIN, "template", "sentinel", str(CHART_DIR),
-         "--set", "sentinel.githubToken=test",
-         "--set", "sentinel.llm.apiKey=test",
-         "--set", "weaviate.enabled=false"],
-        capture_output=True, text=True,
+        [
+            HELM_BIN,
+            "template",
+            "sentinel",
+            str(CHART_DIR),
+            "--set",
+            "sentinel.githubToken=test",
+            "--set",
+            "sentinel.llm.apiKey=test",
+            "--set",
+            "weaviate.enabled=false",
+        ],
+        capture_output=True,
+        text=True,
     )
     assert r.returncode == 0, f"helm template failed:\n{r.stderr}"
     # Should produce a substantial amount of YAML
     assert len(r.stdout) > 1000
     # Core mode should include these
-    for kind in ["Deployment", "Service", "ConfigMap", "Secret",
-                 "CustomResourceDefinition"]:
+    for kind in ["Deployment", "Service", "ConfigMap", "Secret", "CustomResourceDefinition"]:
         assert f"kind: {kind}" in r.stdout, f"Missing kind: {kind}"
     # v2.0.0: no Kafka resources ever
     assert "kind: Kafka" not in r.stdout, "Kafka should not be present (distributed mode removed)"
@@ -60,9 +72,9 @@ def test_helm_template_renders():
 def test_helm_template_no_operator():
     """v2.0.0: operator deployment must NOT be present (replaced by CRD watcher in core)."""
     r = subprocess.run(
-        [HELM_BIN, "template", "sentinel", str(CHART_DIR),
-         "--set", "weaviate.enabled=false"],
-        capture_output=True, text=True,
+        [HELM_BIN, "template", "sentinel", str(CHART_DIR), "--set", "weaviate.enabled=false"],
+        capture_output=True,
+        text=True,
     )
     assert r.returncode == 0, f"helm template failed:\n{r.stderr}"
     # The operator Deployment was named "<release>-operator" — assert it's gone
@@ -73,9 +85,9 @@ def test_helm_template_no_operator():
 def test_crd_is_present():
     """The SentinelIncident CRD must be in the rendered output."""
     r = subprocess.run(
-        [HELM_BIN, "template", "sentinel", str(CHART_DIR),
-         "--set", "weaviate.enabled=false"],
-        capture_output=True, text=True,
+        [HELM_BIN, "template", "sentinel", str(CHART_DIR), "--set", "weaviate.enabled=false"],
+        capture_output=True,
+        text=True,
     )
     assert r.returncode == 0, f"helm template failed:\n{r.stderr}"
     assert "name: sentinelincidents.sentinel.io" in r.stdout
@@ -85,9 +97,9 @@ def test_crd_is_present():
 def test_rego_policies_are_mounted():
     """The OPA ConfigMap must contain the Rego policies."""
     r = subprocess.run(
-        [HELM_BIN, "template", "sentinel", str(CHART_DIR),
-         "--set", "weaviate.enabled=false"],
-        capture_output=True, text=True,
+        [HELM_BIN, "template", "sentinel", str(CHART_DIR), "--set", "weaviate.enabled=false"],
+        capture_output=True,
+        text=True,
     )
     assert r.returncode == 0, f"helm template failed:\n{r.stderr}"
     assert "package sentinel" in r.stdout
@@ -99,11 +111,20 @@ def test_rego_policies_are_mounted():
 def test_secrets_are_created():
     """The GitHub + LLM API keys must be in a Secret."""
     r = subprocess.run(
-        [HELM_BIN, "template", "sentinel", str(CHART_DIR),
-         "--set", "sentinel.githubToken=ghp_test123",
-         "--set", "sentinel.llm.apiKey=sk-test456",
-         "--set", "weaviate.enabled=false"],
-        capture_output=True, text=True,
+        [
+            HELM_BIN,
+            "template",
+            "sentinel",
+            str(CHART_DIR),
+            "--set",
+            "sentinel.githubToken=ghp_test123",
+            "--set",
+            "sentinel.llm.apiKey=sk-test456",
+            "--set",
+            "weaviate.enabled=false",
+        ],
+        capture_output=True,
+        text=True,
     )
     assert r.returncode == 0, f"helm template failed:\n{r.stderr}"
     assert "ghp_test123" in r.stdout
@@ -113,9 +134,9 @@ def test_secrets_are_created():
 def test_postgres_password_autogenerated():
     """v2.0.0: postgres password Secret must be present (auto-generated if empty)."""
     r = subprocess.run(
-        [HELM_BIN, "template", "sentinel", str(CHART_DIR),
-         "--set", "weaviate.enabled=false"],
-        capture_output=True, text=True,
+        [HELM_BIN, "template", "sentinel", str(CHART_DIR), "--set", "weaviate.enabled=false"],
+        capture_output=True,
+        text=True,
     )
     assert r.returncode == 0, f"helm template failed:\n{r.stderr}"
     # Should have a Secret for postgres with a generated password
@@ -126,9 +147,9 @@ def test_postgres_password_autogenerated():
 def test_ui_auth_credentials_by_default():
     """v2.0.0: UI auth defaults to credentials mode with an auto-generated password."""
     r = subprocess.run(
-        [HELM_BIN, "template", "sentinel", str(CHART_DIR),
-         "--set", "weaviate.enabled=false"],
-        capture_output=True, text=True,
+        [HELM_BIN, "template", "sentinel", str(CHART_DIR), "--set", "weaviate.enabled=false"],
+        capture_output=True,
+        text=True,
     )
     assert r.returncode == 0, f"helm template failed:\n{r.stderr}"
     # The UI auth secret should be present (credentials mode by default)
@@ -138,9 +159,9 @@ def test_ui_auth_credentials_by_default():
 def test_networkpolicy_enabled_by_default():
     """v2.0.0: NetworkPolicy is enabled by default."""
     r = subprocess.run(
-        [HELM_BIN, "template", "sentinel", str(CHART_DIR),
-         "--set", "weaviate.enabled=false"],
-        capture_output=True, text=True,
+        [HELM_BIN, "template", "sentinel", str(CHART_DIR), "--set", "weaviate.enabled=false"],
+        capture_output=True,
+        text=True,
     )
     assert r.returncode == 0, f"helm template failed:\n{r.stderr}"
     assert "kind: NetworkPolicy" in r.stdout

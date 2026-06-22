@@ -12,6 +12,7 @@ require reasoning about code patches.
 
 The router also implements the JSON-mode + retry logic that every agent needs.
 """
+
 from __future__ import annotations
 
 import json
@@ -40,8 +41,9 @@ class LLMRouter:
         self.frontier_model = settings.llm_frontier_model
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
-    async def complete(self, model: str, system: str, user: str,
-                       temperature: float = 0.2, max_tokens: int = 2000) -> str:
+    async def complete(
+        self, model: str, system: str, user: str, temperature: float = 0.2, max_tokens: int = 2000
+    ) -> str:
         """Plain text completion."""
         try:
             r = await self.client.chat.completions.create(
@@ -54,13 +56,14 @@ class LLMRouter:
                 max_tokens=max_tokens,
             )
             return r.choices[0].message.content or ""
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             log.warning("LLM complete failed (%s): %s", model, e)
             raise
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
-    async def complete_json(self, model: str, system: str, user: str,
-                            temperature: float = 0.1, max_tokens: int = 2000) -> dict[str, Any]:
+    async def complete_json(
+        self, model: str, system: str, user: str, temperature: float = 0.1, max_tokens: int = 2000
+    ) -> dict[str, Any]:
         """JSON-mode completion. Strips markdown fences and parses.
 
         We don't rely on the API's response_format=json_object because not
@@ -83,14 +86,15 @@ class LLMRouter:
             }
             try:
                 r = await self.client.chat.completions.create(
-                    **kwargs, response_format={"type": "json_object"},
+                    **kwargs,
+                    response_format={"type": "json_object"},
                 )
             except Exception:
                 # Provider doesn't support response_format — retry without it
                 r = await self.client.chat.completions.create(**kwargs)
             text = r.choices[0].message.content or "{}"
             return _extract_json(text)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             log.warning("LLM complete_json failed (%s): %s", model, e)
             raise
 
@@ -168,7 +172,7 @@ def _repair_truncated_json(text: str) -> str | None:
     import re
 
     # Find the start of the JSON object
-    start = text.find('{')
+    start = text.find("{")
     if start == -1:
         return None
 
@@ -184,7 +188,7 @@ def _repair_truncated_json(text: str) -> str | None:
         if escape_next:
             escape_next = False
             continue
-        if c == '\\':
+        if c == "\\":
             escape_next = True
             continue
         if c == '"':
@@ -192,13 +196,13 @@ def _repair_truncated_json(text: str) -> str | None:
             continue
         if in_string:
             continue
-        if c == '{':
+        if c == "{":
             open_braces += 1
-        elif c == '}':
+        elif c == "}":
             open_braces -= 1
-        elif c == '[':
+        elif c == "[":
             open_brackets += 1
-        elif c == ']':
+        elif c == "]":
             open_brackets -= 1
 
     # If we're in an unclosed string, close it
@@ -206,11 +210,11 @@ def _repair_truncated_json(text: str) -> str | None:
         snippet += '"'
 
     # Remove any trailing comma (would be invalid after closing)
-    snippet = re.sub(r',\s*$', '', snippet.rstrip())
+    snippet = re.sub(r",\s*$", "", snippet.rstrip())
 
     # Close open brackets and braces
-    snippet += ']' * max(open_brackets, 0)
-    snippet += '}' * max(open_braces, 0)
+    snippet += "]" * max(open_brackets, 0)
+    snippet += "}" * max(open_braces, 0)
 
     return snippet
 
@@ -228,19 +232,19 @@ def _clean_json_quirks(text: str) -> str:
     import re
 
     # Remove comments
-    text = re.sub(r'//.*?$', '', text, flags=re.MULTILINE)
-    text = re.sub(r'/\*.*?\*/', '', text, flags=re.DOTALL)
+    text = re.sub(r"//.*?$", "", text, flags=re.MULTILINE)
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
 
     # Remove trailing commas
-    text = re.sub(r',\s*([}\]])', r'\1', text)
+    text = re.sub(r",\s*([}\]])", r"\1", text)
 
     # Python booleans/None → JSON
-    text = re.sub(r'\bNone\b', 'null', text)
-    text = re.sub(r'\bTrue\b', 'true', text)
-    text = re.sub(r'\bFalse\b', 'false', text)
+    text = re.sub(r"\bNone\b", "null", text)
+    text = re.sub(r"\bTrue\b", "true", text)
+    text = re.sub(r"\bFalse\b", "false", text)
 
     # Unquoted property names: {foo: "bar"} → {"foo": "bar"}
-    text = re.sub(r'(\{|,)\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*:', r'\1"\2":', text)
+    text = re.sub(r"(\{|,)\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*:", r'\1"\2":', text)
 
     # Single quotes → double quotes (only for string values, not inside other strings)
     # This is tricky — only do it if we still can't parse, and be conservative

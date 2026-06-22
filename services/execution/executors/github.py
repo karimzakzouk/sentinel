@@ -25,18 +25,18 @@ The PR body contains:
 
 A human engineer wakes up, reviews the PR, and clicks Merge.
 """
+
 from __future__ import annotations
 
 import asyncio
-import base64
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from github import Auth, Github  # type: ignore
 from github.GithubException import GithubException
 
-from sentinel_common import ExecutionResult, FixType, Incident
+from sentinel_common import ExecutionResult, Incident
 
 log = logging.getLogger(__name__)
 
@@ -79,10 +79,12 @@ class GitHubExecutor:
             # 2. Create a new branch from base
             branch_name = fp.branch_name or f"sentinel/{fp.target_service}-{str(fp.fix_id)[:8]}"
             try:
-                await self._run_sync(lambda: repo.create_git_ref(
-                    ref=f"refs/heads/{branch_name}",
-                    sha=base_sha,
-                ))
+                await self._run_sync(
+                    lambda: repo.create_git_ref(
+                        ref=f"refs/heads/{branch_name}",
+                        sha=base_sha,
+                    )
+                )
                 log.info("Created branch %s on %s", branch_name, fp.repo)
             except GithubException as e:
                 if e.status != 422:  # 422 = branch already exists
@@ -100,22 +102,26 @@ class GitHubExecutor:
                     existing = await self._run_sync(lambda: repo.get_contents(path, ref=branch_name))
                     if isinstance(existing, list):
                         continue
-                    await self._run_sync(lambda: repo.update_file(
-                        path=path,
-                        message=f"[Sentinel] Update {path}",
-                        content=new_content,
-                        sha=existing.sha,
-                        branch=branch_name,
-                    ))
+                    await self._run_sync(
+                        lambda: repo.update_file(
+                            path=path,
+                            message=f"[Sentinel] Update {path}",
+                            content=new_content,
+                            sha=existing.sha,
+                            branch=branch_name,
+                        )
+                    )
                     files_changed += 1
                 except GithubException as e:
                     if e.status == 404:
-                        await self._run_sync(lambda: repo.create_file(
-                            path=path,
-                            message=f"[Sentinel] Create {path}",
-                            content=new_content,
-                            branch=branch_name,
-                        ))
+                        await self._run_sync(
+                            lambda: repo.create_file(
+                                path=path,
+                                message=f"[Sentinel] Create {path}",
+                                content=new_content,
+                                branch=branch_name,
+                            )
+                        )
                         files_changed += 1
                     else:
                         raise
@@ -132,12 +138,13 @@ class GitHubExecutor:
         except GithubException as e:
             log.error("GitHub API error in prepare_branch: %s", e)
             return {"success": False, "error": f"github_api_error: {e}"}
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             log.exception("prepare_branch failed: %s", e)
             return {"success": False, "error": str(e)}
 
-    async def open_pr(self, incident: Incident, branch_info: dict[str, Any],
-                      sandbox_verified: bool, sandbox_summary: str = "") -> ExecutionResult:
+    async def open_pr(
+        self, incident: Incident, branch_info: dict[str, Any], sandbox_verified: bool, sandbox_summary: str = ""
+    ) -> ExecutionResult:
         """Phase 2: Open a Pull Request from the fix branch.
 
         Called AFTER the sandbox has verified (or failed to verify) the canary.
@@ -158,7 +165,7 @@ class GitHubExecutor:
             fix_id=fp.fix_id,
             fix_type=fp.fix_type,
             success=False,
-            started_at=datetime.now(timezone.utc),
+            started_at=datetime.now(UTC),
         )
 
         if not branch_info.get("success"):
@@ -183,12 +190,14 @@ class GitHubExecutor:
             pr_body += f"\n---\n_Autonomous fix by Sentinel. Confidence: {fp.proposed_confidence:.1%}_"
 
             # Open the PR
-            pr = await self._run_sync(lambda: repo.create_pull(
-                title=fp.pr_title or f"[Sentinel] {fp.fix_type.value} for {fp.target_service}",
-                body=pr_body,
-                head=branch_name,
-                base=base_branch,
-            ))
+            pr = await self._run_sync(
+                lambda: repo.create_pull(
+                    title=fp.pr_title or f"[Sentinel] {fp.fix_type.value} for {fp.target_service}",
+                    body=pr_body,
+                    head=branch_name,
+                    base=base_branch,
+                )
+            )
 
             # Add labels for discoverability
             try:
@@ -198,7 +207,7 @@ class GitHubExecutor:
                 else:
                     labels.append("needs-review")
                 await self._run_sync(lambda: pr.add_to_labels(*labels))
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 log.info("Could not add labels: %s", e)
 
             result.pr_url = pr.html_url
@@ -207,15 +216,14 @@ class GitHubExecutor:
             result.sandbox_verified = sandbox_verified
             result.sandbox_summary = sandbox_summary
             result.success = True
-            log.info("PR opened: %s (#%d) — sandbox_verified=%s",
-                     pr.html_url, pr.number, sandbox_verified)
+            log.info("PR opened: %s (#%d) — sandbox_verified=%s", pr.html_url, pr.number, sandbox_verified)
             return result
 
         except GithubException as e:
             log.error("GitHub API error in open_pr: %s", e)
             result.error = f"github_api_error: {e}"
             return result
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             log.exception("open_pr failed: %s", e)
             result.error = str(e)
             return result

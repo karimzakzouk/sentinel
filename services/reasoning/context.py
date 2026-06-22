@@ -18,6 +18,7 @@ Implements the two key context-optimization strategies from the architecture:
    incidents from Weaviate, decays relevance scores by how much the
    referenced files have changed since the historical incident was filed.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -25,12 +26,11 @@ import logging
 import os
 import re
 from typing import Any
-from urllib.parse import quote
 
 import httpx
 from github import Auth, Github  # type: ignore
 
-from sentinel_common import AnomalyCluster, SignalSource
+from sentinel_common import AnomalyCluster
 from sentinel_common.config import Settings
 
 log = logging.getLogger(__name__)
@@ -56,7 +56,7 @@ class ContextFetcher:
         if settings.github_token:
             try:
                 self._gh = Github(auth=Auth.Token(settings.github_token))
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 log.warning("GitHub client init failed: %s", e)
 
     async def close(self) -> None:
@@ -103,7 +103,7 @@ class ContextFetcher:
                         "logs": sp.get("logs", []),
                         "duration_us": sp.get("duration"),
                     }
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             log.warning("Trace anchor failed for %s: %s", trace_id, e)
         return None
 
@@ -128,9 +128,25 @@ class ContextFetcher:
             if c.lower().startswith(("http://", "https://", "ftp://")):
                 continue
             # Skip image / asset extensions
-            if c.endswith((".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico",
-                           ".css", ".html", ".json", ".yaml", ".yml", ".toml",
-                           ".md", ".txt", ".lock")):
+            if c.endswith(
+                (
+                    ".png",
+                    ".jpg",
+                    ".jpeg",
+                    ".gif",
+                    ".svg",
+                    ".ico",
+                    ".css",
+                    ".html",
+                    ".json",
+                    ".yaml",
+                    ".yml",
+                    ".toml",
+                    ".md",
+                    ".txt",
+                    ".lock",
+                )
+            ):
                 continue
             # Skip library/site-packages paths — these are dependencies, not
             # project source code. We can't fix them and they waste GitHub API
@@ -192,6 +208,7 @@ class ContextFetcher:
                     if isinstance(content, list):
                         continue  # directory listing, not a file
                     import base64
+
                     result = base64.b64decode(content.content).decode("utf-8", errors="replace")
                     if try_path != path:
                         log.info("File found at %s (stripped from %s)", try_path, path)
@@ -200,12 +217,11 @@ class ContextFetcher:
                     continue
             log.info("File %s not found in %s@%s (tried %d path variants)", path, repo, ref, len(paths_to_try))
             return None
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             log.warning("Repo %s fetch failed: %s", repo, e)
             return None
 
-    async def fetch_files_for_cluster(self, cluster: AnomalyCluster,
-                                       repo: str | None = None) -> dict[str, str]:
+    async def fetch_files_for_cluster(self, cluster: AnomalyCluster, repo: str | None = None) -> dict[str, str]:
         """For a given cluster, parse logs/traces to find source files and
         fetch their contents. Returns {path: content}.
 
@@ -233,8 +249,7 @@ class ContextFetcher:
             log.info("No source files identified in logs for %s", cluster.service)
             return {}
 
-        log.info("Identified %d candidate files for %s: %s",
-                 len(candidate_files), cluster.service, candidate_files[:5])
+        log.info("Identified %d candidate files for %s: %s", len(candidate_files), cluster.service, candidate_files[:5])
 
         # Fetch in parallel
         tasks = [self.fetch_file_from_repo(repo, p) for p in candidate_files[:10]]
@@ -254,8 +269,7 @@ class ContextFetcher:
 
     # ---------------- RAG: Weaviate ----------------
 
-    async def retrieve_similar_incidents(self, cluster: AnomalyCluster,
-                                          top_k: int = 5) -> list[dict[str, Any]]:
+    async def retrieve_similar_incidents(self, cluster: AnomalyCluster, top_k: int = 5) -> list[dict[str, Any]]:
         """Query Weaviate for similar past incidents.
 
         Each stored incident has a vector capturing (service, anomaly signature,
@@ -284,9 +298,7 @@ class ContextFetcher:
                 # Compute churn decay
                 git_commit = props.get("git_commit_at_resolution")
                 files = props.get("source_files", [])
-                decay = await self._compute_churn_decay(repo=props.get("repo"),
-                                                        files=files,
-                                                        since_commit=git_commit)
+                decay = await self._compute_churn_decay(repo=props.get("repo"), files=files, since_commit=git_commit)
                 # Combine semantic distance with churn decay
                 semantic_score = 1.0 - (o.metadata.distance or 0.0)
                 decayed_score = semantic_score * decay
@@ -297,12 +309,11 @@ class ContextFetcher:
             # Sort by decayed score and trim to top_k
             out.sort(key=lambda x: x.get("decayed_score", 0.0), reverse=True)
             return out[:top_k]
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             log.warning("Weaviate retrieval failed: %s", e)
             return []
 
-    async def _compute_churn_decay(self, repo: str | None, files: list[str],
-                                    since_commit: str | None) -> float:
+    async def _compute_churn_decay(self, repo: str | None, files: list[str], since_commit: str | None) -> float:
         """Compute 1 / (1 + commit_count_since) for the affected files.
 
         If we can't compute (no GitHub, no commit, no files), return 1.0
@@ -321,7 +332,7 @@ class ContextFetcher:
             if churn_count >= len(files) and len(files) > 0:
                 return 0.0
             return 1.0 / (1.0 + churn_count)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             log.info("Churn decay computation failed: %s", e)
             return 1.0
 
@@ -334,8 +345,7 @@ class ContextFetcher:
 
     # ---------------- Loki query helper ----------------
 
-    async def _query_loki_recent(self, service: str, namespace: str,
-                                  lookback_minutes: int = 5) -> list[str]:
+    async def _query_loki_recent(self, service: str, namespace: str, lookback_minutes: int = 5) -> list[str]:
         """Pull recent log lines for a service from Loki. Used to find stack traces."""
         loki_url = os.getenv("LOKI_URL")
         if not loki_url:
@@ -357,7 +367,7 @@ class ContextFetcher:
                 for ts, line in stream.get("values", []):
                     lines.append(line)
             return lines
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             log.info("Loki query failed: %s", e)
             return []
 
@@ -375,6 +385,7 @@ class ContextFetcher:
                 self._weaviate = None  # connection died, retry
         try:
             import weaviate  # type: ignore
+
             # weaviate-client v4.x uses host= (not hostname=)
             host = self.settings.weaviate_url.replace("http://", "").replace("https://", "").split(":")[0]
             port = int(self.settings.weaviate_url.split(":")[-1]) if ":" in self.settings.weaviate_url else 8080
@@ -384,6 +395,6 @@ class ContextFetcher:
                 skip_init_checks=True,
             )
             return self._weaviate
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             log.info("Weaviate not available: %s", e)
             return None

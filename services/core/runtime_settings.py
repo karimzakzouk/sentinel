@@ -5,13 +5,14 @@ truth for runtime-configurable settings. Changes via the /settings API are
 applied immediately and persisted to a K8s ConfigMap (non-secret) + Secret
 (secret) so they survive pod restarts.
 """
+
 from __future__ import annotations
 
 import logging
 import os
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 log = logging.getLogger(__name__)
 

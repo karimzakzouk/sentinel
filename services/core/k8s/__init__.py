@@ -4,6 +4,7 @@ Used by the CRD watcher to find the GitHub repo, runbook URL, team ownership,
 etc. for a service. Tries Deployment by name → Deployment by label → StatefulSet
 → Pod (last resort).
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -61,7 +62,8 @@ async def lookup_workload_annotations(service: str, namespace: str) -> dict[str,
     # 2. Try by label selector
     try:
         deps = await asyncio.to_thread(
-            apps.list_namespaced_deployment, namespace,
+            apps.list_namespaced_deployment,
+            namespace,
             label_selector=f"app.kubernetes.io/name={service}",
         )
         for dep in (deps.items or [])[:1]:
@@ -90,7 +92,8 @@ async def lookup_workload_annotations(service: str, namespace: str) -> dict[str,
     # 4. Try Pods (last resort)
     try:
         pods = await asyncio.to_thread(
-            core.list_namespaced_pod, namespace,
+            core.list_namespaced_pod,
+            namespace,
             label_selector=f"app.kubernetes.io/name={service}",
         )
         for pod in (pods.items or [])[:1]:
@@ -227,7 +230,7 @@ async def patch_cr_status(
             status_body["confidence"] = confidence
         if pr_url:
             status_body["prUrl"] = pr_url
-        status_body["lastUpdated"] = datetime.utcnow().isoformat()  # noqa: DTZ003 — K8s wants naive UTC
+        status_body["lastUpdated"] = datetime.utcnow().isoformat()
 
         await asyncio.to_thread(
             coa.patch_namespaced_custom_object_status,
@@ -243,4 +246,4 @@ async def patch_cr_status(
 
 
 # Imported here to avoid circular import at module top
-from datetime import datetime  # noqa: E402
+from datetime import datetime

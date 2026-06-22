@@ -7,6 +7,7 @@ Uses the frontier LLM to produce a markdown postmortem that summarizes:
   - The fix that was applied
   - Action items for preventing recurrence
 """
+
 from __future__ import annotations
 
 import json
@@ -62,7 +63,7 @@ class PostmortemGenerator:
                 max_tokens=3000,
             )
             return r.choices[0].message.content or ""
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             log.warning("Postmortem generation failed: %s", e)
             return self._fallback_postmortem(incident)
 
@@ -96,21 +97,25 @@ class PostmortemGenerator:
         ]
         for entry in incident.state.agent_trace:
             parts.append(f"- {json.dumps(entry)}")
-        parts.extend([
-            "",
-            "## Evidence",
-        ])
+        parts.extend(
+            [
+                "",
+                "## Evidence",
+            ]
+        )
         for e in incident.state.evidence[:10]:
             parts.append(f"- **{e.e_id}** ({e.source}): {json.dumps(e.result)[:300]}")
-        parts.extend([
-            "",
-            "## Beta Distribution After Resolution",
-            f"alpha={incident.beta_alpha}, beta={incident.beta_beta}",
-            f"posterior mean = {incident.beta_alpha / (incident.beta_alpha + incident.beta_beta):.3f}",
-            "",
-            "## Your Task",
-            "Write the markdown postmortem now.",
-        ])
+        parts.extend(
+            [
+                "",
+                "## Beta Distribution After Resolution",
+                f"alpha={incident.beta_alpha}, beta={incident.beta_beta}",
+                f"posterior mean = {incident.beta_alpha / (incident.beta_alpha + incident.beta_beta):.3f}",
+                "",
+                "## Your Task",
+                "Write the markdown postmortem now.",
+            ]
+        )
         return "\n".join(parts)
 
     def _fallback_postmortem(self, incident: Incident) -> str:
@@ -125,11 +130,11 @@ Autonomous Sentinel investigation resolved an incident on `{incident.cluster.ser
 {incident.cluster.summary}
 
 ## Root Cause
-{rc.statement if rc else 'unknown'}
+{rc.statement if rc else "unknown"}
 
 ## Fix Applied
-Type: `{fp.fix_type.value if fp else 'unknown'}`
-Description: {fp.description if fp else 'n/a'}
+Type: `{fp.fix_type.value if fp else "unknown"}`
+Description: {fp.description if fp else "n/a"}
 
 ## Action Items
 - Review the agent trace for accuracy

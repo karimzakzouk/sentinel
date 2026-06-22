@@ -1,17 +1,17 @@
 """Tests for LLM provider URL resolution."""
+
 import os
 import sys
 from pathlib import Path
 
-import pytest
-
 sys.path.insert(0, str(Path(__file__).parent.parent / "services" / "common"))
 
+from sentinel_common.config import Settings, get_settings
 
-def _make_settings(provider: str, base_url: str = "", api_key: str = "test") -> "Settings":
+
+def _make_settings(provider: str, base_url: str = "", api_key: str = "test") -> Settings:
     """Build a Settings instance with the given provider/base_url."""
     # Clear cached settings so env var changes take effect
-    from sentinel_common.config import get_settings, Settings
     get_settings.cache_clear()
     os.environ["SENTINEL_LLM_PROVIDER"] = provider
     os.environ["SENTINEL_LLM_BASE_URL"] = base_url

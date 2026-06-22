@@ -1,15 +1,14 @@
 """Detection layer tests — Isolation Forest, CUSUM, Rules."""
+
 import asyncio
-from datetime import datetime, timezone
 from uuid import uuid4
 
-import pytest
-
-from sentinel_common import Signal, SignalSource, Severity
-from detection.detectors.isolation_forest import IsolationForestDetector
-from detection.detectors.cusum import CUSUMDetector
-from detection.detectors.rules import RulesDetector
 from detection.detectors.clusterer import AnomalyClusterer
+from detection.detectors.cusum import CUSUMDetector
+from detection.detectors.isolation_forest import IsolationForestDetector
+from detection.detectors.rules import RulesDetector
+
+from sentinel_common import Signal, SignalSource
 
 
 def _prom_signal(service: str, metric: str, value: float) -> Signal:
@@ -92,6 +91,7 @@ class TestAnomalyClusterer:
     def test_clusters_anomalies_within_window(self):
         c = AnomalyClusterer(window_seconds=60, min_anomalies=1, cooldown_seconds=120)
         from sentinel_common import Anomaly
+
         a1 = Anomaly(
             signal_id=uuid4(),
             service="api",

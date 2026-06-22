@@ -1,8 +1,9 @@
 """CI/CD history collector — pulls recent deployments from a GitHub repo's Actions runs."""
+
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -42,24 +43,25 @@ class CDHistoryCollector:
                 # Pull commit message to detect schema migrations
                 commit_msg = run.get("head_commit", {}).get("message", "")
                 has_schema_migration = any(
-                    marker in commit_msg.lower()
-                    for marker in ["migration", "schema", "alter table", "create table"]
+                    marker in commit_msg.lower() for marker in ["migration", "schema", "alter table", "create table"]
                 )
-                out.append({
-                    "source": "cd_history",
-                    "service": self.repo.split("/")[-1],
-                    "repo": self.repo,
-                    "commit_sha": run.get("head_sha"),
-                    "commit_msg": commit_msg,
-                    "has_schema_migration": has_schema_migration,
-                    "deployment_url": run.get("html_url"),
-                    "actor": run.get("actor", {}).get("login"),
-                    "status": run.get("conclusion") or run.get("status"),
-                    "deployed_at": run.get("updated_at") or datetime.now(timezone.utc).isoformat(),
-                    "namespace": "prod",  # CD runs target prod by convention
-                })
+                out.append(
+                    {
+                        "source": "cd_history",
+                        "service": self.repo.split("/")[-1],
+                        "repo": self.repo,
+                        "commit_sha": run.get("head_sha"),
+                        "commit_msg": commit_msg,
+                        "has_schema_migration": has_schema_migration,
+                        "deployment_url": run.get("html_url"),
+                        "actor": run.get("actor", {}).get("login"),
+                        "status": run.get("conclusion") or run.get("status"),
+                        "deployed_at": run.get("updated_at") or datetime.now(UTC).isoformat(),
+                        "namespace": "prod",  # CD runs target prod by convention
+                    }
+                )
             return out
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             log.warning("CD history poll failed: %s", e)
             return []
 

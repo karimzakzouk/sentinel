@@ -1,4 +1,5 @@
 """Reasoning loop — consumes anomaly clusters, runs the LangGraph, publishes incidents."""
+
 from __future__ import annotations
 
 import asyncio
@@ -51,7 +52,9 @@ async def _process_cluster(
         status=IncidentStatus.INVESTIGATING,
     )
     await event_store.append(
-        incident_id, "reasoning", "investigation_started",
+        incident_id,
+        "reasoning",
+        "investigation_started",
         payload={"cluster_summary": cluster.summary},
     )
     await incident_store.upsert(incident.model_dump(mode="json"))
@@ -68,13 +71,16 @@ async def _process_cluster(
         incident.touch()
         await incident_store.upsert(incident.model_dump(mode="json"))
         await event_store.append(
-            incident_id, "reasoning", "investigation_completed",
-            agent="orchestrator", payload={"status": state.status},
+            incident_id,
+            "reasoning",
+            "investigation_completed",
+            agent="orchestrator",
+            payload={"status": state.status},
         )
         await bus.publish_model(settings.kafka_topic_incidents, incident, key=cluster.service)
         INCIDENTS_TOTAL.labels(status=state.status, service=cluster.service).inc()
         log.info("Incident %s published (status=%s)", incident_id, state.status)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         log.error("Investigation %s timed out", incident_id)
         incident.status = IncidentStatus.FAILED
         incident.state.error = f"timeout: {timeout}s"

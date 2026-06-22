@@ -10,6 +10,7 @@ to the ConfigMap + Secret.
 
 If running outside K8s (local dev), falls back to in-memory only.
 """
+
 from __future__ import annotations
 
 import logging
@@ -20,11 +21,18 @@ log = logging.getLogger(__name__)
 
 SECRET_FIELDS = {"github_token", "llm_api_key"}
 CONFIGMAP_FIELDS = {
-    "llm_provider", "llm_fast_model", "llm_frontier_model",
-    "prometheus_url", "loki_url", "jaeger_url",
-    "production_namespaces", "write_namespaces",
-    "confidence_threshold_autonomous", "confidence_threshold_human_review",
-    "panic_cpu_threshold_pct", "panic_connections_threshold",
+    "llm_provider",
+    "llm_fast_model",
+    "llm_frontier_model",
+    "prometheus_url",
+    "loki_url",
+    "jaeger_url",
+    "production_namespaces",
+    "write_namespaces",
+    "confidence_threshold_autonomous",
+    "confidence_threshold_human_review",
+    "panic_cpu_threshold_pct",
+    "panic_connections_threshold",
 }
 
 
@@ -38,6 +46,7 @@ class SettingsStore:
         try:
             if os.getenv("KUBERNETES_SERVICE_HOST"):
                 from kubernetes import client, config  # type: ignore
+
                 config.load_incluster_config()
                 self._k8s_core = client.CoreV1Api()
                 self._available = True
@@ -55,11 +64,13 @@ class SettingsStore:
         if not self._available:
             return {}
         import asyncio
+
         result: dict[str, Any] = {}
         try:
             cm = await asyncio.to_thread(
                 self._k8s_core.read_namespaced_config_map,
-                name=self.configmap_name, namespace=self.namespace,
+                name=self.configmap_name,
+                namespace=self.namespace,
             )
             for k, v in (cm.data or {}).items():
                 result[k] = v
@@ -69,15 +80,21 @@ class SettingsStore:
         try:
             sec = await asyncio.to_thread(
                 self._k8s_core.read_namespaced_secret,
-                name=self.secret_name, namespace=self.namespace,
+                name=self.secret_name,
+                namespace=self.namespace,
             )
             import base64
+
             for k, v in (sec.data or {}).items():
                 result[k] = base64.b64decode(v).decode("utf-8")
         except Exception as e:
             if "404" not in str(e):
                 log.debug("Secret load: %s", e)
-        for field in ("confidence_threshold_autonomous", "confidence_threshold_human_review", "panic_cpu_threshold_pct"):
+        for field in (
+            "confidence_threshold_autonomous",
+            "confidence_threshold_human_review",
+            "panic_cpu_threshold_pct",
+        ):
             if field in result:
                 try:
                     result[field] = float(result[field])
@@ -95,8 +112,8 @@ class SettingsStore:
         if not self._available:
             log.info("SettingsStore: in-memory — not persisting")
             return
-        import asyncio
         import base64
+
         cm_data = {}
         sec_data = {}
         for k, v in settings.items():
@@ -116,7 +133,9 @@ class SettingsStore:
 
     async def _upsert_configmap(self, data: dict[str, str]) -> None:
         import asyncio
+
         from kubernetes import client
+
         body = client.V1ConfigMap(
             metadata=client.V1ObjectMeta(name=self.configmap_name, namespace=self.namespace),
             data=data,
@@ -125,13 +144,20 @@ class SettingsStore:
             await asyncio.to_thread(self._k8s_core.create_namespaced_config_map, namespace=self.namespace, body=body)
         except Exception as e:
             if "409" in str(e) or "AlreadyExists" in str(e):
-                await asyncio.to_thread(self._k8s_core.patch_namespaced_config_map, name=self.configmap_name, namespace=self.namespace, body=body)
+                await asyncio.to_thread(
+                    self._k8s_core.patch_namespaced_config_map,
+                    name=self.configmap_name,
+                    namespace=self.namespace,
+                    body=body,
+                )
             else:
                 raise
 
     async def _upsert_secret(self, data: dict[str, str]) -> None:
         import asyncio
+
         from kubernetes import client
+
         body = client.V1Secret(
             metadata=client.V1ObjectMeta(name=self.secret_name, namespace=self.namespace),
             data=data,
@@ -140,6 +166,8 @@ class SettingsStore:
             await asyncio.to_thread(self._k8s_core.create_namespaced_secret, namespace=self.namespace, body=body)
         except Exception as e:
             if "409" in str(e) or "AlreadyExists" in str(e):
-                await asyncio.to_thread(self._k8s_core.patch_namespaced_secret, name=self.secret_name, namespace=self.namespace, body=body)
+                await asyncio.to_thread(
+                    self._k8s_core.patch_namespaced_secret, name=self.secret_name, namespace=self.namespace, body=body
+                )
             else:
                 raise

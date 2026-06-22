@@ -1,5 +1,5 @@
 """Pytest config — make every service importable in tests."""
-import os
+
 import sys
 from pathlib import Path
 

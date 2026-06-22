@@ -4,10 +4,10 @@ The reasoning engine doesn't want one incident per anomaly — it wants one
 incident per *problem*. If CPU + memory + 5xx all spike within 60 seconds for
 the same service, that's one cluster = one investigation.
 """
+
 from __future__ import annotations
 
 import logging
-import time
 from collections import defaultdict
 from uuid import uuid4
 
@@ -17,8 +17,7 @@ log = logging.getLogger(__name__)
 
 
 class AnomalyClusterer:
-    def __init__(self, window_seconds: int = 60, min_anomalies: int = 1,
-                 cooldown_seconds: int = 120):
+    def __init__(self, window_seconds: int = 60, min_anomalies: int = 1, cooldown_seconds: int = 120):
         """`window_seconds` — max gap between anomalies in the same cluster.
         `min_anomalies` — minimum anomalies before emitting a cluster.
         `cooldown_seconds` — don't emit another cluster for the same service

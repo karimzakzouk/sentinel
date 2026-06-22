@@ -1,4 +1,5 @@
 """Jaeger collector — pulls recent traces that contain error spans."""
+
 from __future__ import annotations
 
 import logging
@@ -34,7 +35,7 @@ class JaegerCollector:
             for trace in data.get("data", []):
                 out.append({"source": "jaeger", "trace": trace})
             return out
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             log.warning("Jaeger poll failed: %s", e)
             return []
 

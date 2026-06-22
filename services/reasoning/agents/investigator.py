@@ -6,6 +6,7 @@ Output: Updated state with up to 5 Hypothesis objects.
 Uses the frontier LLM model because hypothesis generation requires deep
 reasoning over the anomaly signature, the code, and historical incidents.
 """
+
 from __future__ import annotations
 
 import json
@@ -14,9 +15,9 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from sentinel_common import Hypothesis, RewindEvent
-from sentinel_common.schemas import AgentState, IncidentStatus
 from agents._repo_discovery import _discover_repo_from_state
+from sentinel_common import Hypothesis
+from sentinel_common.schemas import AgentState, IncidentStatus
 
 log = logging.getLogger(__name__)
 
@@ -51,8 +52,9 @@ Respond with a JSON object of shape:
 Do NOT make up evidence — only cite things that appear in the context."""
 
 
-async def investigator_node(state: AgentState, *, llm_router: Any,
-                              context_fetcher: Any, event_store: Any) -> dict[str, Any]:
+async def investigator_node(
+    state: AgentState, *, llm_router: Any, context_fetcher: Any, event_store: Any
+) -> dict[str, Any]:
     """Generate up to 5 hypotheses based on cluster + context."""
     incident_id = state.incident_id
     cluster = state.cluster
@@ -88,7 +90,7 @@ async def investigator_node(state: AgentState, *, llm_router: Any,
     # 7. Call LLM
     try:
         result = await llm_router.frontier_json(SYSTEM_PROMPT, user_msg, max_tokens=4000)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         log.error("Investigator LLM call failed: %s", e)
         state.status = IncidentStatus.FAILED
         state.error = f"investigator_llm_failure: {e}"
@@ -104,27 +106,35 @@ async def investigator_node(state: AgentState, *, llm_router: Any,
         raw_hyps = result.get("hypotheses", [])
         new_hyps: list[Hypothesis] = []
         for i, h in enumerate(raw_hyps[:5], start=1):
-            new_hyps.append(Hypothesis(
-                h_id=f"H{i}",
-                statement=h.get("statement", ""),
-                supporting_evidence=h.get("supporting_evidence", []),
-                contradicting_evidence=[],
-                confidence=float(h.get("confidence", 0.5)),
-                falsified=False,
-                source_files=h.get("source_files", []),
-            ))
+            new_hyps.append(
+                Hypothesis(
+                    h_id=f"H{i}",
+                    statement=h.get("statement", ""),
+                    supporting_evidence=h.get("supporting_evidence", []),
+                    contradicting_evidence=[],
+                    confidence=float(h.get("confidence", 0.5)),
+                    falsified=False,
+                    source_files=h.get("source_files", []),
+                )
+            )
         state.hypotheses = new_hyps
         state.iterations += 1
-        state.agent_trace.append({
-            "agent": "investigator",
-            "iteration": state.iterations,
-            "hypothesis_count": len(new_hyps),
-            "had_trace_anchor": anchor is not None,
-            "fetched_files": list(fetched.keys()),
-        })
-        await event_store.append(incident_id, "reasoning", "hypotheses_formed",
-                                  agent="investigator",
-                                  payload={"hypotheses": [h.model_dump(mode="json") for h in new_hyps]})
+        state.agent_trace.append(
+            {
+                "agent": "investigator",
+                "iteration": state.iterations,
+                "hypothesis_count": len(new_hyps),
+                "had_trace_anchor": anchor is not None,
+                "fetched_files": list(fetched.keys()),
+            }
+        )
+        await event_store.append(
+            incident_id,
+            "reasoning",
+            "hypotheses_formed",
+            agent="investigator",
+            payload={"hypotheses": [h.model_dump(mode="json") for h in new_hyps]},
+        )
     except (ValidationError, ValueError) as ve:
         log.error("Hypothesis validation failed: %s", ve)
         state.status = IncidentStatus.FAILED
@@ -134,9 +144,9 @@ async def investigator_node(state: AgentState, *, llm_router: Any,
     return state.model_dump(mode="json")
 
 
-def _build_user_message(state: AgentState, anchor: dict[str, Any] | None,
-                        similar: list[dict[str, Any]],
-                        fetched_code: dict[str, str]) -> str:
+def _build_user_message(
+    state: AgentState, anchor: dict[str, Any] | None, similar: list[dict[str, Any]], fetched_code: dict[str, str]
+) -> str:
     parts: list[str] = []
     parts.append(f"# Service: {state.cluster.service}")
     parts.append(f"# Namespace: {state.cluster.namespace}")
@@ -157,10 +167,12 @@ def _build_user_message(state: AgentState, anchor: dict[str, Any] | None,
     if similar:
         parts.append("## Similar Past Incidents (with code-churn decay)")
         for s in similar[:5]:
-            parts.append(f"- score={s.get('decayed_score', 0):.2f} "
-                        f"(semantic={s.get('semantic_score', 0):.2f}, "
-                        f"decay={s.get('churn_decay', 0):.2f}): "
-                        f"{s.get('summary', '')}")
+            parts.append(
+                f"- score={s.get('decayed_score', 0):.2f} "
+                f"(semantic={s.get('semantic_score', 0):.2f}, "
+                f"decay={s.get('churn_decay', 0):.2f}): "
+                f"{s.get('summary', '')}"
+            )
             parts.append(f"  root_cause: {s.get('root_cause', '')}")
             parts.append(f"  fix: {s.get('fix_pattern', '')}")
         parts.append("")
