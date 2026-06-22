@@ -46,9 +46,16 @@ Respond with a JSON object of shape:
   "description": "...",
   "k8s_action": null | {"kind": "Deployment", "name": "...", "patch": {...}},
   "files_to_change": [{"path": "src/foo.py", "new_content": "..."}],
+  "dockerfile_path": "Dockerfile",
   "pr_title": "[Sentinel] ...",
   "pr_body": "..."
 }
+
+The "dockerfile_path" field is the path to the Dockerfile relative to the repo
+root. Default to "Dockerfile" (repo root). If the repo is a monorepo with
+multiple Dockerfiles (e.g. "services/core/Dockerfile", "ui/Dockerfile"), set
+this to the path of the Dockerfile that builds the affected service's image.
+This is used by the sandbox to build a canary image with your fix applied.
 
 If fix_type is rollback, leave files_to_change empty — the execution layer
 will trigger a kubectl rollout undo. If roll_forward, treat it like code_fix.
@@ -113,6 +120,7 @@ async def fix_proposer_node(state: AgentState, *, llm_router: Any,
             repo=_discover_repo(state),
             k8s_action=result.get("k8s_action"),
             files_to_change=result.get("files_to_change", []),
+            dockerfile_path=result.get("dockerfile_path", "Dockerfile"),
             pr_title=result.get("pr_title") or f"[Sentinel] {fix_type.value} for {state.cluster.service}",
             pr_body=result.get("pr_body") or _build_pr_body(state, rc, fix_type=fix_type.value),
             requires_sandbox=True,

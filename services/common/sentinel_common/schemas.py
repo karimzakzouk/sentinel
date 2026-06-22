@@ -209,6 +209,11 @@ class FixProposal(BaseModel):
     )
     pr_title: Optional[str] = None
     pr_body: Optional[str] = None
+    # Path to the Dockerfile relative to the repo root (e.g. "Dockerfile",
+    # "services/core/Dockerfile", "ui/Dockerfile"). The LLM's Fix Proposer
+    # can set this when the repo is a monorepo with multiple Dockerfiles.
+    # Default: "Dockerfile" (repo root).
+    dockerfile_path: Optional[str] = Field(default="Dockerfile", description="Path to Dockerfile relative to repo root")
     # Canary image for sandbox verification (set by the execution layer
     # after the branch is pushed + CI builds the image)
     canary_image: Optional[str] = Field(default=None, description="Image tag for sandbox canary, e.g. 'karimzakzouk/sentinel-sim:sentinel-abc123'")

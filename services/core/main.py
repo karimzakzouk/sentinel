@@ -781,6 +781,7 @@ async def _execute_incident(incident: Incident) -> None:
                             fixed_files=fixed_files,
                             image_name=image_name,
                             image_tag=image_tag,
+                            dockerfile_path=fp.dockerfile_path or "Dockerfile",
                         )
                         log.info("Canary image built: %s", canary_image)
 

@@ -20,11 +20,18 @@ def _discover_repo_from_state(state: AgentState) -> str | None:
     Standard annotation values:
       - "github.com/owner/repo"   — full GitHub URL
       - "owner/repo"              — short form, treated as github.com
+      - "https://github.com/owner/repo" — full HTTPS URL
       - "" / missing              — repo unknown, returns None
 
-    Returns None if no annotation is present. In that case the Investigator
-    can't fetch source code (limiting hypothesis quality) and the Fix
-    Proposer cannot open a PR (incident will be escalated for human review).
+    Returns the repo in "owner/repo" format (e.g. "karimzakzoukz/sentinel-sim")
+    which is what PyGithub's get_repo() expects. Returns None if no annotation
+    is present.
+
+    Why "owner/repo" and not the full URL:
+      - PyGithub's get_repo("owner/repo") works
+      - PyGithub's get_repo("https://github.com/owner/repo") returns 404
+      - The Kaniko git clone command needs the full URL, so we reconstruct it
+        there with f"https://github.com/{repo}"
     """
     annotations = state.cluster.annotations or {}
     for a in state.cluster.anomalies:
@@ -34,10 +41,18 @@ def _discover_repo_from_state(state: AgentState) -> str | None:
     if not repo:
         return None
 
-    # Normalize: accept both "github.com/owner/repo" and "owner/repo"
-    if repo.startswith("github.com/"):
-        repo = "https://" + repo
-    elif "/" in repo and not repo.startswith("http"):
-        repo = "https://github.com/" + repo
+    # Strip protocol prefix
+    if repo.startswith("https://github.com/"):
+        repo = repo[len("https://github.com/"):]
+    elif repo.startswith("http://github.com/"):
+        repo = repo[len("http://github.com/"):]
+    elif repo.startswith("github.com/"):
+        repo = repo[len("github.com/"):]
 
-    return repo if repo.startswith("http") else None
+    # Now repo should be "owner/repo" format
+    # Validate: must have exactly one slash and non-empty parts
+    parts = repo.split("/")
+    if len(parts) == 2 and parts[0] and parts[1]:
+        return repo
+
+    return None
