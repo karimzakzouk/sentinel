@@ -28,7 +28,7 @@ from typing import Any
 from urllib.parse import quote
 
 import httpx
-from github import Github  # type: ignore
+from github import Auth, Github  # type: ignore
 
 from sentinel_common import AnomalyCluster, SignalSource
 from sentinel_common.config import Settings
@@ -55,7 +55,7 @@ class ContextFetcher:
         self._gh: Any = None
         if settings.github_token:
             try:
-                self._gh = Github(settings.github_token)
+                self._gh = Github(auth=Auth.Token(settings.github_token))
             except Exception as e:  # noqa: BLE001
                 log.warning("GitHub client init failed: %s", e)
 

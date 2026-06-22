@@ -36,6 +36,7 @@ from sentinel_common import IncidentStatus  # noqa: F401 — re-exported for tes
 from sentinel_common.config import get_settings
 from sentinel_common.kafka_client import KafkaBus, _InMemoryBus
 from sentinel_common.db import IncidentStore, EventStore, BetaStore, init_db
+from sentinel_common.logging import configure_logging, get_logger
 from sqlalchemy.ext.asyncio import create_async_engine
 
 # Layer imports
@@ -73,11 +74,8 @@ from .loops import (
     safety_loop,
 )
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-)
-log = logging.getLogger("sentinel.core")
+configure_logging()
+log = get_logger("sentinel.core")
 
 settings = get_settings()
 
