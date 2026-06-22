@@ -37,15 +37,23 @@ Given a confirmed root cause, propose ONE concrete fix. Pick the fix type:
   - roll_forward  : the previous deploy had a schema migration — must fix forward, NOT rollback
   - infrastructure: a Terraform-managed resource needs changing
 
-For code_fix, output the *exact* new file contents. The execution layer will
-open a PR with your patch. Be conservative — only change what's necessary.
+CRITICAL RULES for code_fix:
+  1. MODIFY the EXISTING file that contains the bug. Do NOT create new files.
+  2. The "path" in files_to_change MUST be the path of the EXISTING file in the repo.
+     For example, if the bug is in app/main.py, set path to "app/main.py".
+  3. The "new_content" must be the COMPLETE new file contents (not a diff).
+     Include the entire file with the fix applied.
+  4. Only change what's necessary to fix the bug. Don't refactor unrelated code.
+  5. If the root cause is a missing env var (KeyError on os.environ), fix the
+     CODE that reads it (e.g. change os.environ["X"] to os.environ.get("X", default))
+     — do NOT create a new config file.
 
 Respond with a JSON object of shape:
 {
   "fix_type": "restart|scale|code_fix|rollback|roll_forward|infrastructure",
   "description": "...",
   "k8s_action": null | {"kind": "Deployment", "name": "...", "patch": {...}},
-  "files_to_change": [{"path": "src/foo.py", "new_content": "..."}],
+  "files_to_change": [{"path": "app/main.py", "new_content": "COMPLETE file contents with fix applied"}],
   "dockerfile_path": "Dockerfile",
   "pr_title": "[Sentinel] ...",
   "pr_body": "..."
