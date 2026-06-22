@@ -48,6 +48,21 @@ class KanikoBuilder:
         self.k8s_apps = k8s_apps
         self.k8s_core = k8s_core
 
+    @staticmethod
+    def _encode_path(path: str) -> str:
+        """Encode a file path as a valid ConfigMap key.
+
+        K8s ConfigMap keys can only contain alphanumeric, '-', '_', and '.'.
+        Slashes are NOT allowed. We replace '/' with '__' (double underscore).
+        e.g. 'app/main.py' → 'app__main.py'
+        """
+        return path.replace("/", "__")
+
+    @staticmethod
+    def _decode_path(key: str) -> str:
+        """Decode a ConfigMap key back to a file path."""
+        return key.replace("__", "/")
+
     async def build(
         self,
         repo: str,
@@ -93,7 +108,7 @@ class KanikoBuilder:
                     namespace=namespace,
                     labels={"app": "kaniko-build", "sentinel.io/build-id": build_id},
                 ),
-                data=fixed_files,  # {path: content}
+                data={self._encode_path(k): v for k, v in fixed_files.items()},
             )
             await asyncio.to_thread(
                 self.k8s_core.create_namespaced_config_map,
@@ -194,19 +209,17 @@ git clone --depth 1 --branch {branch} https://github.com/{repo}.git /workspace/r
 cd /workspace/repo
 
 # Apply the fixed files from the ConfigMap.
-# The ConfigMap keys are the FULL file paths relative to the repo root
-# (e.g. "app/main.py", "src/handler.py"). We copy each file to its
-# exact path — no find/glob, no ambiguity.
+# ConfigMap keys can't contain '/', so they were encoded with '__' as
+# separator (e.g. 'app/main.py' → 'app__main.py').
+# We decode each key back to the full path and copy the file.
 for f in /fixed-files/*; do
-    rel_path=$(basename "$f")
-    # The ConfigMap mounts each key as a file named after the key.
-    # We need to reconstruct the full path from the key.
-    # The key is the file path (e.g. "app/main.py" → mounted as /fixed-files/app/main.py)
-    # But ConfigMap mounts flatten the path, so we use the key directly.
+    key=$(basename "$f")
+    # Decode: replace '__' with '/'
+    rel_path=$(echo "$key" | sed 's/__/\\//g')
     dest="/workspace/repo/$rel_path"
     mkdir -p "$(dirname "$dest")"
     cp "$f" "$dest"
-    echo "Applied fix: $rel_path → $dest"
+    echo "Applied fix: $key → $dest"
 done
 
 # Verify the files were applied

@@ -108,18 +108,20 @@ async def evidence_gatherer_node(state: AgentState, *, llm_router: Any,
                                   payload=ev.model_dump(mode="json"))
         return state.model_dump(mode="json")
 
-    # 3. Execute each query (with per-query timeout to prevent hanging)
+    # 3. Execute all queries IN PARALLEL (with per-query timeout).
+    # Previously this was a serial for loop — 10 queries × 15s = 150s worst case.
+    # Now all queries run concurrently via asyncio.gather — max time = 15s
+    # regardless of query count.
     queries = result.get("evidence_queries", [])
-    new_evidence: list[Evidence] = []
-    for i, q in enumerate(queries):
+
+    async def _run_single_query(i: int, q: dict) -> Evidence:
+        """Run one evidence query with a 15s timeout. Returns Evidence (never raises)."""
         try:
-            # 15-second timeout per query — prevents the investigation from
-            # hanging if a K8s API call or Loki/Prometheus query gets stuck.
             result_data = await asyncio.wait_for(
                 _execute_query(q.get("query", {}), context_fetcher),
                 timeout=15.0,
             )
-            ev = Evidence(
+            return Evidence(
                 e_id=f"E{i+1}",
                 source=q.get("query", {}).get("type", "unknown"),
                 query=json.dumps(q.get("query", {})),
@@ -127,27 +129,33 @@ async def evidence_gatherer_node(state: AgentState, *, llm_router: Any,
                 supports_hypothesis_id=q.get("hypothesis_id") if q.get("supports_or_contradicts") == "supports" else None,
                 contradicts_hypothesis_id=q.get("hypothesis_id") if q.get("supports_or_contradicts") == "contradicts" else None,
             )
-            new_evidence.append(ev)
         except asyncio.TimeoutError:
             log.warning("Evidence query %d timed out after 15s", i+1)
-            new_evidence.append(Evidence(
+            return Evidence(
                 e_id=f"E{i+1}",
                 source=q.get("query", {}).get("type", "unknown"),
                 query=json.dumps(q.get("query", {})),
                 result={"error": "query timed out after 15s"},
                 supports_hypothesis_id=q.get("hypothesis_id") if q.get("supports_or_contradicts") == "supports" else None,
                 contradicts_hypothesis_id=q.get("hypothesis_id") if q.get("supports_or_contradicts") == "contradicts" else None,
-            ))
+            )
         except Exception as e:  # noqa: BLE001
-            log.warning("Evidence query failed: %s", e)
-            new_evidence.append(Evidence(
+            log.warning("Evidence query %d failed: %s", i+1, e)
+            return Evidence(
                 e_id=f"E{i+1}",
                 source=q.get("query", {}).get("type", "unknown"),
                 query=json.dumps(q.get("query", {})),
                 result={"error": str(e)},
                 supports_hypothesis_id=q.get("hypothesis_id") if q.get("supports_or_contradicts") == "supports" else None,
                 contradicts_hypothesis_id=q.get("hypothesis_id") if q.get("supports_or_contradicts") == "contradicts" else None,
-            ))
+            )
+
+    # Run all queries in parallel — returns results in order
+    if queries:
+        new_evidence = await asyncio.gather(*[_run_single_query(i, q) for i, q in enumerate(queries)])
+        new_evidence = list(new_evidence)
+    else:
+        new_evidence = []
 
     state.evidence = new_evidence
     state.agent_trace.append({
