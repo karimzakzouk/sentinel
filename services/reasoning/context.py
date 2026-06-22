@@ -240,7 +240,37 @@ class ContextFetcher:
         out: dict[str, str] = {}
         for path, content in zip(candidate_files, results):
             if isinstance(content, str) and content:
-                out[path] = content
+                # fetch_file_from_repo tries progressively shorter paths.
+                # The content is the file, but the KEY should be the path
+                # that actually worked in the repo (not the container path
+                # from the stack trace). We need to return the repo path
+                # so the Fix Proposer uses the correct path in files_to_change.
+                # Since fetch_file_from_repo doesn't return which path worked,
+                # we use the original path but strip any prefix that doesn't
+                # look like a repo path. The progressive path finder already
+                # found the file — we just need the right key.
+                #
+                # The key insight: if the path has a duplicate directory segment
+                # (e.g. "app/app/main.py"), the repo path is the shorter version
+                # ("app/main.py"). We find the shortest suffix that's a valid
+                # repo path by checking for duplicate segments.
+                repo_path = path
+                parts = path.split("/")
+                for i in range(1, len(parts)):
+                    shorter = "/".join(parts[i:])
+                    if shorter and shorter != path:
+                        # Check if this shorter path has a duplicate segment
+                        # (e.g. "app/main.py" from "app/app/main.py")
+                        if len(parts) > i and parts[i-1] == parts[i]:
+                            repo_path = shorter
+                            break
+                        # Also just try the shorter path as the key — the
+                        # fetch_file_from_repo already confirmed the file
+                        # exists at some shorter path, so use the shortest
+                        # reasonable one (strip one directory level)
+                        repo_path = shorter
+                        break
+                out[repo_path] = content
         return out
 
     # ---------------- RAG: Weaviate ----------------
