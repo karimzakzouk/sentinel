@@ -20,11 +20,11 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 
 # Copy source + build
 COPY . .
-
+ARG VERSION=dev
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-    -ldflags='-s -w -extldflags "-static"' \
+    -ldflags="-s -w -extldflags '-static' -X main.Version=${VERSION}" \
     -trimpath \
     -o /sentinel ./cmd/sentinel
 

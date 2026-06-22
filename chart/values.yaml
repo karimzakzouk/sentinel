@@ -11,8 +11,8 @@
 image:
   registry: "docker.io/karimzakzouk"
   repository: "sentinel-v3"
-  tag: "3.0.0"
-  pullPolicy: IfNotPresent
+  tag: "3.0.4"
+  pullPolicy: Always
 
 sentinel:
   # GitHub token — REQUIRED for code_fix / roll_forward (opens PRs)
