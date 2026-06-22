@@ -141,12 +141,44 @@ class SandboxRunner:
             return {"success": False, "error": "no fix proposal"}
 
         try:
-            # Get the current production Deployment
-            prod_deploy = await asyncio.to_thread(
-                self.k8s.apps.read_namespaced_deployment,
-                name=fp.target_service,
-                namespace=fp.target_namespace,
-            )
+            # Get the current production Deployment.
+            # Try exact name first, then fall back to label selector.
+            # Helm charts typically name deployments as <release>-<chart-name>,
+            # so the service name 'sentinel-sim' might not match the deployment
+            # name 'sim-sentinel-sim'. The label app.kubernetes.io/name is the
+            # reliable way to find it.
+            prod_deploy = None
+            try:
+                prod_deploy = await asyncio.to_thread(
+                    self.k8s.apps.read_namespaced_deployment,
+                    name=fp.target_service,
+                    namespace=fp.target_namespace,
+                )
+            except Exception:
+                pass  # Fall through to label lookup
+
+            if prod_deploy is None:
+                # Try by label app.kubernetes.io/name=<service>
+                deps = await asyncio.to_thread(
+                    self.k8s.apps.list_namespaced_deployment,
+                    namespace=fp.target_namespace,
+                    label_selector=f"app.kubernetes.io/name={fp.target_service}",
+                )
+                if deps.items:
+                    prod_deploy = deps.items[0]
+
+            if prod_deploy is None:
+                # Try by label app=<service> (older convention)
+                deps = await asyncio.to_thread(
+                    self.k8s.apps.list_namespaced_deployment,
+                    namespace=fp.target_namespace,
+                    label_selector=f"app={fp.target_service}",
+                )
+                if deps.items:
+                    prod_deploy = deps.items[0]
+
+            if prod_deploy is None:
+                return {"success": False, "error": f"deployment for {fp.target_service} not found in {fp.target_namespace}"}
 
             # Determine the canary image
             canary_image = await self._resolve_canary_image(incident, prod_deploy)

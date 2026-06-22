@@ -96,9 +96,9 @@ rules:
   - apiGroups: ["apps"]
     resources: ["deployments", "deployments/scale", "replicasets"]
     verbs: ["get", "list", "watch", "patch", "update"]
-  # Create sandbox namespaces + deploy canaries
+  # Pods, services, configmaps in the target namespace
   - apiGroups: [""]
-    resources: ["namespaces", "pods", "services", "configmaps"]
+    resources: ["pods", "services", "configmaps"]
     verbs: ["create", "delete", "get", "list", "watch", "patch", "update"]
   # Apply Istio VirtualServices for traffic mirroring
   - apiGroups: ["networking.istio.io"]
@@ -121,4 +121,48 @@ subjects:
     name: {{ $.Values.serviceAccount.name | default (include "sentinel.fullname" $) }}
     namespace: {{ $.Release.Namespace }}
 {{- end }}
+{{- end }}
+---
+# ClusterRole for sandbox namespace management.
+# Sandbox namespaces are cluster-scoped resources, so we need a ClusterRole
+# (not a namespaced Role) to create/delete them. This is only granted when
+# writeNamespaces is non-empty (i.e. autonomous mode is enabled).
+{{- if .Values.sentinel.rbac.writeNamespaces }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "sentinel.fullname" . }}-sandbox-manager
+  labels:
+    {{- include "sentinel.labels" . | nindent 4 }}
+rules:
+  # Create/delete sandbox namespaces
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["create", "delete", "get", "list", "watch"]
+  # Create deployments + services in sandbox namespaces
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["create", "delete", "get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["services", "configmaps", "pods"]
+    verbs: ["create", "delete", "get", "list", "watch"]
+  # Apply Istio VirtualServices in sandbox namespaces
+  - apiGroups: ["networking.istio.io"]
+    resources: ["virtualservices", "destinationrules"]
+    verbs: ["create", "delete", "get", "list", "watch", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "sentinel.fullname" . }}-sandbox-manager
+  labels:
+    {{- include "sentinel.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "sentinel.fullname" . }}-sandbox-manager
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.serviceAccount.name | default (include "sentinel.fullname" .) }}
+    namespace: {{ .Release.Namespace }}
 {{- end }}
