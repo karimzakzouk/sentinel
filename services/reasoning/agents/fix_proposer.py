@@ -120,6 +120,8 @@ async def fix_proposer_node(state: AgentState, *, llm_router: Any,
         # instead of repo paths (e.g. "app/main.py"). We match each path against
         # the fetched_code keys (which are the correct repo paths) and replace
         # if there's a suffix match. This is generic — works for any project.
+        log.info("Fix Proposer: fetched_code keys = %s", list(state.fetched_code.keys()) if state.fetched_code else "EMPTY")
+        log.info("Fix Proposer: LLM returned files_to_change paths = %s", [fc.get("path", "?") for fc in raw_files])
         if state.fetched_code:
             fixed_files = []
             for fc in raw_files:
@@ -133,6 +135,15 @@ async def fix_proposer_node(state: AgentState, *, llm_router: Any,
                         fc["path"] = repo_path
                         matched = True
                         break
+                if not matched and path != "":
+                    # Also try: if any fetched_code key ends with the LLM path
+                    # (LLM might have a shorter path than the repo)
+                    for repo_path in state.fetched_code.keys():
+                        if repo_path.endswith(path) and repo_path != path:
+                            log.info("Fixing file path: %s → %s (reverse match)", path, repo_path)
+                            fc["path"] = repo_path
+                            matched = True
+                            break
                 fixed_files.append(fc)
             raw_files = fixed_files
 
@@ -221,7 +232,21 @@ async def _llm_code_fix(state: AgentState, proposal: FixProposal,
     user_msg = _build_user_message(state)
     try:
         result = await llm_router.frontier_json(SYSTEM_PROMPT, user_msg, max_tokens=6000)
-        proposal.files_to_change = result.get("files_to_change", [])
+        raw_files = result.get("files_to_change", [])
+        # Apply the same path fixing as the main code_fix path
+        if state.fetched_code:
+            for fc in raw_files:
+                path = fc.get("path", "")
+                for repo_path in state.fetched_code.keys():
+                    if path.endswith(repo_path) and path != repo_path:
+                        log.info("Fixing file path (roll_forward): %s → %s", path, repo_path)
+                        fc["path"] = repo_path
+                        break
+                    if repo_path.endswith(path) and repo_path != path:
+                        log.info("Fixing file path (roll_forward reverse): %s → %s", path, repo_path)
+                        fc["path"] = repo_path
+                        break
+        proposal.files_to_change = raw_files
         proposal.description = result.get("description", proposal.description)
     except Exception as e:  # noqa: BLE001
         log.error("Roll-forward LLM call failed: %s", e)

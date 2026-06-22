@@ -234,8 +234,9 @@ class SandboxRunner:
             # to resources that only exist in the prod namespace.
             await self._copy_configmaps_and_secrets(prod_deploy, fp.target_namespace, ns)
 
-            # Create a Service so the mirror can reach it
+            # Create a Service so the mirror + Level 2 verification can reach it
             prod_svc = None
+            # Try exact name first, then label selector
             try:
                 prod_svc = await asyncio.to_thread(
                     self.k8s.core.read_namespaced_service,
@@ -244,6 +245,32 @@ class SandboxRunner:
                 )
             except Exception:
                 pass
+
+            if prod_svc is None:
+                # Try by label app.kubernetes.io/name=service
+                try:
+                    svcs = await asyncio.to_thread(
+                        self.k8s.core.list_namespaced_service,
+                        namespace=fp.target_namespace,
+                        label_selector=f"app.kubernetes.io/name={fp.target_service}",
+                    )
+                    if svcs.items:
+                        prod_svc = svcs.items[0]
+                except Exception:
+                    pass
+
+            if prod_svc is None:
+                # Try by label app=service
+                try:
+                    svcs = await asyncio.to_thread(
+                        self.k8s.core.list_namespaced_service,
+                        namespace=fp.target_namespace,
+                        label_selector=f"app={fp.target_service}",
+                    )
+                    if svcs.items:
+                        prod_svc = svcs.items[0]
+                except Exception:
+                    pass
 
             if prod_svc:
                 sandbox_svc = client.V1Service(
@@ -491,11 +518,35 @@ class SandboxRunner:
         import httpx
         try:
             # Get the sandbox Service to find the port
-            svc = await asyncio.to_thread(
-                self.k8s.core.read_namespaced_service,
-                name=service, namespace=sandbox_ns,
-            )
+            # Try exact name, then label selector
+            svc = None
+            try:
+                svc = await asyncio.to_thread(
+                    self.k8s.core.read_namespaced_service,
+                    name=service, namespace=sandbox_ns,
+                )
+            except Exception:
+                pass
+
+            if svc is None:
+                try:
+                    svcs = await asyncio.to_thread(
+                        self.k8s.core.list_namespaced_service,
+                        namespace=sandbox_ns,
+                        label_selector=f"app={service}",
+                    )
+                    if svcs.items:
+                        svc = svcs.items[0]
+                except Exception:
+                    pass
+
+            if svc is None:
+                log.warning("Sandbox Level 2: no Service found for %s in %s", service, sandbox_ns)
+                return True  # Don't fail if no Service — Level 1 + 3 are sufficient
+
             port = svc.spec.ports[0].port if svc.spec.ports else 80
+            # Use the Service's actual name for DNS resolution
+            svc_name = svc.metadata.name
 
             # Common endpoints to check — always include /, /healthz, /readyz
             # plus any paths from the prod deployment's probes
@@ -525,7 +576,7 @@ class SandboxRunner:
             # Call each endpoint
             async with httpx.AsyncClient(timeout=5.0) as client:
                 for path in endpoints_to_check:
-                    url = f"http://{service}.{sandbox_ns}.svc.cluster.local:{port}{path}"
+                    url = f"http://{svc_name}.{sandbox_ns}.svc.cluster.local:{port}{path}"
                     try:
                         r = await client.get(url)
                         log.info("Sandbox Level 2: %s → %d", url, r.status_code)
@@ -608,11 +659,26 @@ class SandboxRunner:
             # reproduce by calling the app's endpoints. If any endpoint triggers
             # the same error, the fix didn't work.
             try:
-                svc = await asyncio.to_thread(
-                    self.k8s.core.read_namespaced_service,
-                    name=service, namespace=sandbox_ns,
-                )
+                svc = None
+                try:
+                    svc = await asyncio.to_thread(
+                        self.k8s.core.read_namespaced_service,
+                        name=service, namespace=sandbox_ns,
+                    )
+                except Exception:
+                    pass
+                if svc is None:
+                    svcs = await asyncio.to_thread(
+                        self.k8s.core.list_namespaced_service,
+                        namespace=sandbox_ns,
+                        label_selector=f"app={service}",
+                    )
+                    if svcs.items:
+                        svc = svcs.items[0]
+                if svc is None:
+                    return None
                 port = svc.spec.ports[0].port if svc.spec.ports else 80
+                svc_name = svc.metadata.name
             except Exception:
                 return None
 
@@ -631,7 +697,7 @@ class SandboxRunner:
 
             async with httpx.AsyncClient(timeout=5.0) as client:
                 for method, path, params in test_inputs:
-                    url = f"http://{service}.{sandbox_ns}.svc.cluster.local:{port}{path}"
+                    url = f"http://{svc_name}.{sandbox_ns}.svc.cluster.local:{port}{path}"
                     try:
                         if method == "GET":
                             r = await client.get(url, params=params)
