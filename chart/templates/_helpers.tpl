@@ -98,7 +98,6 @@ Standard env vars shared by all Python services.
       optional: true
 - name: SENTINEL_DOCKER_HUB_USERNAME
   value: {{ .Values.sentinel.dockerHubUsername | default "" | quote }}
-  value: {{ printf "%s-registry:5000" (include "sentinel.fullname" .) | quote }}
 - name: SENTINEL_PRODUCTION_NAMESPACES
   value: {{ .Values.sentinel.productionNamespaces | quote }}
 - name: SENTINEL_WRITE_NAMESPACES

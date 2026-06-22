@@ -320,8 +320,11 @@ async def _lookup_workload_annotations(service: str, namespace: str) -> dict[str
     except Exception:
         return {}
 
-    # Try a few likely Deployment names
-    candidate_names = {service, f"{service}-sentinel-sim"}
+    # Try a few likely Deployment names.
+    # Helm names deployments as <release>-<chart-name>, so if the service is
+    # 'sentinel-sim' and the release is 'sim', the deployment is 'sim-sentinel-sim'.
+    # We try the exact service name first, then rely on label selectors below.
+    candidate_names = {service}
     annotations: dict[str, str] = {}
 
     # 1. Try by name (most common — Helm chart names deployments predictably)
