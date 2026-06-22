@@ -22,6 +22,8 @@ import (
 // Sentinel annotation keys we recognize on workloads.
 var sentinelAnnotationKeys = map[string]bool{
         "sentinel.io/repo":         true,
+        "sentinel.io/branch":       true,
+        "sentinel.io/git-commit":   true,
         "sentinel.io/runbook":      true,
         "sentinel.io/team":         true,
         "sentinel.io/ignore":       true,
