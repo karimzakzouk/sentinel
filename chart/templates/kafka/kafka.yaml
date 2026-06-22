@@ -1,0 +1,158 @@
+{{- if eq .Values.mode "distributed" -}}
+{{- if .Values.kafka.enabled -}}
+# Strimzi Kafka cluster
+# The Strimzi operator must be installed in the cluster before this. It's
+# declared as a Helm dependency so `helm dep update` pulls it.
+apiVersion: kafka.strimzi.io/v1beta2
+kind: Kafka
+metadata:
+  name: {{ .Release.Name }}-kafka
+  labels:
+    {{- include "sentinel.labels" . | nindent 4 }}
+spec:
+  kafka:
+    version: 3.7.0
+    replicas: {{ .Values.kafka.replicas | default 3 }}
+    listeners:
+      - name: plain
+        port: 9092
+        type: internal
+        tls: false
+      - name: tls
+        port: 9093
+        type: internal
+        tls: true
+    storage:
+      type: jbod
+      volumes:
+        - id: 0
+          type: persistent-claim
+          size: 10Gi
+          deleteClaim: false
+    config:
+      offsets.topic.replication.factor: 3
+      transaction.state.log.replication.factor: 3
+      transaction.state.log.min.isr: 2
+      default.replication.factor: 3
+      min.insync.replicas: 2
+  zookeeper:
+    replicas: 3
+    storage:
+      type: persistent-claim
+      size: 5Gi
+      deleteClaim: false
+  entityOperator:
+    topicOperator: {}
+    userOperator: {}
+---
+# Kafka topics
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: {{ .Release.Name }}-signals
+  labels:
+    strimzi.io/cluster: {{ .Release.Name }}-kafka
+spec:
+  partitions: 6
+  replicas: 3
+  config:
+    retention.ms: 604800000
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: {{ .Release.Name }}-anomalies
+  labels:
+    strimzi.io/cluster: {{ .Release.Name }}-kafka
+spec:
+  partitions: 3
+  replicas: 3
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: {{ .Release.Name }}-incidents
+  labels:
+    strimzi.io/cluster: {{ .Release.Name }}-kafka
+spec:
+  partitions: 3
+  replicas: 3
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: {{ .Release.Name }}-fixes
+  labels:
+    strimzi.io/cluster: {{ .Release.Name }}-kafka
+spec:
+  partitions: 3
+  replicas: 3
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: {{ .Release.Name }}-deadletter
+  labels:
+    strimzi.io/cluster: {{ .Release.Name }}-kafka
+spec:
+  partitions: 1
+  replicas: 3
+  config:
+    retention.ms: 2592000000  # 30 days
+{{- if .Values.kafka.schemaRegistry.enabled -}}
+---
+# Schema Registry
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-schema-registry
+  labels:
+    {{- include "sentinel.serviceLabels" (list "schema-registry" .) | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: schema-registry
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: schema-registry
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/part-of: sentinel
+    spec:
+      containers:
+        - name: schema-registry
+          image: {{ printf "%s:%s" .Values.kafka.schemaRegistry.image .Values.kafka.schemaRegistry.tag | quote }}
+          env:
+            - name: SCHEMA_REGISTRY_HOST_NAME
+              value: {{ .Release.Name }}-schema-registry
+            - name: SCHEMA_REGISTRY_LISTENERS
+              value: "http://0.0.0.0:8081"
+            - name: SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS
+              value: {{ printf "%s-kafka-bootstrap:9092" .Release.Name | quote }}
+            - name: SCHEMA_REGISTRY_KAFKASTORE_TOPIC
+              value: {{ printf "%s-schemas" .Release.Name | quote }}
+          ports:
+            - containerPort: 8081
+              name: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-schema-registry
+  labels:
+    {{- include "sentinel.serviceLabels" (list "schema-registry" .) | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8081
+      targetPort: http
+      name: http
+  selector:
+    app.kubernetes.io/name: schema-registry
+    app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end -}}
+{{- end -}}
+
+{{- end -}}

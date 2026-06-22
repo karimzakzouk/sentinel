@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sentinel-detection"
+version = "1.0.0"
+description = "Sentinel Layer 2 — anomaly detection (Isolation Forest + CUSUM + rules)"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn>=0.27",
+    "scikit-learn>=1.3",
+    "numpy>=1.26",
+    "sentinel-common @ file:../common",
+]

@@ -1,0 +1,188 @@
+name: Release
+
+# ONE workflow that does EVERYTHING:
+# 1. Run tests
+# 2. Build all Docker images → push to Docker Hub + GHCR
+# 3. Package Helm chart → attach to GitHub Release
+# 4. Publish Helm repo to GitHub Pages
+#
+# Triggered when you push a tag like `v1.5.1`.
+# After this, you just: helm repo update && helm install
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+  packages: write
+  pages: write
+  id-token: write
+
+env:
+  DH_REGISTRY: docker.io
+  DH_OWNER: karimzakzouk
+  GHCR_REGISTRY: ghcr.io
+  GHCR_OWNER: karimzakzoukz
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.3
+      - name: Install deps
+        run: |
+          pip install -e services/common
+          pip install pytest pytest-asyncio langgraph langchain-openai openai \
+            pygithub kubernetes kopf weaviate-client scikit-learn httpx tenacity \
+            "sqlalchemy[asyncio]" asyncpg fastapi uvicorn aiokafka prometheus-client
+      - name: Build chart deps
+        run: |
+          rm -f chart/Chart.lock
+          helm dependency update chart/
+      - name: Helm lint
+        run: helm lint chart/
+      - name: Pytest
+        env:
+          PYTHONPATH: services/common:services/ingestion:services/detection:services/reasoning:services/safety:services/execution:services/feedback:services/core
+        run: pytest tests/ --tb=short -v
+
+  build-images:
+    name: Build ${{ matrix.service }}
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { service: core,       dockerfile: services/core/Dockerfile }
+          - { service: ui,         dockerfile: ui/Dockerfile }
+          - { service: ingestion,  dockerfile: services/ingestion/Dockerfile }
+          - { service: detection,  dockerfile: services/detection/Dockerfile }
+          - { service: reasoning,  dockerfile: services/reasoning/Dockerfile }
+          - { service: safety,     dockerfile: services/safety/Dockerfile }
+          - { service: execution,  dockerfile: services/execution/Dockerfile }
+          - { service: feedback,   dockerfile: services/feedback/Dockerfile }
+          - { service: operator,   dockerfile: services/operator/Dockerfile }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.DH_REGISTRY }}
+          username: ${{ env.DH_OWNER }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.GHCR_REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push (both registries)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: |
+            ${{ env.DH_REGISTRY }}/${{ env.DH_OWNER }}/sentinel-${{ matrix.service }}:${{ steps.version.outputs.version }}
+            ${{ env.DH_REGISTRY }}/${{ env.DH_OWNER }}/sentinel-${{ matrix.service }}:latest
+            ${{ env.GHCR_REGISTRY }}/${{ env.GHCR_OWNER }}/sentinel/${{ matrix.service }}:${{ steps.version.outputs.version }}
+            ${{ env.GHCR_REGISTRY }}/${{ env.GHCR_OWNER }}/sentinel/${{ matrix.service }}:latest
+          no-cache: true
+          platforms: linux/amd64
+
+  publish-chart:
+    name: Publish Helm chart
+    needs: build-images
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.3
+
+      - name: Get version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+
+      - name: Build chart deps
+        run: |
+          rm -f chart/Chart.lock
+          helm dependency update chart/
+
+      - name: Package chart
+        run: |
+          helm package chart/ -d /tmp/ --version ${{ steps.version.outputs.version }}
+          ls -la /tmp/sentinel-*.tgz
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Sentinel ${{ github.ref_name }}
+          body: |
+            ## Install
+
+            ```bash
+            helm repo add sentinel https://karimzakzoukz.github.io/sentinel/
+            helm repo update
+            helm install sentinel sentinel/sentinel --version ${{ steps.version.outputs.version }} \
+              --namespace sentinel --create-namespace \
+              --set sentinel.githubToken=YOUR_GITHUB_TOKEN \
+              --set sentinel.llm.apiKey=YOUR_LLM_API_KEY \
+              --set sentinel.llm.provider=gemini
+            ```
+
+            Then: `kubectl -n sentinel port-forward svc/sentinel-ui 8080:80`
+          files: /tmp/sentinel-${{ steps.version.outputs.version }}.tgz
+          generate_release_notes: true
+
+      - name: Publish to GitHub Pages (Helm repo)
+        run: |
+          git config user.email "actions@github.com"
+          git config user.name "GitHub Actions"
+
+          # Clone gh-pages into a separate directory so we don't have to
+          # switch the main worktree's branch (which previously broke on
+          # `git checkout main -- chart/gh-pages-index.html` because the local
+          # `main` ref doesn't exist after actions/checkout + branch switch).
+          rm -rf /tmp/gh-pages
+          git clone --branch gh-pages --depth 1 \
+            https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} \
+            /tmp/gh-pages 2>/dev/null || mkdir -p /tmp/gh-pages
+
+          cd /tmp/gh-pages
+          git config user.email "actions@github.com"
+          git config user.name "GitHub Actions"
+          cp ${GITHUB_WORKSPACE}/chart/gh-pages-index.html index.html
+          cp /tmp/sentinel-${{ steps.version.outputs.version }}.tgz .
+          helm repo index . --url https://karimzakzoukz.github.io/sentinel/
+          touch .nojekyll
+          git add -A
+          git commit -m "Publish chart v${{ steps.version.outputs.version }}" || true
+          git push https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} gh-pages --force
+
+          cd ${GITHUB_WORKSPACE}

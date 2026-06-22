@@ -1,0 +1,79 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: sentinelincidents.sentinel.io
+  labels:
+    {{- include "sentinel.labels" . | nindent 4 }}
+spec:
+  group: sentinel.io
+  scope: Namespaced
+  names:
+    plural: sentinelincidents
+    singular: sentinelincident
+    kind: SentinelIncident
+    shortNames:
+      - sent
+      - sre
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: ["service"]
+              properties:
+                service:
+                  type: string
+                  description: The affected service name
+                namespace:
+                  type: string
+                  description: The target namespace (defaults to the CR's namespace)
+                reason:
+                  type: string
+                  description: Optional human-readable description
+                trigger:
+                  type: string
+                  description: What created this incident (operator_crashloop_watch, manual, alertmanager)
+                  enum: [manual, operator_crashloop_watch, alertmanager]
+                repo:
+                  type: string
+                  description: GitHub repo (auto-discovered from pod annotations if not set)
+                anomaly_cluster:
+                  type: object
+                  description: Optional pre-built anomaly cluster JSON
+                  x-kubernetes-preserve-unknown-fields: true
+            status:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+              properties:
+                phase:
+                  type: string
+                incidentId:
+                  type: string
+                rootCause:
+                  type: string
+                confidence:
+                  type: number
+                prUrl:
+                  type: string
+                lastUpdated:
+                  type: string
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Service
+          type: string
+          jsonPath: .spec.service
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Confidence
+          type: number
+          jsonPath: .status.confidence
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp

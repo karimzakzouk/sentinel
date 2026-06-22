@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sentinel — Helm Chart Repository</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #0f1419;
+      color: #e1e7ef;
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 4rem 1.5rem;
+      line-height: 1.6;
+    }
+    h1 { color: #00d9a3; font-size: 2rem; margin-bottom: 0.5rem; }
+    h2 { color: #8a96a3; font-size: 1rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em; margin-top: 2.5rem; }
+    code {
+      background: #1a2028;
+      border: 1px solid #2d3640;
+      border-radius: 3px;
+      padding: 0.1em 0.4em;
+      font-family: ui-monospace, "SF Mono", Menlo, monospace;
+      font-size: 0.9em;
+      color: #00d9a3;
+    }
+    pre {
+      background: #1a2028;
+      border: 1px solid #2d3640;
+      border-radius: 4px;
+      padding: 1rem;
+      overflow-x: auto;
+      font-family: ui-monospace, "SF Mono", Menlo, monospace;
+      font-size: 0.85em;
+      color: #e1e7ef;
+    }
+    a { color: #00d9a3; }
+    a:hover { text-decoration: underline; }
+    .badge {
+      display: inline-block;
+      background: rgba(0, 217, 163, 0.15);
+      color: #00d9a3;
+      padding: 0.2em 0.6em;
+      border-radius: 3px;
+      font-size: 0.75em;
+      font-family: ui-monospace, monospace;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-left: 0.5em;
+      vertical-align: middle;
+    }
+  </style>
+</head>
+<body>
+  <h1>Sentinel <span class="badge">Helm Repo</span></h1>
+  <p>This is the Helm chart repository for Sentinel — the Autonomous AI Site Reliability Engineer.</p>
+
+  <h2>Install</h2>
+  <pre><code>helm repo add sentinel https://karimzakzoukz.github.io/sentinel/
+helm repo update
+helm install sentinel sentinel/sentinel \
+  -f my-values.yaml \
+  --namespace sentinel --create-namespace</pre></code>
+
+  <h2>Available charts</h2>
+  <pre><code>$ helm search repo sentinel
+NAME                    CHART VERSION   APP VERSION     DESCRIPTION
+sentinel/sentinel       1.5.4           1.5.4           Sentinel — The Autonomous AI SRE...</pre></code>
+
+  <h2>Documentation</h2>
+  <ul>
+    <li><a href="https://github.com/karimzakzoukz/sentinel">GitHub repository</a></li>
+    <li><a href="https://github.com/karimzakzoukz/sentinel/releases">Releases</a></li>
+    <li><a href="https://github.com/karimzakzoukz/sentinel/blob/main/examples/my-values.yaml">Example values file</a></li>
+    <li><a href="https://github.com/karimzakzoukz/sentinel/blob/main/README.md">README</a></li>
+  </ul>
+
+  <h2>Chart index</h2>
+  <p>The raw Helm repo index is at <a href="index.yaml">index.yaml</a>.</p>
+</body>
+</html>

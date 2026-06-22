@@ -1,0 +1,281 @@
+# Sentinel - Helm Chart Values
+#
+# Default values are tuned for a small production cluster (3+ nodes).
+# Override with --set or -f values-prod.yaml.
+#
+# Quick start:
+#   helm repo add sentinel https://karimzakzoukz.github.io/sentinel/
+#   helm pull sentinel/sentinel --version 1.2.0 --untar
+#   cd sentinel
+#   cp values-example.yaml my-values.yaml
+#   $EDITOR my-values.yaml      # fill in githubToken, llm.apiKey, pick provider
+#   helm install sentinel . -f my-values.yaml --namespace sentinel --create-namespace
+#
+# --- DEPLOYMENT MODE ---
+# core         = ONE pod running all 6 layers + Postgres + Weaviate (default)
+#                Plug-and-play. No Kafka. ~3 pods. ~30s startup.
+# distributed  = 7 service pods + Kafka + Zookeeper + OPA + Postgres + Weaviate
+#                For horizontal scaling. Requires Strimzi operator.
+mode: "core"
+
+image:
+  registry: "docker.io/karimzakzouk"
+  pullPolicy: IfNotPresent
+  pullSecrets: []
+
+# All Sentinel services share these settings
+sentinel:
+  # The GitHub token Sentinel uses to clone repos, open PRs, and pull CD
+  # history. REQUIRED for code_fix / roll_forward actions.
+  githubToken: ""
+
+  # Docker Hub credentials for Kaniko (sandbox image builder).
+  # Kaniko builds canary images with the fix applied, then pushes them to
+  # Docker Hub so the sandbox can pull and test them.
+  # REQUIRED for sandbox verification (without this, sandbox is skipped).
+  dockerHubUsername: "karimzakzouk"
+  dockerHubToken: ""
+
+  # --- Secret backend ---
+  # plain    — plain K8s Secret (dev only, NOT for production)
+  # sealed   — Bitnami sealed-secrets (user provides encrypted SealedSecret YAML)
+  # external — external-secrets.io (user provides ExternalSecret YAML for Vault/AWS SM/GCP SM)
+  secrets:
+    backend: "plain"
+    # For backend=sealed: paste your SealedSecret manifest here (encrypted with kubeseal)
+    sealedYaml: ""
+    # For backend=external: paste your ExternalSecret manifest here
+    externalSecretYaml: ""
+
+  # Comma-separated list of namespaces Sentinel treats as production.
+  productionNamespaces: "prod,production,payments"
+
+  # RBAC — namespaces where Sentinel is allowed to WRITE (apply fixes).
+  # Empty = read-only mode (Sentinel detects + investigates but never fixes).
+  # Add namespaces here to enable autonomous remediation.
+  rbac:
+    writeNamespaces: []
+    # writeNamespaces:
+    #   - prod
+    #   - staging
+  # Confidence thresholds for autonomous execution
+  confidenceThresholdAutonomous: 0.92
+  confidenceThresholdHumanReview: 0.70
+  # Panic-button thresholds (Layer 6 edge case #6)
+  panicCpuThresholdPct: 95.0
+  panicConnectionsThreshold: 9000
+  # LLM settings — Sentinel uses the OpenAI Python SDK with AsyncOpenAI(base_url=...),
+  # so ANY OpenAI-compatible endpoint works.
+  #
+  # Pick a provider by setting `provider`. Sentinel will auto-configure the
+  # correct base URL. Supported:
+  #   - openai     (https://api.openai.com/v1)
+  #   - zai        (https://api.z.ai/api/paas/v4) — DEFAULT
+  #   - gemini     (https://generativelanguage.googleapis.com/v1beta/openai)
+  #   - ollama     (http://ollama:11434/v1)
+  #   - vllm       (http://vllm:8000/v1)
+  #   - litellm    (http://litellm:4000/v1) — use this for Anthropic, Bedrock,
+  #                 or any non-OpenAI provider (LiteLLM proxies the call)
+  #   - azure      (set baseUrl explicitly to https://<resource>.openai.azure.com)
+  #   - custom     (set baseUrl explicitly)
+  #
+  # For Anthropic: Anthropic has NO native OpenAI-compatible endpoint.
+  # Run LiteLLM as a sidecar or separate service:
+  #   docker run -p 4000:4000 -e ANTHROPIC_API_KEY=sk-ant-xxx \
+  #     ghcr.io/berriai/litellm:main-latest --model claude-3-5-sonnet-20241022
+  # Then set provider=litellm and fastModel/frontierModel to the LiteLLM model names.
+  llm:
+    provider: "zai"
+    baseUrl: ""        # if empty, derived from provider
+    apiKey: ""
+    fastModel: "glm-4-flash"
+    frontierModel: "glm-4.5"
+  # Slack webhook for governance approvals + terraform plan notifications
+  approvalWebhookUrl: ""
+  tfSlackWebhook: ""
+
+# Per-service configuration
+core:
+  enabled: true
+  image: sentinel-core
+  tag: "latest"
+  replicas: 1
+  resources:
+    requests: { cpu: 200m, memory: 512Mi }
+    limits: { cpu: 2000m, memory: 2Gi }
+
+ingestion:
+  enabled: true
+  image: sentinel-ingestion
+  tag: "latest"
+  replicas: 1
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: 500m, memory: 512Mi }
+  env:
+    prometheusUrl: ""    # e.g. http://prometheus-server.monitoring.svc
+    lokiUrl: ""
+    jaegerUrl: ""
+
+detection:
+  enabled: true
+  image: sentinel-detection
+  tag: "latest"
+  replicas: 1
+  resources:
+    requests: { cpu: 200m, memory: 512Mi }
+    limits: { cpu: 1000m, memory: 1Gi }
+
+reasoning:
+  enabled: true
+  image: sentinel-reasoning
+  tag: "latest"
+  replicas: 1
+  resources:
+    requests: { cpu: 200m, memory: 512Mi }
+    limits: { cpu: 2000m, memory: 2Gi }
+
+safety:
+  enabled: true
+  image: sentinel-safety
+  tag: "latest"
+  replicas: 1
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: 500m, memory: 512Mi }
+
+execution:
+  enabled: true
+  image: sentinel-execution
+  tag: "latest"
+  replicas: 1
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: 500m, memory: 512Mi }
+
+feedback:
+  enabled: true
+  image: sentinel-feedback
+  tag: "latest"
+  replicas: 1
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: 500m, memory: 512Mi }
+
+operator:
+  enabled: true
+  image: sentinel-operator
+  tag: "latest"
+  replicas: 1
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { cpu: 500m, memory: 256Mi }
+
+ui:
+  enabled: true
+  image: sentinel-ui
+  tag: "latest"
+  replicas: 1
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { cpu: 500m, memory: 512Mi }
+  # Auth: disabled (default, dev only) | credentials (shared password) | github (GitHub OAuth + org check)
+  # WARNING: chart refuses to install with mode=disabled if ingress.enabled=true
+  auth:
+    mode: "disabled"
+    password: ""           # for mode=credentials
+    githubClientId: ""     # for mode=github
+    githubClientSecret: "" # for mode=github
+    githubOrg: ""          # only members of this org can sign in
+    nextauthSecret: ""     # required for credentials/github modes — `openssl rand -base64 32`
+
+# Sandbox (canary image verification)
+sandbox:
+  enabled: true  # Set to false to skip sandbox verification entirely
+
+# OPA sidecar — runs the governance policies
+opa:
+  enabled: true
+  image: openpolicyagent/opa
+  tag: "1.0.0-static"
+  port: 8181
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { cpu: 200m, memory: 256Mi }
+
+# Infrastructure dependencies (toggle off if you bring your own)
+# Note: full postgres configuration (including backup settings) is below —
+# see the second `postgres:` block. Don't add another one here.
+kafka:
+  # Disabled in core mode (default). Set to true ONLY if mode=distributed.
+  enabled: false
+  bootstrapServers: "sentinel-kafka-bootstrap:9092"
+  topicPrefix: "sentinel"
+  replicas: 3
+  schemaRegistry:
+    enabled: true
+    image: confluentinc/cp-schema-registry
+    tag: "7.7.0"
+    port: 8081
+
+weaviate:
+  enabled: true
+  # Defaults to the Weaviate Helm chart values
+  storage:
+    size: 20Gi
+
+# Service account + RBAC
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+rbac:
+  create: true
+  # Operator needs cluster-wide read on pods/deployments/events + write on
+  # the SentinelIncident CRD. Tighten in production if needed.
+  clusterScope: true
+
+# Ingress for the UI
+ingress:
+  enabled: false
+  className: nginx
+  annotations: {}
+  hosts:
+    - host: sentinel.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# Node selector / tolerations / affinity (applied to all services)
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# NetworkPolicy — deny-by-default, only allow Sentinel namespace + needed egress
+networkPolicy:
+  enabled: false  # set to true in production
+
+# Postgres HA — production should use 2+ replicas + backups
+postgres:
+  enabled: true
+  auth:
+    username: sentinel
+    password: sentinel  # CHANGE IN PRODUCTION
+    database: sentinel
+  primary:
+    persistence:
+      size: 10Gi
+  # HA settings (uncomment for production)
+  # architecture: replication
+  # readReplicas:
+  #   replicaCount: 1
+  # Backup CronJob — runs pg_dump every 6 hours, uploads to S3
+  backup:
+    enabled: false  # set to true in production
+    schedule: "0 */6 * * *"
+    s3Bucket: ""
+    s3Prefix: "sentinel-backups"
+    awsAccessKeyId: ""
+    awsSecretAccessKey: ""

@@ -1,0 +1,29 @@
+apiVersion: v2
+name: sentinel
+description: Sentinel — The Autonomous AI Site Reliability Engineer. Detect, diagnose, fix, verify.
+type: application
+version: 1.5.43
+appVersion: "1.5.43"
+home: https://github.com/karimzakzoukz/sentinel
+sources:
+  - https://github.com/karimzakzoukz/sentinel
+maintainers:
+  - name: Sentinel
+keywords:
+  - sre
+  - ai
+  - automation
+  - kubernetes
+  - observability
+  - self-healing
+dependencies:
+  - name: strimzi-kafka-operator
+    version: "0.43.0"
+    repository: "https://strimzi.io/charts/"
+    condition: kafka.enabled
+    optional: true
+  - name: weaviate
+    version: "17.8.2"
+    repository: "https://weaviate.github.io/weaviate-helm"
+    condition: weaviate.enabled
+    optional: true
