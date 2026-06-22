@@ -1,9 +1,9 @@
 apiVersion: v2
 name: sentinel
-description: Sentinel — The Autonomous AI Site Reliability Engineer. Detect, diagnose, fix, verify.
+description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
 type: application
-version: 2.0.1
-appVersion: "2.0.1"
+version: 3.0.1
+appVersion: "3.0.1"
 home: https://github.com/karimzakzoukz/sentinel
 sources:
   - https://github.com/karimzakzoukz/sentinel
@@ -14,11 +14,6 @@ keywords:
   - ai
   - automation
   - kubernetes
-  - observability
   - self-healing
-dependencies:
-  - name: weaviate
-    version: "17.8.2"
-    repository: "https://weaviate.github.io/weaviate-helm"
-    condition: weaviate.enabled
-    optional: true
+# No subchart dependencies — v3 is a single binary with embedded SQLite.
+# No Weaviate, no Postgres, no Kafka, no operator.

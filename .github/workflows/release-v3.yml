@@ -35,18 +35,16 @@ jobs:
         with:
           go-version: "1.25"
           cache: true
-          cache-dependency-path: v3/go.sum
+          cache-dependency-path: go.sum
 
       - uses: azure/setup-helm@v4
         with:
           version: v3.16.3
 
       - name: Go tests (with race detector)
-        working-directory: v3
         run: go test ./... -race -count=1
 
       - name: Build binary (verify it compiles + check size)
-        working-directory: v3
         run: |
           go build -ldflags='-s -w' -trimpath -o /tmp/sentinel ./cmd/sentinel
           ls -lh /tmp/sentinel
@@ -54,11 +52,11 @@ jobs:
           /tmp/sentinel --help 2>&1 | head -5 || true
 
       - name: Helm lint
-        run: helm lint v3/chart/
+        run: helm lint chart/
 
       - name: Helm template (verify chart renders)
         run: |
-          helm template test v3/chart/ > /tmp/rendered.yaml
+          helm template test chart/ > /tmp/rendered.yaml
           test $(grep -c "kind:" /tmp/rendered.yaml) -ge 6
 
   build-and-push:
@@ -100,7 +98,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: v3/Dockerfile
+          file: Dockerfile
           push: true
           tags: |
             ${{ env.DH_REGISTRY }}/${{ env.DH_OWNER }}/sentinel-v3:${{ steps.version.outputs.version }}
@@ -118,7 +116,7 @@ jobs:
 
       - name: Package chart
         run: |
-          helm package v3/chart/ -d /tmp/ --version ${{ steps.version.outputs.version }} --app-version ${{ steps.version.outputs.version }}
+          helm package chart/ -d /tmp/ --version ${{ steps.version.outputs.version }} --app-version ${{ steps.version.outputs.version }}
           ls -lh /tmp/sentinel-*.tgz
 
       - name: Create GitHub Release

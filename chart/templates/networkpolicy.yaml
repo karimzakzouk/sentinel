@@ -1,30 +1,20 @@
-{{- if .Values.networkPolicy.enabled -}}
-# Deny-by-default NetworkPolicy for the Sentinel namespace.
-# Only allows:
-#   - Ingress from within the Sentinel namespace
-#   - Egress to: K8s API, DNS, GitHub API, LLM API, configured observability,
-#     S3 (for backups), and the Sentinel namespace itself
+{{/* NetworkPolicy — deny by default, allow only needed egress */}}
+{{- if .Values.networkPolicy.enabled }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ include "sentinel.fullname" . }}-deny-by-default
+  name: {{ .Release.Name }}
   namespace: {{ .Release.Namespace }}
-  labels:
-    {{- include "sentinel.labels" . | nindent 4 }}
 spec:
   podSelector:
     matchLabels:
-      app.kubernetes.io/part-of: sentinel
+      app.kubernetes.io/name: sentinel
   policyTypes:
     - Ingress
     - Egress
   ingress:
-    # Allow from within the same namespace
     - from:
-        - podSelector:
-            matchLabels:
-              app.kubernetes.io/part-of: sentinel
-    # Allow from the ingress controller (for the UI)
+        - podSelector: {}
     {{- if .Values.ingress.enabled }}
     - from:
         - namespaceSelector:
@@ -40,7 +30,7 @@ spec:
           port: 53
         - protocol: TCP
           port: 53
-    # K8s API server
+    # K8s API + HTTPS (GitHub, LLM, Docker Hub)
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0
@@ -49,17 +39,4 @@ spec:
           port: 443
         - protocol: TCP
           port: 6443
-    # GitHub API (443)
-    - to:
-        - ipBlock:
-            cidr: 0.0.0.0/0
-      ports:
-        - protocol: TCP
-          port: 443
-    # LLM API (443) — same as above, covered by the 443 rule
-    # Within-namespace communication (Kafka, Postgres, Weaviate, OPA, etc.)
-    - to:
-        - podSelector:
-            matchLabels:
-              app.kubernetes.io/part-of: sentinel
 {{- end }}
