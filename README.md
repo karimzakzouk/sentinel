@@ -1,57 +1,83 @@
-# Sentinel v3
+<div align="center">
 
-**The Autonomous AI SRE — rewritten in Go.**
+# Sentinel
 
-One binary. One pod. ~25MB image. Same product.
+**The Autonomous AI SRE.**
 
----
+Detect. Diagnose. Fix. Verify. — autonomously.
 
-## What's new in v3
+[![Go Version](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go)]()
+[![Image Size](https://img.shields.io/badge/image-~28MB-success)]()
+[![Pods](https://img.shields.io/badge/pods-1-blue)]()
+[![License](https://img.shields.io/badge/license-MIT-green)]()
 
-v3 is a complete rewrite of Sentinel from Python to Go. The goal: make it **the smallest serious AIOps tool in existence**.
-
-| Metric | v2 (Python) | v3 (Go) | Improvement |
-|--------|-------------|---------|-------------|
-| Image size | 600MB | **~25MB** | 24x smaller |
-| Pods | 4 (core + postgres + weaviate + ui) | **1** | 4x fewer |
-| RAM at idle | ~1.5GB | **~50MB** | 30x less |
-| Disk | ~30GB | **~5GB** | 6x less |
-| Cold start | 5–10s | **<1s** | 10x faster |
-| Dependencies | 50+ Python packages | **6 Go modules** | 8x fewer |
-
-### What we killed
-
-- **Postgres pod** → SQLite (one file, embedded in the binary's pod)
-- **Weaviate pod** → pgvector-style vector search in Go (bag-of-words, zero deps)
-- **UI pod** → HTTP API + CLI (Slack integration coming)
-- **OPA sidecar** → 5 embedded Go if-statements (same rules, no JVM)
-- **Kafka** → already gone in v2, stayed gone
-- **Operator (kopf)** → already gone in v2, replaced by real K8s Watch
-- **LangGraph** → plain Go state machine (4 nodes, 200 lines)
-- **PyGithub** → direct net/http calls
-- **sqlalchemy** → modernc.org/sqlite (pure Go, no CGO)
-
-### What we kept
-
-The full pipeline. v3 does everything v2 did:
-- Watch a K8s cluster for `SentinelIncident` CRs (real Watch stream, ~1s detection)
-- Fetch real pod logs from crashing pods
-- Run the 4-agent reasoning pipeline (Investigator → Evidence Gatherer → Analyst → Fix Proposer)
-- Embedded safety policy (allow / require_human / deny)
-- Open PRs via the GitHub API
-- Build canary images with Kaniko
-- 3-level sandbox verification (pod ready → endpoints respond → original error gone)
-- Beta-distribution confidence tracker (Bayesian priors)
-- Vector-similarity RAG over past incidents
-
-### What's NOT in v3.0 (coming in v3.1)
-
-- The CLI (`sentinel incidents list`, etc.) — the HTTP API works, CLI is next
-- Slack webhook integration — the API has the hooks, Slack is next
-- Real embedding model (v3.0 uses bag-of-words; v3.1 will use sentence-transformers via ONNX)
-- Prometheus + Loki evidence queries (v3.0 returns "not configured"; v3.1 wires observability stack)
+</div>
 
 ---
+
+Sentinel is an autonomous AI Site Reliability Engineer that plugs into any Kubernetes cluster, detects incidents, diagnoses them with an LLM, writes fixes, tests them in a sandbox, and opens Pull Requests — all on its own.
+
+**One binary. One pod. ~28MB image. ~50MB RAM.**
+
+## How it works
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        Sentinel v3 Pod                          │
+│                                                                 │
+│  ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐  │
+│  │ Watcher  │───▶│ Agents   │───▶│ Safety   │───▶│Execution │  │
+│  │ (K8s     │    │ (4-agent │    │ (embedded│    │ (GitHub +│  │
+│  │  Watch)  │    │  loop)   │    │  policy) │    │  sandbox)│  │
+│  └──────────┘    └──────────┘    └──────────┘    └──────────┘  │
+│       │                                              │           │
+│       ▼                                              ▼           │
+│  ┌──────────┐                                 ┌──────────┐      │
+│  │  Clone   │                                 │   PR     │      │
+│  │  repo    │                                 │  opened  │      │
+│  │ (go-git) │                                 └──────────┘      │
+│  └──────────┘                                                   │
+│       │                                                         │
+│       ▼                                                         │
+│  ┌──────────────────────────────────────────────────────────┐  │
+│  │  SQLite (incidents + events + beta priors + vectors)     │  │
+│  └──────────────────────────────────────────────────────────┘  │
+│                                                                 │
+│  ┌──────────────────────────────────────────────────────────┐  │
+│  │  HTTP API (healthz, incidents, settings, investigate)    │  │
+│  └──────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### The 6-layer pipeline
+
+1. **Watch** — Real Kubernetes `Watch()` stream on `SentinelIncident` CRs. Detection latency: ~1 second.
+2. **Investigate** — Two-round agentic loop: clone the repo (go-git, pure Go), LLM emits search queries, we run them locally (regexp), LLM forms hypotheses from the results. Same pattern as SWE-agent / OpenHands / Aider.
+3. **Gather Evidence** — LLM-generated queries run against the K8s API (events, pods, deployments) in parallel.
+4. **Analyze** — Pure math: falsification + Bayes' rule + Beta-distribution priors. Picks the survivor hypothesis.
+5. **Govern** — 5 embedded Go rules (production namespace, high-risk service, blast radius, schema-migration rollback block, confidence threshold). No OPA sidecar.
+6. **Execute** — 4-phase code fix: prepare branch → Kaniko build canary → 3-level sandbox verification (pod ready → endpoints respond → original error gone) → open PR with `sandbox-verified` label.
+
+### The agent loop (what makes it accurate)
+
+Sentinel doesn't guess which files to look at. It does what real coding agents do:
+
+```
+1. Clone the repo locally (go-git, ~2 seconds)
+2. Walk the file tree (filtered: no node_modules, vendor, .git, etc.)
+3. LLM Round 1: "Given these logs + this file tree, what should I search for?"
+   → LLM emits 3-8 search queries: ["DB_PASSWORD", "KeyError", "def main"]
+4. Run the searches locally (Go regexp over the cloned files)
+   → instant, no API calls, no rate limits
+5. LLM Round 2: "Given these search results, what's the root cause + which files should I read?"
+   → LLM returns hypotheses + file paths
+6. Read those files from disk (zero API calls)
+7. Pass source code to the Fix Proposer → writes the patch
+8. Open PR with sandbox-verified label
+9. Clean up the cloned repo
+```
+
+This is the **agentic loop** — the same pattern SWE-agent, OpenHands, and Aider use. It works for any repo, any language, any layout, because the LLM searches by content, not by filename.
 
 ## Install
 
@@ -59,7 +85,7 @@ The full pipeline. v3 does everything v2 did:
 helm repo add sentinel https://karimzakzoukz.github.io/sentinel/
 helm repo update
 
-helm install sentinel sentinel/sentinel --version 3.0.0 \
+helm install sentinel sentinel/sentinel --version 3.0.2 \
   --namespace sentinel --create-namespace \
   --set sentinel.githubToken=YOUR_GITHUB_TOKEN \
   --set sentinel.llm.apiKey=YOUR_LLM_API_KEY \
@@ -67,28 +93,11 @@ helm install sentinel sentinel/sentinel --version 3.0.0 \
   --set 'sentinel.rbac.writeNamespaces={sim}'
 ```
 
-That's it. One pod. ~25MB image. ~50MB RAM. Ready in <1 second.
+That's it. One pod. ~28MB image. ~50MB RAM. Ready in <1 second.
 
 ```bash
-kubectl -n sentinel get pods -w
+kubectl -n sentinel get pods
 # sentinel-xxx   1/1 Running   0   1s
-```
-
-## Verify it works
-
-```bash
-# Health check
-kubectl -n sentinel port-forward svc/sentinel 8000:8000 &
-curl http://localhost:8000/healthz
-# → {"status":"ok","service":"core","version":"3.0.0"}
-
-curl http://localhost:8000/readyz
-# → {"status":"ready","ready":true}
-
-curl http://localhost:8000/incidents
-# → []
-
-kill %1
 ```
 
 ## Trigger an incident
@@ -103,102 +112,79 @@ metadata:
   name: test-crashloop
   namespace: sim
 spec:
-  service: sentinel-sim
+  service: my-app
   namespace: sim
-  reason: CrashLoopBackOff detected on sentinel-sim
+  reason: CrashLoopBackOff detected on my-app
   trigger: manual
+  repo: myorg/my-app
 EOF
 ```
 
-Watch Sentinel pick it up (~1 second) and run the full pipeline:
+Watch Sentinel investigate, diagnose, build a canary, verify it in a sandbox, and open a PR — all autonomously:
 
 ```bash
 kubectl -n sentinel logs -f deploy/sentinel
-# [investigation] sim/test-crashloop — service=sentinel-sim
-# [investigation] Phase 1: preparing fix branch...
-# [investigation] Phase 2: building canary image with Kaniko...
-# [investigation] Phase 3: running sandbox verification...
-# [investigation] Phase 4: opening PR...
-# [investigation] <id> resolved (status=verified, alpha=2, beta=1)
 ```
 
----
+## Numbers
 
-## Architecture (v3)
+| Metric | Sentinel v3 | Typical AIOps tool |
+|--------|-------------|-------------------|
+| Image size | **~28MB** | 1–5GB |
+| Pods | **1** | 5–20 |
+| RAM at idle | **~50MB** | 2–8GB |
+| Disk | **~5GB** | 50–200GB |
+| Cold start | **<1s** | 30–120s |
+| Dependencies | **6 Go modules** | 50+ packages |
+| External services | **0** (SQLite embedded) | Postgres, Redis, Kafka, ES... |
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                   Sentinel v3 Pod (~25MB)                    │
-│                                                              │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │  Go binary (sentinel)                                │   │
-│  │                                                       │   │
-│  │  ┌────────────┐  ┌────────────┐  ┌────────────┐     │   │
-│  │  │  Watcher   │→│  Agents    │→│  Safety    │     │   │
-│  │  │  (real     │  │  (4-agent  │  │  (embedded │     │   │
-│  │  │  Watch)    │  │  pipeline) │  │  policy)   │     │   │
-│  │  └────────────┘  └────────────┘  └────────────┘     │   │
-│  │         ↓                                    ↓        │   │
-│  │  ┌────────────┐                     ┌────────────┐    │   │
-│  │  │  SQLite    │←───────────────────│  Execution │    │   │
-│  │  │  (incidents│                     │  (GH+K8s+  │    │   │
-│  │  │   + vectors│                     │   sandbox+ │    │   │
-│  │  │   + beta)  │                     │   kaniko)  │    │   │
-│  │  └────────────┘                     └────────────┘    │   │
-│  │                                                       │   │
-│  │  ┌──────────────────────────────────────────────┐    │   │
-│  │  │  HTTP API (healthz, incidents, settings)     │    │   │
-│  │  └──────────────────────────────────────────────┘    │   │
-│  └──────────────────────────────────────────────────────┘   │
-│                                                              │
-│  ┌──────────────┐                                           │
-│  │  PVC (5GB)   │  ← SQLite DB + incident memory            │
-│  └──────────────┘                                           │
-└─────────────────────────────────────────────────────────────┘
-```
+## Configuration
 
-### Code structure
+### LLM providers
 
-```
-v3/
-  cmd/sentinel/main.go           # entrypoint (~250 lines)
-  internal/
-    schemas/                     # all types (Pydantic → Go structs)
-    config/                      # env var loading + LLM provider resolution
-    llm/                         # OpenAI-compatible client (net/http, no SDK)
-    k8s/                         # workload annotation lookup, pod logs, CR status
-    watcher/                     # real K8s Watch stream on SentinelIncident CRD
-    agents/                      # 4-agent pipeline + state machine
-      pipeline.go                #   wires agents + handles rewinds
-      investigator.go            #   forms hypotheses from logs + source code
-      evidence_gatherer.go       #   queries K8s API to test hypotheses
-      analyst.go                 #   Bayes + Beta priors → root cause
-      fix_proposer.go            #   root cause → FixProposal (LLM)
-    safety/                      # embedded policy (5 if-statements, replaces OPA)
-    executors/                   # GitHub PRs, K8s patches, sandbox, Kaniko
-      github.go                  #   opens PRs via REST API
-      kubernetes.go              #   restart/scale/rollback
-      sandbox.go                 #   3-level verification
-      kaniko.go                  #   builds canary images
-    feedback/                    # SQLite store (replaces Postgres + Weaviate)
-      store.go                   #   incidents + events + beta + vector search
-    api/                         # HTTP API (replaces UI pod)
-  chart/                         # single-pod Helm chart
-  Dockerfile                     # distroless static, ~25MB
+Sentinel uses the OpenAI-compatible API. Any provider works:
+
+| Provider | `llm.provider` | `llm.baseUrl` |
+|----------|----------------|---------------|
+| OpenAI | `openai` | (auto) |
+| Google Gemini | `gemini` | (auto) |
+| z.ai GLM | `zai` | (auto) |
+| OpenRouter | `custom` | `https://openrouter.ai/api/v1` |
+| Ollama (local) | `ollama` | (auto) |
+| vLLM | `vllm` | (auto) |
+| LiteLLM proxy | `litellm` | (auto) |
+| Any OpenAI-compatible | `custom` | your URL |
+
+### Workload annotations
+
+Annotate your Deployments/StatefulSets so Sentinel knows where to find the source:
+
+```yaml
+metadata:
+  annotations:
+    sentinel.io/repo: myorg/my-app          # GitHub repo (required for code fixes)
+    sentinel.io/runbook: https://wiki/...   # Runbook URL (optional)
+    sentinel.io/team: platform               # Owning team (optional)
+    sentinel.io/ignore: "true"               # Opt out of Sentinel (optional)
 ```
 
----
+### RBAC
+
+Sentinel needs cluster-wide read on pods/deployments/events to investigate incidents. By default it can't write anywhere — set `sentinel.rbac.writeNamespaces` to allow fixes:
+
+```bash
+--set 'sentinel.rbac.writeNamespaces={sim,staging}'   # can fix in sim + staging
+--set 'sentinel.rbac.writeNamespaces={prod}'          # can fix in prod (be careful)
+```
 
 ## Development
 
 ```bash
 git clone https://github.com/karimzakzoukz/sentinel.git
 cd sentinel
-git checkout v3
 
 # Build
-cd v3
-go build ./cmd/sentinel
+go build -ldflags='-s -w' -trimpath -o sentinel ./cmd/sentinel
 
 # Test
 go test ./... -race
@@ -210,7 +196,33 @@ go test ./... -race
 helm lint chart/
 ```
 
----
+## Architecture
+
+```
+sentinel/
+├── cmd/sentinel/          # Entrypoint (~250 lines)
+├── internal/
+│   ├── schemas/           # All types (Pydantic → Go structs)
+│   ├── config/            # Env var loading + LLM provider resolution
+│   ├── llm/               # OpenAI-compatible client (net/http, no SDK)
+│   ├── k8s/               # Workload annotation lookup, pod logs, CR status
+│   ├── watcher/           # Real K8s Watch stream on SentinelIncident CRD
+│   ├── repo/              # go-git cloner + local search engine
+│   ├── agents/            # 4-agent pipeline + state machine
+│   │   ├── pipeline.go    #   Wires agents + handles rewinds
+│   │   ├── investigator.go#   Two-round agentic loop (clone → search → read)
+│   │   ├── evidence_gatherer.go # K8s API queries in parallel
+│   │   ├── analyst.go     # Bayes + Beta priors → root cause
+│   │   └── fix_proposer.go# Root cause → FixProposal (LLM)
+│   ├── safety/            # Embedded policy (5 if-statements, replaces OPA)
+│   ├── executors/         # GitHub PRs, K8s patches, sandbox, Kaniko
+│   ├── feedback/          # SQLite store (incidents + events + beta + vectors)
+│   └── api/               # HTTP API
+├── chart/                 # Single-pod Helm chart
+├── Dockerfile             # Distroless static, ~28MB
+├── go.mod
+└── README.md
+```
 
 ## License
 

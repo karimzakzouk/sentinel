@@ -121,8 +121,12 @@ func (c *Client) LookupWorkloadAnnotations(ctx context.Context, service, namespa
 }
 
 // FetchCrashingPodLogs returns the last 4KB of logs from the most-crashing pod
-// matching `service` in `namespace`. Tries previous container logs first
-// (the crash output), falls back to current logs.
+// matching `service` in `namespace`. Retries up to 3 times with delays because
+// K8s sometimes returns "unable to retrieve container logs for containerd://..."
+// when the container just restarted and logs aren't available yet.
+//
+// Tries previous container logs first (the crash output), then current logs.
+// Returns the first non-empty, non-error log content.
 func (c *Client) FetchCrashingPodLogs(ctx context.Context, service, namespace string) (string, error) {
         // Find pods matching the service label
         pods, err := c.clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
@@ -165,23 +169,68 @@ func (c *Client) FetchCrashingPodLogs(ctx context.Context, service, namespace st
                 return "", nil
         }
 
-        // Try previous container logs first (the crash output)
-        limitBytes := int64(4096)
-        opts := &corev1.PodLogOptions{
-                Previous:   true,
-                LimitBytes: &limitBytes,
-        }
-        if logs, err := c.clientset.CoreV1().Pods(namespace).GetLogs(worstPod.Name, opts).Do(ctx).Raw(); err == nil {
-                return string(logs), nil
-        }
+        // Retry log fetching up to 3 times with 2s delays.
+        // K8s sometimes returns "unable to retrieve container logs for containerd://..."
+        // immediately after a restart; waiting 2s usually fixes it.
+        limitBytes := int64(8192) // 8KB — enough for a full stack trace
+        for attempt := 0; attempt < 3; attempt++ {
+                // Try previous container logs first (the crash output)
+                opts := &corev1.PodLogOptions{
+                        Previous:   true,
+                        LimitBytes: &limitBytes,
+                }
+                if logs, err := c.clientset.CoreV1().Pods(namespace).GetLogs(worstPod.Name, opts).Do(ctx).Raw(); err == nil {
+                        s := string(logs)
+                        if isValidLogContent(s) {
+                                return s, nil
+                        }
+                }
 
-        // Fall back to current logs
-        opts.Previous = false
-        if logs, err := c.clientset.CoreV1().Pods(namespace).GetLogs(worstPod.Name, opts).Do(ctx).Raw(); err == nil {
-                return string(logs), nil
+                // Fall back to current logs
+                opts.Previous = false
+                if logs, err := c.clientset.CoreV1().Pods(namespace).GetLogs(worstPod.Name, opts).Do(ctx).Raw(); err == nil {
+                        s := string(logs)
+                        if isValidLogContent(s) {
+                                return s, nil
+                        }
+                }
+
+                // Wait before retrying
+                if attempt < 2 {
+                        select {
+                        case <-ctx.Done():
+                                return "", ctx.Err()
+                        case <-time.After(2 * time.Second):
+                        }
+                }
         }
 
         return "", nil
+}
+
+// isValidLogContent returns false if the log content is empty or is just the
+// K8s error message "unable to retrieve container logs for containerd://...".
+// This happens when the container just restarted and logs aren't available yet.
+func isValidLogContent(s string) bool {
+        if strings.TrimSpace(s) == "" {
+                return false
+        }
+        // K8s returns this error string when containerd logs aren't ready yet
+        if strings.Contains(s, "unable to retrieve container logs for containerd://") {
+                // But it's still valid if there's other content after the error
+                // (some runtimes prefix the error then include the actual logs)
+                lines := strings.Split(s, "\n")
+                realContent := 0
+                for _, line := range lines {
+                        line = strings.TrimSpace(line)
+                        if line == "" || strings.Contains(line, "unable to retrieve container logs") {
+                                continue
+                        }
+                        realContent++
+                }
+                return realContent > 0
+        }
+        return true
 }
 
 // GetProdImage returns the current production image for a service by looking
