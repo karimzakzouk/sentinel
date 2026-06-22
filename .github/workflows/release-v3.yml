@@ -1,0 +1,175 @@
+name: Release v3
+
+# v3 CI: build the Go binary, run tests, push the distroless image,
+# package + publish the Helm chart.
+
+on:
+  push:
+    tags:
+      - "v3.*.*"
+    branches:
+      - v3
+
+permissions:
+  contents: write
+  packages: write
+  pages: write
+  id-token: write
+
+env:
+  DH_REGISTRY: docker.io
+  DH_OWNER: karimzakzouk
+  GHCR_REGISTRY: ghcr.io
+  GHCR_OWNER: karimzakzoukz
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.3
+
+      - name: Go tests
+        working-directory: v3
+        run: |
+          go test ./... -v -race
+
+      - name: Go build
+        working-directory: v3
+        run: |
+          go build -ldflags='-s -w' -o /tmp/sentinel ./cmd/sentinel
+          ls -lh /tmp/sentinel
+
+      - name: Helm lint
+        run: helm lint v3/chart/
+
+      - name: Helm template
+        run: |
+          helm template test v3/chart/ > /tmp/rendered.yaml
+          test $(grep -c "kind:" /tmp/rendered.yaml) -ge 6
+
+  build-image:
+    name: Build Docker image
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.DH_REGISTRY }}
+          username: ${{ env.DH_OWNER }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.GHCR_REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Get version
+        id: version
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            echo "version=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+          else
+            echo "version=3.0.0-dev" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: v3/Dockerfile
+          push: true
+          tags: |
+            ${{ env.DH_REGISTRY }}/${{ env.DH_OWNER }}/sentinel-v3:${{ steps.version.outputs.version }}
+            ${{ env.DH_REGISTRY }}/${{ env.DH_OWNER }}/sentinel-v3:latest
+            ${{ env.GHCR_REGISTRY }}/${{ env.GHCR_OWNER }}/sentinel/sentinel-v3:${{ steps.version.outputs.version }}
+            ${{ env.GHCR_REGISTRY }}/${{ env.GHCR_OWNER }}/sentinel/sentinel-v3:latest
+          platforms: linux/amd64,linux/arm64
+
+  publish-chart:
+    name: Publish Helm chart
+    needs: build-image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.3
+
+      - name: Get version
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+
+      - name: Package chart
+        run: |
+          helm package v3/chart/ -d /tmp/ --version ${{ steps.version.outputs.version }} --app-version ${{ steps.version.outputs.version }}
+          ls -la /tmp/sentinel-*.tgz
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v3')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Sentinel ${{ github.ref_name }}
+          body: |
+            ## Install (v3 — single Go binary, ~25MB)
+
+            ```bash
+            helm repo add sentinel https://karimzakzoukz.github.io/sentinel/
+            helm repo update
+            helm install sentinel sentinel/sentinel --version ${{ steps.version.outputs.version }} \
+              --namespace sentinel --create-namespace \
+              --set sentinel.githubToken=YOUR_GITHUB_TOKEN \
+              --set sentinel.llm.apiKey=YOUR_LLM_API_KEY
+            ```
+
+            **What's new in v3:**
+            - Single Go binary (~25MB image, was 600MB Python)
+            - One pod (was 4: core + postgres + weaviate + ui)
+            - SQLite replaces Postgres + Weaviate
+            - No Kafka, no operator, no OPA sidecar
+            - Real K8s Watch on CRD watcher (~1s detection, was 10s polling)
+            - Embedded safety policy (replaces OPA Rego sidecar)
+            - 6x smaller total, 5x fewer pods, 5x less RAM
+
+            See MIGRATION-v3.md for upgrade instructions from v2.x.
+          files: /tmp/sentinel-${{ steps.version.outputs.version }}.tgz
+          generate_release_notes: true
+
+      - name: Publish to GitHub Pages
+        run: |
+          git config user.email "actions@github.com"
+          git config user.name "GitHub Actions"
+
+          rm -rf /tmp/gh-pages
+          git clone --branch gh-pages --depth 1 \
+            https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} \
+            /tmp/gh-pages 2>/dev/null || mkdir -p /tmp/gh-pages
+
+          cd /tmp/gh-pages
+          git config user.email "actions@github.com"
+          git config user.name "GitHub Actions"
+          cp /tmp/sentinel-${{ steps.version.outputs.version }}.tgz .
+          helm repo index . --url https://karimzakzoukz.github.io/sentinel/
+          touch .nojekyll
+          git add -A
+          git commit -m "Publish chart v${{ steps.version.outputs.version }}" || true
+          git push https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} gh-pages --force

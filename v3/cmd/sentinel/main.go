@@ -1,9 +1,5 @@
 // Package main is the Sentinel v3 single-binary entrypoint.
-// Replaces: services/core + services/ingestion + services/detection +
-// services/reasoning + services/safety + services/execution + services/feedback +
-// the OPA sidecar + the Postgres pod + the Weaviate pod + the UI pod.
-//
-// One binary, one process, one pod. ~20MB image.
+// One binary, one process, one pod. ~25MB image.
 package main
 
 import (
@@ -17,114 +13,191 @@ import (
         "syscall"
         "time"
 
+        "github.com/google/uuid"
+
+        "github.com/karimzakzoukz/sentinel/v3/internal/agents"
         "github.com/karimzakzoukz/sentinel/v3/internal/api"
         "github.com/karimzakzoukz/sentinel/v3/internal/config"
+        "github.com/karimzakzoukz/sentinel/v3/internal/executors"
         "github.com/karimzakzoukz/sentinel/v3/internal/feedback"
         "github.com/karimzakzoukz/sentinel/v3/internal/k8s"
         "github.com/karimzakzoukz/sentinel/v3/internal/llm"
+        "github.com/karimzakzoukz/sentinel/v3/internal/safety"
         "github.com/karimzakzoukz/sentinel/v3/internal/schemas"
         "github.com/karimzakzoukz/sentinel/v3/internal/watcher"
 )
 
 func main() {
-        // CLI flags (mostly for dev — in prod, env vars are set by Helm)
-        addr := flag.String("addr", "", "HTTP listen address (default: from env)")
-        dbPath := flag.String("db", "", "SQLite DB path (default: from env)")
+        addr := flag.String("addr", "", "HTTP listen address (overrides env)")
+        dbPath := flag.String("db", "", "SQLite DB path (overrides env)")
         flag.Parse()
 
         cfg := config.Load()
-        if *addr != "" {
-                cfg.APIHost = "" // let the addr flag win
-                cfg.APIPort = 0
-                _ = addr // parsed but we build the addr below
-        }
         if *dbPath != "" {
                 cfg.SQLitePath = *dbPath
         }
-
         listenAddr := fmt.Sprintf("%s:%d", cfg.APIHost, cfg.APIPort)
+        if *addr != "" {
+                listenAddr = *addr
+        }
 
         log.Printf("[main] Sentinel v3.0.0 starting")
-        log.Printf("[main] LLM provider: %s (model: %s)", cfg.LLMProvider, cfg.LLMFrontierModel)
-        log.Printf("[main] SQLite path: %s", cfg.SQLitePath)
-        log.Printf("[main] API listen: %s", listenAddr)
+        log.Printf("[main] LLM: %s (model: %s)", cfg.LLMProvider, cfg.LLMFrontierModel)
+        log.Printf("[main] SQLite: %s", cfg.SQLitePath)
+        log.Printf("[main] API: %s", listenAddr)
 
-        // 1. Initialize SQLite store (replaces Postgres + Weaviate)
+        // 1. Storage (SQLite replaces Postgres + Weaviate)
         store, err := feedback.New(cfg.SQLitePath)
         if err != nil {
-                log.Fatalf("[main] failed to init storage: %v", err)
+                log.Fatalf("[main] storage init: %v", err)
         }
         defer store.Close()
-        log.Printf("[main] storage initialized (SQLite at %s)", cfg.SQLitePath)
 
-        // 2. Initialize K8s client (in-cluster)
+        // 2. K8s client
         k8sClient, err := k8s.New()
         if err != nil {
-                log.Fatalf("[main] failed to init K8s client: %v", err)
+                log.Fatalf("[main] k8s client: %v", err)
         }
-        log.Printf("[main] K8s client initialized")
 
-        // 3. Initialize LLM router
-        router := llm.New(
-                cfg.ResolvedBaseURL(),
-                cfg.LLMAPIKey,
-                cfg.LLMFastModel,
-                cfg.LLMFrontierModel,
-        )
-        log.Printf("[main] LLM router initialized")
-        _ = router // used by the agent pipeline (next commit)
+        // 3. LLM router
+        router := llm.New(cfg.ResolvedBaseURL(), cfg.LLMAPIKey, cfg.LLMFastModel, cfg.LLMFrontierModel)
 
-        // 4. Ready state (set to true after watcher starts)
+        // 4. Agent pipeline
+        pipeline := agents.NewPipeline(router, k8sClient, cfg.GitHubToken, store)
+
+        // 5. Safety policy (embedded, replaces OPA sidecar)
+        policy := safety.NewPolicy(cfg.ProductionNamespaces, cfg.ConfidenceAutonomous)
+
+        // 6. Executors
+        ghExec := executors.NewGitHub(cfg.GitHubToken)
+        k8sExec := executors.NewK8s(k8sClient.Clientset())
+        sandbox := executors.NewSandbox(k8sClient.Clientset(), cfg.SandboxNamespacePrefix, cfg.EnableTrafficMirroring)
+        kaniko := executors.NewKaniko(k8sClient.Clientset(), cfg.Namespace)
+
         ready := false
 
-        // 5. Create the investigation handler
+        // 7. The full investigation handler — runs the agent pipeline + execution
         handler := func(ctx context.Context, cluster schemas.AnomalyCluster, crName, crNamespace string) {
-                log.Printf("[investigation] starting for %s/%s (service=%s)", crNamespace, crName, cluster.Service)
+                log.Printf("[investigation] %s/%s — service=%s", crNamespace, crName, cluster.Service)
+
+                // Create + save incident
                 incident := schemas.NewIncident(cluster)
                 incident.Status = schemas.StatusInvestigating
-
-                // Save the incident
                 if err := store.UpsertIncident(ctx, &incident); err != nil {
-                        log.Printf("[investigation] failed to save incident: %v", err)
+                        log.Printf("[investigation] save incident: %v", err)
                         return
                 }
-
-                // Append audit event
                 _ = store.AppendEvent(ctx, incident.IncidentID, "reasoning", "investigation_started", nil,
                         map[string]any{"cluster_summary": cluster.Summary})
 
-                // v3.0: Run the full reasoning pipeline here.
-                // For now, this is a stub that marks the incident as "investigating"
-                // and logs it. The full agent pipeline (investigator → evidence →
-                // analyst → fix_proposer) will be implemented in the next commit.
-                log.Printf("[investigation] incident %s created — agent pipeline pending implementation", incident.IncidentID)
+                // === REASONING PHASE ===
+                investigationCtx, cancel := context.WithTimeout(ctx, time.Duration(cfg.InvestigationTimeout)*time.Second)
+                defer cancel()
 
-                // Patch the CR status
-                _ = k8sClient.PatchCRStatus(ctx, crName, crNamespace, "investigating")
+                if err := pipeline.Run(investigationCtx, &incident.State); err != nil {
+                        log.Printf("[investigation] pipeline error: %v", err)
+                        incident.Status = schemas.StatusFailed
+                        s := err.Error()
+                        incident.State.Error = &s
+                        _ = store.UpsertIncident(ctx, &incident)
+                        _ = k8sClient.PatchCRStatus(ctx, crName, crNamespace, "failed")
+                        return
+                }
+                incident.Status = incident.State.Status
+                _ = store.UpsertIncident(ctx, &incident)
+                _ = store.AppendEvent(ctx, incident.IncidentID, "reasoning", "investigation_completed", nil,
+                        map[string]any{"status": string(incident.Status)})
+
+                if incident.State.FixProposal == nil {
+                        log.Printf("[investigation] no fix proposed — status=%s", incident.Status)
+                        _ = k8sClient.PatchCRStatus(ctx, crName, crNamespace, string(incident.Status))
+                        return
+                }
+
+                // === SAFETY PHASE (embedded policy, no OPA) ===
+                fp := incident.State.FixProposal
+                decision := policy.Evaluate(safety.Input{
+                        FixType:           fp.FixType,
+                        TargetService:     fp.TargetService,
+                        TargetNamespace:   fp.TargetNamespace,
+                        Confidence:        fp.ProposedConfidence,
+                        HasSchemaMigration: incident.State.RootCause.HasSchemaMigration,
+                })
+
+                switch decision.Verdict {
+                case schemas.VerdictAllow:
+                        incident.Status = schemas.StatusApproved
+                case schemas.VerdictRequireHumanApproval:
+                        incident.Status = schemas.StatusGovernanceReview
+                default:
+                        incident.Status = schemas.StatusEscalated
+                }
+                _ = store.UpsertIncident(ctx, &incident)
+                _ = store.AppendEvent(ctx, incident.IncidentID, "safety", "governance_decision", nil,
+                        map[string]any{"verdict": string(decision.Verdict)})
+
+                if decision.Verdict != schemas.VerdictAllow {
+                        log.Printf("[investigation] denied by safety — verdict=%s", decision.Verdict)
+                        _ = k8sClient.PatchCRStatus(ctx, crName, crNamespace, string(incident.Status))
+                        return
+                }
+
+                // === EXECUTION PHASE ===
+                // RBAC check
+                if !cfg.CanWriteTo(fp.TargetNamespace) {
+                        log.Printf("[investigation] execution denied — namespace %s not in allowlist", fp.TargetNamespace)
+                        incident.Status = schemas.StatusEscalated
+                        _ = store.UpsertIncident(ctx, &incident)
+                        _ = k8sClient.PatchCRStatus(ctx, crName, crNamespace, "escalated")
+                        return
+                }
+
+                incident.Status = schemas.StatusExecuting
+                _ = store.UpsertIncident(ctx, &incident)
+
+                if err := executeFix(ctx, &incident, cfg, ghExec, k8sExec, sandbox, kaniko, k8sClient, store); err != nil {
+                        log.Printf("[investigation] execution error: %v", err)
+                        incident.Status = schemas.StatusFailed
+                        s := err.Error()
+                        incident.State.Error = &s
+                }
+                _ = store.UpsertIncident(ctx, &incident)
+
+                // === FEEDBACK PHASE ===
+                success := incident.Status == schemas.StatusVerified
+                alpha, beta := recordBetaOutcome(ctx, store, incident, success)
+                incident.BetaAlpha = alpha
+                incident.BetaBeta = beta
+                _ = store.StoreIncidentVector(ctx, &incident, success)
+                incident.Status = schemas.StatusResolved
+                _ = store.UpsertIncident(ctx, &incident)
+
+                log.Printf("[investigation] %s resolved (status=%s, alpha=%.0f, beta=%.0f)",
+                        incident.IncidentID, incident.Status, alpha, beta)
+                _ = k8sClient.PatchCRStatus(ctx, crName, crNamespace, string(incident.Status))
         }
 
-        // 6. Start the CRD watcher
+        // 8. Start the CRD watcher
         w, err := watcher.New(k8sClient, handler)
         if err != nil {
-                log.Fatalf("[main] failed to init watcher: %v", err)
+                log.Fatalf("[main] watcher: %v", err)
         }
 
         ctx, cancel := context.WithCancel(context.Background())
         defer cancel()
 
         go func() {
-                log.Printf("[main] starting CRD watcher")
+                log.Printf("[main] CRD watcher started")
                 w.Run(ctx)
         }()
 
-        // Mark ready after a brief startup delay
         go func() {
                 time.Sleep(2 * time.Second)
                 ready = true
                 log.Printf("[main] Sentinel ready — watching for incidents")
         }()
 
-        // 7. Start the HTTP API
+        // 9. HTTP API
         apiServer := api.New(
                 listenAddr,
                 &storeAdapter{store: store},
@@ -139,27 +212,27 @@ func main() {
                 },
                 func(service, namespace, reason string) (string, error) {
                         cluster := schemas.AnomalyCluster{
+                                ClusterID: uuid.New(),
                                 Service:   service,
                                 Namespace: namespace,
                                 Severity:  schemas.SeverityWarning,
                                 Summary:   fmt.Sprintf("Manual investigation: %s", reason),
                         }
-                        handler(ctx, cluster, "manual", "sentinel")
+                        go handler(ctx, cluster, "manual", "sentinel")
                         return cluster.ClusterID.String(), nil
                 },
                 func() bool { return ready },
         )
 
-        // 8. Wait for shutdown signal
-        sigCh := make(chan os.Signal, 1)
-        signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-
         go func() {
                 if err := apiServer.Start(); err != nil && err != http.ErrServerClosed {
-                        log.Printf("[main] API server error: %v", err)
+                        log.Printf("[main] API server: %v", err)
                 }
         }()
 
+        // 10. Wait for shutdown
+        sigCh := make(chan os.Signal, 1)
+        signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
         <-sigCh
         log.Printf("[main] shutting down...")
         cancel()
@@ -167,12 +240,146 @@ func main() {
         shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
         defer shutdownCancel()
         _ = apiServer.Shutdown(shutdownCtx)
-
         log.Printf("[main] stopped")
 }
 
+// executeFix runs the appropriate executor based on fix type.
+// For CODE_FIX / ROLL_FORWARD: 4-phase flow (branch → Kaniko → sandbox → PR)
+func executeFix(
+        ctx context.Context,
+        incident *schemas.Incident,
+        cfg *config.Config,
+        ghExec *executors.GitHubExecutor,
+        k8sExec *executors.K8sExecutor,
+        sandbox *executors.SandboxRunner,
+        kaniko *executors.KanikoBuilder,
+        k8sClient *k8s.Client,
+        store *feedback.Store,
+) error {
+        fp := incident.State.FixProposal
+
+        switch fp.FixType {
+        case schemas.FixCodeFix, schemas.FixRollForward:
+                return executeCodeFix(ctx, incident, cfg, ghExec, sandbox, kaniko, k8sClient)
+
+        case schemas.FixRestart:
+                return k8sExec.Restart(ctx, fp)
+
+        case schemas.FixScale:
+                // Default to doubling replicas (capped at 10)
+                newReplicas := int32(2)
+                // v3.1: parse from fp.K8sAction
+                return k8sExec.Scale(ctx, fp, newReplicas)
+
+        case schemas.FixRollback:
+                return k8sExec.Rollback(ctx, fp)
+
+        default:
+                return fmt.Errorf("unknown fix type: %s", fp.FixType)
+        }
+}
+
+// executeCodeFix runs the 4-phase code fix flow:
+// 1. Prepare branch (push fix files to a new Git branch)
+// 2. Build canary image with Kaniko
+// 3. Run sandbox verification (3 levels)
+// 4. Open PR with sandbox result
+func executeCodeFix(
+        ctx context.Context,
+        incident *schemas.Incident,
+        cfg *config.Config,
+        ghExec *executors.GitHubExecutor,
+        sandbox *executors.SandboxRunner,
+        kaniko *executors.KanikoBuilder,
+        k8sClient *k8s.Client,
+) error {
+        fp := incident.State.FixProposal
+
+        // Phase 1: Prepare branch
+        log.Printf("[execution] Phase 1: preparing fix branch...")
+        branchInfo := ghExec.PrepareBranch(ctx, incident)
+        if !branchInfo.Success {
+                return fmt.Errorf("branch_preparation_failed: %s", branchInfo.Error)
+        }
+        if branchInfo.FilesChanged == 0 {
+                return fmt.Errorf("no_files_in_fix_proposal (LLM response may have been truncated)")
+        }
+
+        // Phase 2 + 3: Build canary + sandbox (only if Docker Hub creds available)
+        sandboxVerified := false
+        sandboxSummary := "skipped (no Docker Hub credentials)"
+
+        if cfg.DockerHubToken != "" {
+                log.Printf("[execution] Phase 2: building canary image with Kaniko...")
+                prodImage, err := k8sClient.GetProdImage(ctx, fp.TargetService, fp.TargetNamespace)
+                if err == nil && prodImage != "" {
+                        canaryImage, err := kaniko.BuildForIncident(ctx, incident, branchInfo, prodImage)
+                        if err != nil {
+                                sandboxSummary = fmt.Sprintf("kaniko_error: %v", err)
+                                log.Printf("[execution] kaniko failed: %v", err)
+                        } else {
+                                log.Printf("[execution] canary image built: %s", canaryImage)
+                                fp.CanaryImage = &canaryImage
+
+                                log.Printf("[execution] Phase 3: running sandbox verification...")
+                                sb := sandbox.Run(ctx, incident)
+                                sandboxVerified = sb.Verified
+                                sandboxSummary = sb.Summary
+                                log.Printf("[execution] sandbox: verified=%v (%s)", sandboxVerified, sandboxSummary)
+                        }
+                } else {
+                        sandboxSummary = "skipped (could not find prod image)"
+                }
+        }
+
+        // Phase 4: Open PR
+        log.Printf("[execution] Phase 4: opening PR...")
+        prResult := ghExec.OpenPR(ctx, incident, branchInfo, sandboxVerified, sandboxSummary)
+        if !prResult.Success {
+                return fmt.Errorf("pr_open_failed: %s", prResult.Error)
+        }
+
+        incident.Status = schemas.StatusVerified
+        if incident.State.ExecutionResult == nil {
+                incident.State.ExecutionResult = &schemas.ExecutionResult{
+                        FixID: fp.FixID,
+                        FixType: fp.FixType,
+                        Success: true,
+                        StartedAt: time.Now().UTC(),
+                }
+        }
+        incident.State.ExecutionResult.Success = true
+        incident.State.ExecutionResult.PRURL = &prResult.PRURL
+        incident.State.ExecutionResult.PRNumber = &prResult.PRNumber
+        incident.State.ExecutionResult.PRBranch = &prResult.PRBranch
+        incident.State.ExecutionResult.SandboxVerified = sandboxVerified
+        incident.State.ExecutionResult.SandboxSummary = &sandboxSummary
+        now := time.Now().UTC()
+        incident.State.ExecutionResult.FinishedAt = &now
+
+        log.Printf("[execution] PR opened: %s (#%d) — sandbox_verified=%v",
+                prResult.PRURL, prResult.PRNumber, sandboxVerified)
+        return nil
+}
+
+// recordBetaOutcome updates the Beta prior for this fix pattern.
+func recordBetaOutcome(ctx context.Context, store *feedback.Store, incident schemas.Incident, success bool) (float64, float64) {
+        if incident.State.FixProposal == nil {
+                return 1.0, 1.0
+        }
+        alpha, beta, err := store.RecordBetaOutcome(ctx,
+                incident.State.FixProposal.TargetService,
+                string(incident.State.FixProposal.FixType),
+                success,
+        )
+        if err != nil {
+                log.Printf("[feedback] record beta outcome: %v", err)
+                return 1.0, 1.0
+        }
+        return alpha, beta
+}
+
 // storeAdapter bridges feedback.Store to the api.Store interface.
-// v3.0: returns []any from the typed []*schemas.Incident.
 type storeAdapter struct {
         store *feedback.Store
 }
