@@ -210,6 +210,12 @@ class SandboxRunner:
                 namespace=ns, body=sandbox_deploy,
             )
 
+            # Copy ConfigMaps + Secrets referenced by the prod Deployment
+            # into the sandbox namespace. Without this, the sandbox pod
+            # can't start because envFrom/configMapRef/secretKeyRef point
+            # to resources that only exist in the prod namespace.
+            await self._copy_configmaps_and_secrets(prod_deploy, fp.target_namespace, ns)
+
             # Create a Service so the mirror can reach it
             prod_svc = None
             try:
@@ -245,6 +251,96 @@ class SandboxRunner:
         except Exception as e:  # noqa: BLE001
             log.error("Sandbox deploy failed: %s", e)
             return {"success": False, "error": str(e)}
+
+    async def _copy_configmaps_and_secrets(self, deploy: Any, prod_ns: str, sandbox_ns: str) -> None:
+        """Copy ConfigMaps + Secrets referenced by the prod Deployment into the sandbox namespace.
+
+        Scans the pod spec for:
+          - envFrom.configMapRef.name
+          - envFrom.secretRef.name
+          - env[].valueFrom.configMapKeyRef.name
+          - env[].valueFrom.secretKeyRef.name
+          - volumes[].configMap.name
+          - volumes[].secret.secretName
+
+        Copies each referenced resource from prod_ns to sandbox_ns.
+        Skips resources that don't exist or already exist in the sandbox.
+        """
+        from kubernetes import client
+        import copy
+
+        pod_spec = deploy.spec.template.spec
+        cm_names: set[str] = set()
+        secret_names: set[str] = set()
+
+        # Collect from envFrom (container level)
+        for container in (pod_spec.containers or []):
+            for env_from in (container.env_from or []):
+                if env_from.config_map_ref:
+                    cm_names.add(env_from.config_map_ref.name)
+                if env_from.secret_ref:
+                    secret_names.add(env_from.secret_ref.name)
+
+            # Collect from env[].valueFrom
+            for env in (container.env or []):
+                if env.value_from:
+                    if env.value_from.config_map_key_ref:
+                        cm_names.add(env.value_from.config_map_key_ref.name)
+                    if env.value_from.secret_key_ref:
+                        secret_names.add(env.value_from.secret_key_ref.name)
+
+        # Collect from volumes
+        for vol in (pod_spec.volumes or []):
+            if vol.config_map:
+                cm_names.add(vol.config_map.name)
+            if vol.secret:
+                secret_names.add(vol.secret.secret_name)
+
+        # Copy ConfigMaps
+        for cm_name in cm_names:
+            if not cm_name:
+                continue
+            try:
+                cm = await asyncio.to_thread(
+                    self.k8s.core.read_namespaced_config_map,
+                    name=cm_name, namespace=prod_ns,
+                )
+                sandbox_cm = client.V1ConfigMap(
+                    metadata=client.V1ObjectMeta(name=cm_name, namespace=sandbox_ns),
+                    data=cm.data,
+                    binary_data=cm.binary_data,
+                )
+                await asyncio.to_thread(
+                    self.k8s.core.create_namespaced_config_map,
+                    namespace=sandbox_ns, body=sandbox_cm,
+                )
+                log.info("Copied ConfigMap %s to sandbox", cm_name)
+            except Exception as e:
+                if "409" not in str(e) and "AlreadyExists" not in str(e):
+                    log.warning("Could not copy ConfigMap %s: %s", cm_name, e)
+
+        # Copy Secrets
+        for secret_name in secret_names:
+            if not secret_name:
+                continue
+            try:
+                sec = await asyncio.to_thread(
+                    self.k8s.core.read_namespaced_secret,
+                    name=secret_name, namespace=prod_ns,
+                )
+                sandbox_sec = client.V1Secret(
+                    metadata=client.V1ObjectMeta(name=secret_name, namespace=sandbox_ns),
+                    data=sec.data,
+                    type=sec.type,
+                )
+                await asyncio.to_thread(
+                    self.k8s.core.create_namespaced_secret,
+                    namespace=sandbox_ns, body=sandbox_sec,
+                )
+                log.info("Copied Secret %s to sandbox", secret_name)
+            except Exception as e:
+                if "409" not in str(e) and "AlreadyExists" not in str(e):
+                    log.warning("Could not copy Secret %s: %s", secret_name, e)
 
     def _patch_pod_spec(self, spec: Any, fp: Any, canary_image: str) -> Any:
         """Apply the fix's K8s patch (if any) to the pod spec, and override the image."""

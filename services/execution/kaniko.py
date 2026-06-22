@@ -193,12 +193,20 @@ set -ex
 git clone --depth 1 --branch {branch} https://github.com/{repo}.git /workspace/repo
 cd /workspace/repo
 
-# Apply the fixed files from the ConfigMap
-# The ConfigMap is mounted at /fixed-files
+# Apply the fixed files from the ConfigMap.
+# The ConfigMap keys are the FULL file paths relative to the repo root
+# (e.g. "app/main.py", "src/handler.py"). We copy each file to its
+# exact path — no find/glob, no ambiguity.
 for f in /fixed-files/*; do
     rel_path=$(basename "$f")
-    # Find the file in the repo and overwrite it
-    find /workspace/repo -name "$rel_path" -exec cp "$f" {{}} \\;
+    # The ConfigMap mounts each key as a file named after the key.
+    # We need to reconstruct the full path from the key.
+    # The key is the file path (e.g. "app/main.py" → mounted as /fixed-files/app/main.py)
+    # But ConfigMap mounts flatten the path, so we use the key directly.
+    dest="/workspace/repo/$rel_path"
+    mkdir -p "$(dirname "$dest")"
+    cp "$f" "$dest"
+    echo "Applied fix: $rel_path → $dest"
 done
 
 # Verify the files were applied

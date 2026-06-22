@@ -82,13 +82,13 @@ class ContextFetcher:
                 pass
         if not trace_id:
             return None
-        # Synchronous Jaeger fetch — wrapped in to_thread
+        # Async Jaeger fetch — uses httpx.AsyncClient to avoid blocking the event loop
         try:
-            r = httpx.get(
-                f"{os.getenv('JAEGER_URL', 'http://localhost:16686')}/api/traces/{trace_id}",
-                timeout=10.0,
-            )
-            r.raise_for_status()
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                r = await client.get(
+                    f"{os.getenv('JAEGER_URL', 'http://localhost:16686')}/api/traces/{trace_id}",
+                )
+                r.raise_for_status()
             data = r.json()
             trace = data.get("data", [{}])[0]
             spans = sorted(trace.get("spans", []), key=lambda s: s.get("startTime", 0))

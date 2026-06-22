@@ -70,7 +70,7 @@ class Settings(BaseSettings):
     github_default_reviewer: Optional[str] = None
 
     # --- Docker Hub (for Kaniko sandbox image builder) ---
-    docker_hub_username: str = Field(default="karimzakzouk")
+    docker_hub_username: str = Field(default="")
     docker_hub_token: str = Field(default="", description="Docker Hub PAT for Kaniko to push canary images")
 
     # --- Terraform ---

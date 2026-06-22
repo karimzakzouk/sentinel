@@ -163,7 +163,15 @@ async def _execute_incident(incident: Incident) -> None:
 
         # 2. Execute the actual fix
         if fp.fix_type in (FixType.CODE_FIX, FixType.ROLL_FORWARD):
-            result = await gh_exec.execute(incident, result)
+            # Use the split GitHub executor: prepare_branch → open_pr
+            branch_info = await gh_exec.prepare_branch(incident)
+            if branch_info.get("success"):
+                result = await gh_exec.open_pr(incident, branch_info,
+                                               sandbox_verified=result.sandbox_verified,
+                                               sandbox_summary=result.sandbox_summary or "")
+            else:
+                result.success = False
+                result.error = f"branch_preparation_failed: {branch_info.get('error')}"
         elif fp.fix_type in (FixType.RESTART, FixType.SCALE):
             result = await k8s_exec.execute(incident, result)
         elif fp.fix_type == FixType.ROLLBACK:
