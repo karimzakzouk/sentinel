@@ -155,18 +155,24 @@ Sentinel uses the OpenAI-compatible API. Any provider works:
 | LiteLLM proxy | `litellm` | (auto) |
 | Any OpenAI-compatible | `custom` | your URL |
 
-### Workload annotations
+### Workload annotations (REQUIRED for code fixes)
 
-Annotate your Deployments/StatefulSets so Sentinel knows where to find the source:
+Annotate your Deployments/StatefulSets so Sentinel knows what code is running. **The `sentinel.io/branch` annotation is critical** — without it, Sentinel clones `main` which may not match the deployed code, leading to wrong diagnoses.
 
 ```yaml
 metadata:
   annotations:
-    sentinel.io/repo: myorg/my-app          # GitHub repo (required for code fixes)
-    sentinel.io/runbook: https://wiki/...   # Runbook URL (optional)
+    sentinel.io/repo: myorg/my-app           # GitHub repo (required for code fixes)
+    sentinel.io/branch: bug/crashloop-typo   # Branch that's actually deployed (REQUIRED)
+    sentinel.io/git-commit: abc123...        # Exact commit SHA (optional, most precise)
+    sentinel.io/runbook: https://wiki/...    # Runbook URL (optional)
     sentinel.io/team: platform               # Owning team (optional)
     sentinel.io/ignore: "true"               # Opt out of Sentinel (optional)
 ```
+
+**Priority:** `sentinel.io/git-commit` (exact commit) > `sentinel.io/branch` (branch tip) > `main` (fallback with warning).
+
+If neither annotation is set, Sentinel clones `main` and logs a warning. The diagnosis may be inaccurate if the deployed code differs from `main`.
 
 ### RBAC
 
