@@ -384,6 +384,82 @@ async def _lookup_workload_annotations(service: str, namespace: str) -> dict[str
     return annotations
 
 
+async def _fetch_crashing_pod_logs(service: str, namespace: str) -> str:
+    """Fetch logs from the most recent crashing pod for a service.
+
+    Finds pods matching the service label, picks the one with the most
+    restarts (or in CrashLoopBackOff), and fetches its previous container
+    logs (the logs from before the last crash).
+
+    Returns the last 4KB of log text, or empty string if no pods found.
+    """
+    from kubernetes import client
+    try:
+        core = client.CoreV1Api()
+        # Find pods by label app.kubernetes.io/name=service
+        pods = await asyncio.to_thread(
+            core.list_namespaced_pod,
+            namespace=namespace,
+            label_selector=f"app.kubernetes.io/name={service}",
+        )
+        if not pods.items:
+            # Try app=service label
+            pods = await asyncio.to_thread(
+                core.list_namespaced_pod,
+                namespace=namespace,
+                label_selector=f"app={service}",
+            )
+        if not pods.items:
+            return ""
+
+        # Pick the pod with the most restarts or in CrashLoopBackOff
+        worst_pod = None
+        worst_restarts = -1
+        for pod in pods.items:
+            restarts = sum(cs.restart_count for cs in (pod.status.container_statuses or []))
+            phase = pod.status.phase
+            if phase == "Pending" or "CrashLoopBackOff" in str(pod.status.container_statuses or ""):
+                # Prefer CrashLoopBackOff pods
+                worst_pod = pod
+                break
+            if restarts > worst_restarts:
+                worst_restarts = restarts
+                worst_pod = pod
+
+        if worst_pod is None:
+            return ""
+
+        pod_name = worst_pod.metadata.name
+        log.info("CRD watcher: fetching logs from pod %s (restarts=%d)", pod_name, worst_restarts)
+
+        # Fetch previous container logs (the crash output)
+        try:
+            logs = await asyncio.to_thread(
+                core.read_namespaced_pod_log,
+                name=pod_name,
+                namespace=namespace,
+                previous=True,  # Get logs from before the last crash
+                limit_bytes=4096,  # Last 4KB
+            )
+            return logs or ""
+        except Exception:
+            # If --previous fails (pod might not have previous logs), try current
+            try:
+                logs = await asyncio.to_thread(
+                    core.read_namespaced_pod_log,
+                    name=pod_name,
+                    namespace=namespace,
+                    limit_bytes=4096,
+                )
+                return logs or ""
+            except Exception as e:
+                log.warning("CRD watcher: could not fetch logs from %s: %s", pod_name, e)
+                return ""
+    except Exception as e:
+        log.warning("CRD watcher: error fetching pod logs: %s", e)
+        return ""
+
+
 async def _crd_watcher_loop() -> None:
     """Watch for SentinelIncident CRs and trigger investigations automatically.
 
@@ -440,8 +516,23 @@ async def _crd_watcher_loop() -> None:
                     log.info("CRD watcher: discovered annotations for %s: %s",
                              service, list(workload_annotations.keys()))
 
-                # Build a synthetic anomaly cluster and publish it
+                # Fetch REAL pod logs from the crashing pods.
+                # This is critical — without actual error messages, the LLM
+                # has to guess what file to fix. With real logs (including
+                # stack traces), the Investigator can parse file paths and
+                # fetch the actual source code from GitHub.
+                pod_logs = await _fetch_crashing_pod_logs(service, svc_ns)
+                if pod_logs:
+                    log.info("CRD watcher: fetched %d chars of pod logs for %s", len(pod_logs), service)
+
+                # Build a synthetic anomaly cluster with REAL pod log data
                 from sentinel_common import Anomaly, AnomalyCluster, Severity
+                # Include the pod logs in the explanation so the Investigator
+                # can parse stack traces and identify source files.
+                full_explanation = f"SentinelIncident CR: {reason}"
+                if pod_logs:
+                    full_explanation += f"\n\n## Pod Logs (last 4KB)\n{pod_logs}"
+
                 anomaly = Anomaly(
                     signal_id=uuid4(),
                     service=service,
@@ -449,7 +540,7 @@ async def _crd_watcher_loop() -> None:
                     detector="crd_watcher",
                     score=0.8,
                     dimensions={"manual": 1.0},
-                    explanation=f"SentinelIncident CR: {reason}",
+                    explanation=full_explanation,
                     annotations=workload_annotations,
                 )
                 cluster = AnomalyCluster(

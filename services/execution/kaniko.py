@@ -97,7 +97,7 @@ class KanikoBuilder:
         build_id = image_tag.replace("sentinel-", "")[:8]
         configmap_name = f"kaniko-fixed-files-{build_id}"
         pod_name = f"kaniko-build-{build_id}"
-        full_image = f"{image_name}:{image_tag}"
+        full_image = f"docker.io/{image_name}:{image_tag}"
 
         log.info("Starting Kaniko build: %s (repo=%s, branch=%s)", full_image, repo, branch)
 
@@ -263,6 +263,7 @@ ls -la /workspace/repo/
 
         pod_spec = client.V1PodSpec(
             restart_policy="Never",
+            service_account_name=os.getenv("SENTINEL_RELEASE_NAME", "sentinel") + "-sentinel",
             init_containers=[init_container],
             containers=[kaniko_container],
             volumes=[
