@@ -132,6 +132,25 @@ class ContextFetcher:
                            ".css", ".html", ".json", ".yaml", ".yml", ".toml",
                            ".md", ".txt", ".lock")):
                 continue
+            # Skip library/site-packages paths — these are dependencies, not
+            # project source code. We can't fix them and they waste GitHub API
+            # calls with 404s.
+            if "/site-packages/" in c or "/dist-packages/" in c:
+                continue
+            if c.startswith("/usr/local/lib/") or c.startswith("/usr/lib/"):
+                continue
+            if c.startswith("/lib/") or c.startswith("/opt/"):
+                continue
+            # Strip common Docker WORKDIR prefixes so the path matches the
+            # repo structure. e.g. /app/app/main.py → app/main.py
+            # Common WORKDIRs: /app, /workspace, /home/app, /srv
+            for prefix in ["/app/", "/workspace/", "/home/app/", "/srv/"]:
+                if c.startswith(prefix):
+                    c = c[len(prefix):]
+                    break
+            # Also strip a leading slash if it's an absolute path
+            if c.startswith("/") and not c.startswith("//"):
+                c = c[1:]
             # We require either:
             #   - a slash (file path), OR
             #   - 3+ dot-separated parts (Java class file like com.acme.Foo.java)
