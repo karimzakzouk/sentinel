@@ -199,12 +199,14 @@ class KanikoBuilder:
 
         init_container = client.V1Container(
             name="clone-and-patch",
-            image="alpine/git:2.45.0",
+            image="alpine:3.19",
             working_dir="/workspace",
             command=["/bin/sh", "-c"],
             args=[
                 f"""
 set -ex
+# Install git
+apk add --no-cache git
 # Clone the repo
 git clone --depth 1 --branch {branch} https://github.com/{repo}.git /workspace/repo
 cd /workspace/repo
