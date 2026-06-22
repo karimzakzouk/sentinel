@@ -189,6 +189,10 @@ ui:
     githubOrg: ""          # only members of this org can sign in
     nextauthSecret: ""     # required for credentials/github modes — `openssl rand -base64 32`
 
+# Sandbox (canary image verification)
+sandbox:
+  enabled: true  # Set to false to skip sandbox verification entirely
+
 # OPA sidecar — runs the governance policies
 opa:
   enabled: true

@@ -348,6 +348,8 @@ class SandboxRunner:
         patched = copy.deepcopy(spec)
         for container in patched.containers:
             container.image = canary_image
+            # Force image pull for the canary image (local registry, not cached)
+            container.image_pull_policy = "Always"
         # Apply scale patch if it's a scale fix
         if fp.k8s_action and isinstance(fp.k8s_action, dict):
             patch = fp.k8s_action.get("patch", {})

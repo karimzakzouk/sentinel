@@ -1,0 +1,63 @@
+{{- if .Values.sandbox.enabled }}
+# Local Docker registry for Kaniko canary image builds.
+# Kaniko pushes canary images here (no Docker Hub needed), and the sandbox
+# pod pulls from here. This eliminates the need for Docker Hub credentials
+# and makes builds faster (local network, no internet round trip).
+#
+# The registry is insecure (HTTP, no TLS) because it's only used inside
+# the cluster. Kaniko uses --force to skip TLS verification.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "sentinel.fullname" . }}-registry
+  labels:
+    app.kubernetes.io/name: sentinel-registry
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sentinel-registry
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: sentinel-registry
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      containers:
+        - name: registry
+          image: registry:2
+          ports:
+            - containerPort: 5000
+              name: registry
+          env:
+            - name: REGISTRY_STORAGE_DELETE_ENABLED
+              value: "true"
+          resources:
+            requests: { cpu: 50m, memory: 32Mi }
+            limits: { cpu: 200m, memory: 128Mi }
+          volumeMounts:
+            - name: registry-data
+              mountPath: /var/lib/registry
+      volumes:
+        - name: registry-data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "sentinel.fullname" . }}-registry
+  labels:
+    app.kubernetes.io/name: sentinel-registry
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: 5000
+      targetPort: 5000
+      name: registry
+  selector:
+    app.kubernetes.io/name: sentinel-registry
+    app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}
