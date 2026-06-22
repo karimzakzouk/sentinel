@@ -13,6 +13,7 @@ from typing import Any
 from uuid import UUID
 
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 logger = logging.getLogger(__name__)
@@ -110,7 +111,7 @@ class IncidentStore:
                 "weaviate_uuid": incident.get("weaviate_uuid"),
             }
             await conn.execute(
-                sa.dialects.postgresql.insert(incidents_table)
+                postgresql.insert(incidents_table)
                 .values(row)
                 .on_conflict_do_update(
                     index_elements=[incidents_table.c.incident_id],

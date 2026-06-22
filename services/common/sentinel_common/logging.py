@@ -31,7 +31,7 @@ try:
     HAS_STRUCTLOG = True
 except ImportError:
     HAS_STRUCTLOG = False
-    structlog = None
+    structlog = None  # type: ignore[assignment]
 
 _CONFIGURED = False
 
@@ -71,7 +71,7 @@ def configure_logging(*, json_output: bool | None = None, level: str = "INFO") -
     ]
 
     structlog.configure(
-        processors=shared_processors
+        processors=shared_processors  # type: ignore[arg-type]
         + [
             structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
         ],
@@ -82,7 +82,7 @@ def configure_logging(*, json_output: bool | None = None, level: str = "INFO") -
 
     # Configure stdlib logging to route through structlog's formatter
     formatter = structlog.stdlib.ProcessorFormatter(
-        foreign_pre_chain=shared_processors,
+        foreign_pre_chain=shared_processors,  # type: ignore[arg-type]
         processors=[
             structlog.stdlib.ProcessorFormatter.remove_processors_meta,
             (
