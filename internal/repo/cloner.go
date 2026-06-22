@@ -44,15 +44,33 @@ func NewCloner(githubToken string) *Cloner {
 //   - a commit SHA (e.g. "abc123...") — 40 hex chars
 //
 // Uses --depth 1 for speed (we don't need history, just the current state).
+// The clone is written to /data/repos/ (the mounted PVC) because /tmp is
+// read-only in the distroless image (readOnlyRootFilesystem: true).
 func (c *Cloner) Clone(ctx context.Context, repo, ref string) (string, error) {
         if ref == "" {
                 ref = "main"
         }
 
-        // Create temp dir
-        tmpDir, err := os.MkdirTemp("", "sentinel-repo-*")
-        if err != nil {
-                return "", fmt.Errorf("create temp dir: %w", err)
+        // Use /data/repos/ (the mounted PVC) instead of /tmp (read-only in distroless)
+        cloneDir := "/data/repos"
+        if err := os.MkdirAll(cloneDir, 0755); err != nil {
+                // Fallback to /tmp if /data isn't writable (e.g. running locally without PVC)
+                cloneDir = os.TempDir()
+        }
+
+        // Sanitize repo name for directory naming
+        safeRepo := strings.ReplaceAll(repo, "/", "-")
+        dirName := fmt.Sprintf("sentinel-repo-%s-%s", safeRepo, ref)
+        if len(dirName) > 60 {
+                // Truncate long names + add a short random suffix
+                dirName = dirName[:60]
+        }
+        // Add random suffix to avoid collisions
+        dirName = fmt.Sprintf("%s-%d", dirName, time.Now().UnixNano())
+
+        tmpDir := filepath.Join(cloneDir, dirName)
+        if err := os.MkdirAll(tmpDir, 0755); err != nil {
+                return "", fmt.Errorf("create clone dir: %w", err)
         }
 
         // Build the clone URL with token auth (if private)
@@ -94,7 +112,7 @@ func (c *Cloner) Clone(ctx context.Context, repo, ref string) (string, error) {
         }
 
         // Branch or tag — try as branch first, then as tag, then full clone
-        _, err = git.PlainCloneContext(cloneCtx, tmpDir, false, &git.CloneOptions{
+        _, err := git.PlainCloneContext(cloneCtx, tmpDir, false, &git.CloneOptions{
                 URL:           cloneURL,
                 Depth:         1,
                 SingleBranch:  true,
