@@ -64,7 +64,7 @@ class ContextFetcher:
 
     # ---------------- Trace Anchoring ----------------
 
-    def anchor_span(self, cluster: AnomalyCluster) -> dict[str, Any] | None:
+    async def anchor_span(self, cluster: AnomalyCluster) -> dict[str, Any] | None:
         """Find the first failing span in the cluster's trace (if any).
 
         If we have a trace_id, query Jaeger for the full trace, then walk the

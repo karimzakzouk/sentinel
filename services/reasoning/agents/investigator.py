@@ -58,7 +58,7 @@ async def investigator_node(state: AgentState, *, llm_router: Any,
     cluster = state.cluster
 
     # 1. Anchor on trace if available (Layer 6 edge case #4)
-    anchor = context_fetcher.anchor_span(cluster)
+    anchor = await context_fetcher.anchor_span(cluster)
 
     # 2. Parse stack traces from logs to find source files
     all_text = cluster.summary + "\n"
