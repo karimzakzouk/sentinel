@@ -97,12 +97,8 @@ class KanikoBuilder:
         build_id = image_tag.replace("sentinel-", "")[:8]
         configmap_name = f"kaniko-fixed-files-{build_id}"
         pod_name = f"kaniko-build-{build_id}"
-        # Push to the local in-cluster registry instead of Docker Hub.
-        # This eliminates the need for Docker Hub credentials and is faster
-        # (local network, no internet round trip).
-        # The registry service is <release>-registry:5000 in the sentinel namespace.
-        registry = os.getenv("SENTINEL_LOCAL_REGISTRY", "sentinel-sentinel-registry:5000")
-        full_image = f"{registry}/{image_name}:{image_tag}"
+        # Push to Docker Hub. Works on any cluster without configuration.
+        full_image = f"docker.io/{image_name}:{image_tag}"
 
         log.info("Starting Kaniko build: %s (repo=%s, branch=%s)", full_image, repo, branch)
 
@@ -246,7 +242,7 @@ ls -la /workspace/repo/
             f"--dockerfile={dockerfile_path}",
             f"--destination={full_image}",
             "--context=/workspace/repo",
-            "--insecure",  # local registry is HTTP, no TLS
+            "--force",  # skip TLS verify for Docker Hub
             "--cache=false",
             "--snapshotMode=redo",
         ]
@@ -258,6 +254,11 @@ ls -la /workspace/repo/
             working_dir="/workspace",
             volume_mounts=[
                 client.V1VolumeMount(name="workspace", mount_path="/workspace"),
+                client.V1VolumeMount(
+                    name="docker-config",
+                    mount_path="/kaniko/.docker",
+                    read_only=True,
+                ),
             ],
         )
 
@@ -276,6 +277,14 @@ ls -la /workspace/repo/
                 client.V1Volume(
                     name="fixed-files",
                     config_map=client.V1ConfigMapVolumeSource(name=configmap_name),
+                ),
+                # Docker Hub credentials for Kaniko to push
+                client.V1Volume(
+                    name="docker-config",
+                    secret=client.V1SecretVolumeSource(
+                        secret_name=docker_secret_name,
+                        items=[client.V1KeyToPath(key=".dockerconfigjson", path="config.json")],
+                    ),
                 ),
             ],
         )

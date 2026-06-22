@@ -2,8 +2,8 @@ apiVersion: v2
 name: sentinel
 description: Sentinel — The Autonomous AI Site Reliability Engineer. Detect, diagnose, fix, verify.
 type: application
-version: 1.5.37
-appVersion: "1.5.37"
+version: 1.5.38
+appVersion: "1.5.38"
 home: https://github.com/karimzakzoukz/sentinel
 sources:
   - https://github.com/karimzakzoukz/sentinel
