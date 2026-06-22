@@ -1,4 +1,0 @@
-{{- if eq .Values.mode "distributed" -}}
-{{ include "sentinel.deployment" (list "ingestion" .) }}
-
-{{- end -}}

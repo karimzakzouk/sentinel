@@ -64,10 +64,8 @@ This ensures chart v1.4.2 pulls image v1.4.2 — no more version mismatches.
 Standard env vars shared by all Python services.
 */}}
 {{- define "sentinel.commonEnv" -}}
-- name: SENTINEL_KAFKA_BROKERS
-  value: {{ .Values.kafka.bootstrapServers | quote }}
 - name: SENTINEL_POSTGRES_URL
-  value: {{ printf "postgresql://%s:%s@%s-postgresql:5432/%s" .Values.postgres.auth.username .Values.postgres.auth.password .Release.Name .Values.postgres.auth.database | quote }}
+  value: {{ printf "postgresql://%s:%s@%s-postgresql:5432/%s" .Values.postgres.auth.username (include "sentinel.postgresPassword" .) .Release.Name .Values.postgres.auth.database | quote }}
 - name: SENTINEL_WEAVIATE_URL
   value: "http://weaviate:8080"
 - name: SENTINEL_OPA_URL
@@ -123,4 +121,37 @@ Standard volume mounts for the Python services
 {{- define "sentinel.standardVolumeMounts" -}}
 - name: tmp
   mountPath: /tmp
+{{- end -}}
+
+{{/*
+Generated passwords — these run at template-render time and produce stable
+values within a single `helm install` invocation. The values are also written
+into a Secret so they survive across upgrades.
+*/}}
+{{- define "sentinel.postgresPassword" -}}
+{{- if .Values.postgres.auth.password -}}
+{{- .Values.postgres.auth.password -}}
+{{- else -}}
+{{- randAlphaNum 32 -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "sentinel.uiPassword" -}}
+{{- if eq .Values.ui.auth.mode "credentials" -}}
+{{- if .Values.ui.auth.password -}}
+{{- .Values.ui.auth.password -}}
+{{- else -}}
+{{- randAlphaNum 24 -}}
+{{- end -}}
+{{- else -}}
+{{- "" -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "sentinel.nextauthSecret" -}}
+{{- if .Values.ui.auth.nextauthSecret -}}
+{{- .Values.ui.auth.nextauthSecret -}}
+{{- else -}}
+{{- randAlphaNum 48 -}}
+{{- end -}}
 {{- end -}}

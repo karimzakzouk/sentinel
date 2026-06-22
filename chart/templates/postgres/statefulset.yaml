@@ -1,10 +1,18 @@
 {{- if .Values.postgres.enabled -}}
+{{- $pgPassword := include "sentinel.postgresPassword" . -}}
 # Simple Postgres deployment using the official postgres:16-alpine image.
-# We don't use the Bitnami chart because Bitnami rotates image tags aggressively,
-# causing ImagePullBackOff. The official postgres image is stable.
-#
-# This is intentionally minimal — single replica, no HA. For production use
-# the Bitnami chart or your own managed Postgres (RDS, Cloud SQL, etc.)
+# v2.0.0: password auto-generated if .Values.postgres.auth.password is empty.
+# The password is also written to a Secret so upgrades preserve it.
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Release.Name }}-postgresql
+  labels:
+    {{- include "sentinel.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  password: {{ $pgPassword | quote }}
 ---
 apiVersion: apps/v1
 kind: StatefulSet
@@ -26,7 +34,13 @@ spec:
         app.kubernetes.io/instance: {{ .Release.Name }}
         app.kubernetes.io/part-of: sentinel
     spec:
-      serviceAccountName: {{ .Values.serviceAccount.name | default (include "sentinel.fullname" .) }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: postgresql
           image: "postgres:16-alpine"
@@ -35,7 +49,10 @@ spec:
             - name: POSTGRES_USER
               value: {{ .Values.postgres.auth.username | quote }}
             - name: POSTGRES_PASSWORD
-              value: {{ .Values.postgres.auth.password | quote }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-postgresql
+                  key: password
             - name: POSTGRES_DB
               value: {{ .Values.postgres.auth.database | quote }}
             - name: PGDATA
@@ -57,6 +74,10 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /var/lib/postgresql/data
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           resources:
             requests: { cpu: 100m, memory: 128Mi }
             limits: { cpu: 500m, memory: 512Mi }
