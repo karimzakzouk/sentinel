@@ -1,4 +1,5 @@
 """Kubernetes Events collector — watches the cluster event stream."""
+
 from __future__ import annotations
 
 import asyncio
@@ -38,6 +39,7 @@ class K8sEventsCollector:
 
     def __init__(self) -> None:
         from kubernetes import client, config  # type: ignore
+
         try:
             if os.getenv("KUBERNETES_SERVICE_HOST"):
                 config.load_incluster_config()
@@ -46,7 +48,7 @@ class K8sEventsCollector:
             self.api = client.CoreV1Api()
             self.apps_api = client.AppsV1Api()
             self._available = True
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             log.warning("K8s collector not available: %s", e)
             self._available = False
             self.api = None
@@ -73,37 +75,44 @@ class K8sEventsCollector:
                 # we walk up to the owning ReplicaSet/Deployment to find the
                 # annotations that matter (pods inherit from their template).
                 workload_annotations = await self._fetch_workload_annotations(
-                    involved_kind, involved_name, involved_ns,
+                    involved_kind,
+                    involved_name,
+                    involved_ns,
                 )
 
-                out.append({
-                    "source": "k8s_events",
-                    "event": {
-                        "reason": ev.reason,
-                        "message": ev.message,
-                        "type": ev.type,
-                        "involvedObject": {
-                            "kind": involved_kind,
-                            "name": involved_name,
-                            "namespace": involved_ns,
+                out.append(
+                    {
+                        "source": "k8s_events",
+                        "event": {
+                            "reason": ev.reason,
+                            "message": ev.message,
+                            "type": ev.type,
+                            "involvedObject": {
+                                "kind": involved_kind,
+                                "name": involved_name,
+                                "namespace": involved_ns,
+                            },
+                            "lastTimestamp": ev.last_timestamp.isoformat() if ev.last_timestamp else None,
+                            "count": ev.count,
+                            "metadata": {
+                                "labels": ev.metadata.labels or {},
+                                "annotations": ev.metadata.annotations or {},
+                            },
+                            # NEW: workload-level annotations (sentinel.io/* keys)
+                            "workloadAnnotations": workload_annotations,
                         },
-                        "lastTimestamp": ev.last_timestamp.isoformat() if ev.last_timestamp else None,
-                        "count": ev.count,
-                        "metadata": {
-                            "labels": ev.metadata.labels or {},
-                            "annotations": ev.metadata.annotations or {},
-                        },
-                        # NEW: workload-level annotations (sentinel.io/* keys)
-                        "workloadAnnotations": workload_annotations,
-                    },
-                })
+                    }
+                )
             return out
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             log.warning("K8s events poll failed: %s", e)
             return []
 
     async def _fetch_workload_annotations(
-        self, kind: str | None, name: str | None, namespace: str,
+        self,
+        kind: str | None,
+        name: str | None,
+        namespace: str,
     ) -> dict[str, str]:
         """Fetch sentinel.io/* annotations from the involved workload.
 
@@ -122,7 +131,9 @@ class K8sEventsCollector:
             if kind == "Pod":
                 # Fetch pod, then walk up to owner (ReplicaSet → Deployment)
                 pod = await asyncio.to_thread(
-                    self.api.read_namespaced_pod, name, namespace,
+                    self.api.read_namespaced_pod,
+                    name,
+                    namespace,
                 )
                 annotations.update(self._filter_sentinel_annotations(pod.metadata.annotations))
 
@@ -130,13 +141,17 @@ class K8sEventsCollector:
                 if pod.metadata.owner_references:
                     for owner in pod.metadata.owner_references:
                         owner_annotations = await self._fetch_workload_annotations(
-                            owner.kind, owner.name, namespace,
+                            owner.kind,
+                            owner.name,
+                            namespace,
                         )
                         annotations.update(owner_annotations)
 
             elif kind == "Deployment" and self.apps_api:
                 dep = await asyncio.to_thread(
-                    self.apps_api.read_namespaced_deployment, name, namespace,
+                    self.apps_api.read_namespaced_deployment,
+                    name,
+                    namespace,
                 )
                 annotations.update(self._filter_sentinel_annotations(dep.metadata.annotations))
                 # Also check the pod template's annotations (some teams put
@@ -146,7 +161,9 @@ class K8sEventsCollector:
 
             elif kind == "StatefulSet" and self.apps_api:
                 sts = await asyncio.to_thread(
-                    self.apps_api.read_namespaced_stateful_set, name, namespace,
+                    self.apps_api.read_namespaced_stateful_set,
+                    name,
+                    namespace,
                 )
                 annotations.update(self._filter_sentinel_annotations(sts.metadata.annotations))
                 if sts.spec.template.metadata.annotations:
@@ -154,7 +171,9 @@ class K8sEventsCollector:
 
             elif kind == "DaemonSet" and self.apps_api:
                 ds = await asyncio.to_thread(
-                    self.apps_api.read_namespaced_daemon_set, name, namespace,
+                    self.apps_api.read_namespaced_daemon_set,
+                    name,
+                    namespace,
                 )
                 annotations.update(self._filter_sentinel_annotations(ds.metadata.annotations))
                 if ds.spec.template.metadata.annotations:
@@ -162,20 +181,24 @@ class K8sEventsCollector:
 
             elif kind == "ReplicaSet" and self.apps_api:
                 rs = await asyncio.to_thread(
-                    self.apps_api.read_namespaced_replica_set, name, namespace,
+                    self.apps_api.read_namespaced_replica_set,
+                    name,
+                    namespace,
                 )
                 annotations.update(self._filter_sentinel_annotations(rs.metadata.annotations))
                 # Walk up to the Deployment that owns this ReplicaSet
                 if rs.metadata.owner_references:
                     for owner in rs.metadata.owner_references:
                         owner_annotations = await self._fetch_workload_annotations(
-                            owner.kind, owner.name, namespace,
+                            owner.kind,
+                            owner.name,
+                            namespace,
                         )
                         annotations.update(owner_annotations)
 
             return annotations
 
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             log.debug("Could not fetch annotations for %s/%s in %s: %s", kind, name, namespace, e)
             return {}
 

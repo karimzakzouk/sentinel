@@ -1,24 +1,38 @@
 """GitHub executor tests — uses a mock PyGithub client to verify PR logic."""
+
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 from uuid import uuid4
 
-import pytest
+from execution.executors.github import GitHubExecutor
 
 from sentinel_common import (
-    Anomaly, AnomalyCluster, AgentState, ExecutionResult, FixProposal,
-    FixType, Incident, IncidentStatus, RootCause, Severity,
+    AgentState,
+    Anomaly,
+    AnomalyCluster,
+    FixProposal,
+    FixType,
+    Incident,
+    IncidentStatus,
+    RootCause,
+    Severity,
 )
-from execution.executors.github import GitHubExecutor
 
 
 def _make_incident() -> Incident:
     cluster = AnomalyCluster(
-        service="api", namespace="default",
-        anomalies=[Anomaly(
-            signal_id=uuid4(), service="api", namespace="default",
-            detector="test", score=0.9, dimensions={},
-        )],
+        service="api",
+        namespace="default",
+        anomalies=[
+            Anomaly(
+                signal_id=uuid4(),
+                service="api",
+                namespace="default",
+                detector="test",
+                score=0.9,
+                dimensions={},
+            )
+        ],
         summary="test",
         severity=Severity.WARNING,
     )
@@ -39,14 +53,15 @@ def _make_incident() -> Incident:
         incident_id=uuid4(),
         cluster=cluster,
         root_cause=RootCause(
-            statement="bug", confidence=0.95, category="bug",
+            statement="bug",
+            confidence=0.95,
+            category="bug",
             source_files=["src/main.py"],
         ),
         fix_proposal=fp,
         status=IncidentStatus.APPROVED,
     )
-    inc = Incident(incident_id=uuid4(), cluster=cluster, state=state,
-                    status=IncidentStatus.APPROVED)
+    inc = Incident(incident_id=uuid4(), cluster=cluster, state=state, status=IncidentStatus.APPROVED)
     return inc
 
 
@@ -60,6 +75,7 @@ class TestGitHubExecutor:
     async def _test_pr(self):
         # Mock the Github client
         from github.GithubException import GithubException
+
         mock_repo = MagicMock()
         mock_branch = MagicMock()
         mock_branch.commit.sha = "abc123"

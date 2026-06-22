@@ -9,31 +9,27 @@ to the `sentinel.anomalies` topic.
 This is *just math* — no LLM, no AI reasoning. It needs to be fast because
 it runs on every metric, every minute, for every service.
 """
+
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 import sys
-from collections import defaultdict, deque
-from datetime import datetime, timezone
 from typing import Any
-from uuid import UUID
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "common"))
 
-from fastapi import FastAPI
 import uvicorn
+from fastapi import FastAPI
 
-from sentinel_common import Anomaly, AnomalyCluster, Signal, Severity
+from detectors.clusterer import AnomalyClusterer
+from detectors.cusum import CUSUMDetector
+from detectors.isolation_forest import IsolationForestDetector
+from detectors.rules import RulesDetector
+from sentinel_common import Anomaly, Signal
 from sentinel_common.config import get_settings
 from sentinel_common.kafka_client import KafkaBus, SchemaRegistry
-
-from detectors.isolation_forest import IsolationForestDetector
-from detectors.cusum import CUSUMDetector
-from detectors.rules import RulesDetector
-from detectors.clusterer import AnomalyClusterer
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("sentinel.detection")
@@ -90,11 +86,11 @@ async def _consumer_loop() -> None:
             try:
                 sig = Signal.model_validate_json(raw if isinstance(raw, bytes) else raw.value)
                 await _process_signal(sig)
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 log.warning("Failed to process signal: %s", e)
     except asyncio.CancelledError:
         log.info("Consumer cancelled")
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         log.exception("Consumer loop crashed: %s", e)
 
 
@@ -124,12 +120,13 @@ async def _process_signal(sig: Signal) -> None:
     for anomaly in anomalies:
         cluster = clusterer.add(anomaly)
         if cluster is not None:
-            await bus.publish_model(
-                settings.kafka_topic_anomalies, cluster, key=cluster.service
-            )
+            await bus.publish_model(settings.kafka_topic_anomalies, cluster, key=cluster.service)
             log.info(
                 "Published anomaly cluster %s for %s (severity=%s, %d anomalies)",
-                cluster.cluster_id, cluster.service, cluster.severity, len(cluster.anomalies),
+                cluster.cluster_id,
+                cluster.service,
+                cluster.severity,
+                len(cluster.anomalies),
             )
 
 

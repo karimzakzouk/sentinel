@@ -5,6 +5,7 @@ This is the loop that closes the feedback cycle: every resolved incident
 becomes a permanent data point in the system's memory, improving future
 diagnoses via Beta-distribution priors and Weaviate RAG retrieval.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -34,8 +35,12 @@ async def feedback_loop(
                 if incident.status in (IncidentStatus.VERIFIED, IncidentStatus.FAILED, IncidentStatus.RESOLVED):
                     asyncio.create_task(
                         _feedback_process(
-                            incident, incident_store, event_store,
-                            weaviate, beta_tracker, postmortem_gen,
+                            incident,
+                            incident_store,
+                            event_store,
+                            weaviate,
+                            beta_tracker,
+                            postmortem_gen,
                         )
                     )
             except Exception as e:

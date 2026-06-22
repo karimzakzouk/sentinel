@@ -1,4 +1,5 @@
 """Loki collector — pulls recent error-level log lines for services."""
+
 from __future__ import annotations
 
 import logging
@@ -43,16 +44,18 @@ class LokiCollector:
             for stream in data.get("data", {}).get("result", []):
                 labels = stream.get("stream", {})
                 for ts, line in stream.get("values", []):
-                    out.append({
-                        "source": "loki",
-                        "log": {
-                            "labels": labels,
-                            "line": line,
-                            "ts": ts,
-                        },
-                    })
+                    out.append(
+                        {
+                            "source": "loki",
+                            "log": {
+                                "labels": labels,
+                                "line": line,
+                                "ts": ts,
+                            },
+                        }
+                    )
             return out
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             log.warning("Loki poll failed: %s", e)
             return []
 

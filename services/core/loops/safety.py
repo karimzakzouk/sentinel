@@ -1,4 +1,5 @@
 """Safety loop — consumes incidents, evaluates OPA policies, routes to execution."""
+
 from __future__ import annotations
 
 import asyncio
@@ -62,8 +63,10 @@ async def _safety_evaluate(
     }
     try:
         verdict_result = await opa.decide("sentinel/verdict", opa_input)
-        verdict_str = verdict_result if isinstance(verdict_result, str) else (
-            verdict_result.get("verdict") if isinstance(verdict_result, dict) else "deny"
+        verdict_str = (
+            verdict_result
+            if isinstance(verdict_result, str)
+            else (verdict_result.get("verdict") if isinstance(verdict_result, dict) else "deny")
         )
         rules_result = await opa.decide("sentinel/rules_evaluated", opa_input)
         rollback_result = await opa.decide("sentinel/rollback_blocked", opa_input)
@@ -113,6 +116,9 @@ async def _safety_evaluate(
     incident.touch()
     await incident_store.upsert(incident.model_dump(mode="json"))
     await event_store.append(
-        incident.incident_id, "safety", "governance_decision",
-        agent="safety", payload=decision.model_dump(mode="json"),
+        incident.incident_id,
+        "safety",
+        "governance_decision",
+        agent="safety",
+        payload=decision.model_dump(mode="json"),
     )

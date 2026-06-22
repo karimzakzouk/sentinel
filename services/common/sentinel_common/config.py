@@ -1,9 +1,8 @@
 """Centralized configuration. Every service reads env vars through this."""
+
 from __future__ import annotations
 
-import os
 from functools import lru_cache
-from typing import Optional
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -28,9 +27,7 @@ class Settings(BaseSettings):
     schema_registry_url: str = Field(default="http://sentinel-schema-registry:8081")
 
     # --- Storage ---
-    postgres_url: str = Field(
-        default="postgresql://sentinel:sentinel@sentinel-postgres:5432/sentinel"
-    )
+    postgres_url: str = Field(default="postgresql://sentinel:sentinel@sentinel-postgres:5432/sentinel")
     weaviate_url: str = Field(default="http://sentinel-weaviate:8080")
     weaviate_class: str = Field(default="Incident")
 
@@ -63,12 +60,12 @@ class Settings(BaseSettings):
 
     # --- Kubernetes ---
     k8s_in_cluster: bool = Field(default=True, description="True => use in-cluster service account")
-    k8s_kubeconfig: Optional[str] = Field(default=None, description="Path to kubeconfig if not in-cluster")
+    k8s_kubeconfig: str | None = Field(default=None, description="Path to kubeconfig if not in-cluster")
 
     # --- GitHub ---
     github_token: str = Field(default="")
     github_api_url: str = Field(default="https://api.github.com")
-    github_default_reviewer: Optional[str] = None
+    github_default_reviewer: str | None = None
 
     # --- Docker Hub (for Kaniko sandbox image builder) ---
     docker_hub_username: str = Field(default="")
@@ -76,7 +73,7 @@ class Settings(BaseSettings):
 
     # --- Terraform ---
     tf_workspace_dir: str = Field(default="/data/terraform")
-    tf_slack_webhook: Optional[str] = None
+    tf_slack_webhook: str | None = None
     # External URL for the Sentinel UI (used in Slack approval buttons + TF plan links)
     # Set this to the ingress URL or port-forward URL so Slack can reach it.
     ui_url: str = Field(default="http://sentinel-ui", description="External URL for the Sentinel UI")
@@ -123,14 +120,14 @@ class Settings(BaseSettings):
     # Anthropic and Bedrock have NO native OpenAI endpoint — you must run a
     # proxy (LiteLLM is recommended) and set llm_base_url to point at it.
     PROVIDER_BASE_URLS: dict[str, str] = {
-        "openai":    "https://api.openai.com/v1",
-        "zai":       "https://api.z.ai/api/paas/v4",
-        "gemini":    "https://generativelanguage.googleapis.com/v1beta/openai",
-        "azure":     "",  # must be set explicitly: https://<resource>.openai.azure.com
-        "ollama":    "http://ollama:11434/v1",
-        "vllm":      "http://vllm:8000/v1",
-        "litellm":   "http://litellm:4000/v1",  # default LiteLLM proxy port
-        "custom":    "",  # must be set explicitly
+        "openai": "https://api.openai.com/v1",
+        "zai": "https://api.z.ai/api/paas/v4",
+        "gemini": "https://generativelanguage.googleapis.com/v1beta/openai",
+        "azure": "",  # must be set explicitly: https://<resource>.openai.azure.com
+        "ollama": "http://ollama:11434/v1",
+        "vllm": "http://vllm:8000/v1",
+        "litellm": "http://litellm:4000/v1",  # default LiteLLM proxy port
+        "custom": "",  # must be set explicitly
     }
 
     @property

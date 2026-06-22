@@ -5,11 +5,11 @@ re-fit a small Isolation Forest every K observations. The forest flags
 observations whose path-length in the tree is unusually short (= easy to
 isolate = anomalous).
 """
+
 from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from collections import defaultdict, deque
 from typing import Any
 
@@ -127,7 +127,7 @@ class IsolationForestDetector:
             )
             m.fit(X)
             self._models[service] = m
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             log.warning("IF fit failed for %s: %s", service, e)
 
     def _build_matrix(self, window: deque[dict[str, Any]]) -> tuple[list[str], np.ndarray]:

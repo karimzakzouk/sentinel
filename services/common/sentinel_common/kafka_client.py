@@ -7,12 +7,14 @@ before it goes on the wire. In production you'd run Confluent Schema Registry
 as a separate pod (the Helm chart deploys it); this client just talks to it
 over HTTP.
 """
+
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
-from typing import Any, AsyncIterator, Optional
+from collections.abc import AsyncIterator
+from typing import Any
 
 import httpx
 from pydantic import BaseModel
@@ -45,10 +47,10 @@ class SchemaRegistry:
         try:
             r = await self._client.get(url)
             r.raise_for_status()
-            schema = r.json()
+            schema: dict[str, Any] = r.json()
             self._cache[subject] = schema
             return schema
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("Schema registry unreachable for %s: %s", subject, e)
             return {}
 
@@ -70,7 +72,8 @@ class SchemaRegistry:
 
 # We use aiokafka for real Kafka. The Helm chart deploys Strimzi Kafka.
 try:
-    from aiokafka import AIOKafkaProducer, AIOKafkaConsumer  # type: ignore
+    from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
+
     _HAS_AIOKAFKA = True
 except ImportError:  # pragma: no cover - aiokafka optional in unit tests
     _HAS_AIOKAFKA = False
@@ -99,10 +102,10 @@ class _InMemoryBus:
             self.topics[name] = _InMemoryTopic()
         return self.topics[name]
 
-    async def publish(self, topic: str, value: bytes, key: Optional[bytes] = None) -> None:
+    async def publish(self, topic: str, value: bytes, key: bytes | None = None) -> None:
         await self.topic(topic).publish(value)
 
-    def consumer(self, topic: str, group: str) -> "_InMemoryConsumer":
+    def consumer(self, topic: str, group: str) -> _InMemoryConsumer:
         q: asyncio.Queue[bytes] = asyncio.Queue()
         t = self.topic(topic)
         t.subscribers.append(q)
@@ -129,18 +132,19 @@ class KafkaBus:
     Tests / local: in-memory asyncio queue.
     """
 
-    def __init__(self, brokers: str, schema_registry: Optional[SchemaRegistry] = None):
+    def __init__(self, brokers: str, schema_registry: SchemaRegistry | None = None):
         self.brokers = brokers
         self.schema_registry = schema_registry
         self._producer: Any = None
-        self._mem: Optional[_InMemoryBus] = None
+        self._mem: _InMemoryBus | None = None
         if not _HAS_AIOKAFKA:
             self._mem = _InMemoryBus()
 
     async def start(self) -> None:
         if self._mem is not None:
             return
-        from aiokafka import AIOKafkaProducer  # type: ignore
+        from aiokafka import AIOKafkaProducer
+
         self._producer = AIOKafkaProducer(bootstrap_servers=self.brokers)
         await self._producer.start()
 
@@ -154,7 +158,7 @@ class KafkaBus:
         self,
         topic: str,
         model: BaseModel,
-        key: Optional[str] = None,
+        key: str | None = None,
     ) -> None:
         """Serialize a Pydantic model and publish it.
 
@@ -169,7 +173,7 @@ class KafkaBus:
         body = json.dumps(payload, default=str).encode("utf-8")
         await self.publish_raw(topic, body, key.encode("utf-8") if key else None)
 
-    async def publish_raw(self, topic: str, value: bytes, key: Optional[bytes] = None) -> None:
+    async def publish_raw(self, topic: str, value: bytes, key: bytes | None = None) -> None:
         if self._mem is not None:
             await self._mem.publish(topic, value, key)
             return
@@ -180,5 +184,6 @@ class KafkaBus:
     def consumer(self, topic: str, group: str) -> Any:
         if self._mem is not None:
             return self._mem.consumer(topic, group)
-        from aiokafka import AIOKafkaConsumer  # type: ignore
+        from aiokafka import AIOKafkaConsumer
+
         return AIOKafkaConsumer(topic, bootstrap_servers=self.brokers, group_id=group)

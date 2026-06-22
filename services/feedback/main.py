@@ -18,29 +18,28 @@ Turns every incident into a lesson. Three jobs:
    After resolution, ask the LLM to write a markdown postmortem and store
    it on the Incident record.
 """
+
 from __future__ import annotations
 
 import asyncio
 import logging
 import os
 import sys
-from datetime import datetime, timezone
 from typing import Any
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "common"))
 
-from fastapi import FastAPI
 import uvicorn
+from beta_tracker import BetaTracker
+from fastapi import FastAPI
+from postmortem import PostmortemGenerator
+from sqlalchemy.ext.asyncio import create_async_engine
+from weaviate_client import WeaviateStore
 
 from sentinel_common import Incident, IncidentStatus
 from sentinel_common.config import get_settings
+from sentinel_common.db import BetaStore, EventStore, IncidentStore, init_db
 from sentinel_common.kafka_client import KafkaBus, SchemaRegistry
-from sentinel_common.db import IncidentStore, EventStore, BetaStore, init_db
-from sqlalchemy.ext.asyncio import create_async_engine
-
-from weaviate_client import WeaviateStore
-from beta_tracker import BetaTracker
-from postmortem import PostmortemGenerator
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("sentinel.feedback")
@@ -103,13 +102,10 @@ async def _consumer_loop() -> None:
     try:
         async for raw in consumer:
             try:
-                incident = Incident.model_validate_json(
-                    raw if isinstance(raw, bytes) else raw.value
-                )
-                if incident.status in (IncidentStatus.VERIFIED, IncidentStatus.FAILED,
-                                        IncidentStatus.RESOLVED):
+                incident = Incident.model_validate_json(raw if isinstance(raw, bytes) else raw.value)
+                if incident.status in (IncidentStatus.VERIFIED, IncidentStatus.FAILED, IncidentStatus.RESOLVED):
                     asyncio.create_task(_process_incident(incident))
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 log.warning("Failed to process incident: %s", e)
     except asyncio.CancelledError:
         log.info("Consumer cancelled")
@@ -134,11 +130,11 @@ async def _process_incident(incident: Incident) -> None:
     alpha, beta = await beta_tracker.record(service, fix_pattern, success)
     incident.beta_alpha = alpha
     incident.beta_beta = beta
-    log.info("Beta updated for %s/%s: alpha=%.1f, beta=%.1f, success=%s",
-             service, fix_pattern, alpha, beta, success)
+    log.info("Beta updated for %s/%s: alpha=%.1f, beta=%.1f, success=%s", service, fix_pattern, alpha, beta, success)
 
-    await event_store.append(incident.incident_id, "feedback", "beta_updated",
-                              payload={"alpha": alpha, "beta": beta, "success": success})
+    await event_store.append(
+        incident.incident_id, "feedback", "beta_updated", payload={"alpha": alpha, "beta": beta, "success": success}
+    )
 
     # 2. Store in Weaviate for future RAG retrieval (with git_commit_at_resolution
     # so future retrievals can apply code-churn decay)
@@ -154,9 +150,12 @@ async def _process_incident(incident: Incident) -> None:
     incident.state.status = IncidentStatus.RESOLVED
     incident.touch()
     await incident_store.upsert(incident.model_dump(mode="json"))
-    await event_store.append(incident.incident_id, "feedback", "incident_resolved",
-                              payload={"weaviate_uuid": weaviate_uuid,
-                                       "postmortem_length": len(pm) if pm else 0})
+    await event_store.append(
+        incident.incident_id,
+        "feedback",
+        "incident_resolved",
+        payload={"weaviate_uuid": weaviate_uuid, "postmortem_length": len(pm) if pm else 0},
+    )
 
 
 @app.get("/healthz")

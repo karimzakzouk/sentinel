@@ -1,4 +1,5 @@
 """Rego policy bundle helpers — the safety service uses these to talk to OPA."""
+
 from __future__ import annotations
 
 import logging
@@ -29,7 +30,8 @@ class OPAClient:
         url = f"{self.base_url}/v1/data/{decision_path}"
         r = await self._client.post(url, json={"input": input_data})
         r.raise_for_status()
-        return r.json().get("result", {})
+        result: dict[str, Any] = r.json().get("result", {})
+        return result
 
     async def close(self) -> None:
         await self._client.aclose()

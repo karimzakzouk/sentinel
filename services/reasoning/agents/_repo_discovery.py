@@ -5,6 +5,7 @@ from an AgentState's cluster annotations. Used by both the Investigator
 (to fetch source code for hypothesis formation) and the Fix Proposer (to
 know where to open the PR).
 """
+
 from __future__ import annotations
 
 from sentinel_common.schemas import AgentState
@@ -43,11 +44,11 @@ def _discover_repo_from_state(state: AgentState) -> str | None:
 
     # Strip protocol prefix
     if repo.startswith("https://github.com/"):
-        repo = repo[len("https://github.com/"):]
+        repo = repo[len("https://github.com/") :]
     elif repo.startswith("http://github.com/"):
-        repo = repo[len("http://github.com/"):]
+        repo = repo[len("http://github.com/") :]
     elif repo.startswith("github.com/"):
-        repo = repo[len("github.com/"):]
+        repo = repo[len("github.com/") :]
 
     # Now repo should be "owner/repo" format
     # Validate: must have exactly one slash and non-empty parts

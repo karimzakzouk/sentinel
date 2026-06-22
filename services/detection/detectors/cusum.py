@@ -6,6 +6,7 @@ It's the canonical algorithm for "this metric is drifting, not just spiking".
 
 We run one CUSUM per (service, metric_name) pair.
 """
+
 from __future__ import annotations
 
 import logging
@@ -19,8 +20,7 @@ log = logging.getLogger(__name__)
 
 
 class CUSUMDetector:
-    def __init__(self, threshold: float = 5.0, drift: float = 0.02,
-                 warmup: int = 30, window_size: int = 200):
+    def __init__(self, threshold: float = 5.0, drift: float = 0.02, warmup: int = 30, window_size: int = 200):
         """`threshold` = number of std deviations of cumulative drift before firing.
         `drift` = allowance parameter (k in CUSUM literature).
         """

@@ -15,10 +15,10 @@ State is a Pydantic model — every node reads from and writes to it. A
 malformed agent output is caught at the node boundary rather than poisoning
 downstream nodes.
 """
+
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 import sys
@@ -27,21 +27,23 @@ from uuid import UUID, uuid4
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "common"))
 
-from fastapi import FastAPI
-from pydantic import ValidationError
 import uvicorn
-
-from sentinel_common import (
-    AnomalyCluster, Incident, IncidentStatus, AgentState,
-)
-from sentinel_common.config import get_settings
-from sentinel_common.kafka_client import KafkaBus, SchemaRegistry
-from sentinel_common.db import IncidentStore, EventStore, init_db, BetaStore
+from context import ContextFetcher
+from fastapi import FastAPI
+from graph import build_graph
+from llm import LLMRouter
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from graph import build_graph
-from context import ContextFetcher
-from llm import LLMRouter
+from sentinel_common import (
+    AgentState,
+    AnomalyCluster,
+    Incident,
+    IncidentStatus,
+)
+from sentinel_common.config import get_settings
+from sentinel_common.db import BetaStore, EventStore, IncidentStore, init_db
+from sentinel_common.kafka_client import KafkaBus, SchemaRegistry
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("sentinel.reasoning")
@@ -107,11 +109,9 @@ async def _consumer_loop() -> None:
     try:
         async for raw in consumer:
             try:
-                cluster = AnomalyCluster.model_validate_json(
-                    raw if isinstance(raw, bytes) else raw.value
-                )
+                cluster = AnomalyCluster.model_validate_json(raw if isinstance(raw, bytes) else raw.value)
                 asyncio.create_task(_process_cluster(cluster))
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 log.warning("Failed to parse cluster: %s", e)
     except asyncio.CancelledError:
         log.info("Consumer cancelled")
@@ -135,8 +135,9 @@ async def _process_cluster(cluster: AnomalyCluster) -> None:
         status=IncidentStatus.INVESTIGATING,
     )
 
-    await event_store.append(incident_id, "reasoning", "investigation_started",
-                             payload={"cluster_summary": cluster.summary})
+    await event_store.append(
+        incident_id, "reasoning", "investigation_started", payload={"cluster_summary": cluster.summary}
+    )
 
     # Persist initial incident
     await incident_store.upsert(incident.model_dump(mode="json"))
@@ -156,34 +157,36 @@ async def _process_cluster(cluster: AnomalyCluster) -> None:
         incident.status = state.status
         incident.touch()
         await incident_store.upsert(incident.model_dump(mode="json"))
-        await event_store.append(incident_id, "reasoning", "investigation_completed",
-                                 agent="orchestrator",
-                                 payload={"status": state.status})
+        await event_store.append(
+            incident_id, "reasoning", "investigation_completed", agent="orchestrator", payload={"status": state.status}
+        )
 
         # Publish to incidents topic for the safety layer
         await bus.publish_model(settings.kafka_topic_incidents, incident, key=cluster.service)
-        log.info("Incident %s published (status=%s, service=%s)",
-                 incident_id, state.status, cluster.service)
+        log.info("Incident %s published (status=%s, service=%s)", incident_id, state.status, cluster.service)
     except ValidationError as ve:
         log.error("State validation failed: %s", ve)
         incident.status = IncidentStatus.FAILED
         incident.state.error = f"validation_error: {ve}"
         await incident_store.upsert(incident.model_dump(mode="json"))
-    except asyncio.TimeoutError:
+    except TimeoutError:
         log.error("Investigation timed out after %ss", timeout)
         incident.status = IncidentStatus.FAILED
         incident.state.status = IncidentStatus.FAILED
         incident.state.error = f"investigation_timeout: exceeded {timeout}s"
-        incident.state.agent_trace.append({
-            "agent": "orchestrator",
-            "action": "timeout",
-            "timeout_seconds": timeout,
-        })
+        incident.state.agent_trace.append(
+            {
+                "agent": "orchestrator",
+                "action": "timeout",
+                "timeout_seconds": timeout,
+            }
+        )
         incident.touch()
         await incident_store.upsert(incident.model_dump(mode="json"))
-        await event_store.append(incident_id, "reasoning", "investigation_timeout",
-                                  payload={"timeout_seconds": timeout})
-    except Exception as e:  # noqa: BLE001
+        await event_store.append(
+            incident_id, "reasoning", "investigation_timeout", payload={"timeout_seconds": timeout}
+        )
+    except Exception as e:
         log.exception("Reasoning graph failed: %s", e)
         incident.status = IncidentStatus.FAILED
         await incident_store.upsert(incident.model_dump(mode="json"))

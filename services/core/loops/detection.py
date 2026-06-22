@@ -1,4 +1,5 @@
 """Detection loop — consumes signals, runs detectors, publishes anomaly clusters."""
+
 from __future__ import annotations
 
 import asyncio

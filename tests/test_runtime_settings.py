@@ -1,7 +1,8 @@
 """Tests for the runtime settings module (Pydantic Settings v2 model)."""
-from sentinel_common.config import Settings
 
 from runtime_settings import RuntimeSettings, SettingsUpdate, apply_runtime_to_settings, load_from_env
+
+from sentinel_common.config import Settings
 
 
 class TestRuntimeSettings:
@@ -77,10 +78,12 @@ class TestApplyUpdate:
 
     def test_only_returns_changed_fields(self):
         rs = RuntimeSettings(llm_provider="openai")
-        changed = rs.apply_update({
-            "llm_provider": "openai",  # unchanged
-            "llm_fast_model": "gpt-4o",  # changed
-        })
+        changed = rs.apply_update(
+            {
+                "llm_provider": "openai",  # unchanged
+                "llm_fast_model": "gpt-4o",  # changed
+            }
+        )
         assert changed == ["llm_fast_model"]
 
 

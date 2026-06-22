@@ -6,11 +6,12 @@ This is the most complex loop because CODE_FIX has a 4-phase flow:
   3. Sandbox verification — deploy canary, run 3 verification levels
   4. open_pr — open a PR with the sandbox result
 """
+
 from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from sentinel_common import ExecutionResult, FixType, Incident, IncidentStatus
@@ -72,8 +73,10 @@ async def _execute_incident(
     await incident_store.upsert(incident.model_dump(mode="json"))
 
     result = ExecutionResult(
-        fix_id=fp.fix_id, fix_type=fp.fix_type, success=False,
-        started_at=datetime.now(timezone.utc),
+        fix_id=fp.fix_id,
+        fix_type=fp.fix_type,
+        success=False,
+        started_at=datetime.now(UTC),
     )
     try:
         if fp.fix_type in (FixType.CODE_FIX, FixType.ROLL_FORWARD):
@@ -86,7 +89,7 @@ async def _execute_incident(
             result.success = False
             result.error = f"unknown_fix_type: {fp.fix_type}"
 
-        result.finished_at = datetime.now(timezone.utc)
+        result.finished_at = datetime.now(UTC)
         incident.state.execution_result = result
         incident.state.status = IncidentStatus.VERIFIED if result.success else IncidentStatus.FAILED
         incident.status = incident.state.status
@@ -146,9 +149,7 @@ async def _execute_code_fix(incident: Incident, gh_exec: Any, sandbox: Any, sett
                 image_tag = f"sentinel-{str(fp.fix_id)[:8]}"
 
                 fixed_files = {
-                    fc["path"]: fc["new_content"]
-                    for fc in fp.files_to_change
-                    if "path" in fc and "new_content" in fc
+                    fc["path"]: fc["new_content"] for fc in fp.files_to_change if "path" in fc and "new_content" in fc
                 }
 
                 canary_image = await kaniko.build(
@@ -210,6 +211,6 @@ def _failed_result(fp: Any, error: str) -> ExecutionResult:
         fix_type=fp.fix_type,
         success=False,
         error=error,
-        started_at=datetime.now(timezone.utc),
-        finished_at=datetime.now(timezone.utc),
+        started_at=datetime.now(UTC),
+        finished_at=datetime.now(UTC),
     )

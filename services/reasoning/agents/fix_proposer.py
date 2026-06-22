@@ -12,16 +12,16 @@ For CODE_FIX proposals, this agent ALSO writes the actual patch — using the
 source code fetched by the context fetcher. It returns a list of
 {path, new_content} dicts that the execution layer applies as a PR.
 """
+
 from __future__ import annotations
 
 import json
 import logging
-import re
 from typing import Any
 
+from agents._repo_discovery import _discover_repo_from_state
 from sentinel_common import FixProposal, FixType
 from sentinel_common.schemas import AgentState, IncidentStatus
-from agents._repo_discovery import _discover_repo_from_state
 
 log = logging.getLogger(__name__)
 
@@ -65,8 +65,7 @@ will trigger a kubectl rollout undo. If roll_forward, treat it like code_fix.
 """
 
 
-async def fix_proposer_node(state: AgentState, *, llm_router: Any,
-                             event_store: Any) -> dict[str, Any]:
+async def fix_proposer_node(state: AgentState, *, llm_router: Any, event_store: Any) -> dict[str, Any]:
     """Translate the root cause into a FixProposal."""
     incident_id = state.incident_id
     if state.root_cause is None:
@@ -99,7 +98,7 @@ async def fix_proposer_node(state: AgentState, *, llm_router: Any,
         user_msg = _build_user_message(state)
         try:
             result = await llm_router.frontier_json(SYSTEM_PROMPT, user_msg, max_tokens=6000)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             log.error("Fix Proposer LLM call failed: %s", e)
             state.status = IncidentStatus.FAILED
             state.error = f"fix_proposer_llm_failure: {e}"
@@ -120,7 +119,9 @@ async def fix_proposer_node(state: AgentState, *, llm_router: Any,
         # instead of repo paths (e.g. "app/main.py"). We match each path against
         # the fetched_code keys (which are the correct repo paths) and replace
         # if there's a suffix match. This is generic — works for any project.
-        log.info("Fix Proposer: fetched_code keys = %s", list(state.fetched_code.keys()) if state.fetched_code else "EMPTY")
+        log.info(
+            "Fix Proposer: fetched_code keys = %s", list(state.fetched_code.keys()) if state.fetched_code else "EMPTY"
+        )
         log.info("Fix Proposer: LLM returned files_to_change paths = %s", [fc.get("path", "?") for fc in raw_files])
         if state.fetched_code:
             fixed_files = []
@@ -168,15 +169,21 @@ async def fix_proposer_node(state: AgentState, *, llm_router: Any,
 
     state.fix_proposal = proposal
     state.status = IncidentStatus.FIX_PROPOSED
-    state.agent_trace.append({
-        "agent": "fix_proposer",
-        "fix_type": proposal.fix_type.value,
-        "files_changed": len(proposal.files_to_change),
-        "confidence": proposal.proposed_confidence,
-    })
-    await event_store.append(incident_id, "reasoning", "fix_proposed",
-                              agent="fix_proposer",
-                              payload={"fix_proposal": proposal.model_dump(mode="json")})
+    state.agent_trace.append(
+        {
+            "agent": "fix_proposer",
+            "fix_type": proposal.fix_type.value,
+            "files_changed": len(proposal.files_to_change),
+            "confidence": proposal.proposed_confidence,
+        }
+    )
+    await event_store.append(
+        incident_id,
+        "reasoning",
+        "fix_proposed",
+        agent="fix_proposer",
+        payload={"fix_proposal": proposal.model_dump(mode="json")},
+    )
 
     return state.model_dump(mode="json")
 
@@ -226,8 +233,7 @@ def _build_user_message(state: AgentState) -> str:
     return "\n".join(parts)
 
 
-async def _llm_code_fix(state: AgentState, proposal: FixProposal,
-                        llm_router: Any) -> FixProposal:
+async def _llm_code_fix(state: AgentState, proposal: FixProposal, llm_router: Any) -> FixProposal:
     """For roll_forward cases, ask LLM for the actual code patch."""
     user_msg = _build_user_message(state)
     try:
@@ -248,7 +254,7 @@ async def _llm_code_fix(state: AgentState, proposal: FixProposal,
                         break
         proposal.files_to_change = raw_files
         proposal.description = result.get("description", proposal.description)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         log.error("Roll-forward LLM call failed: %s", e)
         proposal.description = f"{proposal.description} (LLM code generation failed — needs human)"
     return proposal
@@ -257,7 +263,7 @@ async def _llm_code_fix(state: AgentState, proposal: FixProposal,
 def _build_pr_body(state: AgentState, rc: Any, fix_type: str) -> str:
     """Generate a markdown PR body for the fix."""
     parts: list[str] = []
-    parts.append(f"# Sentinel Autonomous Fix")
+    parts.append("# Sentinel Autonomous Fix")
     parts.append("")
     parts.append(f"**Fix type:** `{fix_type}`")
     parts.append(f"**Service:** `{state.cluster.service}` (namespace: `{state.cluster.namespace}`)")
@@ -272,7 +278,7 @@ def _build_pr_body(state: AgentState, rc: Any, fix_type: str) -> str:
         parts.append(f"- **{e.e_id}** ({e.source}): {json.dumps(e.result)[:300]}")
     parts.append("")
     parts.append("## Files Changed")
-    for f in (state.fix_proposal.files_to_change if state.fix_proposal else []):
+    for f in state.fix_proposal.files_to_change if state.fix_proposal else []:
         parts.append(f"- `{f.get('path')}`")
     parts.append("")
     parts.append("## Verification")

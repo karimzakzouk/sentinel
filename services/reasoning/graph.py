@@ -24,24 +24,26 @@ Layout:
                               ^
                               └── (rewind goes back to investigator)
 """
+
 from __future__ import annotations
 
 import logging
 from typing import Any
 
-from langgraph.graph import StateGraph, END  # type: ignore
+from langgraph.graph import END, StateGraph  # type: ignore
 
-from sentinel_common.schemas import AgentState
-from agents.investigator import investigator_node
-from agents.evidence_gatherer import evidence_gatherer_node
 from agents.analyst import analyst_node
+from agents.evidence_gatherer import evidence_gatherer_node
 from agents.fix_proposer import fix_proposer_node
+from agents.investigator import investigator_node
+from sentinel_common.schemas import AgentState
 
 log = logging.getLogger(__name__)
 
 
-def build_graph(*, llm_router: Any, context_fetcher: Any,
-                incident_store: Any, event_store: Any, beta_store: Any) -> Any:
+def build_graph(
+    *, llm_router: Any, context_fetcher: Any, incident_store: Any, event_store: Any, beta_store: Any
+) -> Any:
     """Build and compile the LangGraph reasoning graph.
 
     Every node takes the AgentState dict and returns a dict with a `state` key
@@ -56,7 +58,8 @@ def build_graph(*, llm_router: Any, context_fetcher: Any,
         # The Investigator can be invoked after a rewind — if so, the
         # rewind_events list has new context. Merge it into the prompt.
         return await investigator_node(
-            s, llm_router=llm_router,
+            s,
+            llm_router=llm_router,
             context_fetcher=context_fetcher,
             event_store=event_store,
         )
@@ -64,7 +67,8 @@ def build_graph(*, llm_router: Any, context_fetcher: Any,
     async def _evidence(state: dict[str, Any]) -> dict[str, Any]:
         s = AgentState.model_validate(state)
         return await evidence_gatherer_node(
-            s, llm_router=llm_router,
+            s,
+            llm_router=llm_router,
             context_fetcher=context_fetcher,
             event_store=event_store,
         )
@@ -72,7 +76,8 @@ def build_graph(*, llm_router: Any, context_fetcher: Any,
     async def _analyst(state: dict[str, Any]) -> dict[str, Any]:
         s = AgentState.model_validate(state)
         return await analyst_node(
-            s, llm_router=llm_router,
+            s,
+            llm_router=llm_router,
             beta_store=beta_store,
             event_store=event_store,
         )
@@ -80,7 +85,8 @@ def build_graph(*, llm_router: Any, context_fetcher: Any,
     async def _fix(state: dict[str, Any]) -> dict[str, Any]:
         s = AgentState.model_validate(state)
         return await fix_proposer_node(
-            s, llm_router=llm_router,
+            s,
+            llm_router=llm_router,
             event_store=event_store,
         )
 

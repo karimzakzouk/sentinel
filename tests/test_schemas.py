@@ -1,12 +1,20 @@
 """Schema validation tests — every Pydantic model must reject malformed input."""
-import pytest
-from datetime import datetime
+
 from uuid import uuid4
 
+import pytest
+
 from sentinel_common import (
-    Signal, SignalSource, Anomaly, AnomalyCluster, Severity,
-    Hypothesis, Evidence, RootCause, FixProposal, FixType,
-    AgentState, IncidentStatus, RewindEvent,
+    AgentState,
+    Anomaly,
+    AnomalyCluster,
+    FixProposal,
+    FixType,
+    Hypothesis,
+    RewindEvent,
+    Severity,
+    Signal,
+    SignalSource,
 )
 
 
@@ -100,11 +108,13 @@ class TestAgentState:
             agent_trace=[{"agent": "investigator", "iter": 1}],
         )
         # Simulate rewind
-        state.rewind_events.append(RewindEvent(
-            raised_by="evidence_gatherer",
-            reason="upstream is down",
-            new_context={"upstream": "billing-api"},
-        ))
+        state.rewind_events.append(
+            RewindEvent(
+                raised_by="evidence_gatherer",
+                reason="upstream is down",
+                new_context={"upstream": "billing-api"},
+            )
+        )
         state.hypotheses = []  # wiped
         state.agent_trace.append({"agent": "evidence_gatherer", "action": "rewind"})
 

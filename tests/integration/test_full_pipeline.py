@@ -10,6 +10,7 @@ This is a placeholder for Week 2. When run, it would:
 Skipped by default (requires a real cluster + Docker Hub creds + LLM key).
 Run with: pytest -m integration
 """
+
 import os
 
 import pytest

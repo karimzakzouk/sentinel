@@ -16,6 +16,7 @@ If Istio is not installed on the cluster, the VirtualService application will
 fail. We catch that and fall back to a "no-mirror" sandbox that just boots
 the canary and polls its /metrics — less rigorous but still useful.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -52,8 +53,9 @@ class SandboxRunner:
         if self._available:
             try:
                 from kubernetes import client  # type: ignore
+
                 self._coa = client.CustomObjectsApi()
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 log.warning("CustomObjectsApi init failed: %s", e)
 
     async def run(self, incident: Incident, duration_seconds: int = 60) -> SandboxResult:
@@ -75,47 +77,47 @@ class SandboxRunner:
             # 2. Deploy the canary into the sandbox
             deploy_result = await self._deploy_to_sandbox(incident, sandbox_ns)
             if not deploy_result["success"]:
-                return SandboxResult(False, f"deploy_failed: {deploy_result['error']}",
-                                     namespace=sandbox_ns)
+                return SandboxResult(False, f"deploy_failed: {deploy_result['error']}", namespace=sandbox_ns)
 
             # 3. Wait for the canary pods to be ready (Level 1 — startup crash detection)
             ready = await self._wait_for_ready(sandbox_ns, fp.target_service, timeout=240)
             if not ready:
-                return SandboxResult(False, "canary_pods_not_ready (startup crash not fixed)",
-                                     namespace=sandbox_ns)
+                return SandboxResult(False, "canary_pods_not_ready (startup crash not fixed)", namespace=sandbox_ns)
             log.info("Sandbox Level 1 PASSED: canary pod is Ready")
 
             # 4. Set up Istio traffic mirroring (1% of prod traffic) — optional
             mirror_applied = False
             if self.settings.enable_traffic_mirroring:
-                mirror_applied = await self._setup_traffic_mirror(
-                    fp.target_service, fp.target_namespace, sandbox_ns
-                )
+                mirror_applied = await self._setup_traffic_mirror(fp.target_service, fp.target_namespace, sandbox_ns)
 
             # 5. Level 2 — call the app's own endpoints to verify they respond
             level2_passed = await self._verify_endpoints(sandbox_ns, fp.target_service)
             if not level2_passed:
-                return SandboxResult(False, "endpoints_returned_5xx (app starts but endpoints fail)",
-                                     namespace=sandbox_ns)
+                return SandboxResult(
+                    False, "endpoints_returned_5xx (app starts but endpoints fail)", namespace=sandbox_ns
+                )
             log.info("Sandbox Level 2 PASSED: all endpoints returned 2xx/3xx")
 
             # 6. Level 3 — reproduce the original error and verify it's gone
-            level3_result = await self._verify_original_error_fixed(
-                sandbox_ns, fp.target_service, incident
-            )
+            level3_result = await self._verify_original_error_fixed(sandbox_ns, fp.target_service, incident)
             if level3_result is not None:
                 if not level3_result["passed"]:
-                    return SandboxResult(False, f"original_error_still_present: {level3_result['detail']}",
-                                         namespace=sandbox_ns)
+                    return SandboxResult(
+                        False, f"original_error_still_present: {level3_result['detail']}", namespace=sandbox_ns
+                    )
                 log.info("Sandbox Level 3 PASSED: %s", level3_result["detail"])
             else:
                 log.info("Sandbox Level 3 SKIPPED: could not determine original error to reproduce")
 
             # All levels passed
-            return SandboxResult(True, "all_checks_passed (pod ready + endpoints ok + original error gone)",
-                                 namespace=sandbox_ns, mirror_applied=mirror_applied)
+            return SandboxResult(
+                True,
+                "all_checks_passed (pod ready + endpoints ok + original error gone)",
+                namespace=sandbox_ns,
+                mirror_applied=mirror_applied,
+            )
 
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             log.exception("Sandbox failed: %s", e)
             return SandboxResult(False, f"sandbox_error: {e}", namespace=sandbox_ns)
         finally:
@@ -137,7 +139,7 @@ class SandboxRunner:
         try:
             await asyncio.to_thread(self.k8s.core.create_namespace, body=body)
             log.info("Created sandbox namespace: %s", ns)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             # 409 = already exists, that's fine
             log.info("Namespace %s creation: %s", ns, e)
 
@@ -154,6 +156,7 @@ class SandboxRunner:
         For ROLLBACK: we copy the previous ReplicaSet's template.
         """
         from kubernetes import client  # type: ignore
+
         fp = incident.state.fix_proposal
         if fp is None:
             return {"success": False, "error": "no fix proposal"}
@@ -196,7 +199,10 @@ class SandboxRunner:
                     prod_deploy = deps.items[0]
 
             if prod_deploy is None:
-                return {"success": False, "error": f"deployment for {fp.target_service} not found in {fp.target_namespace}"}
+                return {
+                    "success": False,
+                    "error": f"deployment for {fp.target_service} not found in {fp.target_namespace}",
+                }
 
             # Determine the canary image
             canary_image = await self._resolve_canary_image(incident, prod_deploy)
@@ -225,7 +231,8 @@ class SandboxRunner:
 
             await asyncio.to_thread(
                 self.k8s.apps.create_namespaced_deployment,
-                namespace=ns, body=sandbox_deploy,
+                namespace=ns,
+                body=sandbox_deploy,
             )
 
             # Copy ConfigMaps + Secrets referenced by the prod Deployment
@@ -295,7 +302,8 @@ class SandboxRunner:
             try:
                 await asyncio.to_thread(
                     self.k8s.core.create_namespaced_service,
-                    namespace=ns, body=sandbox_svc,
+                    namespace=ns,
+                    body=sandbox_svc,
                 )
                 log.info("Created sandbox Service %s in %s", fp.target_service, ns)
             except Exception as e:
@@ -304,7 +312,7 @@ class SandboxRunner:
             log.info("Deployed canary image %s into sandbox %s", canary_image, ns)
             return {"success": True, "image": canary_image}
 
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             log.error("Sandbox deploy failed: %s", e)
             return {"success": False, "error": str(e)}
 
@@ -322,23 +330,23 @@ class SandboxRunner:
         Copies each referenced resource from prod_ns to sandbox_ns.
         Skips resources that don't exist or already exist in the sandbox.
         """
+
         from kubernetes import client
-        import copy
 
         pod_spec = deploy.spec.template.spec
         cm_names: set[str] = set()
         secret_names: set[str] = set()
 
         # Collect from envFrom (container level)
-        for container in (pod_spec.containers or []):
-            for env_from in (container.env_from or []):
+        for container in pod_spec.containers or []:
+            for env_from in container.env_from or []:
                 if env_from.config_map_ref:
                     cm_names.add(env_from.config_map_ref.name)
                 if env_from.secret_ref:
                     secret_names.add(env_from.secret_ref.name)
 
             # Collect from env[].valueFrom
-            for env in (container.env or []):
+            for env in container.env or []:
                 if env.value_from:
                     if env.value_from.config_map_key_ref:
                         cm_names.add(env.value_from.config_map_key_ref.name)
@@ -346,7 +354,7 @@ class SandboxRunner:
                         secret_names.add(env.value_from.secret_key_ref.name)
 
         # Collect from volumes
-        for vol in (pod_spec.volumes or []):
+        for vol in pod_spec.volumes or []:
             if vol.config_map:
                 cm_names.add(vol.config_map.name)
             if vol.secret:
@@ -359,7 +367,8 @@ class SandboxRunner:
             try:
                 cm = await asyncio.to_thread(
                     self.k8s.core.read_namespaced_config_map,
-                    name=cm_name, namespace=prod_ns,
+                    name=cm_name,
+                    namespace=prod_ns,
                 )
                 sandbox_cm = client.V1ConfigMap(
                     metadata=client.V1ObjectMeta(name=cm_name, namespace=sandbox_ns),
@@ -368,7 +377,8 @@ class SandboxRunner:
                 )
                 await asyncio.to_thread(
                     self.k8s.core.create_namespaced_config_map,
-                    namespace=sandbox_ns, body=sandbox_cm,
+                    namespace=sandbox_ns,
+                    body=sandbox_cm,
                 )
                 log.info("Copied ConfigMap %s to sandbox", cm_name)
             except Exception as e:
@@ -382,7 +392,8 @@ class SandboxRunner:
             try:
                 sec = await asyncio.to_thread(
                     self.k8s.core.read_namespaced_secret,
-                    name=secret_name, namespace=prod_ns,
+                    name=secret_name,
+                    namespace=prod_ns,
                 )
                 sandbox_sec = client.V1Secret(
                     metadata=client.V1ObjectMeta(name=secret_name, namespace=sandbox_ns),
@@ -391,7 +402,8 @@ class SandboxRunner:
                 )
                 await asyncio.to_thread(
                     self.k8s.core.create_namespaced_secret,
-                    namespace=sandbox_ns, body=sandbox_sec,
+                    namespace=sandbox_ns,
+                    body=sandbox_sec,
                 )
                 log.info("Copied Secret %s to sandbox", secret_name)
             except Exception as e:
@@ -401,6 +413,7 @@ class SandboxRunner:
     def _patch_pod_spec(self, spec: Any, fp: Any, canary_image: str) -> Any:
         """Apply the fix's K8s patch (if any) to the pod spec, and override the image."""
         import copy
+
         patched = copy.deepcopy(spec)
         for container in patched.containers:
             container.image = canary_image
@@ -439,7 +452,8 @@ class SandboxRunner:
             try:
                 deploy = await asyncio.to_thread(
                     self.k8s.apps.read_namespaced_deployment,
-                    name=name, namespace=ns,
+                    name=name,
+                    namespace=ns,
                 )
                 if deploy.status.ready_replicas and deploy.status.ready_replicas >= 1:
                     return True
@@ -448,8 +462,7 @@ class SandboxRunner:
             await asyncio.sleep(3)
         return False
 
-    async def _setup_traffic_mirror(self, prod_service: str, prod_ns: str,
-                                      sandbox_ns: str) -> bool:
+    async def _setup_traffic_mirror(self, prod_service: str, prod_ns: str, sandbox_ns: str) -> bool:
         """Apply an Istio VirtualService that mirrors 1% of prod traffic to the sandbox.
 
         Returns True if the VirtualService was applied successfully, False if
@@ -469,16 +482,18 @@ class SandboxRunner:
             },
             "spec": {
                 "hosts": [prod_service],
-                "http": [{
-                    "route": [
-                        {"destination": {"host": prod_service, "port": {"number": 80}}},
-                    ],
-                    "mirror": {
-                        "host": f"{prod_service}.{sandbox_ns}.svc.cluster.local",
-                        "port": {"number": 80},
-                    },
-                    "mirror_percentage": {"value": 1.0},
-                }],
+                "http": [
+                    {
+                        "route": [
+                            {"destination": {"host": prod_service, "port": {"number": 80}}},
+                        ],
+                        "mirror": {
+                            "host": f"{prod_service}.{sandbox_ns}.svc.cluster.local",
+                            "port": {"number": 80},
+                        },
+                        "mirror_percentage": {"value": 1.0},
+                    }
+                ],
             },
         }
 
@@ -494,7 +509,7 @@ class SandboxRunner:
             )
             log.info("Applied Istio VirtualService %s-mirror in %s", prod_service, prod_ns)
             return True
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             # 409 = already exists, that's OK — patch it
             if "409" in str(e) or "AlreadyExists" in str(e):
                 try:
@@ -509,7 +524,7 @@ class SandboxRunner:
                     )
                     log.info("Patched existing Istio VirtualService %s-mirror", prod_service)
                     return True
-                except Exception as e2:  # noqa: BLE001
+                except Exception as e2:
                     log.warning("VirtualService patch failed: %s", e2)
                     return False
             # If Istio CRDs are not installed, we get a 404 or "resource type not found"
@@ -527,6 +542,7 @@ class SandboxRunner:
         Returns True if all endpoints return 2xx/3xx, False if any returns 5xx.
         """
         import httpx
+
         try:
             # Get the sandbox Service to find the port
             # Try exact name, then label selector
@@ -534,7 +550,8 @@ class SandboxRunner:
             try:
                 svc = await asyncio.to_thread(
                     self.k8s.core.read_namespaced_service,
-                    name=service, namespace=sandbox_ns,
+                    name=service,
+                    namespace=sandbox_ns,
                 )
             except Exception:
                 pass
@@ -572,7 +589,7 @@ class SandboxRunner:
                 )
                 if prod_deps.items:
                     dep = prod_deps.items[0]
-                    for container in (dep.spec.template.spec.containers or []):
+                    for container in dep.spec.template.spec.containers or []:
                         if container.readiness_probe and container.readiness_probe.http_get:
                             path = container.readiness_probe.http_get.path
                             if path and path not in endpoints_to_check:
@@ -605,8 +622,7 @@ class SandboxRunner:
             log.warning("Sandbox Level 2 error: %s", e)
             return True  # Don't fail the sandbox if Level 2 has an infrastructure error
 
-    async def _verify_original_error_fixed(self, sandbox_ns: str, service: str,
-                                            incident: Any) -> dict | None:
+    async def _verify_original_error_fixed(self, sandbox_ns: str, service: str, incident: Any) -> dict | None:
         """Level 3 verification: reproduce the original error and verify it's gone.
 
         Parses the original pod logs (stored in the anomaly cluster's explanation)
@@ -624,13 +640,14 @@ class SandboxRunner:
         - {"passed": False, "detail": "..."} if the original error still occurs
         - None if the original error can't be determined or reproduced
         """
-        import httpx
         import re
+
+        import httpx
 
         try:
             # Get the original pod logs from the anomaly explanation
             explanation = ""
-            for anomaly in (incident.cluster.anomalies or []):
+            for anomaly in incident.cluster.anomalies or []:
                 explanation += anomaly.explanation + "\n"
 
             if not explanation:
@@ -640,11 +657,11 @@ class SandboxRunner:
             # Common Python errors: KeyError, ImportError, ValueError, TypeError,
             # ZeroDivisionError, AttributeError, RuntimeError, FileNotFoundError
             error_match = re.search(
-                r'(KeyError|ImportError|ValueError|TypeError|ZeroDivisionError|'
-                r'AttributeError|RuntimeError|FileNotFoundError|ModuleNotFoundError|'
-                r'ConnectionError|TimeoutError|RecursionError|OverflowError):?\s*'
-                r'([^\n]+)?',
-                explanation
+                r"(KeyError|ImportError|ValueError|TypeError|ZeroDivisionError|"
+                r"AttributeError|RuntimeError|FileNotFoundError|ModuleNotFoundError|"
+                r"ConnectionError|TimeoutError|RecursionError|OverflowError):?\s*"
+                r"([^\n]+)?",
+                explanation,
             )
 
             if not error_match:
@@ -656,14 +673,13 @@ class SandboxRunner:
 
             # Check if this was a startup error (the pod crashed on startup)
             # Startup errors are already verified by Level 1 (pod is Ready = no crash)
-            startup_errors = {"KeyError", "ImportError", "ModuleNotFoundError",
-                            "FileNotFoundError", "SyntaxError"}
+            startup_errors = {"KeyError", "ImportError", "ModuleNotFoundError", "FileNotFoundError", "SyntaxError"}
             if error_type in startup_errors:
                 # The canary pod is Running and Ready — the startup error is gone
                 return {
                     "passed": True,
                     "detail": f"Startup error {error_type}: {error_detail} — "
-                              f"canary pod started successfully (error is gone)"
+                    f"canary pod started successfully (error is gone)",
                 }
 
             # For runtime errors (ZeroDivisionError, TypeError, etc.) — try to
@@ -674,7 +690,8 @@ class SandboxRunner:
                 try:
                     svc = await asyncio.to_thread(
                         self.k8s.core.read_namespaced_service,
-                        name=service, namespace=sandbox_ns,
+                        name=service,
+                        namespace=sandbox_ns,
                     )
                 except Exception:
                     pass
@@ -698,12 +715,12 @@ class SandboxRunner:
                 ("GET", "/", {}),
                 ("GET", "/healthz", {}),
                 ("GET", "/readyz", {}),
-                ("GET", "/pay", {"amount": "0"}),       # common edge case
-                ("GET", "/pay", {"amount": "-1"}),      # negative input
-                ("GET", "/pay", {"amount": "abc"}),     # invalid type
-                ("GET", "/", {"id": "0"}),              # zero ID
-                ("GET", "/", {"id": "-1"}),             # negative ID
-                ("GET", "/", {"q": ""}),                # empty query
+                ("GET", "/pay", {"amount": "0"}),  # common edge case
+                ("GET", "/pay", {"amount": "-1"}),  # negative input
+                ("GET", "/pay", {"amount": "abc"}),  # invalid type
+                ("GET", "/", {"id": "0"}),  # zero ID
+                ("GET", "/", {"id": "-1"}),  # negative ID
+                ("GET", "/", {"q": ""}),  # empty query
             ]
 
             async with httpx.AsyncClient(timeout=5.0) as client:
@@ -721,15 +738,14 @@ class SandboxRunner:
                             return {
                                 "passed": False,
                                 "detail": f"{error_type}: {error_detail} still present in "
-                                          f"response from {path} (status {r.status_code})"
+                                f"response from {path} (status {r.status_code})",
                             }
 
                         # 500 = the error might still be there
                         if r.status_code >= 500:
                             return {
                                 "passed": False,
-                                "detail": f"{path} returned {r.status_code} — "
-                                          f"possible {error_type} still occurring"
+                                "detail": f"{path} returned {r.status_code} — possible {error_type} still occurring",
                             }
                     except Exception:
                         continue
@@ -738,15 +754,14 @@ class SandboxRunner:
             return {
                 "passed": True,
                 "detail": f"Runtime error {error_type}: {error_detail} — "
-                          f"not reproduced on any endpoint (error is gone)"
+                f"not reproduced on any endpoint (error is gone)",
             }
 
         except Exception as e:
             log.warning("Sandbox Level 3 error: %s", e)
             return None  # Skip Level 3 on infrastructure errors
 
-    async def _observe(self, sandbox_ns: str, service: str,
-                        duration_seconds: int) -> SandboxResult:
+    async def _observe(self, sandbox_ns: str, service: str, duration_seconds: int) -> SandboxResult:
         """Observe the sandbox's 5xx rate over the duration window.
 
         Polls the sandbox pod's /metrics endpoint directly (Prometheus-format)
@@ -812,7 +827,7 @@ class SandboxRunner:
                     return {}
                 text = r.text
                 return self._parse_prometheus_metrics(text)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             log.debug("Metrics scrape failed for %s/%s: %s", ns, service, e)
             return {}
 
@@ -825,6 +840,7 @@ class SandboxRunner:
           http_server_requests_seconds_count{status="502"} 3
         """
         import re
+
         total_5xx = 0
         total_requests = 0
         for line in text.splitlines():
@@ -832,7 +848,7 @@ class SandboxRunner:
             if not line or line.startswith("#"):
                 continue
             # Match: metric_name{labels} value
-            m = re.match(r'^(\w+)(\{[^}]*\})?\s+(\d+(?:\.\d+)?)$', line)
+            m = re.match(r"^(\w+)(\{[^}]*\})?\s+(\d+(?:\.\d+)?)$", line)
             if not m:
                 continue
             metric_name = m.group(1)
@@ -856,5 +872,5 @@ class SandboxRunner:
                 body={"gracePeriodSeconds": 0},
             )
             log.info("Cleaned up sandbox namespace: %s", sandbox_ns)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             log.info("Cleanup of %s failed: %s", sandbox_ns, e)

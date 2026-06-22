@@ -3,9 +3,9 @@
 These are pure-logic tests — they don't hit a real K8s API. The functions
 are async + use the K8s client, so we mock at the client level.
 """
+
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
-from uuid import uuid4
+from unittest.mock import MagicMock, patch
 
 
 class TestLookupWorkloadAnnotations:
@@ -35,8 +35,10 @@ class TestLookupWorkloadAnnotations:
         mock_dep.spec.template.metadata.annotations = {}
         mock_apps.read_namespaced_deployment = MagicMock(return_value=mock_dep)
 
-        with patch("kubernetes.client.AppsV1Api", return_value=mock_apps), \
-             patch("kubernetes.client.CoreV1Api", return_value=MagicMock()):
+        with (
+            patch("kubernetes.client.AppsV1Api", return_value=mock_apps),
+            patch("kubernetes.client.CoreV1Api", return_value=MagicMock()),
+        ):
             result = await lookup_workload_annotations("api", "default")
             assert result == {"sentinel.io/repo": "github.com/owner/repo"}
 

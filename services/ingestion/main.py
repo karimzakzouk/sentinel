@@ -16,33 +16,30 @@ topic.
 In production we deploy Strimzi Kafka + Confluent Schema Registry as
 sidecars/subcharts (see chart/templates/kafka.yaml).
 """
+
 from __future__ import annotations
 
 import asyncio
 import logging
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
-from uuid import uuid4
 
 # Make sentinel_common importable in dev/test runs without installing.
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "common"))
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import JSONResponse
 import uvicorn
+from fastapi import FastAPI
+from normalizer import Normalizer
 
-from sentinel_common import Signal, SignalSource, Severity
-from sentinel_common.config import get_settings
-from sentinel_common.kafka_client import KafkaBus, SchemaRegistry
-
-from collectors.prometheus import PrometheusCollector
-from collectors.loki import LokiCollector
+from collectors.cd_history import CDHistoryCollector
 from collectors.jaeger import JaegerCollector
 from collectors.k8s_events import K8sEventsCollector
-from collectors.cd_history import CDHistoryCollector
-from normalizer import Normalizer
+from collectors.loki import LokiCollector
+from collectors.prometheus import PrometheusCollector
+from sentinel_common.config import get_settings
+from sentinel_common.kafka_client import KafkaBus, SchemaRegistry
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("sentinel.ingestion")
@@ -78,9 +75,7 @@ async def _startup() -> None:
     if os.getenv("K8S_IN_CLUSTER_COLLECTOR", "true").lower() == "true":
         collectors.append(K8sEventsCollector())
     if os.getenv("GITHUB_TOKEN") and os.getenv("CD_REPO"):
-        collectors.append(CDHistoryCollector(
-            os.getenv("CD_REPO"), os.getenv("GITHUB_TOKEN", settings.github_token)
-        ))
+        collectors.append(CDHistoryCollector(os.getenv("CD_REPO"), os.getenv("GITHUB_TOKEN", settings.github_token)))
 
     poller_task = asyncio.create_task(_poller_loop())
     log.info("Ingestion started with %d collectors", len(collectors))
@@ -104,12 +99,12 @@ async def _poller_loop() -> None:
                     raw_batch = await c.poll()
                     for raw in raw_batch:
                         await _publish_raw(raw)
-                except Exception as e:  # noqa: BLE001
+                except Exception as e:
                     log.warning("Collector %s failed: %s", c.__class__.__name__, e)
             await asyncio.sleep(15)
         except asyncio.CancelledError:
             break
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             log.exception("Poller loop error: %s", e)
             await asyncio.sleep(5)
 
@@ -124,11 +119,11 @@ async def _publish_raw(raw: dict[str, Any]) -> None:
     try:
         sig = normalizer.normalize(raw)
         await bus.publish_model(settings.kafka_topic_signals, sig, key=sig.service)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         log.warning("Failed to normalize/publish signal: %s — sending to DLQ", e)
         try:
             dlq_payload = {
-                "ts": datetime.now(timezone.utc).isoformat(),
+                "ts": datetime.now(UTC).isoformat(),
                 "error": str(e),
                 "raw": raw,
             }
@@ -141,6 +136,7 @@ async def _publish_raw(raw: dict[str, Any]) -> None:
 
 
 # ---------- HTTP API ----------
+
 
 @app.get("/healthz")
 async def healthz() -> dict[str, str]:

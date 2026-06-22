@@ -10,9 +10,9 @@ Each incident is stored with:
 
 The schema is created on startup if it doesn't exist.
 """
+
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
 
@@ -56,6 +56,7 @@ class WeaviateStore:
             return self._client
         try:
             import weaviate  # type: ignore
+
             host = self.settings.weaviate_url.replace("http://", "").replace("https://", "")
             hostname, _, port = host.partition(":")
             self._client = weaviate.connect_to_local(
@@ -64,7 +65,7 @@ class WeaviateStore:
                 skip_init_checks=True,
             )
             return self._client
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             log.warning("Weaviate not available: %s", e)
             return None
 
@@ -77,10 +78,10 @@ class WeaviateStore:
             try:
                 client.collections.create(CLASS_DEFINITION)
                 log.info("Created Weaviate class: %s", CLASS_DEFINITION["class"])
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 # Most likely already exists
                 log.info("Weaviate class Incident already exists or creation failed: %s", e)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             log.warning("Schema creation failed: %s", e)
 
     async def store_incident(self, incident: Incident) -> str | None:
@@ -95,15 +96,17 @@ class WeaviateStore:
             return None
 
         # Build the textual signature that the vectorizer will embed
-        signature = " ".join([
-            incident.cluster.service,
-            incident.cluster.summary,
-            rc.statement,
-            rc.category,
-            fp.fix_type.value,
-            fp.description,
-            " ".join(rc.source_files),
-        ])
+        signature = " ".join(
+            [
+                incident.cluster.service,
+                incident.cluster.summary,
+                rc.statement,
+                rc.category,
+                fp.fix_type.value,
+                fp.description,
+                " ".join(rc.source_files),
+            ]
+        )
 
         properties = {
             "service": incident.cluster.service,
@@ -129,7 +132,7 @@ class WeaviateStore:
             obj = collection.data.insert(properties=properties)
             log.info("Stored incident %s in Weaviate (uuid=%s)", incident.incident_id, obj)
             return str(obj)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             log.warning("Weaviate insert failed: %s", e)
             return None
 
@@ -145,11 +148,13 @@ class WeaviateStore:
                 return_metadata=["distance", "certainty"],
             )
             return [
-                {**dict(o.properties),
-                 "_distance": o.metadata.distance if o.metadata else None,
-                 "_certainty": o.metadata.certainty if o.metadata else None}
+                {
+                    **dict(o.properties),
+                    "_distance": o.metadata.distance if o.metadata else None,
+                    "_certainty": o.metadata.certainty if o.metadata else None,
+                }
                 for o in results.objects
             ]
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             log.warning("Weaviate query failed: %s", e)
             return []

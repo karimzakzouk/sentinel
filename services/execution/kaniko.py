@@ -27,6 +27,7 @@ The builder:
   3. Waits for the pod to complete (timeout: 5 min)
   4. Returns the full image tag on success, raises on failure
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -89,9 +90,8 @@ class KanikoBuilder:
         Raises:
             Exception if the build fails or times out.
         """
+
         from kubernetes import client
-        import base64
-        import json
 
         namespace = os.getenv("SENTINEL_NAMESPACE", "sentinel")
         build_id = image_tag.replace("sentinel-", "")[:8]
@@ -294,6 +294,7 @@ ls -la /workspace/repo/
     async def _wait_for_completion(self, pod_name: str, namespace: str, timeout: int) -> bool:
         """Wait for a pod to reach Succeeded or Failed phase."""
         import time
+
         deadline = time.time() + timeout
         while time.time() < deadline:
             try:
@@ -317,6 +318,7 @@ ls -la /workspace/repo/
     async def _cleanup(self, configmap_name: str, pod_name: str, namespace: str) -> None:
         """Delete the ConfigMap and Pod (best-effort)."""
         from kubernetes import client
+
         try:
             await asyncio.to_thread(
                 self.k8s_core.delete_namespaced_config_map,

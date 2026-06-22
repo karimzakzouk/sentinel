@@ -1,13 +1,10 @@
 """Context fetcher tests — trace parsing, file extraction."""
-import os
-import sys
-from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
+from unittest.mock import MagicMock
 
 # We can't fully test the ContextFetcher without external services, but we
 # can test the regex parsing logic in isolation.
-from reasoning.context import ContextFetcher, TRACE_FILE_RE
+from reasoning.context import TRACE_FILE_RE, ContextFetcher
 
 
 class TestTraceParsing:

@@ -11,6 +11,7 @@ Mounted on the FastAPI app in main.py. Routes:
   - POST /settings          — update runtime settings (persisted to K8s)
   - POST /admin/investigate — manually trigger an investigation
 """
+
 from __future__ import annotations
 
 import logging
@@ -18,9 +19,9 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
 
 from sentinel_common import Anomaly, AnomalyCluster, Severity
+
 from .runtime_settings import SettingsUpdate
 
 log = logging.getLogger(__name__)
@@ -85,7 +86,12 @@ async def metrics_summary() -> dict[str, Any]:
     if state.get("incident_store") is None:
         return {"active": 0, "resolved_24h": 0, "failed": 0, "total": 0}
     incidents = await state["incident_store"].list_recent(100)
-    active = [i for i in incidents if i["status"] in ("detected", "investigating", "root_caused", "fix_proposed", "governance_review", "approved", "executing")]
+    active = [
+        i
+        for i in incidents
+        if i["status"]
+        in ("detected", "investigating", "root_caused", "fix_proposed", "governance_review", "approved", "executing")
+    ]
     resolved = [i for i in incidents if i["status"] in ("verified", "resolved")]
     failed = [i for i in incidents if i["status"] in ("failed", "rejected", "escalated")]
     return {
@@ -135,7 +141,8 @@ async def update_runtime_settings(update: SettingsUpdate) -> dict[str, Any]:
         state["llm_router"] = LLMRouter(settings_obj)
         log.info(
             "LLM router re-created with provider=%s, model=%s",
-            settings_obj.llm_provider, settings_obj.llm_frontier_model,
+            settings_obj.llm_provider,
+            settings_obj.llm_frontier_model,
         )
 
     # Persist to K8s ConfigMap + Secret

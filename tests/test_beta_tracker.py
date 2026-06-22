@@ -1,7 +1,4 @@
 """Beta tracker tests — verifies the math of confidence calibration."""
-import asyncio
-
-import pytest
 
 # We can't easily test the async db store without a real Postgres. Instead
 # we test the BetaTracker's math functions directly.

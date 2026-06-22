@@ -11,6 +11,7 @@ discovers that the entire hypothesis set is wrong (e.g. an upstream dependency
 is down), it wipes the hypotheses and returns control to the Investigator
 with the new context.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -54,8 +55,9 @@ hypothesis set (e.g. a hard upstream dependency is down). Leave it null 99%
 of the time."""
 
 
-async def evidence_gatherer_node(state: AgentState, *, llm_router: Any,
-                                  context_fetcher: Any, event_store: Any) -> dict[str, Any]:
+async def evidence_gatherer_node(
+    state: AgentState, *, llm_router: Any, context_fetcher: Any, event_store: Any
+) -> dict[str, Any]:
     """Generate queries, execute them, and attach evidence to each hypothesis."""
     incident_id = state.incident_id
     if not state.hypotheses:
@@ -66,17 +68,19 @@ async def evidence_gatherer_node(state: AgentState, *, llm_router: Any,
     user_msg = _build_user_message(state)
     try:
         result = await llm_router.fast_json(SYSTEM_PROMPT, user_msg, max_tokens=4000)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         log.error("Evidence Gatherer LLM call failed: %s", e)
         # Don't fail the whole investigation — continue with no evidence.
         # The Analyst will pick the top hypothesis by prior confidence.
         # This is more resilient than crashing.
         state.evidence = []
-        state.agent_trace.append({
-            "agent": "evidence_gatherer",
-            "action": "llm_failed_no_evidence",
-            "error": str(e)[:200],
-        })
+        state.agent_trace.append(
+            {
+                "agent": "evidence_gatherer",
+                "action": "llm_failed_no_evidence",
+                "error": str(e)[:200],
+            }
+        )
         return state.model_dump(mode="json")
 
     # 2. Normalize the result — LLMs sometimes return a list instead of an object.
@@ -98,14 +102,16 @@ async def evidence_gatherer_node(state: AgentState, *, llm_router: Any,
         )
         state.rewind_events.append(ev)
         state.hypotheses = []  # wipe — Investigator will re-run
-        state.agent_trace.append({
-            "agent": "evidence_gatherer",
-            "action": "rewind",
-            "reason": ev.reason,
-        })
-        await event_store.append(incident_id, "reasoning", "rewind_event",
-                                  agent="evidence_gatherer",
-                                  payload=ev.model_dump(mode="json"))
+        state.agent_trace.append(
+            {
+                "agent": "evidence_gatherer",
+                "action": "rewind",
+                "reason": ev.reason,
+            }
+        )
+        await event_store.append(
+            incident_id, "reasoning", "rewind_event", agent="evidence_gatherer", payload=ev.model_dump(mode="json")
+        )
         return state.model_dump(mode="json")
 
     # 3. Execute all queries IN PARALLEL (with per-query timeout).
@@ -122,32 +128,44 @@ async def evidence_gatherer_node(state: AgentState, *, llm_router: Any,
                 timeout=15.0,
             )
             return Evidence(
-                e_id=f"E{i+1}",
+                e_id=f"E{i + 1}",
                 source=q.get("query", {}).get("type", "unknown"),
                 query=json.dumps(q.get("query", {})),
                 result=result_data,
-                supports_hypothesis_id=q.get("hypothesis_id") if q.get("supports_or_contradicts") == "supports" else None,
-                contradicts_hypothesis_id=q.get("hypothesis_id") if q.get("supports_or_contradicts") == "contradicts" else None,
+                supports_hypothesis_id=q.get("hypothesis_id")
+                if q.get("supports_or_contradicts") == "supports"
+                else None,
+                contradicts_hypothesis_id=q.get("hypothesis_id")
+                if q.get("supports_or_contradicts") == "contradicts"
+                else None,
             )
-        except asyncio.TimeoutError:
-            log.warning("Evidence query %d timed out after 15s", i+1)
+        except TimeoutError:
+            log.warning("Evidence query %d timed out after 15s", i + 1)
             return Evidence(
-                e_id=f"E{i+1}",
+                e_id=f"E{i + 1}",
                 source=q.get("query", {}).get("type", "unknown"),
                 query=json.dumps(q.get("query", {})),
                 result={"error": "query timed out after 15s"},
-                supports_hypothesis_id=q.get("hypothesis_id") if q.get("supports_or_contradicts") == "supports" else None,
-                contradicts_hypothesis_id=q.get("hypothesis_id") if q.get("supports_or_contradicts") == "contradicts" else None,
+                supports_hypothesis_id=q.get("hypothesis_id")
+                if q.get("supports_or_contradicts") == "supports"
+                else None,
+                contradicts_hypothesis_id=q.get("hypothesis_id")
+                if q.get("supports_or_contradicts") == "contradicts"
+                else None,
             )
-        except Exception as e:  # noqa: BLE001
-            log.warning("Evidence query %d failed: %s", i+1, e)
+        except Exception as e:
+            log.warning("Evidence query %d failed: %s", i + 1, e)
             return Evidence(
-                e_id=f"E{i+1}",
+                e_id=f"E{i + 1}",
                 source=q.get("query", {}).get("type", "unknown"),
                 query=json.dumps(q.get("query", {})),
                 result={"error": str(e)},
-                supports_hypothesis_id=q.get("hypothesis_id") if q.get("supports_or_contradicts") == "supports" else None,
-                contradicts_hypothesis_id=q.get("hypothesis_id") if q.get("supports_or_contradicts") == "contradicts" else None,
+                supports_hypothesis_id=q.get("hypothesis_id")
+                if q.get("supports_or_contradicts") == "supports"
+                else None,
+                contradicts_hypothesis_id=q.get("hypothesis_id")
+                if q.get("supports_or_contradicts") == "contradicts"
+                else None,
             )
 
     # Run all queries in parallel — returns results in order
@@ -158,13 +176,19 @@ async def evidence_gatherer_node(state: AgentState, *, llm_router: Any,
         new_evidence = []
 
     state.evidence = new_evidence
-    state.agent_trace.append({
-        "agent": "evidence_gatherer",
-        "evidence_count": len(new_evidence),
-    })
-    await event_store.append(incident_id, "reasoning", "evidence_gathered",
-                              agent="evidence_gatherer",
-                              payload={"evidence": [e.model_dump(mode="json") for e in new_evidence]})
+    state.agent_trace.append(
+        {
+            "agent": "evidence_gatherer",
+            "evidence_count": len(new_evidence),
+        }
+    )
+    await event_store.append(
+        incident_id,
+        "reasoning",
+        "evidence_gathered",
+        agent="evidence_gatherer",
+        payload={"evidence": [e.model_dump(mode="json") for e in new_evidence]},
+    )
 
     return state.model_dump(mode="json")
 
@@ -186,7 +210,9 @@ def _build_user_message(state: AgentState) -> str:
     parts.append(state.cluster.summary)
     parts.append("")
     parts.append("## Your Task")
-    parts.append("Produce evidence queries for each hypothesis. Be concrete — use the actual service name and namespace.")
+    parts.append(
+        "Produce evidence queries for each hypothesis. Be concrete — use the actual service name and namespace."
+    )
     return "\n".join(parts)
 
 
@@ -206,7 +232,9 @@ async def _execute_query(query: dict[str, Any], context_fetcher: Any) -> dict[st
 
 async def _query_loki(query: str, context_fetcher: Any) -> dict[str, Any]:
     import os
+
     import httpx
+
     loki_url = os.getenv("LOKI_URL")
     if not loki_url:
         return {"error": "LOKI_URL not configured"}
@@ -218,7 +246,9 @@ async def _query_loki(query: str, context_fetcher: Any) -> dict[str, Any]:
 
 async def _query_prometheus(query: str, context_fetcher: Any) -> dict[str, Any]:
     import os
+
     import httpx
+
     prom_url = os.getenv("PROMETHEUS_URL")
     if not prom_url:
         return {"error": "PROMETHEUS_URL not configured"}
@@ -230,7 +260,9 @@ async def _query_prometheus(query: str, context_fetcher: Any) -> dict[str, Any]:
 
 async def _query_jaeger(query: str, context_fetcher: Any) -> dict[str, Any]:
     import os
+
     import httpx
+
     jaeger_url = os.getenv("JAEGER_URL")
     if not jaeger_url:
         return {"error": "JAEGER_URL not configured"}
@@ -254,8 +286,8 @@ async def _query_k8s(query: str, context_fetcher: Any) -> dict[str, Any]:
     Returns the raw K8s API response as a dict. Errors are returned as
     {"error": "..."} so the Analyst can mark the evidence as weak.
     """
-    import os
     import re
+
     try:
         from kubernetes import client
         from kubernetes.client import ApiClient
@@ -270,6 +302,7 @@ async def _query_k8s(query: str, context_fetcher: Any) -> dict[str, Any]:
         # Fall back to kubeconfig if running outside cluster (dev mode)
         try:
             from kubernetes.config import load_kube_config
+
             load_kube_config()
         except Exception as e:
             return {"error": f"no k8s config available: {e}"}
@@ -340,7 +373,9 @@ async def _query_k8s(query: str, context_fetcher: Any) -> dict[str, Any]:
                         "name": p.metadata.name,
                         "phase": p.status.phase,
                         "restart_count": sum(cs.restart_count for cs in (p.status.container_statuses or [])),
-                        "ready": all(cs.ready for cs in (p.status.container_statuses or [])) if p.status.container_statuses else False,
+                        "ready": all(cs.ready for cs in (p.status.container_statuses or []))
+                        if p.status.container_statuses
+                        else False,
                         "image": [cs.image for cs in (p.status.container_statuses or [])],
                         "node": p.spec.node_name,
                     }
@@ -359,7 +394,10 @@ async def _query_k8s(query: str, context_fetcher: Any) -> dict[str, Any]:
                         "replicas": d.spec.replicas,
                         "ready_replicas": d.status.ready_replicas or 0,
                         "image": [c.image for c in d.spec.template.spec.containers],
-                        "conditions": [{"type": c.type, "status": c.status, "reason": c.reason} for c in (d.status.conditions or [])],
+                        "conditions": [
+                            {"type": c.type, "status": c.status, "reason": c.reason}
+                            for c in (d.status.conditions or [])
+                        ],
                     }
                     for d in deps.items[:limit]
                 ],

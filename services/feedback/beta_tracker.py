@@ -12,6 +12,7 @@ pattern for that service.
 The BetaTracker wraps the persistent BetaStore so the reasoning layer can
 fetch priors synchronously during hypothesis scoring.
 """
+
 from __future__ import annotations
 
 import logging
@@ -47,8 +48,8 @@ class BetaTracker:
         n = alpha + beta
         if n <= 1:
             return 0.5
-        var = (alpha * beta) / ((n ** 2) * (n + 1))
-        return var ** 0.5
+        var = (alpha * beta) / ((n**2) * (n + 1))
+        return var**0.5
 
     def confidence_interval(self, alpha: float, beta: float, z: float = 1.96) -> tuple[float, float]:
         """95% confidence interval (default z=1.96) for the posterior mean."""
