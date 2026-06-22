@@ -33,7 +33,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from github import Github  # type: ignore
+from github import Auth, Github  # type: ignore
 from github.GithubException import GithubException
 
 from sentinel_common import ExecutionResult, FixType, Incident
@@ -44,7 +44,11 @@ log = logging.getLogger(__name__)
 class GitHubExecutor:
     def __init__(self, settings: Any):
         self.settings = settings
-        self.gh = Github(settings.github_token) if settings.github_token else None
+        # v2.0.0: use Auth.Token instead of the deprecated login_or_token arg
+        if settings.github_token:
+            self.gh = Github(auth=Auth.Token(settings.github_token))
+        else:
+            self.gh = None
 
     async def prepare_branch(self, incident: Incident) -> dict[str, Any]:
         """Phase 1: Create a branch and push the fix's file changes.

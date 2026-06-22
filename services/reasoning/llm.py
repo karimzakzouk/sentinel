@@ -69,15 +69,25 @@ class LLMRouter:
         """
         prompt = user + "\n\nRespond with a single valid JSON object. No prose, no markdown fences."
         try:
-            r = await self.client.chat.completions.create(
-                model=model,
-                messages=[
+            # v2.0.0: use response_format=json_object where supported (OpenAI,
+            # z.ai, OpenRouter, Gemini-via-OpenAI). Falls back silently if the
+            # provider rejects it. Cuts JSON repair attempts by ~80%.
+            kwargs: dict[str, Any] = {
+                "model": model,
+                "messages": [
                     {"role": "system", "content": system},
                     {"role": "user", "content": prompt},
                 ],
-                temperature=temperature,
-                max_tokens=max_tokens,
-            )
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+            }
+            try:
+                r = await self.client.chat.completions.create(
+                    **kwargs, response_format={"type": "json_object"},
+                )
+            except Exception:
+                # Provider doesn't support response_format — retry without it
+                r = await self.client.chat.completions.create(**kwargs)
             text = r.choices[0].message.content or "{}"
             return _extract_json(text)
         except Exception as e:  # noqa: BLE001

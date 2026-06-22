@@ -121,9 +121,12 @@ async def update_runtime_settings(update: SettingsUpdate) -> dict[str, Any]:
 
     # Re-init GitHub executor if token changed
     if "github_token" in changed and state.get("gh_exec"):
-        from github import Github
+        from github import Auth, Github
 
-        state["gh_exec"].gh = Github(runtime.github_token) if runtime.github_token else None
+        if runtime.github_token:
+            state["gh_exec"].gh = Github(auth=Auth.Token(runtime.github_token))
+        else:
+            state["gh_exec"].gh = None
 
     # Re-create the LLM router if any LLM setting changed
     if any(f in changed for f in ("llm_provider", "llm_api_key", "llm_fast_model", "llm_frontier_model")):

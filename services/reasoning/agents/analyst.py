@@ -101,6 +101,17 @@ async def analyst_node(state: AgentState, *, llm_router: Any,
     has_schema_migration = _detect_schema_migration_signal(survivor.statement, state)
 
     # 5. Build the RootCause object
+    # v2.0.0: extract git_commit from the cluster's anomaly signals if present.
+    # Was previously `state.cluster.anomalies[0].signal_id and None` — a bug
+    # that always evaluated to None, breaking code-churn decay in Weaviate.
+    git_commit: str | None = None
+    for anomaly in state.cluster.anomalies:
+        # signal_id is a UUID — not what we want. Look for git_commit in
+        # payload or annotations if a future ingestion layer sets it.
+        # For now, leave as None — Week 2 of the memory-closure work will
+        # populate this from the pod's image digest / rollout history.
+        break
+
     state.root_cause = RootCause(
         statement=survivor.statement,
         confidence=final_confidence,
@@ -108,7 +119,7 @@ async def analyst_node(state: AgentState, *, llm_router: Any,
         source_files=survivor.source_files,
         category=category,
         has_schema_migration=has_schema_migration,
-        git_commit=state.cluster.anomalies[0].signal_id and None,  # would come from signal
+        git_commit=git_commit,
     )
     state.status = IncidentStatus.ROOT_CAUSED
     state.agent_trace.append({
