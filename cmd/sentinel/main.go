@@ -31,6 +31,7 @@ import (
         "github.com/karimzakzouk/sentinel/v3/internal/slackbot"
         "github.com/karimzakzouk/sentinel/v3/internal/schemas"
         "github.com/karimzakzouk/sentinel/v3/internal/watcher"
+        "github.com/karimzakzouk/sentinel/v3/internal/web"
 )
 
 func main() {
@@ -544,6 +545,9 @@ func main() {
 
         // v3.6.0: Wire pause controller so CLI can pause/resume via API
         apiServer.SetPauseController(slackBot)
+
+        // v3.6.0: Wire the embedded web UI (Next.js dashboard)
+        apiServer.SetWebUIHandler(web.Handler())
 
         // v3.5.0: Wire the Slack bot token for posting @mention replies.
         if cfg.SlackBotToken != "" {

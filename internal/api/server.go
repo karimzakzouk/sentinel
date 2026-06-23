@@ -28,14 +28,15 @@ import (
 
 // Server is the HTTP API server.
 type Server struct {
-        store          Store
-        settings       SettingsGetter
-        investigate    InvestigateFunc
-        readyChecker   ReadyChecker
-        webhookHandler http.Handler // v3.5.0: GitHub webhook receiver (predictive PR review)
-        slackHandler   http.Handler // v3.5.0: Slack Events API (interactive bot)
+        store           Store
+        settings        SettingsGetter
+        investigate     InvestigateFunc
+        readyChecker    ReadyChecker
+        webhookHandler  http.Handler // v3.5.0: GitHub webhook receiver (predictive PR review)
+        slackHandler    http.Handler // v3.5.0: Slack Events API (interactive bot)
         pauseController PauseController // v3.6.0: CLI pause/resume via API
-        http           *http.Server
+        webUIHandler    http.Handler // v3.6.0: Embedded web UI
+        http            *http.Server
 }
 
 // PauseController controls autonomous mode pause/resume.
@@ -86,6 +87,9 @@ func New(addr string, store Store, settings SettingsGetter, investigate Investig
         mux.HandleFunc("/webhook/github", s.handleWebhook)
         // v3.5.0: Interactive Slack bot (Events API + slash commands).
         mux.HandleFunc("/slack/events", s.handleSlack)
+        // v3.6.0: Web UI — served from embedded files (internal/web)
+        // The handler is set via SetWebUIHandler. If nil, / returns a placeholder.
+        mux.HandleFunc("/", s.handleWebUI)
 
         s.http = &http.Server{
                 Addr:    addr,
@@ -110,6 +114,12 @@ func (s *Server) SetSlackHandler(h http.Handler) {
 // v3.6.0: Allows sentinelctl pause/resume to work via the API.
 func (s *Server) SetPauseController(pc PauseController) {
         s.pauseController = pc
+}
+
+// SetWebUIHandler wires in the embedded web UI handler.
+// v3.6.0: Serves the Next.js dashboard at /.
+func (s *Server) SetWebUIHandler(h http.Handler) {
+        s.webUIHandler = h
 }
 
 func (s *Server) handlePause(w http.ResponseWriter, r *http.Request) {
@@ -173,6 +183,16 @@ func (s *Server) handleSlack(w http.ResponseWriter, r *http.Request) {
                 return
         }
         s.slackHandler.ServeHTTP(w, r)
+}
+
+func (s *Server) handleWebUI(w http.ResponseWriter, r *http.Request) {
+        if s.webUIHandler == nil {
+                // No web UI built — serve placeholder
+                w.Header().Set("Content-Type", "text/html; charset=utf-8")
+                w.Write([]byte(`<!DOCTYPE html><html><head><title>Sentinel</title></head><body style="background:#0A0A0B;color:#A1A1AA;font-family:monospace;padding:40px;"><h1 style="color:#06B6D4;">Sentinel</h1><p>Web UI not built. The API is running at <code>/healthz</code>, <code>/incidents</code>, <code>/metrics</code>.</p></body></html>`))
+                return
+        }
+        s.webUIHandler.ServeHTTP(w, r)
 }
 
 // Start begins serving HTTP.
