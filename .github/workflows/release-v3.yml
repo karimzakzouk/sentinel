@@ -22,7 +22,7 @@ env:
   DH_REGISTRY: docker.io
   DH_OWNER: karimzakzouk
   GHCR_REGISTRY: ghcr.io
-  GHCR_OWNER: karimzakzoukz
+  GHCR_OWNER: karimzakzouk
 
 jobs:
   test:
