@@ -116,7 +116,7 @@ func (c *Correlator) RegisterDeployment(service, namespace string, ts time.Time)
 // the individual investigation), false otherwise (caller should proceed
 // with the normal investigation).
 //
-// v3.5.1: Handler is now called SYNCHRONOUSLY after releasing the lock,
+// v3.5.0: Handler is called SYNCHRONOUSLY after releasing the lock,
 // not in a goroutine. This avoids timing flakes in tests and potential
 // deadlocks if the handler calls back into the correlator. The detection
 // layer should not block on this — if the handler is slow, run it in a

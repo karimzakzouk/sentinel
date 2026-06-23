@@ -90,7 +90,7 @@ jobs:
             echo "version=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
             echo "is_tag=true" >> $GITHUB_OUTPUT
           else
-            echo "version=3.0.0-dev" >> $GITHUB_OUTPUT
+            echo "version=3.5.0-dev" >> $GITHUB_OUTPUT
             echo "is_tag=false" >> $GITHUB_OUTPUT
           fi
 
@@ -128,7 +128,7 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: Sentinel ${{ github.ref_name }}
           body: |
-            ## Install (v3 — single Go binary, ~25MB)
+            ## Install (v3 — single Go binary, ~28MB)
 
             ```bash
             helm repo add sentinel https://karimzakzouk.github.io/sentinel/
@@ -139,14 +139,14 @@ jobs:
               --set sentinel.llm.apiKey=YOUR_LLM_API_KEY
             ```
 
-            **v3.0.0 — Go rewrite:**
-            - 600MB Python image → 25MB Go binary (24x smaller)
-            - 4 pods → 1 pod (core + postgres + weaviate + ui → single binary)
-            - ~1.5GB RAM → ~50MB RAM (30x less)
-            - SQLite replaces Postgres + Weaviate
-            - Embedded safety policy replaces OPA sidecar
-            - Real K8s Watch replaces 10s polling
-            - Full pipeline: 4-agent reasoning + sandbox + Kaniko + GitHub PRs
+            ## What's New in v3.5.0
+
+            - **24-hour feedback loop** — Phase 2 re-occurrence watcher corrects Beta priors when errors reappear in production
+            - **Predictive PR review** — GitHub webhook scores PR diffs against incident memory, posts warnings on risky changes
+            - **Interactive Slack bot** — Two-way commands: pause, resume, investigate, list incidents, status
+            - **Cross-service correlation** — Detects cascading failures (3+ services in 60s), identifies likely cause
+            - **Shared library support** — Redirects investigation to library repo when error is in vendor/node_modules
+            - **Production readiness** — LLM retry/backoff, structured logging (slog), Prometheus metrics, golangci-lint, govulncheck, configurable timeouts
           files: /tmp/sentinel-${{ steps.version.outputs.version }}.tgz
           generate_release_notes: true
 

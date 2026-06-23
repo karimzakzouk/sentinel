@@ -39,7 +39,7 @@ All in ~4 minutes. While you sleep. No human intervention required.
 helm repo add sentinel https://karimzakzouk.github.io/sentinel/
 helm repo update
 
-helm install sentinel sentinel/sentinel --version 3.1.0 \
+helm install sentinel sentinel/sentinel --version 3.5.0 \
   --namespace sentinel --create-namespace \
   --set sentinel.githubToken=YOUR_GITHUB_TOKEN \
   --set sentinel.llm.apiKey=YOUR_LLM_API_KEY \
@@ -166,25 +166,22 @@ sentinel/
 ├── internal/
 │   ├── schemas/               # All types (Go structs)
 │   ├── config/                # Env var loading + LLM provider resolution
-│   ├── llm/                   # OpenAI-compatible client (net/http, no SDK)
+│   ├── llm/                   # OpenAI-compatible client (net/http, no SDK, retry/backoff)
 │   ├── k8s/                   # Workload annotation lookup, pod logs, CR status
 │   ├── watcher/               # CRD watcher (manual trigger via SentinelIncident CR)
 │   ├── detection/             # Autonomous detection (live log streaming + pod status)
 │   ├── repo/                  # go-git cloner + local search engine
-│   ├── agents/                # 4-agent pipeline + state machine
-│   │   ├── pipeline.go        #   Wires agents + handles rewinds
-│   │   ├── investigator.go    #   Two-round agentic loop (clone → search → read)
-│   │   ├── evidence_gatherer.go #   K8s API queries in parallel
-│   │   ├── analyst.go         #   Bayes + Beta priors → root cause
-│   │   └── fix_proposer.go    #   Root cause → FixProposal (LLM)
+│   ├── agents/                # 4-agent pipeline + state machine + error parser
 │   ├── safety/                # Embedded policy (5 if-statements, replaces OPA)
 │   ├── executors/             # GitHub PRs, K8s patches, sandbox, Kaniko
-│   │   ├── github.go          #   Opens PRs via REST API
-│   │   ├── kubernetes.go      #   restart / scale / rollback
-│   │   ├── sandbox.go         #   3-level verification
-│   │   └── kaniko.go          #   Builds canary images
-│   ├── feedback/              # SQLite store (incidents + events + beta + vectors)
-│   └── api/                   # HTTP API
+│   ├── feedback/              # SQLite store + HNSW vector memory + outcome watcher
+│   ├── correlation/           # v3.5: Cross-service cascade detection
+│   ├── depanalysis/           # v3.5: Shared library dependency analysis
+│   ├── prreview/              # v3.5: Predictive PR review (GitHub webhook)
+│   ├── slackbot/              # v3.5: Interactive Slack bot (two-way commands)
+│   ├── logging/               # v3.4: Structured logging (slog + JSON + incident_id)
+│   ├── metrics/               # v3.4: Prometheus metrics (counters/histograms/gauges)
+│   └── api/                   # HTTP API + webhook receivers
 ├── chart/                     # Single-pod Helm chart
 ├── Dockerfile                 # Distroless static, ~28MB
 ├── go.mod
@@ -285,15 +282,22 @@ go test ./... -race
 helm lint chart/
 ```
 
+## What's New in v3.5.0
+
+- **24-hour feedback loop** — Two-phase outcome watcher: Phase 1 (10min recovery check) + Phase 2 (24h re-occurrence watch). If the same error fingerprint reappears within 24h, the Beta prior is corrected from success → failure. The system now learns from real production outcomes, not just sandbox results.
+- **Predictive PR review** — GitHub webhook receiver scores every PR diff against incident memory. If a change resembles a past incident (especially a failure), Sentinel posts a review comment warning the developer before they merge.
+- **Interactive Slack bot** — Two-way commands: `pause`, `resume`, `investigate <service>`, `show me the last N incidents`, `status`. Autonomous mode can be paused via Slack without restarting Sentinel.
+- **Cross-service incident correlation** — Detects cascading failures (3+ services failing within 60s). Identifies the most-recently-deployed service as the likely cause and skips individual investigations.
+- **Multi-repo shared library support** — Detects when an error originates from `vendor/`, `node_modules/`, `site-packages/`, etc. and redirects the investigation to the library's repo instead of opening 12 PRs in 12 services.
+- **Production readiness** — LLM retry/backoff (429/5xx), structured logging (slog + JSON + incident_id correlation), real Prometheus metrics, golangci-lint CI, govulncheck security scanning, configurable timeouts/thresholds (12 hardcoded values → env vars).
+
 ## What's Next
 
 - [ ] CLI (`sentinel incidents list`, `sentinel settings set`)
-- [ ] Slack webhook alerts
 - [ ] Real embedding model (sentence-transformers via ONNX) for semantic RAG
-- [ ] Verified-outcome memory (close the feedback loop)
-- [ ] Predictive PR review (score PRs against incident memory before merge)
 - [ ] HTTP prober (detect 5xx errors that don't show in logs)
 - [ ] Multi-arch (arm64) support
+- [ ] Loki + Jaeger evidence backends (Prometheus is wired; Loki/Jaeger are stubs)
 
 ## License
 

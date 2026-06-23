@@ -4,7 +4,7 @@
 # no OPA sidecar. ~20MB image, ~50MB RAM at idle.
 #
 # Install:
-#   helm install sentinel sentinel/sentinel --version 3.0.0 -n sentinel --create-namespace \
+#   helm install sentinel sentinel/sentinel --version 3.5.0 -n sentinel --create-namespace \
 #     --set sentinel.githubToken=YOUR_GITHUB_TOKEN \
 #     --set sentinel.llm.apiKey=YOUR_LLM_API_KEY
 

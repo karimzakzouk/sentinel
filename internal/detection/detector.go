@@ -1,4 +1,4 @@
-// Package detection implements the autonomous detection layer for Sentinel v3.1.
+// Package detection implements the autonomous detection layer for Sentinel.
 //
 // Two live watchers running continuously:
 //   1. Log Stream Manager — streams logs from every pod with sentinel.io/repo
