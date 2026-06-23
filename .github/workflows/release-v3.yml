@@ -131,7 +131,7 @@ jobs:
             ## Install (v3 — single Go binary, ~25MB)
 
             ```bash
-            helm repo add sentinel https://karimzakzoukz.github.io/sentinel/
+            helm repo add sentinel https://karimzakzouk.github.io/sentinel/
             helm repo update
             helm install sentinel sentinel/sentinel --version ${{ steps.version.outputs.version }} \
               --namespace sentinel --create-namespace \
@@ -164,7 +164,7 @@ jobs:
           git config user.email "actions@github.com"
           git config user.name "GitHub Actions"
           cp /tmp/sentinel-${{ steps.version.outputs.version }}.tgz .
-          helm repo index . --url https://karimzakzoukz.github.io/sentinel/
+          helm repo index . --url https://karimzakzouk.github.io/sentinel/
           touch .nojekyll
           git add -A
           git commit -m "Publish chart v${{ steps.version.outputs.version }}" || true

@@ -36,7 +36,7 @@ All in ~4 minutes. While you sleep. No human intervention required.
 ## Install
 
 ```bash
-helm repo add sentinel https://karimzakzoukz.github.io/sentinel/
+helm repo add sentinel https://karimzakzouk.github.io/sentinel/
 helm repo update
 
 helm install sentinel sentinel/sentinel --version 3.1.0 \
@@ -269,7 +269,7 @@ EOF
 ## Development
 
 ```bash
-git clone https://github.com/karimzakzoukz/sentinel.git
+git clone https://github.com/karimzakzouk/sentinel.git
 cd sentinel
 
 # Build
