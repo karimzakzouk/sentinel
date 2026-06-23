@@ -23,9 +23,10 @@ import (
 //   4. Pushes to Docker Hub
 //   5. Exits
 type KanikoBuilder struct {
-        clientset       *kubernetes.Clientset
-        namespace       string
-        dockerSecretName string
+        clientset         *kubernetes.Clientset
+        namespace         string
+        dockerSecretName  string
+        dockerHubUsername string // v3.3.1: used for --cache-repo (was incorrectly using secret name)
 }
 
 // NewKaniko creates a KanikoBuilder.
@@ -35,6 +36,15 @@ func NewKaniko(clientset *kubernetes.Clientset, namespace string) *KanikoBuilder
                 namespace:        namespace,
                 dockerSecretName: "kaniko-docker-hub-creds",
         }
+}
+
+// WithDockerHubUsername sets the Docker Hub username used for the Kaniko
+// layer cache repository. v3.3.1: This fixes a bug where the cache-repo was
+// constructed as "docker.io/<secret-name>/sentinel-build-cache" (invalid path)
+// instead of "docker.io/<username>/sentinel-build-cache".
+func (k *KanikoBuilder) WithDockerHubUsername(username string) *KanikoBuilder {
+        k.dockerHubUsername = username
+        return k
 }
 
 // Build builds a Docker image with the fixed files applied.
@@ -119,10 +129,20 @@ ls -la /workspace/repo/`, branch, repo)
                 "--context=/workspace/repo",
                 "--force",
                 "--cache=true", // v3.3.0: enable layer caching for faster builds
-                "--cache-repo=docker.io/" + k.dockerSecretName + "/sentinel-build-cache",
-                "--cache-ttl=168h", // cache layers for 7 days
-                "--snapshotMode=redo",
         }
+        // v3.3.1: Only set --cache-repo if we have a valid Docker Hub username.
+        // Previously this used k.dockerSecretName ("kaniko-docker-hub-creds") as
+        // the username, producing an invalid path "docker.io/kaniko-docker-hub-creds/..."
+        // which silently disabled layer caching. Now we use the real username.
+        if k.dockerHubUsername != "" {
+                kanikoArgs = append(kanikoArgs,
+                        "--cache-repo=docker.io/"+k.dockerHubUsername+"/sentinel-build-cache",
+                        "--cache-ttl=168h", // cache layers for 7 days
+                )
+        } else {
+                log.Printf("[kaniko] WARNING: no Docker Hub username set — layer caching disabled (set WithDockerHubUsername)")
+        }
+        kanikoArgs = append(kanikoArgs, "--snapshotMode=redo")
 
         return &corev1.Pod{
                 ObjectMeta: metav1.ObjectMeta{

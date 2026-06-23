@@ -286,7 +286,11 @@ func (a *FixProposer) llmCodeFix(ctx context.Context, state *schemas.AgentState,
 func (a *FixProposer) finalizeProposal(state *schemas.AgentState, proposal *schemas.FixProposal) {
         branchName := fmt.Sprintf("sentinel/%s-%s", state.Cluster.Service, state.IncidentID.String()[:8])
         proposal.BranchName = strPtr(branchName)
-        proposal.BaseBranch = strPtr("main")
+        // v3.3.1: Respect sentinel.io/branch annotation for PR base instead of
+        // hardcoding "main". If the service is deployed from "release-1.2", the
+        // PR should target "release-1.2", not "main". Falls back to "main" if no
+        // annotation is set (same as the investigator's clone behavior).
+        proposal.BaseBranch = strPtr(resolveBaseBranch(state))
 
         state.FixProposal = proposal
         state.Status = schemas.StatusFixProposed
@@ -296,6 +300,22 @@ func (a *FixProposer) finalizeProposal(state *schemas.AgentState, proposal *sche
                 "files_changed": len(proposal.FilesToChange),
                 "confidence":    proposal.ProposedConfidence,
         })
+}
+
+// resolveBaseBranch determines which branch the PR should target.
+// Priority: sentinel.io/branch annotation > "main" fallback.
+// This mirrors the investigator's resolveBranch logic but WITHOUT the
+// git-commit case (PRs target branches, not commits).
+func resolveBaseBranch(state *schemas.AgentState) string {
+        if branch, ok := state.Cluster.Annotations["sentinel.io/branch"]; ok && branch != "" {
+                return branch
+        }
+        for _, anomaly := range state.Cluster.Anomalies {
+                if branch, ok := anomaly.Annotations["sentinel.io/branch"]; ok && branch != "" {
+                        return branch
+                }
+        }
+        return "main"
 }
 
 func buildPRBody(state *schemas.AgentState, rc *schemas.RootCause, fixType string) string {

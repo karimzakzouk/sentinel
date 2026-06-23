@@ -76,7 +76,7 @@ func main() {
         ghExec := executors.NewGitHub(cfg.GitHubToken)
         k8sExec := executors.NewK8s(k8sClient.Clientset())
         sandbox := executors.NewSandbox(k8sClient.Clientset(), cfg.SandboxNamespacePrefix, cfg.EnableTrafficMirroring)
-        kaniko := executors.NewKaniko(k8sClient.Clientset(), cfg.Namespace)
+        kaniko := executors.NewKaniko(k8sClient.Clientset(), cfg.Namespace).WithDockerHubUsername(cfg.DockerHubUsername)
 
         ready := false
 
@@ -125,18 +125,26 @@ func main() {
                         incident.Status = schemas.StatusFailed
                         s := err.Error()
                         incident.State.Error = &s
-                        _ = store.UpsertIncident(ctx, &incident)
-                        _ = k8sClient.PatchCRStatus(ctx, crName, crNamespace, "failed")
+                        if err := store.UpsertIncident(ctx, &incident); err != nil {
+                                log.Printf("[investigation] save incident (pipeline-error): %v", err)
+                        }
+                        if err := k8sClient.PatchCRStatus(ctx, crName, crNamespace, "failed"); err != nil {
+                                log.Printf("[investigation] patch CR status (failed): %v", err)
+                        }
                         return
                 }
                 incident.Status = incident.State.Status
-                _ = store.UpsertIncident(ctx, &incident)
+                if err := store.UpsertIncident(ctx, &incident); err != nil {
+                        log.Printf("[investigation] save incident (post-pipeline): %v", err)
+                }
                 _ = store.AppendEvent(ctx, incident.IncidentID, "reasoning", "investigation_completed", nil,
                         map[string]any{"status": string(incident.Status)})
 
                 if incident.State.FixProposal == nil {
                         log.Printf("[investigation] no fix proposed — status=%s", incident.Status)
-                        _ = k8sClient.PatchCRStatus(ctx, crName, crNamespace, string(incident.Status))
+                        if err := k8sClient.PatchCRStatus(ctx, crName, crNamespace, string(incident.Status)); err != nil {
+                                log.Printf("[investigation] patch CR status (no-fix): %v", err)
+                        }
                         return
                 }
 
@@ -158,13 +166,17 @@ func main() {
                 default:
                         incident.Status = schemas.StatusEscalated
                 }
-                _ = store.UpsertIncident(ctx, &incident)
+                if err := store.UpsertIncident(ctx, &incident); err != nil {
+                        log.Printf("[investigation] save incident (post-safety): %v", err)
+                }
                 _ = store.AppendEvent(ctx, incident.IncidentID, "safety", "governance_decision", nil,
                         map[string]any{"verdict": string(decision.Verdict)})
 
                 if decision.Verdict != schemas.VerdictAllow {
                         log.Printf("[investigation] denied by safety — verdict=%s", decision.Verdict)
-                        _ = k8sClient.PatchCRStatus(ctx, crName, crNamespace, string(incident.Status))
+                        if err := k8sClient.PatchCRStatus(ctx, crName, crNamespace, string(incident.Status)); err != nil {
+                                log.Printf("[investigation] patch CR status (denied): %v", err)
+                        }
                         return
                 }
 
@@ -173,13 +185,19 @@ func main() {
                 if !cfg.CanWriteTo(fp.TargetNamespace) {
                         log.Printf("[investigation] execution denied — namespace %s not in allowlist", fp.TargetNamespace)
                         incident.Status = schemas.StatusEscalated
-                        _ = store.UpsertIncident(ctx, &incident)
-                        _ = k8sClient.PatchCRStatus(ctx, crName, crNamespace, "escalated")
+                        if err := store.UpsertIncident(ctx, &incident); err != nil {
+                                log.Printf("[investigation] save incident (rbac-deny): %v", err)
+                        }
+                        if err := k8sClient.PatchCRStatus(ctx, crName, crNamespace, "escalated"); err != nil {
+                                log.Printf("[investigation] patch CR status (escalated): %v", err)
+                        }
                         return
                 }
 
                 incident.Status = schemas.StatusExecuting
-                _ = store.UpsertIncident(ctx, &incident)
+                if err := store.UpsertIncident(ctx, &incident); err != nil {
+                        log.Printf("[investigation] save incident (executing): %v", err)
+                }
 
                 if err := executeFix(ctx, &incident, cfg, ghExec, k8sExec, sandbox, kaniko, k8sClient, store); err != nil {
                         log.Printf("[investigation] execution error: %v", err)
@@ -187,30 +205,38 @@ func main() {
                         s := err.Error()
                         incident.State.Error = &s
                 }
-                _ = store.UpsertIncident(ctx, &incident)
+                if err := store.UpsertIncident(ctx, &incident); err != nil {
+                        log.Printf("[investigation] save incident (post-execution): %v", err)
+                }
 
                 // === FEEDBACK PHASE ===
                 success := incident.Status == schemas.StatusVerified
                 alpha, beta := recordBetaOutcome(ctx, store, incident, success)
                 incident.BetaAlpha = alpha
                 incident.BetaBeta = beta
-                _ = store.StoreIncidentVector(ctx, &incident, success)
+                if err := store.StoreIncidentVector(ctx, &incident, success); err != nil {
+                        log.Printf("[investigation] store incident vector: %v", err)
+                }
 
                 // v3.2: Add to HNSW vector index for future RAG retrieval
                 if incident.State.RootCause != nil && incident.State.FixProposal != nil {
                         vectorText := incident.Cluster.Summary + " " + incident.State.RootCause.Statement + " " + incident.State.FixProposal.Description
-                        _ = vectorStore.Add(ctx, vectorText, &feedback.VectorMetadata{
+                        if err := vectorStore.Add(ctx, vectorText, &feedback.VectorMetadata{
                                 IncidentID: incident.IncidentID.String(),
                                 Service:    incident.Cluster.Service,
                                 RootCause:  incident.State.RootCause.Statement,
                                 FixType:    string(incident.State.FixProposal.FixType),
                                 FixPattern: incident.State.FixProposal.Description,
                                 Outcome:    map[bool]string{true: "success", false: "failure"}[success],
-                        })
+                        }); err != nil {
+                                log.Printf("[investigation] vector store add: %v", err)
+                        }
                 }
 
                 incident.Status = schemas.StatusResolved
-                _ = store.UpsertIncident(ctx, &incident)
+                if err := store.UpsertIncident(ctx, &incident); err != nil {
+                        log.Printf("[investigation] save incident (resolved): %v", err)
+                }
 
                 // v3.2: Mark resolved in tracker (triggers 30-min cooldown)
                 tracker.MarkResolved(incident.Cluster.Service, incident.Cluster.Namespace, success)
@@ -229,7 +255,9 @@ func main() {
 
                 log.Printf("[investigation] %s resolved (status=%s, alpha=%.0f, beta=%.0f)",
                         incident.IncidentID, incident.Status, alpha, beta)
-                _ = k8sClient.PatchCRStatus(ctx, crName, crNamespace, string(incident.Status))
+                if err := k8sClient.PatchCRStatus(ctx, crName, crNamespace, string(incident.Status)); err != nil {
+                        log.Printf("[investigation] patch CR status (resolved): %v", err)
+                }
         }
 
         // 8. Start the CRD watcher
@@ -540,18 +568,26 @@ func (a *storeAdapter) ListRecentIncidents(ctx context.Context, limit int) ([]an
         return out, nil
 }
 
+// v3.3.1: GetIncident — was missing, causing /incidents/{id} to return 404.
+func (a *storeAdapter) GetIncident(ctx context.Context, id uuid.UUID) (any, error) {
+        return a.store.GetIncident(ctx, id)
+}
+
 // vectorStoreAdapter bridges feedback.VectorStore to agents.VectorStore interface.
+// v3.3.1: Passes through REAL cosine similarity scores from the underlying HNSW
+// index. The previous version fabricated scores (0.9 for top result, descending
+// by 0.1) which made the investigator's memory loop fire applyKnownFix on every
+// incident after the first success — see internal/feedback/vector.go.
 type vectorStoreAdapter struct {
         vs *feedback.VectorStore
 }
 
 func (a *vectorStoreAdapter) Search(ctx context.Context, text string, k int) ([]*agents.VectorMetadata, []float32, error) {
-        metas, err := a.vs.Search(ctx, text, k)
+        metas, scores, err := a.vs.Search(ctx, text, k)
         if err != nil || len(metas) == 0 {
                 return nil, nil, err
         }
         out := make([]*agents.VectorMetadata, len(metas))
-        scores := make([]float32, len(metas))
         for i, m := range metas {
                 out[i] = &agents.VectorMetadata{
                         IncidentID: m.IncidentID,
@@ -560,12 +596,6 @@ func (a *vectorStoreAdapter) Search(ctx context.Context, text string, k int) ([]
                         FixType:    m.FixType,
                         FixPattern: m.FixPattern,
                         Outcome:    m.Outcome,
-                }
-                // HNSW doesn't return scores, so we estimate: first result = highest
-                if i == 0 {
-                        scores[i] = 0.9 // assume high similarity for the top result
-                } else {
-                        scores[i] = 0.5 - float32(i)*0.1
                 }
         }
         return out, scores, nil

@@ -102,24 +102,52 @@ func (v *VectorStore) Add(ctx context.Context, text string, meta *VectorMetadata
         return nil
 }
 
-// Search returns the top-K most similar incidents.
-func (v *VectorStore) Search(ctx context.Context, text string, k int) ([]*VectorMetadata, error) {
+// Search returns the top-K most similar incidents plus their cosine similarity scores
+// (range [0, 1], where 1 = identical). HNSW returns results sorted by ascending
+// distance, so scores are already in descending order.
+//
+// v3.3.1: Returns REAL cosine similarities computed via hnsw.CosineDistance
+// (1 - distance). Previously this method returned no scores, which forced the
+// caller in main.go to synthesize fake scores — that broke the memory loop's
+// 0.85 threshold (it fired on every incident after the first success).
+func (v *VectorStore) Search(ctx context.Context, text string, k int) ([]*VectorMetadata, []float32, error) {
         queryVec, err := v.GenerateEmbedding(ctx, text)
         if err != nil {
-                return nil, err
+                return nil, nil, err
         }
 
         v.mu.RLock()
         defer v.mu.RUnlock()
 
         results := v.index.Search(queryVec, k)
-        var metas []*VectorMetadata
-        for _, node := range results {
-                if meta, ok := v.metadata[node.Key]; ok {
-                        metas = append(metas, meta)
-                }
+        if len(results) == 0 {
+                return nil, nil, nil
         }
-        return metas, nil
+
+        metas := make([]*VectorMetadata, 0, len(results))
+        scores := make([]float32, 0, len(results))
+        for _, node := range results {
+                meta, ok := v.metadata[node.Key]
+                if !ok {
+                        continue
+                }
+                // Real cosine similarity = 1 - cosine distance.
+                // Both queryVec and node.Value are L2-normalized (hashEmbedding normalizes;
+                // text-embedding-3-small returns normalized vectors), so cosine similarity
+                // is in [0, 1] for non-negative embeddings.
+                sim := float32(1.0) - hnsw.CosineDistance(queryVec, node.Value)
+                // Clamp to [0, 1] — small negative values can occur due to float rounding
+                // when vectors are nearly orthogonal.
+                if sim < 0 {
+                        sim = 0
+                }
+                if sim > 1 {
+                        sim = 1
+                }
+                metas = append(metas, meta)
+                scores = append(scores, sim)
+        }
+        return metas, scores, nil
 }
 
 // LoadFromDB rebuilds the HNSW index from stored vectors in SQLite.

@@ -251,6 +251,13 @@ func (d *Detector) startLogStream(ctx context.Context, pod *corev1.Pod, repo str
         d.streamsMu.Unlock()
 
         go func() {
+                // v3.3.1: Panic recovery — a panic in streamPodLogs would kill this
+                // goroutine silently, leaving the pod unmonitored until restart.
+                defer func() {
+                        if r := recover(); r != nil {
+                                log.Printf("[panic] log stream %s/%s recovered: %v", pod.Namespace, pod.Name, r)
+                        }
+                }()
                 defer func() {
                         d.streamsMu.Lock()
                         delete(d.streams, podUID)

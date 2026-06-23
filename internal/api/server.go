@@ -35,6 +35,7 @@ type Server struct {
 // Store interface — satisfied by feedback.Store.
 type Store interface {
         ListRecentIncidents(ctx context.Context, limit int) ([]any, error)
+        GetIncident(ctx context.Context, id uuid.UUID) (any, error)
 }
 
 // SettingsGetter returns current runtime settings (masked).
@@ -86,7 +87,7 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
         writeJSON(w, 200, map[string]string{
                 "status":  "ok",
                 "service": "core",
-                "version": "3.3.0",
+                "version": "3.3.1",
         })
 }
 
@@ -158,9 +159,18 @@ func (s *Server) handleIncident(w http.ResponseWriter, r *http.Request) {
                 writeJSON(w, 400, map[string]string{"error": "invalid incident ID"})
                 return
         }
-        _ = id
-        // v3.0: implement GetIncident in the store interface
-        writeJSON(w, 404, map[string]string{"error": "not implemented yet"})
+        // v3.3.1: Implemented — was returning 404 "not implemented yet" despite
+        // store.GetIncident() existing since v3.0.
+        incident, err := s.store.GetIncident(r.Context(), id)
+        if err != nil {
+                writeJSON(w, 500, map[string]string{"error": err.Error()})
+                return
+        }
+        if incident == nil {
+                writeJSON(w, 404, map[string]string{"error": "incident not found"})
+                return
+        }
+        writeJSON(w, 200, incident)
 }
 
 func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {

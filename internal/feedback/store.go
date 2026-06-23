@@ -424,101 +424,6 @@ func (s *Store) StoreIncidentVector(ctx context.Context, inc *schemas.Incident, 
         return err
 }
 
-// RetrieveSimilarIncidents returns the top-K most similar past incidents
-// using cosine similarity on the embedding vectors. This replaces the
-// Weaviate nearText query.
-func (s *Store) RetrieveSimilarIncidents(ctx context.Context, cluster schemas.AnomalyCluster, topK int) ([]map[string]any, error) {
-        s.mu.RLock()
-        defer s.mu.RUnlock()
-
-        if topK <= 0 {
-                topK = 5
-        }
-
-        queryEmbedding := computeEmbedding(cluster.Summary + " " + cluster.Service)
-
-        rows, err := s.db.QueryContext(ctx, `
-                SELECT incident_id, service, root_cause_category, fix_type, summary, root_cause, fix_pattern, source_files_json, git_commit, outcome_verified, outcome_success, embedding_json
-                FROM incident_vectors
-                WHERE service = ?
-                ORDER BY created_at DESC
-                LIMIT 200
-        `, cluster.Service)
-        if err != nil {
-                return nil, err
-        }
-        defer rows.Close()
-
-        type candidate struct {
-                props    map[string]any
-                embedding []float32
-        }
-        var candidates []candidate
-
-        for rows.Next() {
-                var incidentID, service, rootCauseCategory, fixType, summary, rootCause, fixPattern, sourceFilesJSON, embeddingJSON string
-                var gitCommit sql.NullString
-                var outcomeVerified, outcomeSuccess int
-
-                if err := rows.Scan(
-                        &incidentID, &service, &rootCauseCategory, &fixType,
-                        &summary, &rootCause, &fixPattern, &sourceFilesJSON,
-                        &gitCommit, &outcomeVerified, &outcomeSuccess, &embeddingJSON,
-                ); err != nil {
-                        continue
-                }
-
-                var embedding []float32
-                if err := json.Unmarshal([]byte(embeddingJSON), &embedding); err != nil {
-                        continue
-                }
-
-                candidates = append(candidates, candidate{
-                        props: map[string]any{
-                                "incident_id":         incidentID,
-                                "service":             service,
-                                "root_cause_category": rootCauseCategory,
-                                "fix_type":            fixType,
-                                "summary":             summary,
-                                "root_cause":          rootCause,
-                                "fix_pattern":         fixPattern,
-                                "source_files":        sourceFilesJSON,
-                                "git_commit":          gitCommit.String,
-                                "outcome_verified":    outcomeVerified == 1,
-                                "outcome_success":     outcomeSuccess == 1,
-                        },
-                        embedding: embedding,
-                })
-        }
-
-        // Compute cosine similarity and sort
-        for i := range candidates {
-                candidates[i].props["semantic_score"] = cosineSim(queryEmbedding, candidates[i].embedding)
-        }
-
-        // Sort by semantic_score descending
-        for i := 0; i < len(candidates); i++ {
-                for j := i + 1; j < len(candidates); j++ {
-                        si, _ := candidates[i].props["semantic_score"].(float64)
-                        sj, _ := candidates[j].props["semantic_score"].(float64)
-                        if sj > si {
-                                candidates[i], candidates[j] = candidates[j], candidates[i]
-                        }
-                }
-        }
-
-        // Return top K
-        if len(candidates) > topK {
-                candidates = candidates[:topK]
-        }
-
-        out := make([]map[string]any, 0, len(candidates))
-        for _, c := range candidates {
-                out = append(out, c.props)
-        }
-        return out, nil
-}
-
 // computeEmbedding produces a bag-of-words vector from text.
 // v3.3.0: Fixed to use 1536 dimensions + float32 to match HNSW index.
 // This prevents the "embedding dimension mismatch: 256 != 1536" panic.
@@ -553,17 +458,6 @@ func computeEmbedding(text string) []float32 {
         return vec
 }
 
-func simpleHash(s string) int {
-        h := 0
-        for _, c := range s {
-                h = h*31 + int(c)
-        }
-        if h < 0 {
-                h = -h
-        }
-        return h
-}
-
 func simpleHash32(s string) uint32 {
         h := uint32(2166136261)
         for _, c := range s {
@@ -571,28 +465,6 @@ func simpleHash32(s string) uint32 {
                 h *= 16777619
         }
         return h
-}
-
-func cosineSim(a, b []float32) float32 {
-        if len(a) != len(b) || len(a) == 0 {
-                return 0
-        }
-        var dot, na, nb float32
-        for i := range a {
-                dot += a[i] * b[i]
-                na += a[i] * a[i]
-                nb += b[i] * b[i]
-        }
-        if na == 0 || nb == 0 {
-                return 0
-        }
-        // manual sqrt for float32
-        normA, normB := na, nb
-        for i := 0; i < 20; i++ {
-                normA = (normA + na/normA) * 0.5
-                normB = (normB + nb/normB) * 0.5
-        }
-        return dot / (normA * normB)
 }
 
 func nullableString(s *string) interface{} {
