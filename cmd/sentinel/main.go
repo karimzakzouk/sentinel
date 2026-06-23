@@ -293,7 +293,7 @@ func main() {
         }
 
         // v3.2: Clusterer groups signals, tracker prevents duplicates
-        clusterer := detection.NewClusterer(clustererHandler, tracker, k8sClient.Clientset())
+        clusterer := detection.NewClusterer(clustererHandler, tracker)
 
         // The detector sends signals to the clusterer instead of triggering directly
         detectionHandler := func(service, namespace, reason, podLogs string) {
@@ -306,13 +306,13 @@ func main() {
                         repo = annotations["sentinel.io/repo"]
                 }
 
-                // Send to clusterer — it will group + dedup + emit one incident
+                // Send to clusterer — it will group + dedup + emit one trigger
+                // v3.2.4: No pod logs in the signal — the investigator fetches them
                 clusterer.Send(ctx, detection.Signal{
                         Type:      detection.SignalLogError,
                         Service:   service,
                         Namespace: namespace,
                         Reason:    reason,
-                        PodLogs:   podLogs,
                         Repo:      repo,
                         Timestamp: time.Now(),
                 })

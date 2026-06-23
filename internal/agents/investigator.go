@@ -91,46 +91,65 @@ func NewInvestigator(router *llm.Router, k8sClient *k8s.Client, gitHubToken stri
 }
 
 // Run executes the investigator agent.
+// v3.2.4: ALWAYS fetch full pod logs via K8s API at the start.
+// The detection layer sends just a trigger — the investigator fetches context.
 func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error {
         cluster := state.Cluster
+
+        // 0. ALWAYS fetch full pod logs via K8s API (8KB, retry 3x).
+        // This is the industry pattern: detection triggers, investigation fetches context.
+        // The log scanner's capture is just the alarm bell — we need the FULL traceback.
+        podLogs, _ := a.k8s.FetchCrashingPodLogs(ctx, cluster.Service, cluster.Namespace)
+        if podLogs != "" {
+                log.Printf("[investigator] fetched %d chars of pod logs via K8s API", len(podLogs))
+                // Update the cluster's anomaly explanation with the FULL logs
+                fullExplanation := cluster.Summary + "\n\n## Pod Logs (full, from K8s API)\n" + podLogs
+                if len(cluster.Anomalies) > 0 {
+                        cluster.Anomalies[0].Explanation = fullExplanation
+                }
+                cluster.Summary = cluster.Summary // keep the original summary
+                state.Cluster = cluster
+        } else {
+                // Fall back to whatever logs the detection layer captured
+                podLogs = a.extractPodLogs(cluster)
+                log.Printf("[investigator] K8s API logs unavailable, using %d chars from detection", len(podLogs))
+        }
 
         // 1. Discover the GitHub repo from cluster annotations
         repoName := discoverRepo(state)
         if repoName == "" {
                 log.Printf("[investigator] no repo discovered — skipping code fetch")
-                return a.runWithoutRepo(ctx, state)
+                return a.runWithoutRepo(ctx, state, podLogs)
         }
 
         // 2. Resolve which branch/commit to clone.
-        // This is critical: we must clone the code that's ACTUALLY RUNNING in the
-        // crashing pod, not main. Otherwise we diagnose the wrong code.
         branch := a.resolveBranch(ctx, state, repoName)
         log.Printf("[investigator] cloning repo %s@%s", repoName, branch)
 
-        // 3. Clone the repo locally (this is what SWE-agent / OpenHands do)
+        // 3. Clone the repo locally
         repoPath, err := a.cloner.Clone(ctx, repoName, branch)
         if err != nil {
                 log.Printf("[investigator] clone failed: %v — falling back to no-repo mode", err)
-                return a.runWithoutRepo(ctx, state)
+                return a.runWithoutRepo(ctx, state, podLogs)
         }
         defer a.cloner.Cleanup(repoPath)
         log.Printf("[investigator] repo cloned to %s", repoPath)
 
-        // 3. Walk the file tree
+        // 4. Walk the file tree
         fileTree, err := repo.WalkTree(repoPath, 500)
         if err != nil {
                 log.Printf("[investigator] walk tree failed: %v", err)
-                return a.runWithoutRepo(ctx, state)
+                return a.runWithoutRepo(ctx, state, podLogs)
         }
         log.Printf("[investigator] file tree: %d files", len(fileTree))
 
         // 4. Round 1 — ask LLM what to search for
-        podLogs := a.extractPodLogs(cluster)
+        // podLogs already fetched at the top of Run() via K8s API
         round1Msg := a.buildRound1Message(state, podLogs, fileTree)
         round1Result, err := a.router.FrontierJSON(ctx, investigatorRound1Prompt, round1Msg, 1000)
         if err != nil {
                 log.Printf("[investigator] round 1 LLM failed: %v", err)
-                return a.runWithoutRepo(ctx, state)
+                return a.runWithoutRepo(ctx, state, podLogs)
         }
 
         searchQueries, _ := round1Result["search_queries"].([]any)
@@ -145,7 +164,7 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
                 }
                 if len(searchQueries) == 0 {
                         log.Printf("[investigator] no search queries from logs either — falling back")
-                        return a.runWithoutRepo(ctx, state)
+                        return a.runWithoutRepo(ctx, state, podLogs)
                 }
         }
 
@@ -178,7 +197,7 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
         round2Result, err := a.router.FrontierJSON(ctx, investigatorRound2Prompt, round2Msg, 4000)
         if err != nil {
                 log.Printf("[investigator] round 2 LLM failed: %v", err)
-                return a.runWithoutRepo(ctx, state)
+                return a.runWithoutRepo(ctx, state, podLogs)
         }
 
         // 7. Parse hypotheses
@@ -271,8 +290,11 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
 
 // runWithoutRepo is the fallback when we can't clone the repo (private repo,
 // network issue, etc.). Forms hypotheses from logs alone, no source code.
-func (a *Investigator) runWithoutRepo(ctx context.Context, state *schemas.AgentState) error {
-        podLogs := a.extractPodLogs(state.Cluster)
+func (a *Investigator) runWithoutRepo(ctx context.Context, state *schemas.AgentState, podLogs string) error {
+        // If no podLogs passed, try to extract from cluster
+        if podLogs == "" {
+                podLogs = a.extractPodLogs(state.Cluster)
+        }
 
         // Parse stack traces from logs for source file hints
         sourceFiles := k8s.ParseStackTrace(podLogs)
