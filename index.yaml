@@ -2,8 +2,29 @@ apiVersion: v1
 entries:
   sentinel:
   - apiVersion: v2
+    appVersion: 3.2.0
+    created: "2026-06-23T02:11:30.068423296Z"
+    description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
+    digest: 8e6bbbca84947989035c632f0e0773cb3f6238e6b47f7c7934d3078093e344dd
+    home: https://github.com/karimzakzouk/sentinel
+    keywords:
+    - sre
+    - ai
+    - automation
+    - kubernetes
+    - self-healing
+    maintainers:
+    - name: Sentinel
+    name: sentinel
+    sources:
+    - https://github.com/karimzakzouk/sentinel
+    type: application
+    urls:
+    - https://karimzakzouk.github.io/sentinel/sentinel-3.2.0.tgz
+    version: 3.2.0
+  - apiVersion: v2
     appVersion: 3.1.1
-    created: "2026-06-23T01:14:07.382837875Z"
+    created: "2026-06-23T02:11:30.068094139Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: 98113c9b0a308631fd9ad44a9a65532bd1c887131692c576721f9d4347baea65
     home: https://github.com/karimzakzouk/sentinel
@@ -24,7 +45,7 @@ entries:
     version: 3.1.1
   - apiVersion: v2
     appVersion: 3.1.0
-    created: "2026-06-23T01:14:07.382514819Z"
+    created: "2026-06-23T02:11:30.067759126Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: 4f2dcc7b94e323b4dfe3fed8a9c2a2fe53bb5dac3d16ab11423728953de45b16
     home: https://github.com/karimzakzoukz/sentinel
@@ -45,7 +66,7 @@ entries:
     version: 3.1.0
   - apiVersion: v2
     appVersion: 3.0.7
-    created: "2026-06-23T01:14:07.382185544Z"
+    created: "2026-06-23T02:11:30.067448926Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: e9fffcb3b29205ae92477be6c714c917014aa2fd04f9dc7362b1dd7feb05d932
     home: https://github.com/karimzakzoukz/sentinel
@@ -66,7 +87,7 @@ entries:
     version: 3.0.7
   - apiVersion: v2
     appVersion: 3.0.6
-    created: "2026-06-23T01:14:07.381822418Z"
+    created: "2026-06-23T02:11:30.067137867Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: 9bc335dd9f7f155195c7a36fdf45384c8929858e1e7689c5d46c2721371421ef
     home: https://github.com/karimzakzoukz/sentinel
@@ -87,7 +108,7 @@ entries:
     version: 3.0.6
   - apiVersion: v2
     appVersion: 3.0.5
-    created: "2026-06-23T01:14:07.381493303Z"
+    created: "2026-06-23T02:11:30.066809394Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: ebc33e5bdee8a550d0f5385fe8c1f036c589c4b9c07536798e9e595cce9ac3e2
     home: https://github.com/karimzakzoukz/sentinel
@@ -108,7 +129,7 @@ entries:
     version: 3.0.5
   - apiVersion: v2
     appVersion: 3.0.4
-    created: "2026-06-23T01:14:07.381153352Z"
+    created: "2026-06-23T02:11:30.066474673Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: abc67544ad6c647a81ac86668766621d44dec4360763c0b0814201d6c40d24ca
     home: https://github.com/karimzakzoukz/sentinel
@@ -129,7 +150,7 @@ entries:
     version: 3.0.4
   - apiVersion: v2
     appVersion: 3.0.3
-    created: "2026-06-23T01:14:07.380766032Z"
+    created: "2026-06-23T02:11:30.066149017Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: 3caec4f2ebf9712a8be7a701485a185743aa77de562c8a71b68f9514e396bd9d
     home: https://github.com/karimzakzoukz/sentinel
@@ -150,7 +171,7 @@ entries:
     version: 3.0.3
   - apiVersion: v2
     appVersion: 3.0.2
-    created: "2026-06-23T01:14:07.380381705Z"
+    created: "2026-06-23T02:11:30.065794529Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: ae6b52c08a0b73258ddd339d1ff3a18f7986f22a9ea3318fda0f12d14f97f1c5
     home: https://github.com/karimzakzoukz/sentinel
@@ -171,7 +192,7 @@ entries:
     version: 3.0.2
   - apiVersion: v2
     appVersion: 3.0.1
-    created: "2026-06-23T01:14:07.37927264Z"
+    created: "2026-06-23T02:11:30.065305775Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: fd6f37fa11bf3a6544daadec389984c471f260b0f3ac2c51843af82271627b1a
     home: https://github.com/karimzakzoukz/sentinel
@@ -192,7 +213,7 @@ entries:
     version: 3.0.1
   - apiVersion: v2
     appVersion: 3.0.0
-    created: "2026-06-23T01:14:07.378442777Z"
+    created: "2026-06-23T02:11:30.064370707Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~20MB.
     digest: 7a0e52050724b4fa5a9bd8ab348335c7ce52eddbd4c366fbb614aa404574aef8
     home: https://github.com/karimzakzoukz/sentinel
@@ -213,7 +234,7 @@ entries:
     version: 3.0.0
   - apiVersion: v2
     appVersion: "3"
-    created: "2026-06-23T01:14:07.383177065Z"
+    created: "2026-06-23T02:11:30.068736911Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~20MB.
     digest: 34375ed973e2a2c5093baaebe838e9e06e9af694fb1c6e62def8b4b3b1292612
     home: https://github.com/karimzakzoukz/sentinel
@@ -234,7 +255,7 @@ entries:
     version: "3"
   - apiVersion: v2
     appVersion: 2.0.1
-    created: "2026-06-23T01:14:07.377896542Z"
+    created: "2026-06-23T02:11:30.063549941Z"
     dependencies:
     - condition: weaviate.enabled
       name: weaviate
@@ -262,7 +283,7 @@ entries:
     version: 2.0.1
   - apiVersion: v2
     appVersion: 2.0.0
-    created: "2026-06-23T01:14:07.373717313Z"
+    created: "2026-06-23T02:11:30.058629877Z"
     dependencies:
     - condition: weaviate.enabled
       name: weaviate
@@ -290,7 +311,7 @@ entries:
     version: 2.0.0
   - apiVersion: v2
     appVersion: 1.5.43
-    created: "2026-06-23T01:14:07.320147789Z"
+    created: "2026-06-23T02:11:30.001665817Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -322,7 +343,7 @@ entries:
     version: 1.5.43
   - apiVersion: v2
     appVersion: 1.5.42
-    created: "2026-06-23T01:14:07.310504827Z"
+    created: "2026-06-23T02:11:29.991963506Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -354,7 +375,7 @@ entries:
     version: 1.5.42
   - apiVersion: v2
     appVersion: 1.5.41
-    created: "2026-06-23T01:14:07.299739942Z"
+    created: "2026-06-23T02:11:29.982246495Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -386,7 +407,7 @@ entries:
     version: 1.5.41
   - apiVersion: v2
     appVersion: 1.5.40
-    created: "2026-06-23T01:14:07.288248785Z"
+    created: "2026-06-23T02:11:29.972425564Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -418,7 +439,7 @@ entries:
     version: 1.5.40
   - apiVersion: v2
     appVersion: 1.5.39
-    created: "2026-06-23T01:14:07.269394858Z"
+    created: "2026-06-23T02:11:29.952512252Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -450,7 +471,7 @@ entries:
     version: 1.5.39
   - apiVersion: v2
     appVersion: 1.5.38
-    created: "2026-06-23T01:14:07.259970798Z"
+    created: "2026-06-23T02:11:29.942586201Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -482,7 +503,7 @@ entries:
     version: 1.5.38
   - apiVersion: v2
     appVersion: 1.5.37
-    created: "2026-06-23T01:14:07.250354015Z"
+    created: "2026-06-23T02:11:29.932849129Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -514,7 +535,7 @@ entries:
     version: 1.5.37
   - apiVersion: v2
     appVersion: 1.5.36
-    created: "2026-06-23T01:14:07.239883403Z"
+    created: "2026-06-23T02:11:29.92150344Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -546,7 +567,7 @@ entries:
     version: 1.5.36
   - apiVersion: v2
     appVersion: 1.5.35
-    created: "2026-06-23T01:14:07.228542548Z"
+    created: "2026-06-23T02:11:29.908315364Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -578,7 +599,7 @@ entries:
     version: 1.5.35
   - apiVersion: v2
     appVersion: 1.5.34
-    created: "2026-06-23T01:14:07.219003148Z"
+    created: "2026-06-23T02:11:29.898140344Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -610,7 +631,7 @@ entries:
     version: 1.5.34
   - apiVersion: v2
     appVersion: 1.5.31
-    created: "2026-06-23T01:14:07.208065058Z"
+    created: "2026-06-23T02:11:29.881250351Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -642,7 +663,7 @@ entries:
     version: 1.5.31
   - apiVersion: v2
     appVersion: 1.5.30
-    created: "2026-06-23T01:14:07.196529296Z"
+    created: "2026-06-23T02:11:29.86690674Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -674,7 +695,7 @@ entries:
     version: 1.5.30
   - apiVersion: v2
     appVersion: 1.5.29
-    created: "2026-06-23T01:14:07.187100879Z"
+    created: "2026-06-23T02:11:29.856997249Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -706,7 +727,7 @@ entries:
     version: 1.5.29
   - apiVersion: v2
     appVersion: 1.5.28
-    created: "2026-06-23T01:14:07.177551215Z"
+    created: "2026-06-23T02:11:29.847125393Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -738,7 +759,7 @@ entries:
     version: 1.5.28
   - apiVersion: v2
     appVersion: 1.5.27
-    created: "2026-06-23T01:14:07.167628751Z"
+    created: "2026-06-23T02:11:29.837322473Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -770,7 +791,7 @@ entries:
     version: 1.5.27
   - apiVersion: v2
     appVersion: 1.5.26
-    created: "2026-06-23T01:14:07.157529747Z"
+    created: "2026-06-23T02:11:29.827574422Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -802,7 +823,7 @@ entries:
     version: 1.5.26
   - apiVersion: v2
     appVersion: 1.5.25
-    created: "2026-06-23T01:14:07.148171775Z"
+    created: "2026-06-23T02:11:29.817828114Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -834,7 +855,7 @@ entries:
     version: 1.5.25
   - apiVersion: v2
     appVersion: 1.5.22
-    created: "2026-06-23T01:14:07.138657852Z"
+    created: "2026-06-23T02:11:29.808063684Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -866,7 +887,7 @@ entries:
     version: 1.5.22
   - apiVersion: v2
     appVersion: 1.5.21
-    created: "2026-06-23T01:14:07.129002943Z"
+    created: "2026-06-23T02:11:29.798342823Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -898,7 +919,7 @@ entries:
     version: 1.5.21
   - apiVersion: v2
     appVersion: 1.5.19
-    created: "2026-06-23T01:14:07.118150047Z"
+    created: "2026-06-23T02:11:29.788697694Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -930,7 +951,7 @@ entries:
     version: 1.5.19
   - apiVersion: v2
     appVersion: 1.5.18
-    created: "2026-06-23T01:14:07.10731634Z"
+    created: "2026-06-23T02:11:29.77900335Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -962,7 +983,7 @@ entries:
     version: 1.5.18
   - apiVersion: v2
     appVersion: 1.5.17
-    created: "2026-06-23T01:14:07.097874774Z"
+    created: "2026-06-23T02:11:29.769335292Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -994,7 +1015,7 @@ entries:
     version: 1.5.17
   - apiVersion: v2
     appVersion: 1.5.16
-    created: "2026-06-23T01:14:07.088348264Z"
+    created: "2026-06-23T02:11:29.75957235Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -1026,7 +1047,7 @@ entries:
     version: 1.5.16
   - apiVersion: v2
     appVersion: 1.5.15
-    created: "2026-06-23T01:14:07.078893339Z"
+    created: "2026-06-23T02:11:29.749737123Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -1058,7 +1079,7 @@ entries:
     version: 1.5.15
   - apiVersion: v2
     appVersion: 1.5.14
-    created: "2026-06-23T01:14:07.069467426Z"
+    created: "2026-06-23T02:11:29.740004515Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -1090,7 +1111,7 @@ entries:
     version: 1.5.14
   - apiVersion: v2
     appVersion: 1.5.13
-    created: "2026-06-23T01:14:07.060022676Z"
+    created: "2026-06-23T02:11:29.730162579Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -1122,7 +1143,7 @@ entries:
     version: 1.5.13
   - apiVersion: v2
     appVersion: 1.5.12
-    created: "2026-06-23T01:14:07.04931813Z"
+    created: "2026-06-23T02:11:29.720351208Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -1154,7 +1175,7 @@ entries:
     version: 1.5.12
   - apiVersion: v2
     appVersion: 1.5.11
-    created: "2026-06-23T01:14:07.039895823Z"
+    created: "2026-06-23T02:11:29.710624622Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -1186,7 +1207,7 @@ entries:
     version: 1.5.11
   - apiVersion: v2
     appVersion: 1.5.10
-    created: "2026-06-23T01:14:07.030429882Z"
+    created: "2026-06-23T02:11:29.700834044Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -1218,7 +1239,7 @@ entries:
     version: 1.5.10
   - apiVersion: v2
     appVersion: 1.5.9
-    created: "2026-06-23T01:14:07.369540487Z"
+    created: "2026-06-23T02:11:30.054427856Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -1250,7 +1271,7 @@ entries:
     version: 1.5.9
   - apiVersion: v2
     appVersion: 1.5.8
-    created: "2026-06-23T01:14:07.36000353Z"
+    created: "2026-06-23T02:11:30.044491298Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -1282,7 +1303,7 @@ entries:
     version: 1.5.8
   - apiVersion: v2
     appVersion: 1.5.7
-    created: "2026-06-23T01:14:07.348999062Z"
+    created: "2026-06-23T02:11:30.034514104Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -1314,7 +1335,7 @@ entries:
     version: 1.5.7
   - apiVersion: v2
     appVersion: 1.5.6
-    created: "2026-06-23T01:14:07.339048206Z"
+    created: "2026-06-23T02:11:30.024503461Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -1346,7 +1367,7 @@ entries:
     version: 1.5.6
   - apiVersion: v2
     appVersion: 1.5.5
-    created: "2026-06-23T01:14:07.329604898Z"
+    created: "2026-06-23T02:11:30.011489953Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -1378,7 +1399,7 @@ entries:
     version: 1.5.5
   - apiVersion: v2
     appVersion: 1.5.4
-    created: "2026-06-23T01:14:07.278837985Z"
+    created: "2026-06-23T02:11:29.962526756Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -1410,7 +1431,7 @@ entries:
     version: 1.5.4
   - apiVersion: v2
     appVersion: 1.5.0
-    created: "2026-06-23T01:14:07.021025421Z"
+    created: "2026-06-23T02:11:29.690937525Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -1442,7 +1463,7 @@ entries:
     version: 1.5.0
   - apiVersion: v2
     appVersion: 1.4.2
-    created: "2026-06-23T01:14:07.011596014Z"
+    created: "2026-06-23T02:11:29.681266945Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -1474,7 +1495,7 @@ entries:
     version: 1.4.2
   - apiVersion: v2
     appVersion: 1.4.1
-    created: "2026-06-23T01:14:07.002028642Z"
+    created: "2026-06-23T02:11:29.671510303Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -1506,7 +1527,7 @@ entries:
     version: 1.4.1
   - apiVersion: v2
     appVersion: 1.4.0
-    created: "2026-06-23T01:14:06.991829881Z"
+    created: "2026-06-23T02:11:29.661431703Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -1538,7 +1559,7 @@ entries:
     version: 1.4.0
   - apiVersion: v2
     appVersion: 1.3.9
-    created: "2026-06-23T01:14:06.972876106Z"
+    created: "2026-06-23T02:11:29.650098054Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -1570,7 +1591,7 @@ entries:
     version: 1.3.9
   - apiVersion: v2
     appVersion: 1.3.3
-    created: "2026-06-23T01:14:06.960361352Z"
+    created: "2026-06-23T02:11:29.640250712Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -1600,4 +1621,4 @@ entries:
     urls:
     - https://karimzakzouk.github.io/sentinel/sentinel-1.3.5.tgz
     version: 1.3.5
-generated: "2026-06-23T01:14:06.950017847Z"
+generated: "2026-06-23T02:11:29.630168611Z"
