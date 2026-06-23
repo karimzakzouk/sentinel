@@ -25,41 +25,41 @@
 package correlation
 
 import (
-	"log"
-	"sync"
-	"time"
+        "log"
+        "sync"
+        "time"
 )
 
 // Correlator detects cascading failures across services.
 type Correlator struct {
-	mu sync.Mutex
+        mu sync.Mutex
 
-	// incidents is a sliding window of recent incidents.
-	// Key: service/namespace, Value: timestamp of the incident.
-	incidents map[string]time.Time
+        // incidents is a sliding window of recent incidents.
+        // Key: service/namespace, Value: timestamp of the incident.
+        incidents map[string]time.Time
 
-	// deployments tracks recent deployments for root-cause attribution.
-	// Key: service/namespace, Value: timestamp of the deployment.
-	deployments map[string]time.Time
+        // deployments tracks recent deployments for root-cause attribution.
+        // Key: service/namespace, Value: timestamp of the deployment.
+        deployments map[string]time.Time
 
-	// Config
-	window           time.Duration // default 60s
-	threshold        int           // default 3 distinct services
-	cooldownDuration time.Duration // default 5 min — don't re-emit for the same cascade
+        // Config
+        window           time.Duration // default 60s
+        threshold        int           // default 3 distinct services
+        cooldownDuration time.Duration // default 5 min — don't re-emit for the same cascade
 
-	// State
-	lastEmission time.Time // tracks cooldown
-	handler      CorrelationHandler
+        // State
+        lastEmission time.Time // tracks cooldown
+        handler      CorrelationHandler
 }
 
 // CorrelationEvent is emitted when a cascade is detected.
 type CorrelationEvent struct {
-	Timestamp       time.Time
-	Services        []string // all affected services
-	Namespaces      []string
-	LikelyCause     string // the most-recently-deployed service (if any)
-	LikelyCauseTime time.Time
-	IncidentCount   int
+        Timestamp       time.Time
+        Services        []string // all affected services
+        Namespaces      []string
+        LikelyCause     string // the most-recently-deployed service (if any)
+        LikelyCauseTime time.Time
+        IncidentCount   int
 }
 
 // CorrelationHandler is called when a cascade is detected.
@@ -67,30 +67,30 @@ type CorrelationHandler func(event CorrelationEvent)
 
 // New creates a Correlator with default settings (60s window, 3-service threshold).
 func New(handler CorrelationHandler) *Correlator {
-	return &Correlator{
-		incidents:        make(map[string]time.Time),
-		deployments:      make(map[string]time.Time),
-		window:           60 * time.Second,
-		threshold:        3,
-		cooldownDuration: 5 * time.Minute,
-		handler:          handler,
-	}
+        return &Correlator{
+                incidents:        make(map[string]time.Time),
+                deployments:      make(map[string]time.Time),
+                window:           60 * time.Second,
+                threshold:        3,
+                cooldownDuration: 5 * time.Minute,
+                handler:          handler,
+        }
 }
 
 // SetConfig configures the correlation parameters.
 // v3.5.0: Allows tuning for different cluster sizes.
 func (c *Correlator) SetConfig(window time.Duration, threshold int, cooldown time.Duration) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if window > 0 {
-		c.window = window
-	}
-	if threshold > 1 {
-		c.threshold = threshold
-	}
-	if cooldown > 0 {
-		c.cooldownDuration = cooldown
-	}
+        c.mu.Lock()
+        defer c.mu.Unlock()
+        if window > 0 {
+                c.window = window
+        }
+        if threshold > 1 {
+                c.threshold = threshold
+        }
+        if cooldown > 0 {
+                c.cooldownDuration = cooldown
+        }
 }
 
 // RegisterDeployment records that a service was deployed at the given time.
@@ -98,13 +98,13 @@ func (c *Correlator) SetConfig(window time.Duration, threshold int, cooldown tim
 // (pod created with a new image tag). The most-recently-deployed service
 // before a cascade is the likely cause.
 func (c *Correlator) RegisterDeployment(service, namespace string, ts time.Time) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	key := service + "/" + namespace
-	c.deployments[key] = ts
-	log.Printf("[correlation] deployment registered: %s at %v", key, ts)
-	// Clean old deployments
-	c.cleanupDeployments(ts)
+        c.mu.Lock()
+        defer c.mu.Unlock()
+        key := service + "/" + namespace
+        c.deployments[key] = ts
+        log.Printf("[correlation] deployment registered: %s at %v", key, ts)
+        // Clean old deployments
+        c.cleanupDeployments(ts)
 }
 
 // RegisterIncident records a new incident and checks for correlation.
@@ -115,104 +115,110 @@ func (c *Correlator) RegisterDeployment(service, namespace string, ts time.Time)
 // Returns true if a correlation event was emitted (caller should suppress
 // the individual investigation), false otherwise (caller should proceed
 // with the normal investigation).
+//
+// v3.5.1: Handler is now called SYNCHRONOUSLY after releasing the lock,
+// not in a goroutine. This avoids timing flakes in tests and potential
+// deadlocks if the handler calls back into the correlator. The detection
+// layer should not block on this — if the handler is slow, run it in a
+// goroutine at the call site.
 func (c *Correlator) RegisterIncident(service, namespace string, ts time.Time) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+        // Build the event under the lock, then release before calling handler.
+        event, emitted := c.checkAndBuildEvent(service, namespace, ts)
+        if !emitted {
+                return false
+        }
 
-	key := service + "/" + namespace
-	c.incidents[key] = ts
+        // Call handler outside the lock to avoid deadlocks.
+        if c.handler != nil {
+                c.handler(event)
+        }
+        return true
+}
 
-	// Clean expired incidents
-	c.cleanupIncidents(ts)
+// checkAndBuildEvent does the actual correlation logic under the lock.
+// Returns the event and true if a cascade was detected, or zero value + false.
+func (c *Correlator) checkAndBuildEvent(service, namespace string, ts time.Time) (CorrelationEvent, bool) {
+        c.mu.Lock()
+        defer c.mu.Unlock()
 
-	// Count distinct services with active incidents
-	distinctServices := make(map[string]bool)
-	for k := range c.incidents {
-		// k is "service/namespace" — extract just the service
-		// to detect cross-service correlation
-		distinctServices[k] = true
-	}
+        key := service + "/" + namespace
+        c.incidents[key] = ts
 
-	if len(distinctServices) < c.threshold {
-		return false
-	}
+        // Clean expired incidents
+        c.cleanupIncidents(ts)
 
-	// Check cooldown — don't re-emit for the same cascade
-	if time.Since(c.lastEmission) < c.cooldownDuration {
-		log.Printf("[correlation] cascade detected (%d services) but in cooldown — suppressing", len(distinctServices))
-		return false
-	}
+        // Count distinct services with active incidents
+        distinctServices := make(map[string]bool)
+        for k := range c.incidents {
+                distinctServices[k] = true
+        }
 
-	// Find the most-recently-deployed service (likely cause)
-	var likelyCause string
-	var likelyCauseTime time.Time
-	incidentServices := make(map[string]bool)
-	for k := range c.incidents {
-		incidentServices[k] = true
-	}
+        if len(distinctServices) < c.threshold {
+                return CorrelationEvent{}, false
+        }
 
-	for depKey, depTime := range c.deployments {
-		// The likely cause is a service that deployed recently but is NOT
-		// itself in the incident list (the cause is usually upstream).
-		// OR it IS in the incident list but deployed first (bad deploy).
-		// We pick the most recent deployment within the window.
-		if ts.Sub(depTime) <= c.window*2 { // deployed within 2x window
-			if depTime.After(likelyCauseTime) {
-				likelyCause = depKey
-				likelyCauseTime = depTime
-			}
-		}
-	}
+        // Check cooldown — don't re-emit for the same cascade
+        if time.Since(c.lastEmission) < c.cooldownDuration {
+                log.Printf("[correlation] cascade detected (%d services) but in cooldown — suppressing", len(distinctServices))
+                return CorrelationEvent{}, false
+        }
 
-	// Build the event
-	event := CorrelationEvent{
-		Timestamp:       ts,
-		LikelyCause:     likelyCause,
-		LikelyCauseTime: likelyCauseTime,
-		IncidentCount:   len(distinctServices),
-	}
-	for k := range c.incidents {
-		// Split "service/namespace"
-		event.Services = append(event.Services, k)
-	}
+        // Find the most-recently-deployed service (likely cause)
+        var likelyCause string
+        var likelyCauseTime time.Time
 
-	c.lastEmission = ts
-	log.Printf("[correlation] CASCADE DETECTED: %d services failing in %v window. Likely cause: %s (deployed at %v)",
-		len(distinctServices), c.window, likelyCause, likelyCauseTime)
+        for depKey, depTime := range c.deployments {
+                if ts.Sub(depTime) <= c.window*2 { // deployed within 2x window
+                        if depTime.After(likelyCauseTime) {
+                                likelyCause = depKey
+                                likelyCauseTime = depTime
+                        }
+                }
+        }
 
-	if c.handler != nil {
-		// Call handler in a goroutine to avoid blocking the detection layer
-		go c.handler(event)
-	}
+        // Build the event
+        event := CorrelationEvent{
+                Timestamp:       ts,
+                LikelyCause:     likelyCause,
+                LikelyCauseTime: likelyCauseTime,
+                IncidentCount:   len(distinctServices),
+        }
+        for k := range c.incidents {
+                event.Services = append(event.Services, k)
+        }
 
-	return true
+        c.lastEmission = ts
+        log.Printf("[correlation] CASCADE DETECTED: %d services failing in %v window. Likely cause: %s (deployed at %v)",
+                len(distinctServices), c.window, likelyCause, likelyCauseTime)
+
+        return event, true
 }
 
 // cleanupIncidents removes incidents older than the window.
 func (c *Correlator) cleanupIncidents(now time.Time) {
-	for key, ts := range c.incidents {
-		if now.Sub(ts) > c.window {
-			delete(c.incidents, key)
-		}
-	}
+        for key, ts := range c.incidents {
+                if now.Sub(ts) > c.window {
+                        delete(c.incidents, key)
+                }
+        }
 }
 
 // cleanupDeployments removes deployments older than 10x the window.
 func (c *Correlator) cleanupDeployments(now time.Time) {
-	for key, ts := range c.deployments {
-		if now.Sub(ts) > c.window*10 {
-			delete(c.deployments, key)
-		}
-	}
+        for key, ts := range c.deployments {
+                if now.Sub(ts) > c.window*10 {
+                        delete(c.deployments, key)
+                }
+        }
 }
 
 // ActiveIncidentCount returns the number of distinct services with active
 // incidents in the current window. v3.5.0: Used for metrics/debugging.
 func (c *Correlator) ActiveIncidentCount() int {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.cleanupIncidents(time.Now())
-	return len(c.incidents)
+        c.mu.Lock()
+        defer c.mu.Unlock()
+        c.cleanupIncidents(time.Now())
+        return len(c.incidents)
 }
 
 // IsLikelyCascade returns true if the given service's incident is likely
@@ -220,8 +226,8 @@ func (c *Correlator) ActiveIncidentCount() int {
 // v3.5.0: The detection layer can use this to skip individual investigation
 // and wait for the correlation handler to trigger a rollback instead.
 func (c *Correlator) IsLikelyCascade(service, namespace string) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.cleanupIncidents(time.Now())
-	return len(c.incidents) >= c.threshold
+        c.mu.Lock()
+        defer c.mu.Unlock()
+        c.cleanupIncidents(time.Now())
+        return len(c.incidents) >= c.threshold
 }

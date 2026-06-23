@@ -18,7 +18,6 @@ linters:
     - govet          # go vet
     - ineffassign    # ineffectual assignments
     - staticcheck    # the big one — SA1000-SC3000
-    - typecheck      # type-check pass
     - unused         # unused vars, funcs, types, fields
     - misspell       # spelling errors in comments
     - revive         # golint successor — naming, exported docs
@@ -27,6 +26,7 @@ linters:
     - dupl           # duplicate code blocks
     - goconst        # repeated constants should be named
     - nakedret       # naked return in long functions
+    # v3.5.0: 'typecheck' removed — it's built-in in v2, can't be enabled/disabled
 
   settings:
     errcheck:
