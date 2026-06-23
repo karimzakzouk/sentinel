@@ -39,6 +39,17 @@ type Clusterer struct {
         mu      sync.Mutex
         pending map[string]*pendingCluster
         window  time.Duration
+
+        // v3.5.0: Optional pause checker — if set and returns true, the clusterer
+        // skips emitting triggers (autonomous mode paused via Slack bot).
+        pauseChecker PauseChecker
+}
+
+// PauseChecker returns true if autonomous mode is paused.
+// v3.5.0: Implemented by the Slack bot — allows pausing investigations
+// without restarting Sentinel.
+type PauseChecker interface {
+        IsPaused() bool
 }
 
 type pendingCluster struct {
@@ -55,6 +66,13 @@ func NewClusterer(handler IncidentHandler, tracker *ActiveTracker) *Clusterer {
                 pending: make(map[string]*pendingCluster),
                 window:  3 * time.Second, // v3.2.4: reduced from 5s to 3s for faster response
         }
+}
+
+// SetPauseChecker wires in a pause checker (e.g. the Slack bot).
+// v3.5.0: When set, the clusterer checks IsPaused() before emitting triggers.
+// If paused, signals are silently dropped (not buffered).
+func (c *Clusterer) SetPauseChecker(pc PauseChecker) {
+        c.pauseChecker = pc
 }
 
 // Send sends a signal to the clusterer.
@@ -107,6 +125,12 @@ func (c *Clusterer) emit(key string) {
 
         if c.tracker.IsActive(pending.signals[0].Service, pending.signals[0].Namespace) {
                 log.Printf("[clusterer] skipping %s — active incident already in progress", key)
+                return
+        }
+
+        // v3.5.0: Check if autonomous mode is paused (via Slack bot).
+        if c.pauseChecker != nil && c.pauseChecker.IsPaused() {
+                log.Printf("[clusterer] skipping %s — autonomous mode paused", key)
                 return
         }
 

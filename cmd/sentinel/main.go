@@ -25,7 +25,9 @@ import (
         "github.com/karimzakzouk/sentinel/v3/internal/llm"
         "github.com/karimzakzouk/sentinel/v3/internal/logging"
         "github.com/karimzakzouk/sentinel/v3/internal/metrics"
+        "github.com/karimzakzouk/sentinel/v3/internal/prreview"
         "github.com/karimzakzouk/sentinel/v3/internal/safety"
+        "github.com/karimzakzouk/sentinel/v3/internal/slackbot"
         "github.com/karimzakzouk/sentinel/v3/internal/schemas"
         "github.com/karimzakzouk/sentinel/v3/internal/watcher"
 )
@@ -296,8 +298,24 @@ func main() {
                 alertSender.SendAlert(incident.Cluster.Service, incident.Cluster.Namespace, incident.Cluster.Summary, prURL)
 
                 // v3.2: Start outcome watcher (monitors service recovery for 10 min)
+                // v3.5.0: Now uses WatchWithDetails — Phase 1 (10 min recovery) +
+                // Phase 2 (24h re-occurrence watch). Phase 2 corrects the Beta prior
+                // if the same error reappears after the initial recovery.
                 if success && prURL != "" {
-                        outcomeWatcher.Watch(ctx, incident.Cluster.Service, incident.Cluster.Namespace, incident.IncidentID.String(), true)
+                        fingerprint := feedback.ExtractErrorFingerprint(extractPodLogsFromIncident(&incident))
+                        fixType := "code_fix"
+                        if incident.State.FixProposal != nil {
+                                fixType = string(incident.State.FixProposal.FixType)
+                        }
+                        outcomeWatcher.WatchWithDetails(
+                                ctx,
+                                incident.Cluster.Service,
+                                incident.Cluster.Namespace,
+                                incident.IncidentID.String(),
+                                true,
+                                fixType,
+                                fingerprint,
+                        )
                 }
 
                 logging.InfoCtx(invCtx, "investigation resolved",
@@ -442,6 +460,52 @@ func main() {
                 },
                 func() bool { return ready },
         )
+
+        // v3.5.0: Wire predictive PR review (GitHub webhook receiver).
+        // Scores PR diffs against HNSW incident memory and posts review comments
+        // warning developers about changes that resemble past incidents.
+        prReviewer := prreview.New(cfg.GitHubToken, cfg.GitHubWebhookSecret, &prReviewVectorAdapter{vs: vectorStore})
+        apiServer.SetWebhookHandler(http.HandlerFunc(prReviewer.HandleWebhook))
+
+        // v3.5.0: Wire interactive Slack bot (two-way commands).
+        // Accepts: pause, resume, investigate, list, status, help.
+        // The bot's IsPaused() is checked by the detection layer before triggering.
+        slackBot := slackbot.New(cfg.SlackSigningSecret, cfg.SlackBotUserID,
+                func(service, namespace, reason string) (string, error) {
+                        cluster := schemas.AnomalyCluster{
+                                ClusterID: uuid.New(),
+                                Service:   service,
+                                Namespace: namespace,
+                                Severity:  schemas.SeverityWarning,
+                                Summary:   fmt.Sprintf("Slack-triggered: %s", reason),
+                        }
+                        go handler(ctx, cluster, "slack", "sentinel")
+                        return cluster.ClusterID.String(), nil
+                },
+                func(ctx context.Context, limit int) ([]map[string]any, error) {
+                        incidents, err := store.ListRecentIncidents(ctx, limit)
+                        if err != nil {
+                                return nil, err
+                        }
+                        out := make([]map[string]any, 0, len(incidents))
+                        for _, inc := range incidents {
+                                out = append(out, map[string]any{
+                                        "incident_id": inc.IncidentID.String(),
+                                        "service":     inc.Cluster.Service,
+                                        "namespace":   inc.Cluster.Namespace,
+                                        "status":      string(inc.Status),
+                                        "created_at":  inc.CreatedAt,
+                                })
+                        }
+                        return out, nil
+                },
+        )
+        apiServer.SetSlackHandler(http.HandlerFunc(slackBot.HandleEvents))
+
+        // v3.5.0: Wire the Slack bot's pause checker into the detection layer.
+        // When autonomous mode is paused via Slack, the clusterer skips emitting
+        // triggers — no new investigations start until resumed.
+        clusterer.SetPauseChecker(slackBot)
 
         go func() {
                 if err := apiServer.Start(); err != nil && err != http.ErrServerClosed {
@@ -616,6 +680,17 @@ func recordBetaOutcome(ctx context.Context, store *feedback.Store, incident sche
         return alpha, beta
 }
 
+// extractPodLogsFromIncident pulls the pod logs from the incident's anomaly
+// explanations. v3.5.0: Used to extract the error fingerprint for the 24h
+// re-occurrence watcher.
+func extractPodLogsFromIncident(incident *schemas.Incident) string {
+        var logs string
+        for _, anomaly := range incident.Cluster.Anomalies {
+                logs += anomaly.Explanation + "\n"
+        }
+        return logs
+}
+
 // storeAdapter bridges feedback.Store to the api.Store interface.
 type storeAdapter struct {
         store *feedback.Store
@@ -655,6 +730,32 @@ func (a *vectorStoreAdapter) Search(ctx context.Context, text string, k int) ([]
         out := make([]*agents.VectorMetadata, len(metas))
         for i, m := range metas {
                 out[i] = &agents.VectorMetadata{
+                        IncidentID: m.IncidentID,
+                        Service:    m.Service,
+                        RootCause:  m.RootCause,
+                        FixType:    m.FixType,
+                        FixPattern: m.FixPattern,
+                        Outcome:    m.Outcome,
+                }
+        }
+        return out, scores, nil
+}
+
+// prReviewVectorAdapter bridges feedback.VectorStore to prreview.VectorStore.
+// v3.5.0: Used by the predictive PR review feature to score PR diffs against
+// incident memory. Same pattern as vectorStoreAdapter above.
+type prReviewVectorAdapter struct {
+        vs *feedback.VectorStore
+}
+
+func (a *prReviewVectorAdapter) Search(ctx context.Context, text string, k int) ([]*prreview.VectorMetadata, []float32, error) {
+        metas, scores, err := a.vs.Search(ctx, text, k)
+        if err != nil || len(metas) == 0 {
+                return nil, nil, err
+        }
+        out := make([]*prreview.VectorMetadata, len(metas))
+        for i, m := range metas {
+                out[i] = &prreview.VectorMetadata{
                         IncidentID: m.IncidentID,
                         Service:    m.Service,
                         RootCause:  m.RootCause,

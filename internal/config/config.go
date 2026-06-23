@@ -29,6 +29,8 @@ type Config struct {
 
         // GitHub
         GitHubToken string
+        // v3.5.0: GitHub webhook secret for PR review signature verification.
+        GitHubWebhookSecret string
 
         // Docker Hub (for Kaniko sandbox image builder)
         DockerHubUsername string
@@ -96,6 +98,10 @@ type Config struct {
         // v3.4.0: Slack webhook (was read via os.Getenv in 2 places).
         SlackWebhook string
 
+        // v3.5.0: Interactive Slack bot (Events API + slash commands)
+        SlackSigningSecret string // verifies Slack webhook signatures
+        SlackBotUserID     string // Sentinel's Slack user ID (for @mention parsing)
+
         // v3.4.0: Structured logging level (DEBUG/INFO/WARN/ERROR). Default INFO.
         LogLevel string
 }
@@ -132,6 +138,7 @@ func Load() *Config {
                 Namespace:              getenv("SENTINEL_NAMESPACE", "sentinel"),
                 ReleaseName:            getenv("SENTINEL_RELEASE_NAME", "sentinel"),
                 GitHubToken:            getenv("SENTINEL_GITHUB_TOKEN", ""),
+                GitHubWebhookSecret:    getenv("SENTINEL_GITHUB_WEBHOOK_SECRET", ""),
                 DockerHubUsername:      getenv("SENTINEL_DOCKER_HUB_USERNAME", ""),
                 DockerHubToken:         getenv("SENTINEL_DOCKER_HUB_TOKEN", ""),
                 ProductionNamespaces:   splitCSV(getenv("SENTINEL_PRODUCTION_NAMESPACES", "prod,production,payments")),
@@ -184,6 +191,10 @@ func Load() *Config {
 
                 // v3.4.0: Slack (was os.Getenv in 2 places)
                 SlackWebhook: getenv("SENTINEL_SLACK_WEBHOOK", ""),
+
+                // v3.5.0: Interactive Slack bot
+                SlackSigningSecret: getenv("SENTINEL_SLACK_SIGNING_SECRET", ""),
+                SlackBotUserID:     getenv("SENTINEL_SLACK_BOT_USER_ID", ""),
 
                 // v3.4.0: Structured logging level
                 LogLevel: getenv("SENTINEL_LOG_LEVEL", "INFO"),

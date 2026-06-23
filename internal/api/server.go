@@ -31,6 +31,8 @@ type Server struct {
         settings     SettingsGetter
         investigate  InvestigateFunc
         readyChecker ReadyChecker
+        webhookHandler http.Handler // v3.5.0: GitHub webhook receiver (predictive PR review)
+        slackHandler   http.Handler // v3.5.0: Slack Events API (interactive bot)
         http         *http.Server
 }
 
@@ -66,12 +68,49 @@ func New(addr string, store Store, settings SettingsGetter, investigate Investig
         mux.HandleFunc("/incidents/", s.handleIncident)
         mux.HandleFunc("/settings", s.handleSettings)
         mux.HandleFunc("/admin/investigate", s.handleInvestigate)
+        // v3.5.0: Predictive PR review webhook receiver.
+        // webhookHandler is nil by default — set via SetWebhookHandler.
+        mux.HandleFunc("/webhook/github", s.handleWebhook)
+        // v3.5.0: Interactive Slack bot (Events API + slash commands).
+        mux.HandleFunc("/slack/events", s.handleSlack)
 
         s.http = &http.Server{
                 Addr:    addr,
                 Handler: mux,
         }
         return s
+}
+
+// SetWebhookHandler wires in the GitHub webhook handler (predictive PR review).
+// v3.5.0: If not called, /webhook/github returns 503 Service Unavailable.
+func (s *Server) SetWebhookHandler(h http.Handler) {
+        s.webhookHandler = h
+}
+
+// SetSlackHandler wires in the Slack bot handler (interactive commands).
+// v3.5.0: If not called, /slack/events returns 503 Service Unavailable.
+func (s *Server) SetSlackHandler(h http.Handler) {
+        s.slackHandler = h
+}
+
+func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
+        if s.webhookHandler == nil {
+                writeJSON(w, 503, map[string]string{
+                        "error": "webhook handler not configured (predictive PR review disabled)",
+                })
+                return
+        }
+        s.webhookHandler.ServeHTTP(w, r)
+}
+
+func (s *Server) handleSlack(w http.ResponseWriter, r *http.Request) {
+        if s.slackHandler == nil {
+                writeJSON(w, 503, map[string]string{
+                        "error": "slack handler not configured (interactive bot disabled)",
+                })
+                return
+        }
+        s.slackHandler.ServeHTTP(w, r)
 }
 
 // Start begins serving HTTP.
@@ -89,7 +128,7 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
         writeJSON(w, 200, map[string]string{
                 "status":  "ok",
                 "service": "core",
-                "version": "3.4.0",
+                "version": "3.5.0",
         })
 }
 
