@@ -89,7 +89,15 @@ func main() {
 
         // 4. Agent pipeline (with vector store for memory loop)
         pipeline := agents.NewPipeline(router, k8sClient, cfg.GitHubToken, store, &vectorStoreAdapter{vs: vectorStore})
-        // v3.4.0: Wire Prometheus backend for evidence gatherer (was returning "not configured")
+        // v3.6.0: Configurable timeouts + confidence threshold
+        pipeline.SetConfig(
+                cfg.InvestigatorTimeoutSec,
+                cfg.EvidenceGathererTimeoutSec,
+                cfg.AnalystTimeoutSec,
+                cfg.FixProposerTimeoutSec,
+                cfg.ConfidenceLoopBackThreshold,
+        )
+        // v3.4.0: Wire Prometheus backend for evidence gatherer
         if cfg.PrometheusURL != "" {
                 pipeline.SetPrometheusURL(cfg.PrometheusURL)
         }
@@ -534,6 +542,9 @@ func main() {
         )
         apiServer.SetSlackHandler(http.HandlerFunc(slackBot.HandleEvents))
 
+        // v3.6.0: Wire pause controller so CLI can pause/resume via API
+        apiServer.SetPauseController(slackBot)
+
         // v3.5.0: Wire the Slack bot token for posting @mention replies.
         if cfg.SlackBotToken != "" {
                 slackBot.SetBotToken(cfg.SlackBotToken)
@@ -625,10 +636,20 @@ func executeCodeFix(
         }
 
         // Phase 2 + 3: Build canary + sandbox (only if Docker Hub creds available)
+        // v3.6.0: Skip sandbox for non-production namespaces when configured (default: true).
+        // This cuts total fix time from ~9 min to ~2 min for sim/staging environments.
         sandboxVerified := false
         sandboxSummary := "skipped (no Docker Hub credentials)"
 
-        if cfg.DockerHubToken != "" {
+        isNonProd := !cfg.IsProductionNamespace(fp.TargetNamespace)
+        if cfg.SkipSandboxNonProd && isNonProd && cfg.DockerHubToken != "" {
+                // Non-prod fast path: skip Kaniko build + sandbox, open PR directly
+                sandboxSummary = "skipped (non-production namespace — fast mode)"
+                logging.Info("skipping sandbox for non-production namespace (fast mode)",
+                        "fix_id", fp.FixID,
+                        "namespace", fp.TargetNamespace,
+                )
+        } else if cfg.DockerHubToken != "" {
                 logging.Info("execution Phase 2: building canary image with Kaniko", "fix_id", fp.FixID)
                 prodImage, err := k8sClient.GetProdImage(ctx, fp.TargetService, fp.TargetNamespace)
                 if err == nil && prodImage != "" {

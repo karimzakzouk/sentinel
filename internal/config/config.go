@@ -86,6 +86,10 @@ type Config struct {
         // v3.4.0: Sandbox probe config (was hardcoded /pay?amount=...).
         SandboxProbePaths []string
 
+        // v3.6.0: Skip sandbox verification for non-production namespaces.
+        // Default true — sim/staging don't need canary verification, just open the PR.
+        SkipSandboxNonProd bool
+
         // v3.4.0: LLM retry config (was no retry — single HTTP call).
         LLMMaxRetries        int
         LLMRetryBaseDelayMs  int
@@ -180,6 +184,9 @@ func Load() *Config {
 
                 // v3.4.0: Sandbox probe paths (was hardcoded /pay?amount=...)
                 SandboxProbePaths: splitCSV(getenv("SENTINEL_SANDBOX_PROBE_PATHS", "/,/healthz,/readyz")),
+
+                // v3.6.0: Skip sandbox for non-prod (default true — faster PRs in sim/staging)
+                SkipSandboxNonProd: getenvBool("SENTINEL_SKIP_SANDBOX_NON_PROD", true),
 
                 // v3.4.0: LLM retry (was no retry)
                 LLMMaxRetries:       getenvInt("SENTINEL_LLM_MAX_RETRIES", 3),

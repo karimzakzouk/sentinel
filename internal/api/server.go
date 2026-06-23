@@ -19,6 +19,7 @@ import (
         "log"
         "net/http"
         "strings"
+        "time"
 
         "github.com/google/uuid"
 
@@ -27,13 +28,22 @@ import (
 
 // Server is the HTTP API server.
 type Server struct {
-        store        Store
-        settings     SettingsGetter
-        investigate  InvestigateFunc
-        readyChecker ReadyChecker
+        store          Store
+        settings       SettingsGetter
+        investigate    InvestigateFunc
+        readyChecker   ReadyChecker
         webhookHandler http.Handler // v3.5.0: GitHub webhook receiver (predictive PR review)
         slackHandler   http.Handler // v3.5.0: Slack Events API (interactive bot)
-        http         *http.Server
+        pauseController PauseController // v3.6.0: CLI pause/resume via API
+        http           *http.Server
+}
+
+// PauseController controls autonomous mode pause/resume.
+// v3.6.0: Implemented by the Slack bot — allows the CLI to pause via the API.
+type PauseController interface {
+        IsPaused() bool
+        Pause(duration time.Duration, reason string)
+        Resume()
 }
 
 // Store interface — satisfied by feedback.Store.
@@ -68,6 +78,9 @@ func New(addr string, store Store, settings SettingsGetter, investigate Investig
         mux.HandleFunc("/incidents/", s.handleIncident)
         mux.HandleFunc("/settings", s.handleSettings)
         mux.HandleFunc("/admin/investigate", s.handleInvestigate)
+        // v3.6.0: CLI pause/resume via API
+        mux.HandleFunc("/admin/pause", s.handlePause)
+        mux.HandleFunc("/admin/resume", s.handleResume)
         // v3.5.0: Predictive PR review webhook receiver.
         // webhookHandler is nil by default — set via SetWebhookHandler.
         mux.HandleFunc("/webhook/github", s.handleWebhook)
@@ -91,6 +104,55 @@ func (s *Server) SetWebhookHandler(h http.Handler) {
 // v3.5.0: If not called, /slack/events returns 503 Service Unavailable.
 func (s *Server) SetSlackHandler(h http.Handler) {
         s.slackHandler = h
+}
+
+// SetPauseController wires in the pause controller (Slack bot) for CLI access.
+// v3.6.0: Allows sentinelctl pause/resume to work via the API.
+func (s *Server) SetPauseController(pc PauseController) {
+        s.pauseController = pc
+}
+
+func (s *Server) handlePause(w http.ResponseWriter, r *http.Request) {
+        if r.Method != "POST" {
+                writeJSON(w, 405, map[string]string{"error": "method not allowed"})
+                return
+        }
+        if s.pauseController == nil {
+                writeJSON(w, 503, map[string]string{"error": "pause controller not configured"})
+                return
+        }
+        var req struct {
+                DurationMin int    `json:"duration_min"`
+                Reason      string `json:"reason"`
+        }
+        if r.Body != nil {
+                _ = json.NewDecoder(r.Body).Decode(&req)
+        }
+        if req.DurationMin <= 0 {
+                req.DurationMin = 30
+        }
+        if req.Reason == "" {
+                req.Reason = "paused via CLI"
+        }
+        s.pauseController.Pause(time.Duration(req.DurationMin)*time.Minute, req.Reason)
+        writeJSON(w, 200, map[string]any{
+                "status":       "paused",
+                "duration_min": req.DurationMin,
+                "reason":       req.Reason,
+        })
+}
+
+func (s *Server) handleResume(w http.ResponseWriter, r *http.Request) {
+        if r.Method != "POST" {
+                writeJSON(w, 405, map[string]string{"error": "method not allowed"})
+                return
+        }
+        if s.pauseController == nil {
+                writeJSON(w, 503, map[string]string{"error": "pause controller not configured"})
+                return
+        }
+        s.pauseController.Resume()
+        writeJSON(w, 200, map[string]string{"status": "resumed"})
 }
 
 func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
