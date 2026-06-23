@@ -68,7 +68,7 @@ func (a *EvidenceGatherer) Run(ctx context.Context, state *schemas.AgentState) e
                 state.AgentTrace = append(state.AgentTrace, map[string]any{
                         "agent":  "evidence_gatherer",
                         "action": "llm_failed_no_evidence",
-                        "error":  fmt.Sprintf("%v", err)[:200],
+                        "error":  truncateErr(fmt.Sprintf("%v", err)),
                 })
                 return nil
         }

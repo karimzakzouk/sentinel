@@ -77,8 +77,31 @@ func main() {
 
         ready := false
 
+        // v3.2: Active incident tracker (per-service dedup)
+        tracker := detection.NewActiveTracker()
+        // v3.2: Slack alerts (graceful degradation if no webhook)
+        alertSender := agents.NewAlertSender(os.Getenv("SENTINEL_SLACK_WEBHOOK"))
+        // v3.2: Outcome watcher (monitors service post-fix)
+        outcomeWatcher := feedback.NewOutcomeWatcher(k8sClient.Clientset(), store)
+        // v3.2: Vector store with HNSW index + LLM embeddings
+        vectorStore := feedback.NewVectorStore(cfg.ResolvedBaseURL(), cfg.LLMAPIKey, "text-embedding-3-small")
+        // Load existing vectors from SQLite into HNSW index on startup
+        go func() {
+                loadCtx := context.Background()
+                if err := vectorStore.LoadFromDB(loadCtx, store); err != nil {
+                        log.Printf("[main] vector store load: %v", err)
+                }
+        }()
+
         // 7. The full investigation handler — runs the agent pipeline + execution
         handler := func(ctx context.Context, cluster schemas.AnomalyCluster, crName, crNamespace string) {
+                // v3.2: Panic recovery — never let an agent bug kill Sentinel
+                defer func() {
+                        if r := recover(); r != nil {
+                                log.Printf("[panic] investigation recovered: %v", r)
+                        }
+                }()
+
                 log.Printf("[investigation] %s/%s — service=%s", crNamespace, crName, cluster.Service)
 
                 // Create + save incident
@@ -170,8 +193,37 @@ func main() {
                 incident.BetaAlpha = alpha
                 incident.BetaBeta = beta
                 _ = store.StoreIncidentVector(ctx, &incident, success)
+
+                // v3.2: Add to HNSW vector index for future RAG retrieval
+                if incident.State.RootCause != nil && incident.State.FixProposal != nil {
+                        vectorText := incident.Cluster.Summary + " " + incident.State.RootCause.Statement + " " + incident.State.FixProposal.Description
+                        _ = vectorStore.Add(ctx, vectorText, &feedback.VectorMetadata{
+                                IncidentID: incident.IncidentID.String(),
+                                Service:    incident.Cluster.Service,
+                                RootCause:  incident.State.RootCause.Statement,
+                                FixType:    string(incident.State.FixProposal.FixType),
+                                FixPattern: incident.State.FixProposal.Description,
+                                Outcome:    map[bool]string{true: "success", false: "failure"}[success],
+                        })
+                }
+
                 incident.Status = schemas.StatusResolved
                 _ = store.UpsertIncident(ctx, &incident)
+
+                // v3.2: Mark resolved in tracker (triggers 30-min cooldown)
+                tracker.MarkResolved(incident.Cluster.Service, incident.Cluster.Namespace, success)
+
+                // v3.2: Send Slack alert with PR URL if available
+                prURL := ""
+                if incident.State.ExecutionResult != nil && incident.State.ExecutionResult.PRURL != nil {
+                        prURL = *incident.State.ExecutionResult.PRURL
+                }
+                alertSender.SendAlert(incident.Cluster.Service, incident.Cluster.Namespace, incident.Cluster.Summary, prURL)
+
+                // v3.2: Start outcome watcher (monitors service recovery for 10 min)
+                if success && prURL != "" {
+                        outcomeWatcher.Watch(ctx, incident.Cluster.Service, incident.Cluster.Namespace, incident.IncidentID.String(), true)
+                }
 
                 log.Printf("[investigation] %s resolved (status=%s, alpha=%.0f, beta=%.0f)",
                         incident.IncidentID, incident.Status, alpha, beta)
@@ -193,19 +245,20 @@ func main() {
         }()
 
         // 9. Start the autonomous detection layer (live log streaming + pod status)
-        detectionHandler := func(service, namespace, reason, podLogs string) {
-                log.Printf("[detection] auto-triggered incident: %s/%s — %s", namespace, service, reason)
-
+        // v3.2: All detectors send signals to the clusterer, which groups them
+        // and emits ONE incident per service per time window.
+        clustererHandler := func(service, namespace, reason, podLogs string) {
                 // Look up workload annotations for repo + branch
                 annotations, _ := k8sClient.LookupWorkloadAnnotations(ctx, service, namespace)
                 if annotations == nil {
                         annotations = map[string]string{}
                 }
 
-                // Build the anomaly cluster (same structure as CRD watcher)
+                repo := annotations["sentinel.io/repo"]
+
                 explanation := fmt.Sprintf("Auto-detected incident: %s", reason)
                 if podLogs != "" {
-                        explanation += fmt.Sprintf("\n\n## Pod Logs (last 8KB)\n%s", podLogs)
+                        explanation += fmt.Sprintf("\n\n## Pod Logs (preprocessed)\n%s", podLogs)
                 }
 
                 cluster := schemas.AnomalyCluster{
@@ -230,11 +283,41 @@ func main() {
                         Annotations: annotations,
                 }
 
-                // Run the same handler as the CRD watcher
+                // Send initial alert
+                alertSender.SendAlert(service, namespace, reason, "")
+
+                // Run the full pipeline
                 handler(ctx, cluster, "auto-detected", namespace)
+                _ = repo
         }
 
-        detector := detection.New(k8sClient.Clientset(), detectionHandler, "")
+        // v3.2: Clusterer groups signals, tracker prevents duplicates
+        clusterer := detection.NewClusterer(clustererHandler, tracker)
+
+        // The detector sends signals to the clusterer instead of triggering directly
+        detectionHandler := func(service, namespace, reason, podLogs string) {
+                log.Printf("[detection] signal: %s/%s — %s", namespace, service, reason)
+
+                // Look up repo annotation
+                annotations, _ := k8sClient.LookupWorkloadAnnotations(ctx, service, namespace)
+                repo := ""
+                if annotations != nil {
+                        repo = annotations["sentinel.io/repo"]
+                }
+
+                // Send to clusterer — it will group + dedup + emit one incident
+                clusterer.Send(ctx, detection.Signal{
+                        Type:      detection.SignalLogError,
+                        Service:   service,
+                        Namespace: namespace,
+                        Reason:    reason,
+                        PodLogs:   podLogs,
+                        Repo:      repo,
+                        Timestamp: time.Now(),
+                })
+        }
+
+        detector := detection.New(k8sClient.Clientset(), detectionHandler, os.Getenv("SENTINEL_SLACK_WEBHOOK"))
         go func() {
                 log.Printf("[main] detection layer started (live log streaming + pod status)")
                 detector.Run(ctx)

@@ -11,6 +11,8 @@ package agents
 import (
         "context"
         "fmt"
+        "log"
+        "time"
 
         "github.com/karimzakzouk/sentinel/v3/internal/k8s"
         "github.com/karimzakzouk/sentinel/v3/internal/llm"
@@ -39,47 +41,73 @@ func NewPipeline(router *llm.Router, k8sClient *k8s.Client, gitHubToken string, 
 }
 
 // Run executes the full pipeline on the given state. Handles rewinds.
+// v3.2: confidence routing — if confidence < 0.5, loop back (max 3 cycles).
+// v3.2: per-agent timeouts — each agent has a hard timeout.
 func (p *Pipeline) Run(ctx context.Context, state *schemas.AgentState) error {
+        defer recoverPanic("pipeline")
+
         for state.Iterations < state.MaxIterations {
-                // 1. Investigator
-                if err := p.investigator.Run(ctx, state); err != nil {
+                // 1. Investigator (30s timeout)
+                invCtx, invCancel := context.WithTimeout(ctx, 60*time.Second)
+                if err := p.investigator.Run(invCtx, state); err != nil {
+                        invCancel()
                         return fmt.Errorf("investigator: %w", err)
                 }
+                invCancel()
                 if state.Status == schemas.StatusFailed || len(state.Hypotheses) == 0 {
                         return nil
                 }
 
-                // 2. Evidence Gatherer
-                if err := p.evidenceGatherer.Run(ctx, state); err != nil {
+                // 2. Evidence Gatherer (60s timeout)
+                evCtx, evCancel := context.WithTimeout(ctx, 90*time.Second)
+                if err := p.evidenceGatherer.Run(evCtx, state); err != nil {
+                        evCancel()
                         return fmt.Errorf("evidence_gatherer: %w", err)
                 }
+                evCancel()
                 if state.Status == schemas.StatusFailed {
                         return nil
                 }
-                // Check for rewind
                 if isRewindBy(state, "evidence_gatherer") {
                         continue
                 }
 
-                // 3. Analyst
-                if err := p.analyst.Run(ctx, state, p.betaStore); err != nil {
+                // 3. Analyst (10s timeout — pure math)
+                anCtx, anCancel := context.WithTimeout(ctx, 15*time.Second)
+                if err := p.analyst.Run(anCtx, state, p.betaStore); err != nil {
+                        anCancel()
                         return fmt.Errorf("analyst: %w", err)
                 }
+                anCancel()
                 if state.Status == schemas.StatusFailed {
                         return nil
                 }
                 if state.RootCause == nil {
-                        // All hypotheses falsified — rewind
                         if isRewindBy(state, "analyst") {
                                 continue
                         }
                         return nil
                 }
 
-                // 4. Fix Proposer
-                if err := p.fixProposer.Run(ctx, state); err != nil {
+                // v3.2: Confidence routing
+                // < 0.3 → no hypothesis is strong enough, loop back (up to 3 cycles)
+                // 0.3–0.7 → root cause identified, proceed to fix
+                // ≥ 0.7 → high confidence, proceed to fix
+                if state.RootCause.Confidence < 0.3 && state.Iterations < 3 {
+                        log.Printf("[pipeline] confidence %.2f < 0.3 — looping back to investigator (iteration %d)", state.RootCause.Confidence, state.Iterations)
+                        state.Hypotheses = nil
+                        state.Evidence = nil
+                        state.RootCause = nil
+                        continue
+                }
+
+                // 4. Fix Proposer (60s timeout)
+                fpCtx, fpCancel := context.WithTimeout(ctx, 60*time.Second)
+                if err := p.fixProposer.Run(fpCtx, state); err != nil {
+                        fpCancel()
                         return fmt.Errorf("fix_proposer: %w", err)
                 }
+                fpCancel()
                 return nil
         }
         return fmt.Errorf("max iterations (%d) reached", state.MaxIterations)
