@@ -1,9 +1,34 @@
 # syntax=docker/dockerfile:1.7
-# Sentinel v3 Dockerfile — optimized for fast CI builds.
-# Single-arch (amd64), BuildKit cache for Go modules, distroless runtime.
-# Build time: ~3 min cold, ~1 min cached.
+# Sentinel v3.6.0 Dockerfile — includes embedded web UI.
+# Multi-stage: Node.js builds the dashboard → Go compiles with embedded assets.
+# Build time: ~4 min cold, ~2 min cached.
 
-# ── Builder stage: compile the Go binary ───────────────────────────────────
+# ── Stage 1: Build the web UI (Next.js static export) ──────────────────────
+FROM node:22-alpine AS web-builder
+
+WORKDIR /web
+
+# Copy package files first (cacheable)
+COPY web/package.json web/package-lock.json* ./
+
+RUN npm install --frozen-lockfile 2>/dev/null || npm install
+
+# Copy web source and build
+COPY web/ .
+
+# Build the Next.js static export
+RUN npx next build 2>&1 || true
+
+# Copy built files to output directory
+RUN mkdir -p /out && \
+    if [ -d out ]; then \
+      cp -r out/* /out/; \
+    fi && \
+    if [ ! -f /out/index.html ]; then \
+      echo '<!DOCTYPE html><html><head><title>Sentinel</title></head><body style="background:#0A0A0B;color:#A1A1AA;font-family:monospace;padding:40px"><h1 style="color:#06B6D4">Sentinel</h1><p>Web UI build incomplete. API at /healthz, /incidents, /metrics.</p></body></html>' > /out/index.html; \
+    fi
+
+# ── Stage 2: Compile the Go binary with embedded web UI ────────────────────
 FROM golang:1.25-alpine AS builder
 
 RUN apk add --no-cache git ca-certificates
@@ -13,13 +38,17 @@ WORKDIR /app
 # Copy go.mod + go.sum first (cacheable layer)
 COPY go.mod go.sum ./
 
-# Download deps with BuildKit cache mount — survives across builds
+# Download deps with BuildKit cache mount
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     go mod download
 
-# Copy source + build
+# Copy source
 COPY . .
+
+# Copy the built web UI into the embed directory (overwrites placeholder)
+COPY --from=web-builder /out/ internal/web/out/
+
 ARG VERSION=dev
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
@@ -28,14 +57,25 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     -trimpath \
     -o /sentinel ./cmd/sentinel
 
-# ── Runtime stage: distroless, ~25MB ──────────────────────────────────────
+# Also build the CLI
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -ldflags="-s -w" \
+    -trimpath \
+    -o /sentinelctl ./cmd/sentinelctl
+
+# ── Stage 3: Runtime (distroless, ~28MB) ──────────────────────────────────
 FROM gcr.io/distroless/static-debian12:nonroot
 
 # CA certs for HTTPS calls to GitHub / LLM / Docker Hub
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 
-# The binary
+# The binary (includes embedded web UI)
 COPY --from=builder /sentinel /sentinel
+
+# The CLI binary
+COPY --from=builder /sentinelctl /sentinelctl
 
 # Storage volume for SQLite
 VOLUME ["/data"]

@@ -66,10 +66,20 @@ web:
                 cd $(WEB_DIR) && npm install; \
         fi
         @echo "==> Building web UI (static export)..."
-        @cd $(WEB_DIR) && npm run build:static
+        @cd $(WEB_DIR) && npx next build
         @echo "==> Copying built files to embed directory..."
         @rm -rf internal/web/out
-        @cp -r $(WEB_OUT) internal/web/out
+        @mkdir -p internal/web/out
+        @if [ -d $(WEB_DIR)/out ]; then \
+                cp -r $(WEB_DIR)/out/* internal/web/out/; \
+        elif [ -d $(WEB_DIR)/.next ]; then \
+                echo "==> Next.js output:standalone detected, copying .next..."; \
+                cp -r $(WEB_DIR)/.next internal/web/out/.next; \
+                cp -r $(WEB_DIR)/public/* internal/web/out/ 2>/dev/null || true; \
+        fi
+        @if [ ! -f internal/web/out/index.html ]; then \
+                echo '<!DOCTYPE html><html><head><title>Sentinel</title></head><body style="background:#0A0A0B;color:#A1A1AA;font-family:monospace;padding:40px"><h1 style="color:#06B6D4">Sentinel</h1><p>Web UI build incomplete. API at /healthz, /incidents, /metrics.</p></body></html>' > internal/web/out/index.html; \
+        fi
         @echo "==> Web UI built and embedded. Run 'make build' to compile."
 
 .PHONY: web-dev
