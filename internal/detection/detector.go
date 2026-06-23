@@ -193,10 +193,21 @@ func (d *Detector) watchPodsInNamespace(ctx context.Context, namespace string) {
 
 func (d *Detector) handlePod(ctx context.Context, pod *corev1.Pod) {
         annotations := pod.Annotations
-        if annotations == nil {
-                return
+        repo, hasRepo := "", false
+        if annotations != nil {
+                repo, hasRepo = annotations["sentinel.io/repo"]
         }
-        repo, hasRepo := annotations["sentinel.io/repo"]
+
+        // v3.5.1: If the pod doesn't have the annotation, check the owning
+        // Deployment/StatefulSet/DaemonSet. Users often put annotations on the
+        // Deployment metadata instead of the pod template metadata.
+        if !hasRepo {
+                repo = d.lookupRepoFromOwner(ctx, pod)
+                if repo != "" {
+                        hasRepo = true
+                }
+        }
+
         if !hasRepo {
                 return
         }
@@ -209,6 +220,39 @@ func (d *Detector) handlePod(ctx context.Context, pod *corev1.Pod) {
         if pod.Status.Phase == corev1.PodRunning {
                 d.startLogStream(ctx, pod, repo)
         }
+}
+
+// lookupRepoFromOwner checks the pod's owner (Deployment/StatefulSet/etc.)
+// for the sentinel.io/repo annotation. v3.5.1: This handles the common case
+// where users annotate the Deployment instead of the pod template.
+func (d *Detector) lookupRepoFromOwner(ctx context.Context, pod *corev1.Pod) string {
+        for _, ownerRef := range pod.OwnerReferences {
+                switch ownerRef.Kind {
+                case "Deployment":
+                        deploy, err := d.clientset.AppsV1().Deployments(pod.Namespace).Get(ctx, ownerRef.Name, metav1.GetOptions{})
+                        if err == nil {
+                                // Check deployment annotations first
+                                if repo, ok := deploy.Annotations["sentinel.io/repo"]; ok {
+                                        return repo
+                                }
+                                // Check pod template annotations
+                                if repo, ok := deploy.Spec.Template.Annotations["sentinel.io/repo"]; ok {
+                                        return repo
+                                }
+                        }
+                case "StatefulSet":
+                        sts, err := d.clientset.AppsV1().StatefulSets(pod.Namespace).Get(ctx, ownerRef.Name, metav1.GetOptions{})
+                        if err == nil {
+                                if repo, ok := sts.Annotations["sentinel.io/repo"]; ok {
+                                        return repo
+                                }
+                                if repo, ok := sts.Spec.Template.Annotations["sentinel.io/repo"]; ok {
+                                        return repo
+                                }
+                        }
+                }
+        }
+        return ""
 }
 
 func (d *Detector) checkPodStatus(ctx context.Context, pod *corev1.Pod, repo string) {
