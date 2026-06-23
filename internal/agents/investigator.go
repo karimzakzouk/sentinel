@@ -5,6 +5,7 @@ import (
         "encoding/json"
         "fmt"
         "log"
+        "regexp"
         "strings"
 
         "github.com/google/uuid"
@@ -134,8 +135,18 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
 
         searchQueries, _ := round1Result["search_queries"].([]any)
         if len(searchQueries) == 0 {
-                log.Printf("[investigator] LLM returned no search queries — falling back")
-                return a.runWithoutRepo(ctx, state)
+                // v3.2.3: Don't give up — extract search queries from the pod logs.
+                // The error type (KeyError, ZeroDivisionError) and the variable name
+                // (DATABASE_URLL) are right there in the traceback.
+                log.Printf("[investigator] LLM returned no search queries — extracting from pod logs")
+                fallbackQueries := extractSearchQueriesFromLogs(podLogs)
+                for _, q := range fallbackQueries {
+                        searchQueries = append(searchQueries, q)
+                }
+                if len(searchQueries) == 0 {
+                        log.Printf("[investigator] no search queries from logs either — falling back")
+                        return a.runWithoutRepo(ctx, state)
+                }
         }
 
         // 5. Run the searches locally (instant, no API calls)
@@ -392,4 +403,54 @@ func uuidNew() uuid.UUID { return uuid.New() }
 func jsonMarshalString(v any) string {
         b, _ := json.Marshal(v)
         return string(b)
+}
+
+// extractSearchQueriesFromLogs pulls search terms from the pod logs traceback.
+// When the LLM can't figure out what to search for, we extract:
+//   - The error type (KeyError, ZeroDivisionError, etc.)
+//   - The variable/key that caused the error (DATABASE_URLL, etc.)
+//   - The source file from the stack trace (app/main.py)
+func extractSearchQueriesFromLogs(logs string) []string {
+        var queries []string
+
+        // Extract error type + key: "KeyError: 'DATABASE_URLL'"
+        errorRe := regexp.MustCompile(`(\w+Error|w+Exception):\s*['"]?([^'"]+)['"]?`)
+        if m := errorRe.FindStringSubmatch(logs); len(m) >= 2 {
+                queries = append(queries, m[1]) // e.g. "KeyError"
+                if len(m) >= 3 && m[2] != "" {
+                        queries = append(queries, m[2]) // e.g. "DATABASE_URLL"
+                }
+        }
+
+        // Extract source files from the traceback: 'File "/app/app/main.py", line 11'
+        fileRe := regexp.MustCompile(`File "([^"]+\.py)", line`)
+        for _, m := range fileRe.FindAllStringSubmatch(logs, -1) {
+                if len(m) >= 2 {
+                        // Strip container paths — just use the repo-relative path
+                        path := m[1]
+                        if idx := strings.Index(path, "/app/"); idx >= 0 {
+                                path = path[idx+5:] // strip "/app/" prefix
+                        }
+                        queries = append(queries, path)
+                }
+        }
+
+        // Also extract any os.environ key references
+        envRe := regexp.MustCompile(`os\.environ\[["']([^"']+)["']\]`)
+        if m := envRe.FindStringSubmatch(logs); len(m) >= 2 {
+                queries = append(queries, m[1])
+        }
+
+        // Dedup
+        seen := map[string]bool{}
+        var unique []string
+        for _, q := range queries {
+                if !seen[q] {
+                        seen[q] = true
+                        unique = append(unique, q)
+                }
+        }
+
+        log.Printf("[investigator] extracted %d search queries from logs: %v", len(unique), unique)
+        return unique
 }

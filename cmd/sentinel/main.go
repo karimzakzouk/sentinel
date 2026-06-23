@@ -293,7 +293,7 @@ func main() {
         }
 
         // v3.2: Clusterer groups signals, tracker prevents duplicates
-        clusterer := detection.NewClusterer(clustererHandler, tracker)
+        clusterer := detection.NewClusterer(clustererHandler, tracker, k8sClient.Clientset())
 
         // The detector sends signals to the clusterer instead of triggering directly
         detectionHandler := func(service, namespace, reason, podLogs string) {
