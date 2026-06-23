@@ -38,14 +38,22 @@ linters:
         - (*github.com/karimzakzouk/sentinel/v3/internal/feedback.Store).Close
     dupl:
       threshold: 150
-    goconst:
-      min-len: 3
-      min-occurrences: 5  # raised from 3 to avoid noise on short strings like "title"
     gocritic:
       enabled-tags:
         - diagnostic
         - performance
-        - style
+      # v3.5.0: 'style' tag disabled — too many subjective suggestions
+      # (rangeValCopy, appendCombine, regexpSimplify, etc.) that are valid
+      # but not worth the noise for an established codebase.
+      disabled-checks:
+        - rangeValCopy      # would require pointer-indexing refactors everywhere
+        - appendCombine     # subjective style preference
+        - regexpSimplify    # subjective regex style
+        - unnamedResult     # subjective
+        - importShadow      # we use short var names like 'url' intentionally
+        - hugeParam         # would require pointer refactors
+        - exitAfterDefer    # known pattern — we accept deferred Close won't run on Fatal
+        - httpNoBody        # nil works fine
     revive:
       rules:
         - name: exported
