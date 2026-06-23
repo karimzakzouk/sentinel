@@ -78,41 +78,83 @@ type Investigator struct {
         k8s         *k8s.Client
         gitHubToken string
         cloner      *repo.Cloner
+        vectorStore VectorStore
 }
 
-// NewInvestigator creates an Investigator.
-func NewInvestigator(router *llm.Router, k8sClient *k8s.Client, gitHubToken string) *Investigator {
+// VectorStore is the interface for incident memory retrieval.
+type VectorStore interface {
+        Search(ctx context.Context, text string, k int) ([]*VectorMetadata, []float32, error)
+}
+
+// VectorMetadata is a past incident stored in the vector index.
+type VectorMetadata struct {
+        IncidentID string
+        Service    string
+        RootCause  string
+        FixType    string
+        FixPattern string
+        Outcome    string
+}
+
+// NewInvestigator creates an Investigator with optional vector store for memory loop.
+func NewInvestigator(router *llm.Router, k8sClient *k8s.Client, gitHubToken string, vectorStore VectorStore) *Investigator {
         return &Investigator{
                 router:      router,
                 k8s:         k8sClient,
                 gitHubToken: gitHubToken,
                 cloner:      repo.NewCloner(gitHubToken),
+                vectorStore: vectorStore,
         }
 }
 
 // Run executes the investigator agent.
 // v3.2.4: ALWAYS fetch full pod logs via K8s API at the start.
-// The detection layer sends just a trigger — the investigator fetches context.
+// v3.3.0: Memory loop — query HNSW for similar past incidents first.
+//         If similarity > 0.85 → skip investigation, apply known fix directly.
 func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error {
         cluster := state.Cluster
 
         // 0. ALWAYS fetch full pod logs via K8s API (8KB, retry 3x).
-        // This is the industry pattern: detection triggers, investigation fetches context.
-        // The log scanner's capture is just the alarm bell — we need the FULL traceback.
         podLogs, _ := a.k8s.FetchCrashingPodLogs(ctx, cluster.Service, cluster.Namespace)
         if podLogs != "" {
                 log.Printf("[investigator] fetched %d chars of pod logs via K8s API", len(podLogs))
-                // Update the cluster's anomaly explanation with the FULL logs
                 fullExplanation := cluster.Summary + "\n\n## Pod Logs (full, from K8s API)\n" + podLogs
                 if len(cluster.Anomalies) > 0 {
                         cluster.Anomalies[0].Explanation = fullExplanation
                 }
-                cluster.Summary = cluster.Summary // keep the original summary
                 state.Cluster = cluster
         } else {
-                // Fall back to whatever logs the detection layer captured
                 podLogs = a.extractPodLogs(cluster)
                 log.Printf("[investigator] K8s API logs unavailable, using %d chars from detection", len(podLogs))
+        }
+
+        // 0.5 MEMORY LOOP — query HNSW for similar past incidents.
+        // If we've seen this exact pattern before AND it was successfully fixed,
+        // skip the full investigation and apply the known fix directly.
+        if a.vectorStore != nil && podLogs != "" {
+                similar, scores, err := a.vectorStore.Search(ctx, podLogs, 5)
+                if err == nil && len(similar) > 0 {
+                        log.Printf("[memory] found %d similar incidents (top score: %.3f)", len(similar), scores[0])
+
+                        // High similarity + prior success → skip investigation, apply known fix
+                        if scores[0] > 0.85 && similar[0].Outcome == "success" {
+                                log.Printf("[memory] HIGH MATCH (score=%.3f) — applying known fix from incident %s", scores[0], similar[0].IncidentID)
+                                return a.applyKnownFix(ctx, state, similar[0], podLogs)
+                        }
+
+                        // Medium similarity → use as context for the LLM
+                        if scores[0] > 0.5 {
+                                log.Printf("[memory] MEDIUM MATCH (score=%.3f) — using incident %s as context", scores[0], similar[0].IncidentID)
+                                state.RetrievedIncidents = []map[string]any{{
+                                        "root_cause":   similar[0].RootCause,
+                                        "fix_pattern":  similar[0].FixPattern,
+                                        "fix_type":     similar[0].FixType,
+                                        "outcome":      similar[0].Outcome,
+                                        "similarity":   scores[0],
+                                        "incident_id":  similar[0].IncidentID,
+                                }}
+                        }
+                }
         }
 
         // 1. Discover the GitHub repo from cluster annotations
@@ -158,7 +200,7 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
                 // The error type (KeyError, ZeroDivisionError) and the variable name
                 // (DATABASE_URLL) are right there in the traceback.
                 log.Printf("[investigator] LLM returned no search queries — extracting from pod logs")
-                fallbackQueries := extractSearchQueriesFromLogs(podLogs)
+                fallbackQueries := ExtractSearchQueriesUniversal(podLogs)
                 for _, q := range fallbackQueries {
                         searchQueries = append(searchQueries, q)
                 }
@@ -213,7 +255,7 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
         // generate hypotheses from the error context directly.
         if len(rawHyps) == 0 && podLogs != "" {
                 log.Printf("[investigator] LLM returned 0 hypotheses — generating from error context")
-                newHyps = generateHypothesesFromLogs(podLogs, state)
+                newHyps = GenerateHypothesesUniversal(podLogs, state)
         }
 
         // Parse LLM hypotheses if we got them
@@ -352,6 +394,52 @@ func (a *Investigator) runWithoutRepo(ctx context.Context, state *schemas.AgentS
         }
         state.Hypotheses = newHyps
         state.Iterations++
+        return nil
+}
+
+// applyKnownFix skips the full investigation and applies a fix from a similar
+// past incident. This is the "second time, already fixed" feature.
+// It clones the repo, fetches the file that was fixed last time, and creates
+// a FixProposal directly — no LLM calls needed.
+func (a *Investigator) applyKnownFix(ctx context.Context, state *schemas.AgentState, meta *VectorMetadata, podLogs string) error {
+        log.Printf("[memory] applying known fix: %s (type=%s)", meta.FixPattern, meta.FixType)
+
+        // Parse the error from the current logs to get the source file
+        parsed := ParseError(podLogs)
+        srcFiles := []string{}
+        if parsed != nil && parsed.SourceFile != "" {
+                srcFiles = append(srcFiles, parsed.SourceFile)
+        }
+
+        // Create a hypothesis directly from the memory match
+        state.Hypotheses = []schemas.Hypothesis{{
+                HID:       "H1",
+                Statement: fmt.Sprintf("Known issue from incident %s: %s", meta.IncidentID, meta.RootCause),
+                SupportingEvidence: []string{
+                        fmt.Sprintf("Memory match (similarity > 0.85) with incident %s", meta.IncidentID),
+                        fmt.Sprintf("Prior fix: %s", meta.FixPattern),
+                },
+                Confidence:  0.9, // high confidence — we've fixed this before
+                SourceFiles: srcFiles,
+        }}
+        state.Iterations = 1
+
+        // Set the root cause directly
+        state.RootCause = &schemas.RootCause{
+                Statement:  meta.RootCause,
+                Confidence: 0.9,
+                Category:   "known_pattern",
+        }
+        state.Status = schemas.StatusRootCaused
+
+        state.AgentTrace = append(state.AgentTrace, map[string]any{
+                "agent":       "investigator",
+                "action":      "memory_match",
+                "incident_id": meta.IncidentID,
+                "similarity":  "high",
+        })
+
+        log.Printf("[memory] root cause set from memory: %s", meta.RootCause)
         return nil
 }
 

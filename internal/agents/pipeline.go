@@ -29,10 +29,10 @@ type Pipeline struct {
         betaStore        BetaStore
 }
 
-// NewPipeline creates a Pipeline.
-func NewPipeline(router *llm.Router, k8sClient *k8s.Client, gitHubToken string, betaStore BetaStore) *Pipeline {
+// NewPipeline creates a Pipeline with optional vector store for memory loop.
+func NewPipeline(router *llm.Router, k8sClient *k8s.Client, gitHubToken string, betaStore BetaStore, vectorStore VectorStore) *Pipeline {
         return &Pipeline{
-                investigator:     NewInvestigator(router, k8sClient, gitHubToken),
+                investigator:     NewInvestigator(router, k8sClient, gitHubToken, vectorStore),
                 evidenceGatherer: NewEvidenceGatherer(router, k8sClient),
                 analyst:          NewAnalyst(router),
                 fixProposer:      NewFixProposer(router, k8sClient, gitHubToken),

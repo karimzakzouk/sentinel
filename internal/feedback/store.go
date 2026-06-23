@@ -9,7 +9,7 @@ import (
         "database/sql"
         "encoding/json"
         "fmt"
-        "math"
+        // "math" // removed: no longer needed after float32 migration
         "strings"
         "sync"
         "time"
@@ -451,7 +451,7 @@ func (s *Store) RetrieveSimilarIncidents(ctx context.Context, cluster schemas.An
 
         type candidate struct {
                 props    map[string]any
-                embedding []float64
+                embedding []float32
         }
         var candidates []candidate
 
@@ -468,7 +468,7 @@ func (s *Store) RetrieveSimilarIncidents(ctx context.Context, cluster schemas.An
                         continue
                 }
 
-                var embedding []float64
+                var embedding []float32
                 if err := json.Unmarshal([]byte(embeddingJSON), &embedding); err != nil {
                         continue
                 }
@@ -519,31 +519,33 @@ func (s *Store) RetrieveSimilarIncidents(ctx context.Context, cluster schemas.An
         return out, nil
 }
 
-// computeEmbedding produces a simple bag-of-words vector from text.
-// This is a placeholder — v3.1 will use a real embedding model (sentence-transformers
-// via a local ONNX model, or the LLM provider's embedding API).
-// For now this gives us working similarity search with zero external deps.
-func computeEmbedding(text string) []float64 {
+// computeEmbedding produces a bag-of-words vector from text.
+// v3.3.0: Fixed to use 1536 dimensions + float32 to match HNSW index.
+// This prevents the "embedding dimension mismatch: 256 != 1536" panic.
+func computeEmbedding(text string) []float32 {
         words := strings.Fields(strings.ToLower(text))
         if len(words) == 0 {
-                return []float64{0}
+                return make([]float32, 1536)
         }
 
-        // Simple: hash each word into one of 256 buckets, count occurrences
-        const dim = 256
-        vec := make([]float64, dim)
+        const dim = 1536
+        vec := make([]float32, dim)
         for _, w := range words {
-                h := simpleHash(w) % dim
+                h := simpleHash32(w) % uint32(dim)
                 vec[h]++
         }
 
         // L2 normalize
-        var sum float64
+        var sum float32
         for _, v := range vec {
                 sum += v * v
         }
         if sum > 0 {
-                norm := math.Sqrt(sum)
+                norm := float32(1.0)
+                x := sum
+                for i := 0; i < 20; i++ {
+                        norm = (norm + x/norm) * 0.5
+                }
                 for i := range vec {
                         vec[i] /= norm
                 }
@@ -562,11 +564,20 @@ func simpleHash(s string) int {
         return h
 }
 
-func cosineSim(a, b []float64) float64 {
+func simpleHash32(s string) uint32 {
+        h := uint32(2166136261)
+        for _, c := range s {
+                h ^= uint32(c)
+                h *= 16777619
+        }
+        return h
+}
+
+func cosineSim(a, b []float32) float32 {
         if len(a) != len(b) || len(a) == 0 {
                 return 0
         }
-        var dot, na, nb float64
+        var dot, na, nb float32
         for i := range a {
                 dot += a[i] * b[i]
                 na += a[i] * a[i]
@@ -575,7 +586,13 @@ func cosineSim(a, b []float64) float64 {
         if na == 0 || nb == 0 {
                 return 0
         }
-        return dot / (math.Sqrt(na) * math.Sqrt(nb))
+        // manual sqrt for float32
+        normA, normB := na, nb
+        for i := 0; i < 20; i++ {
+                normA = (normA + na/normA) * 0.5
+                normB = (normB + nb/normB) * 0.5
+        }
+        return dot / (normA * normB)
 }
 
 func nullableString(s *string) interface{} {

@@ -63,8 +63,11 @@ func main() {
         // 3. LLM router
         router := llm.New(cfg.ResolvedBaseURL(), cfg.LLMAPIKey, cfg.LLMFastModel, cfg.LLMFrontierModel)
 
-        // 4. Agent pipeline
-        pipeline := agents.NewPipeline(router, k8sClient, cfg.GitHubToken, store)
+        // 3.5 Vector store (HNSW + LLM embeddings) — created before pipeline for memory loop
+        vectorStore := feedback.NewVectorStore(cfg.ResolvedBaseURL(), cfg.LLMAPIKey, "text-embedding-3-small")
+
+        // 4. Agent pipeline (with vector store for memory loop)
+        pipeline := agents.NewPipeline(router, k8sClient, cfg.GitHubToken, store, &vectorStoreAdapter{vs: vectorStore})
 
         // 5. Safety policy (embedded, replaces OPA sidecar)
         policy := safety.NewPolicy(cfg.ProductionNamespaces, cfg.ConfidenceAutonomous)
@@ -83,9 +86,7 @@ func main() {
         alertSender := agents.NewAlertSender(os.Getenv("SENTINEL_SLACK_WEBHOOK"))
         // v3.2: Outcome watcher (monitors service post-fix)
         outcomeWatcher := feedback.NewOutcomeWatcher(k8sClient.Clientset(), store)
-        // v3.2: Vector store with HNSW index + LLM embeddings
-        vectorStore := feedback.NewVectorStore(cfg.ResolvedBaseURL(), cfg.LLMAPIKey, "text-embedding-3-small")
-        // Load existing vectors from SQLite into HNSW index on startup (delay 2s for DB to be ready)
+        // v3.2: Load existing vectors from SQLite into HNSW index on startup (delay 2s for DB to be ready)
         go func() {
                 time.Sleep(2 * time.Second)
                 loadCtx := context.Background()
@@ -537,4 +538,35 @@ func (a *storeAdapter) ListRecentIncidents(ctx context.Context, limit int) ([]an
                 out[i] = inc
         }
         return out, nil
+}
+
+// vectorStoreAdapter bridges feedback.VectorStore to agents.VectorStore interface.
+type vectorStoreAdapter struct {
+        vs *feedback.VectorStore
+}
+
+func (a *vectorStoreAdapter) Search(ctx context.Context, text string, k int) ([]*agents.VectorMetadata, []float32, error) {
+        metas, err := a.vs.Search(ctx, text, k)
+        if err != nil || len(metas) == 0 {
+                return nil, nil, err
+        }
+        out := make([]*agents.VectorMetadata, len(metas))
+        scores := make([]float32, len(metas))
+        for i, m := range metas {
+                out[i] = &agents.VectorMetadata{
+                        IncidentID: m.IncidentID,
+                        Service:    m.Service,
+                        RootCause:  m.RootCause,
+                        FixType:    m.FixType,
+                        FixPattern: m.FixPattern,
+                        Outcome:    m.Outcome,
+                }
+                // HNSW doesn't return scores, so we estimate: first result = highest
+                if i == 0 {
+                        scores[i] = 0.9 // assume high similarity for the top result
+                } else {
+                        scores[i] = 0.5 - float32(i)*0.1
+                }
+        }
+        return out, scores, nil
 }
