@@ -46,6 +46,9 @@ spec:
               value: {{ .Values.sentinel.llm.fastModel | quote }}
             - name: SENTINEL_LLM_FRONTIER_MODEL
               value: {{ .Values.sentinel.llm.frontierModel | quote }}
+            # v3.4.0: configurable embedding model
+            - name: SENTINEL_LLM_EMBEDDING_MODEL
+              value: {{ .Values.sentinel.llm.embeddingModel | quote }}
             - name: SENTINEL_GITHUB_TOKEN
               valueFrom:
                 secretKeyRef:
@@ -71,6 +74,35 @@ spec:
               value: {{ .Release.Name | quote }}
             - name: PORT
               value: "8000"
+            # v3.4.0: Observability backends (for Evidence Gatherer)
+            {{- if .Values.sentinel.observability.prometheusUrl }}
+            - name: SENTINEL_PROMETHEUS_URL
+              value: {{ .Values.sentinel.observability.prometheusUrl | quote }}
+            {{- end }}
+            {{- if .Values.sentinel.observability.lokiUrl }}
+            - name: SENTINEL_LOKI_URL
+              value: {{ .Values.sentinel.observability.lokiUrl | quote }}
+            {{- end }}
+            {{- if .Values.sentinel.observability.jaegerUrl }}
+            - name: SENTINEL_JAEGER_URL
+              value: {{ .Values.sentinel.observability.jaegerUrl | quote }}
+            {{- end }}
+            # v3.4.0: Structured logging level
+            - name: SENTINEL_LOG_LEVEL
+              value: {{ .Values.sentinel.logLevel | quote }}
+            # v3.4.0: LLM retry config
+            - name: SENTINEL_LLM_MAX_RETRIES
+              value: {{ .Values.sentinel.llmRetry.maxRetries | quote }}
+            - name: SENTINEL_LLM_RETRY_BASE_DELAY_MS
+              value: {{ .Values.sentinel.llmRetry.baseDelayMs | quote }}
+            # v3.4.0: Sandbox probe paths
+            - name: SENTINEL_SANDBOX_PROBE_PATHS
+              value: {{ .Values.sentinel.sandboxProbePaths | quote }}
+            # v3.4.0: Slack webhook (optional)
+            {{- if .Values.sentinel.slackWebhook }}
+            - name: SENTINEL_SLACK_WEBHOOK
+              value: {{ .Values.sentinel.slackWebhook | quote }}
+            {{- end }}
           ports:
             - containerPort: 8000
               name: http

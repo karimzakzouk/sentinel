@@ -1,0 +1,60 @@
+# golangci-lint configuration for Sentinel
+# v3.4.0: Added in CI to catch dead code, unused vars, shadowing, etc.
+# The dead code removed in v3.3.1 (logpreprocess.go, RetrieveSimilarIncidents,
+# extractSearchQueriesFromLogs, etc.) should have been caught by these linters
+# years ago — this config prevents regression.
+
+run:
+  timeout: 5m
+  go: "1.25"
+
+linters:
+  enable:
+    - errcheck       # catch ignored errors (the _ = store.UpsertIncident pattern)
+    - gosimple       # simplifications
+    - govet          # go vet
+    - ineffassign    # ineffectual assignments
+    - staticcheck    # the big one — SA1000-SC3000
+    - typecheck      # type-check pass
+    - unused         # unused vars, funcs, types, fields
+    - misspell       # spelling errors in comments
+    - revive         # golint successor — naming, exported docs
+    - gocritic       # common pitfalls
+    - bodyclose      # http.Response.Body not closed
+    - dupl           # duplicate code blocks (threshold 150 tokens)
+    - goconst        # repeated constants should be named
+    - nakedret       # naked return in long functions
+
+linters-settings:
+  errcheck:
+    # Allow _ = pattern for genuinely ignorable errors (e.g. log writes).
+    # But flag real error-returning calls that are silently dropped.
+    check-type-assertions: true
+    check-blank: false
+  dupl:
+    threshold: 150
+  goconst:
+    min-len: 3
+    min-occurrences: 3
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - performance
+      - style
+  revive:
+    rules:
+      - name: exported
+        disabled: true  # too noisy for an internal/ package layout
+
+issues:
+  # Don't auto-exclude anything — we want to see everything.
+  exclude-use-default: false
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  # Allow these patterns in test files
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - dupl
+        - errcheck
+        - gocritic

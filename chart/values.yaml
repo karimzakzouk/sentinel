@@ -11,7 +11,7 @@
 image:
   registry: "docker.io/karimzakzouk"
   repository: "sentinel-v3"
-  tag: "3.3.0"
+  tag: "3.4.0"
   pullPolicy: Always
 
 sentinel:
@@ -25,6 +25,7 @@ sentinel:
     apiKey: ""
     fastModel: "glm-4-flash"
     frontierModel: "glm-4.5"
+    embeddingModel: "text-embedding-3-small"  # v3.4.0: configurable embedding model
 
   # Docker Hub creds for Kaniko sandbox image builder
   dockerHubUsername: ""
@@ -47,6 +48,26 @@ sentinel:
   # Panic button thresholds
   panicCpuThresholdPct: 95.0
   panicConnectionsThreshold: 9000
+
+  # v3.4.0: Observability backends (for Evidence Gatherer)
+  observability:
+    prometheusUrl: ""   # e.g. http://prometheus-server.monitoring.svc.cluster.local:9090
+    lokiUrl: ""
+    jaegerUrl: ""
+
+  # v3.4.0: Structured logging level (DEBUG/INFO/WARN/ERROR)
+  logLevel: "INFO"
+
+  # v3.4.0: LLM retry config (free-tier rate-limit resilience)
+  llmRetry:
+    maxRetries: 3
+    baseDelayMs: 500
+
+  # v3.4.0: Sandbox probe paths (was hardcoded /pay?amount=... for demo app)
+  sandboxProbePaths: "/,/healthz,/readyz"
+
+  # v3.4.0: Slack webhook (optional, graceful degradation if empty)
+  slackWebhook: ""
 
 # Resource limits — v3 is much smaller than v2
 resources:

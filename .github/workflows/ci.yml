@@ -1,0 +1,91 @@
+name: CI
+
+# v3.4.0: PR-level CI — runs on every push to main and every pull request.
+# The release workflow (release-v3.yml) only runs on tag push, so PRs previously
+# got zero signal until release time. This catches regressions at PR stage.
+#
+# Jobs:
+#   1. lint   — golangci-lint (catches dead code, unused vars, shadowing, etc.)
+#   2. test   — go test -race + go build + helm lint
+#   3. security — go vet + govulncheck (CVE scan on dependencies)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint (golangci-lint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.61
+          # Run on all .go files, not just changed ones — catches issues
+          # in files that were previously clean but broke due to refactoring.
+          args: --timeout=5m
+          # Install-only mode is faster; we use the official action config.
+
+  test:
+    name: Test + Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+          cache-dependency-path: go.sum
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.3
+
+      - name: Go tests (with race detector)
+        run: go test ./... -race -count=1
+
+      - name: Build binary (verify it compiles)
+        run: |
+          go build -ldflags='-s -w -X main.Version=dev' -trimpath -o /tmp/sentinel ./cmd/sentinel
+          ls -lh /tmp/sentinel
+
+      - name: Helm lint
+        run: helm lint chart/
+
+      - name: Helm template (verify chart renders)
+        run: |
+          helm template test chart/ > /tmp/rendered.yaml
+          test $(grep -c "kind:" /tmp/rendered.yaml) -ge 6
+
+  security:
+    name: Security scan (govulncheck)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      - name: Run govulncheck
+        run: govulncheck ./...

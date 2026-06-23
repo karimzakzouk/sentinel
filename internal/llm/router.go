@@ -1,6 +1,10 @@
 // Package llm provides a minimal OpenAI-compatible LLM client.
 // No SDK — just net/http. Works with OpenAI, z.ai, OpenRouter, Gemini-via-OpenAI,
 // Ollama, vLLM, LiteLLM, any OpenAI-compatible endpoint.
+//
+// v3.4.0: Added retry with exponential backoff for 429 (rate limit) and 5xx
+// (transient server errors). Free-tier models (gpt-oss-120b:free, glm-4-flash)
+// rate-limit aggressively — without retry, a single 429 kills the investigation.
 package llm
 
 import (
@@ -9,6 +13,8 @@ import (
         "encoding/json"
         "fmt"
         "io"
+        "log"
+        "math"
         "net/http"
         "regexp"
         "strings"
@@ -22,19 +28,32 @@ type Router struct {
         fastModel    string
         frontierModel string
         http         *http.Client
+        // v3.4.0: retry config
+        maxRetries    int
+        retryBaseDelay time.Duration
 }
 
-// New creates a Router.
+// New creates a Router with default retry settings (3 retries, 500ms base delay).
 func New(baseURL, apiKey, fastModel, frontierModel string) *Router {
         return &Router{
-                baseURL:       strings.TrimRight(baseURL, "/"),
-                apiKey:        apiKey,
-                fastModel:     fastModel,
-                frontierModel: frontierModel,
+                baseURL:        strings.TrimRight(baseURL, "/"),
+                apiKey:         apiKey,
+                fastModel:      fastModel,
+                frontierModel:  frontierModel,
                 http: &http.Client{
                         Timeout: 120 * time.Second,
                 },
+                maxRetries:     3,
+                retryBaseDelay: 500 * time.Millisecond,
         }
+}
+
+// SetRetryConfig configures retry behavior.
+// v3.4.0: maxRetries = 0 disables retry. baseDelay is the initial backoff
+// (doubles each retry, with jitter).
+func (r *Router) SetRetryConfig(maxRetries int, baseDelay time.Duration) {
+        r.maxRetries = maxRetries
+        r.retryBaseDelay = baseDelay
 }
 
 // Update reconfigures the router (called when settings change at runtime).
@@ -112,6 +131,17 @@ func (r *Router) complete(ctx context.Context, model, system, user string, maxTo
         return body.Choices[0].Message.Content, nil
 }
 
+// recordLLMMetrics is set by main.go via SetMetricsRecorder. This avoids a
+// circular import (llm → metrics → ... → llm). If nil, metrics are skipped.
+var recordLLMMetrics func(model, status string, duration time.Duration)
+
+// SetMetricsRecorder wires in the metrics recorder. Called from main.go.
+// v3.4.0: Allows the metrics package to observe LLM call latencies without
+// creating a dependency cycle.
+func SetMetricsRecorder(fn func(model, status string, duration time.Duration)) {
+        recordLLMMetrics = fn
+}
+
 func (r *Router) completeJSON(ctx context.Context, model, system, user string, maxTokens int) (map[string]any, error) {
         prompt := user + "\n\nRespond with a single valid JSON object. No prose, no markdown fences."
         req := chatRequest{
@@ -140,42 +170,219 @@ func (r *Router) completeJSON(ctx context.Context, model, system, user string, m
         return extractJSON(body.Choices[0].Message.Content), nil
 }
 
+// do executes the HTTP call with retry on 429/5xx.
+// v3.4.0: Retries up to r.maxRetries times with exponential backoff + jitter.
+// 429 (rate limit) and 5xx (server error) are retried. 4xx (bad request,
+// auth error) are NOT retried — they won't succeed on retry.
+//
+// Retry delays: 500ms, 1s, 2s, 4s ... (doubled each time, ±25% jitter).
+// Respects ctx cancellation between retries.
+//
+// v3.4.0: Records metrics (call count + duration) via the recorder set by
+// SetMetricsRecorder. The status is "success", "rate_limited", "error", or
+// "client_error" (4xx non-429).
 func (r *Router) do(ctx context.Context, req chatRequest) (*chatResponse, error) {
         body, err := json.Marshal(req)
         if err != nil {
                 return nil, fmt.Errorf("marshal request: %w", err)
         }
 
-        httpReq, err := http.NewRequestWithContext(ctx, "POST", r.baseURL+"/chat/completions", bytes.NewReader(body))
-        if err != nil {
-                return nil, fmt.Errorf("build request: %w", err)
-        }
-        httpReq.Header.Set("Content-Type", "application/json")
-        httpReq.Header.Set("Authorization", "Bearer "+r.apiKey)
-
-        resp, err := r.http.Do(httpReq)
-        if err != nil {
-                return nil, fmt.Errorf("LLM call failed: %w", err)
-        }
-        defer resp.Body.Close()
-
-        respBody, err := io.ReadAll(resp.Body)
-        if err != nil {
-                return nil, fmt.Errorf("read response: %w", err)
+        // v3.4.0: Track total duration across all retries for metrics.
+        callStart := time.Now()
+        if recordLLMMetrics != nil {
+                LLMCallStart()
+                defer LLMCallEnd()
         }
 
-        if resp.StatusCode >= 400 {
-                return nil, fmt.Errorf("LLM API returned %d: %s", resp.StatusCode, string(respBody[:min(len(respBody), 500)]))
+        var lastErr error
+        for attempt := 0; attempt <= r.maxRetries; attempt++ {
+                if attempt > 0 {
+                        delay := r.backoffDelay(attempt)
+                        select {
+                        case <-ctx.Done():
+                                return nil, ctx.Err()
+                        case <-time.After(delay):
+                        }
+                }
+
+                // Re-create the request body reader each attempt (body is consumed by Do).
+                httpReq, err := http.NewRequestWithContext(ctx, "POST", r.baseURL+"/chat/completions", bytes.NewReader(body))
+                if err != nil {
+                        return nil, fmt.Errorf("build request: %w", err)
+                }
+                httpReq.Header.Set("Content-Type", "application/json")
+                httpReq.Header.Set("Authorization", "Bearer "+r.apiKey)
+
+                resp, err := r.http.Do(httpReq)
+                if err != nil {
+                        lastErr = fmt.Errorf("LLM call failed: %w", err)
+                        // Network errors are retried (could be transient DNS/TLS/connection)
+                        if attempt < r.maxRetries {
+                                log.Printf("[llm] attempt %d/%d failed (network): %v — retrying", attempt+1, r.maxRetries+1, err)
+                                continue
+                        }
+                        if recordLLMMetrics != nil {
+                                recordLLMMetrics(req.Model, "error", time.Since(callStart))
+                        }
+                        return nil, lastErr
+                }
+
+                respBody, readErr := io.ReadAll(resp.Body)
+                resp.Body.Close()
+                if readErr != nil {
+                        lastErr = fmt.Errorf("read response: %w", readErr)
+                        if attempt < r.maxRetries {
+                                log.Printf("[llm] attempt %d/%d failed (read): %v — retrying", attempt+1, r.maxRetries+1, readErr)
+                                continue
+                        }
+                        if recordLLMMetrics != nil {
+                                recordLLMMetrics(req.Model, "error", time.Since(callStart))
+                        }
+                        return nil, lastErr
+                }
+
+                // v3.4.0: Retry on 429 (rate limit) and 5xx (server error).
+                // Do NOT retry on 4xx (bad request, auth) — won't succeed.
+                if resp.StatusCode == 429 || resp.StatusCode >= 500 {
+                        lastErr = fmt.Errorf("LLM API returned %d: %s", resp.StatusCode, string(respBody[:min(len(respBody), 500)]))
+                        if attempt < r.maxRetries {
+                                // Honor Retry-After header if present (common for 429s).
+                                retryAfter := r.parseRetryAfter(resp.Header.Get("Retry-After"))
+                                if retryAfter > 0 {
+                                        delay := retryAfter
+                                        if delay > 30*time.Second {
+                                                delay = 30 * time.Second // cap at 30s
+                                        }
+                                        log.Printf("[llm] attempt %d/%d got %d (Retry-After: %v) — retrying", attempt+1, r.maxRetries+1, resp.StatusCode, delay)
+                                        select {
+                                        case <-ctx.Done():
+                                                return nil, ctx.Err()
+                                        case <-time.After(delay):
+                                        }
+                                } else {
+                                        log.Printf("[llm] attempt %d/%d got %d — retrying", attempt+1, r.maxRetries+1, resp.StatusCode)
+                                }
+                                continue
+                        }
+                        // Exhausted retries on 429/5xx
+                        status := "error"
+                        if resp.StatusCode == 429 {
+                                status = "rate_limited"
+                        }
+                        if recordLLMMetrics != nil {
+                                recordLLMMetrics(req.Model, status, time.Since(callStart))
+                        }
+                        return nil, lastErr
+                }
+
+                if resp.StatusCode >= 400 {
+                        // 4xx (non-429) — don't retry, return immediately.
+                        if recordLLMMetrics != nil {
+                                recordLLMMetrics(req.Model, "client_error", time.Since(callStart))
+                        }
+                        return nil, fmt.Errorf("LLM API returned %d: %s", resp.StatusCode, string(respBody[:min(len(respBody), 500)]))
+                }
+
+                var chatResp chatResponse
+                if err := json.Unmarshal(respBody, &chatResp); err != nil {
+                        if recordLLMMetrics != nil {
+                                recordLLMMetrics(req.Model, "error", time.Since(callStart))
+                        }
+                        return nil, fmt.Errorf("unmarshal response: %w", err)
+                }
+                if chatResp.Error != nil {
+                        if recordLLMMetrics != nil {
+                                recordLLMMetrics(req.Model, "error", time.Since(callStart))
+                        }
+                        return nil, fmt.Errorf("LLM error (%s): %s", chatResp.Error.Type, chatResp.Error.Message)
+                }
+                if recordLLMMetrics != nil {
+                        recordLLMMetrics(req.Model, "success", time.Since(callStart))
+                }
+                return &chatResp, nil
         }
 
-        var chatResp chatResponse
-        if err := json.Unmarshal(respBody, &chatResp); err != nil {
-                return nil, fmt.Errorf("unmarshal response: %w", err)
+        if recordLLMMetrics != nil {
+                recordLLMMetrics(req.Model, "error", time.Since(callStart))
         }
-        if chatResp.Error != nil {
-                return nil, fmt.Errorf("LLM error (%s): %s", chatResp.Error.Type, chatResp.Error.Message)
+        return nil, lastErr
+}
+
+// LLMCallStart / LLMCallEnd are thin wrappers for the in-flight gauge.
+// They call into the metrics recorder if set, avoiding a direct dependency.
+var (
+        llmCallStartHook func()
+        llmCallEndHook   func()
+)
+
+// LLMCallStart increments the in-flight gauge (if wired).
+func LLMCallStart() {
+        if llmCallStartHook != nil {
+                llmCallStartHook()
         }
-        return &chatResp, nil
+}
+
+// LLMCallEnd decrements the in-flight gauge (if wired).
+func LLMCallEnd() {
+        if llmCallEndHook != nil {
+                llmCallEndHook()
+        }
+}
+
+// SetInFlightHooks wires the in-flight gauge hooks. Called from main.go.
+func SetInFlightHooks(start, end func()) {
+        llmCallStartHook = start
+        llmCallEndHook = end
+}
+
+// backoffDelay computes the retry delay for the given attempt (1-indexed).
+// v3.4.0: Exponential backoff: baseDelay * 2^(attempt-1), with ±25% jitter.
+// Attempt 1: 500ms ± 125ms. Attempt 2: 1s ± 250ms. Attempt 3: 2s ± 500ms.
+// Final result is capped at 30s (applied AFTER jitter to avoid overruns).
+func (r *Router) backoffDelay(attempt int) time.Duration {
+        if attempt < 1 {
+                attempt = 1
+        }
+        if r.retryBaseDelay <= 0 {
+                r.retryBaseDelay = 500 * time.Millisecond
+        }
+        // 2^(attempt-1) * baseDelay
+        multiplier := math.Pow(2, float64(attempt-1))
+        delay := time.Duration(float64(r.retryBaseDelay) * multiplier)
+        // Jitter: ±25% — use attempt as a deterministic-ish seed variation.
+        // (We avoid math/rand to keep this testable + dependency-free.)
+        jitterRange := delay / 4
+        if jitterRange > 0 {
+                // Simple deterministic jitter based on time — good enough for retry spacing.
+                jitter := time.Duration(time.Now().UnixNano() % int64(jitterRange*2))
+                delay = delay - jitterRange + jitter
+        }
+        // Cap at 30s (applied AFTER jitter so the final value never exceeds 30s).
+        if delay > 30*time.Second {
+                delay = 30 * time.Second
+        }
+        return delay
+}
+
+// parseRetryAfter parses the HTTP Retry-After header (seconds or HTTP-date).
+// Returns 0 if the header is absent or unparseable.
+func (r *Router) parseRetryAfter(value string) time.Duration {
+        if value == "" {
+                return 0
+        }
+        // Try as seconds (most common)
+        var secs int
+        if _, err := fmt.Sscanf(value, "%d", &secs); err == nil && secs > 0 {
+                return time.Duration(secs) * time.Second
+        }
+        // Try as HTTP-date (RFC1123)
+        if t, err := time.Parse(time.RFC1123, value); err == nil {
+                d := time.Until(t)
+                if d > 0 {
+                        return d
+                }
+        }
+        return 0
 }
 
 // extractJSON defensively parses JSON from LLM output.

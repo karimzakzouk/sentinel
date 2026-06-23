@@ -21,6 +21,8 @@ import (
         "strings"
 
         "github.com/google/uuid"
+
+        "github.com/karimzakzouk/sentinel/v3/internal/metrics"
 )
 
 // Server is the HTTP API server.
@@ -87,7 +89,7 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
         writeJSON(w, 200, map[string]string{
                 "status":  "ok",
                 "service": "core",
-                "version": "3.3.1",
+                "version": "3.4.0",
         })
 }
 
@@ -104,11 +106,10 @@ func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
-        w.Header().Set("Content-Type", "text/plain; version=0.0.4")
-        // Minimal Prometheus metrics — v3.1 will add more
-        fmt.Fprintf(w, "# HELP sentinel_incidents_total Total incidents processed\n")
-        fmt.Fprintf(w, "# TYPE sentinel_incidents_total counter\n")
-        fmt.Fprintf(w, "sentinel_incidents_total 0\n")
+        // v3.4.0: Real Prometheus metrics — was a hardcoded stub returning 0.
+        // Now exports counters/histograms/gauges for investigation count, duration,
+        // LLM latency, sandbox pass rate, PR count, active incidents gauge.
+        metrics.Handler().ServeHTTP(w, r)
 }
 
 func (s *Server) handleMetricsSummary(w http.ResponseWriter, r *http.Request) {

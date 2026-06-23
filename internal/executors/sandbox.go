@@ -33,10 +33,16 @@ type SandboxResult struct {
 //   Level 1: Canary pod becomes Ready (startup crash fixed)
 //   Level 2: Endpoints return 2xx/3xx (app starts + serves traffic)
 //   Level 3: Original error is gone (reproduce the crash conditions)
+//
+// v3.4.0: probePaths replaces the hardcoded /pay?amount=... test inputs that
+// only worked for the demo app. Now configurable via SENTINEL_SANDBOX_PROBE_PATHS.
+// Defaults to /,/healthz,/readyz. For app-specific paths (e.g. /pay?amount=0),
+// set the env var.
 type SandboxRunner struct {
-        clientset        *kubernetes.Clientset
-        sandboxPrefix    string
-        enableMirroring  bool
+        clientset       *kubernetes.Clientset
+        sandboxPrefix   string
+        enableMirroring bool
+        probePaths      []string // v3.4.0: configurable probe paths for Level 2 + 3
 }
 
 // NewSandbox creates a SandboxRunner.
@@ -45,7 +51,18 @@ func NewSandbox(clientset *kubernetes.Clientset, sandboxPrefix string, enableMir
                 clientset:       clientset,
                 sandboxPrefix:   sandboxPrefix,
                 enableMirroring: enableMirroring,
+                probePaths:      []string{"/", "/healthz", "/readyz"}, // sensible defaults
         }
+}
+
+// WithProbePaths sets custom probe paths for Level 2 + 3 verification.
+// v3.4.0: Each path can include query string (e.g. "/pay?amount=0").
+// Replaces the hardcoded /pay?amount=... inputs that only worked for demo-app.
+func (s *SandboxRunner) WithProbePaths(paths []string) *SandboxRunner {
+        if len(paths) > 0 {
+                s.probePaths = paths
+        }
+        return s
 }
 
 // Run creates a sandbox, deploys the fix, verifies it, returns the verdict.
@@ -218,11 +235,19 @@ func (s *SandboxRunner) verifyEndpoints(ctx context.Context, ns, service string)
         }
         svcName := svc.Name
 
-        endpoints := []string{"/", "/healthz", "/readyz"}
+        // v3.4.0: Use configurable probe paths instead of hardcoded [/, /healthz, /readyz].
+        endpoints := s.probePaths
+        if len(endpoints) == 0 {
+                endpoints = []string{"/", "/healthz", "/readyz"}
+        }
         client := &http.Client{Timeout: 5 * time.Second}
         for _, path := range endpoints {
                 url := fmt.Sprintf("http://%s.%s.svc.cluster.local:%d%s", svcName, ns, port, path)
-                resp, err := client.Get(url)
+                req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+                if err != nil {
+                        continue
+                }
+                resp, err := client.Do(req)
                 if err != nil {
                         continue // Connection error — pod might still be starting
                 }
@@ -285,15 +310,23 @@ func (s *SandboxRunner) verifyOriginalErrorFixed(ctx context.Context, ns, servic
         }
         svcName := svc.Name
 
-        testInputs := []struct {
+        // v3.4.0: Use configurable probe paths instead of hardcoded /pay?amount=...
+        // The old test inputs only worked for the demo app. Now we hit each
+        // configured probe path and check that the original error type doesn't
+        // appear in the response body.
+        probePaths := s.probePaths
+        if len(probePaths) == 0 {
+                probePaths = []string{"/", "/healthz", "/readyz"}
+        }
+        testInputs := make([]struct {
                 method, path string
                 params       map[string]string
-        }{
-                {"GET", "/", nil},
-                {"GET", "/healthz", nil},
-                {"GET", "/pay", map[string]string{"amount": "0"}},
-                {"GET", "/pay", map[string]string{"amount": "-1"}},
-                {"GET", "/pay", map[string]string{"amount": "abc"}},
+        }, 0, len(probePaths))
+        for _, p := range probePaths {
+                testInputs = append(testInputs, struct {
+                        method, path string
+                        params       map[string]string
+                }{"GET", p, nil})
         }
 
         client := &http.Client{Timeout: 5 * time.Second}

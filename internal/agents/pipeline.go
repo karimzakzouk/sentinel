@@ -40,6 +40,13 @@ func NewPipeline(router *llm.Router, k8sClient *k8s.Client, gitHubToken string, 
         }
 }
 
+// SetPrometheusURL wires the Prometheus backend into the evidence gatherer.
+// v3.4.0: Allows evidence queries of type "prometheus" to execute against
+// a real Prometheus instance. No-op if URL is empty (backward compatible).
+func (p *Pipeline) SetPrometheusURL(url string) {
+        p.evidenceGatherer.SetPrometheusURL(url)
+}
+
 // Run executes the full pipeline on the given state. Handles rewinds.
 // v3.2: confidence routing — if confidence < 0.5, loop back (max 3 cycles).
 // v3.2: per-agent timeouts — each agent has a hard timeout.

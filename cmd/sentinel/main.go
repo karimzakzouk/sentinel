@@ -23,6 +23,8 @@ import (
         "github.com/karimzakzouk/sentinel/v3/internal/feedback"
         "github.com/karimzakzouk/sentinel/v3/internal/k8s"
         "github.com/karimzakzouk/sentinel/v3/internal/llm"
+        "github.com/karimzakzouk/sentinel/v3/internal/logging"
+        "github.com/karimzakzouk/sentinel/v3/internal/metrics"
         "github.com/karimzakzouk/sentinel/v3/internal/safety"
         "github.com/karimzakzouk/sentinel/v3/internal/schemas"
         "github.com/karimzakzouk/sentinel/v3/internal/watcher"
@@ -42,32 +44,52 @@ func main() {
                 listenAddr = *addr
         }
 
-        log.Printf("[main] Sentinel %s starting", Version)
-        log.Printf("[main] LLM: %s (model: %s)", cfg.LLMProvider, cfg.LLMFrontierModel)
-        log.Printf("[main] SQLite: %s", cfg.SQLitePath)
-        log.Printf("[main] API: %s", listenAddr)
+        // v3.4.0: Initialize structured logger (JSON to stdout, level from config).
+        // Falls back to stdlib log for any code not yet migrated to slog.
+        logging.Init(cfg.LogLevel)
+
+        logging.Info("Sentinel starting",
+                "version", Version,
+                "llm_provider", cfg.LLMProvider,
+                "llm_frontier_model", cfg.LLMFrontierModel,
+                "llm_embedding_model", cfg.LLMEmbeddingModel,
+                "sqlite_path", cfg.SQLitePath,
+                "api_addr", listenAddr,
+                "log_level", cfg.LogLevel,
+        )
 
         // 1. Storage (SQLite replaces Postgres + Weaviate)
         store, err := feedback.New(cfg.SQLitePath)
         if err != nil {
-                log.Fatalf("[main] storage init: %v", err)
+                log.Fatalf("storage init: %v", err)
         }
         defer store.Close()
 
         // 2. K8s client
         k8sClient, err := k8s.New()
         if err != nil {
-                log.Fatalf("[main] k8s client: %v", err)
+                log.Fatalf("k8s client: %v", err)
         }
 
         // 3. LLM router
+        // v3.4.0: retry config (was no retry — single HTTP call, killed by free-tier rate limits)
         router := llm.New(cfg.ResolvedBaseURL(), cfg.LLMAPIKey, cfg.LLMFastModel, cfg.LLMFrontierModel)
+        router.SetRetryConfig(cfg.LLMMaxRetries, time.Duration(cfg.LLMRetryBaseDelayMs)*time.Millisecond)
+
+        // v3.4.0: Wire LLM metrics (avoids circular import: llm → metrics → ... → llm)
+        llm.SetMetricsRecorder(metrics.RecordLLMCall)
+        llm.SetInFlightHooks(metrics.LLMCallStart, metrics.LLMCallEnd)
 
         // 3.5 Vector store (HNSW + LLM embeddings) — created before pipeline for memory loop
-        vectorStore := feedback.NewVectorStore(cfg.ResolvedBaseURL(), cfg.LLMAPIKey, "text-embedding-3-small")
+        // v3.4.0: embedding model now configurable (was hardcoded "text-embedding-3-small")
+        vectorStore := feedback.NewVectorStore(cfg.ResolvedBaseURL(), cfg.LLMAPIKey, cfg.LLMEmbeddingModel)
 
         // 4. Agent pipeline (with vector store for memory loop)
         pipeline := agents.NewPipeline(router, k8sClient, cfg.GitHubToken, store, &vectorStoreAdapter{vs: vectorStore})
+        // v3.4.0: Wire Prometheus backend for evidence gatherer (was returning "not configured")
+        if cfg.PrometheusURL != "" {
+                pipeline.SetPrometheusURL(cfg.PrometheusURL)
+        }
 
         // 5. Safety policy (embedded, replaces OPA sidecar)
         policy := safety.NewPolicy(cfg.ProductionNamespaces, cfg.ConfidenceAutonomous)
@@ -75,7 +97,8 @@ func main() {
         // 6. Executors
         ghExec := executors.NewGitHub(cfg.GitHubToken)
         k8sExec := executors.NewK8s(k8sClient.Clientset())
-        sandbox := executors.NewSandbox(k8sClient.Clientset(), cfg.SandboxNamespacePrefix, cfg.EnableTrafficMirroring)
+        sandbox := executors.NewSandbox(k8sClient.Clientset(), cfg.SandboxNamespacePrefix, cfg.EnableTrafficMirroring).
+                WithProbePaths(cfg.SandboxProbePaths)
         kaniko := executors.NewKaniko(k8sClient.Clientset(), cfg.Namespace).WithDockerHubUsername(cfg.DockerHubUsername)
 
         ready := false
@@ -83,7 +106,7 @@ func main() {
         // v3.2: Active incident tracker (per-service dedup)
         tracker := detection.NewActiveTracker()
         // v3.2: Slack alerts (graceful degradation if no webhook)
-        alertSender := agents.NewAlertSender(os.Getenv("SENTINEL_SLACK_WEBHOOK"))
+        alertSender := agents.NewAlertSender(cfg.SlackWebhook)
         // v3.2: Outcome watcher (monitors service post-fix)
         outcomeWatcher := feedback.NewOutcomeWatcher(k8sClient.Clientset(), store)
         // v3.2: Load existing vectors from SQLite into HNSW index on startup (delay 2s for DB to be ready)
@@ -91,28 +114,52 @@ func main() {
                 time.Sleep(2 * time.Second)
                 loadCtx := context.Background()
                 if err := vectorStore.LoadFromDB(loadCtx, store); err != nil {
-                        log.Printf("[main] vector store load: %v", err)
+                        logging.Error("vector store load failed", "error", err)
                 }
         }()
 
         // 7. The full investigation handler — runs the agent pipeline + execution
         handler := func(ctx context.Context, cluster schemas.AnomalyCluster, crName, crNamespace string) {
+                // v3.4.0: Metrics — track investigation count + duration + active gauge.
+                // finalStatus is captured by the defer; updated at each return point.
+                invStart := time.Now()
+                finalStatus := "failed" // default if we exit early
+                metrics.RecordInvestigationStart()
+                defer func() {
+                        metrics.RecordInvestigationComplete(finalStatus, time.Since(invStart))
+                }()
+
                 // v3.2: Panic recovery — never let an agent bug kill Sentinel
                 defer func() {
                         if r := recover(); r != nil {
-                                log.Printf("[panic] investigation recovered: %v", r)
+                                logging.Error("investigation panic recovered",
+                                        "panic", r,
+                                        "cr_name", crName,
+                                        "cr_namespace", crNamespace,
+                                        "service", cluster.Service,
+                                )
                         }
                 }()
 
-                log.Printf("[investigation] %s/%s — service=%s", crNamespace, crName, cluster.Service)
+                logging.Info("investigation started",
+                        "cr_name", crName,
+                        "cr_namespace", crNamespace,
+                        "service", cluster.Service,
+                        "namespace", cluster.Namespace,
+                )
 
                 // Create + save incident
                 incident := schemas.NewIncident(cluster)
                 incident.Status = schemas.StatusInvestigating
                 if err := store.UpsertIncident(ctx, &incident); err != nil {
-                        log.Printf("[investigation] save incident: %v", err)
+                        logging.Error("save incident failed", "error", err, "service", cluster.Service)
                         return
                 }
+
+                // v3.4.0: Attach incident_id to context so all subsequent log lines
+                // from this handler can be correlated in Datadog/Loki.
+                invCtx := logging.WithIncidentID(ctx, incident.IncidentID.String())
+
                 _ = store.AppendEvent(ctx, incident.IncidentID, "reasoning", "investigation_started", nil,
                         map[string]any{"cluster_summary": cluster.Summary})
 
@@ -121,29 +168,29 @@ func main() {
                 defer cancel()
 
                 if err := pipeline.Run(investigationCtx, &incident.State); err != nil {
-                        log.Printf("[investigation] pipeline error: %v", err)
+                        logging.ErrorCtx(invCtx, "pipeline error", "error", err)
                         incident.Status = schemas.StatusFailed
                         s := err.Error()
                         incident.State.Error = &s
                         if err := store.UpsertIncident(ctx, &incident); err != nil {
-                                log.Printf("[investigation] save incident (pipeline-error): %v", err)
+                                logging.ErrorCtx(invCtx, "save incident (pipeline-error) failed", "error", err)
                         }
                         if err := k8sClient.PatchCRStatus(ctx, crName, crNamespace, "failed"); err != nil {
-                                log.Printf("[investigation] patch CR status (failed): %v", err)
+                                logging.ErrorCtx(invCtx, "patch CR status (failed) failed", "error", err)
                         }
                         return
                 }
                 incident.Status = incident.State.Status
                 if err := store.UpsertIncident(ctx, &incident); err != nil {
-                        log.Printf("[investigation] save incident (post-pipeline): %v", err)
+                        logging.ErrorCtx(invCtx, "save incident (post-pipeline) failed", "error", err)
                 }
                 _ = store.AppendEvent(ctx, incident.IncidentID, "reasoning", "investigation_completed", nil,
                         map[string]any{"status": string(incident.Status)})
 
                 if incident.State.FixProposal == nil {
-                        log.Printf("[investigation] no fix proposed — status=%s", incident.Status)
+                        logging.InfoCtx(invCtx, "no fix proposed", "status", incident.Status)
                         if err := k8sClient.PatchCRStatus(ctx, crName, crNamespace, string(incident.Status)); err != nil {
-                                log.Printf("[investigation] patch CR status (no-fix): %v", err)
+                                logging.ErrorCtx(invCtx, "patch CR status (no-fix) failed", "error", err)
                         }
                         return
                 }
@@ -167,15 +214,15 @@ func main() {
                         incident.Status = schemas.StatusEscalated
                 }
                 if err := store.UpsertIncident(ctx, &incident); err != nil {
-                        log.Printf("[investigation] save incident (post-safety): %v", err)
+                        logging.ErrorCtx(invCtx, "save incident (post-safety) failed", "error", err)
                 }
                 _ = store.AppendEvent(ctx, incident.IncidentID, "safety", "governance_decision", nil,
                         map[string]any{"verdict": string(decision.Verdict)})
 
                 if decision.Verdict != schemas.VerdictAllow {
-                        log.Printf("[investigation] denied by safety — verdict=%s", decision.Verdict)
+                        logging.WarnCtx(invCtx, "denied by safety", "verdict", decision.Verdict)
                         if err := k8sClient.PatchCRStatus(ctx, crName, crNamespace, string(incident.Status)); err != nil {
-                                log.Printf("[investigation] patch CR status (denied): %v", err)
+                                logging.ErrorCtx(invCtx, "patch CR status (denied) failed", "error", err)
                         }
                         return
                 }
@@ -183,30 +230,30 @@ func main() {
                 // === EXECUTION PHASE ===
                 // RBAC check
                 if !cfg.CanWriteTo(fp.TargetNamespace) {
-                        log.Printf("[investigation] execution denied — namespace %s not in allowlist", fp.TargetNamespace)
+                        logging.WarnCtx(invCtx, "execution denied — namespace not in allowlist", "namespace", fp.TargetNamespace)
                         incident.Status = schemas.StatusEscalated
                         if err := store.UpsertIncident(ctx, &incident); err != nil {
-                                log.Printf("[investigation] save incident (rbac-deny): %v", err)
+                                logging.ErrorCtx(invCtx, "save incident (rbac-deny) failed", "error", err)
                         }
                         if err := k8sClient.PatchCRStatus(ctx, crName, crNamespace, "escalated"); err != nil {
-                                log.Printf("[investigation] patch CR status (escalated): %v", err)
+                                logging.ErrorCtx(invCtx, "patch CR status (escalated) failed", "error", err)
                         }
                         return
                 }
 
                 incident.Status = schemas.StatusExecuting
                 if err := store.UpsertIncident(ctx, &incident); err != nil {
-                        log.Printf("[investigation] save incident (executing): %v", err)
+                        logging.ErrorCtx(invCtx, "save incident (executing) failed", "error", err)
                 }
 
                 if err := executeFix(ctx, &incident, cfg, ghExec, k8sExec, sandbox, kaniko, k8sClient, store); err != nil {
-                        log.Printf("[investigation] execution error: %v", err)
+                        logging.ErrorCtx(invCtx, "execution error", "error", err)
                         incident.Status = schemas.StatusFailed
                         s := err.Error()
                         incident.State.Error = &s
                 }
                 if err := store.UpsertIncident(ctx, &incident); err != nil {
-                        log.Printf("[investigation] save incident (post-execution): %v", err)
+                        logging.ErrorCtx(invCtx, "save incident (post-execution) failed", "error", err)
                 }
 
                 // === FEEDBACK PHASE ===
@@ -215,7 +262,7 @@ func main() {
                 incident.BetaAlpha = alpha
                 incident.BetaBeta = beta
                 if err := store.StoreIncidentVector(ctx, &incident, success); err != nil {
-                        log.Printf("[investigation] store incident vector: %v", err)
+                        logging.ErrorCtx(invCtx, "store incident vector failed", "error", err)
                 }
 
                 // v3.2: Add to HNSW vector index for future RAG retrieval
@@ -229,13 +276,13 @@ func main() {
                                 FixPattern: incident.State.FixProposal.Description,
                                 Outcome:    map[bool]string{true: "success", false: "failure"}[success],
                         }); err != nil {
-                                log.Printf("[investigation] vector store add: %v", err)
+                                logging.ErrorCtx(invCtx, "vector store add failed", "error", err)
                         }
                 }
 
                 incident.Status = schemas.StatusResolved
                 if err := store.UpsertIncident(ctx, &incident); err != nil {
-                        log.Printf("[investigation] save incident (resolved): %v", err)
+                        logging.ErrorCtx(invCtx, "save incident (resolved) failed", "error", err)
                 }
 
                 // v3.2: Mark resolved in tracker (triggers 30-min cooldown)
@@ -253,24 +300,30 @@ func main() {
                         outcomeWatcher.Watch(ctx, incident.Cluster.Service, incident.Cluster.Namespace, incident.IncidentID.String(), true)
                 }
 
-                log.Printf("[investigation] %s resolved (status=%s, alpha=%.0f, beta=%.0f)",
-                        incident.IncidentID, incident.Status, alpha, beta)
+                logging.InfoCtx(invCtx, "investigation resolved",
+                        "status", incident.Status,
+                        "success", success,
+                        "alpha", alpha,
+                        "beta", beta,
+                        "pr_url", prURL,
+                )
+                finalStatus = string(incident.Status)
                 if err := k8sClient.PatchCRStatus(ctx, crName, crNamespace, string(incident.Status)); err != nil {
-                        log.Printf("[investigation] patch CR status (resolved): %v", err)
+                        logging.ErrorCtx(invCtx, "patch CR status (resolved) failed", "error", err)
                 }
         }
 
         // 8. Start the CRD watcher
         w, err := watcher.New(k8sClient, handler)
         if err != nil {
-                log.Fatalf("[main] watcher: %v", err)
+                log.Fatalf("watcher init: %v", err)
         }
 
         ctx, cancel := context.WithCancel(context.Background())
         defer cancel()
 
         go func() {
-                log.Printf("[main] CRD watcher started")
+                logging.Info("CRD watcher started")
                 w.Run(ctx)
         }()
 
@@ -326,7 +379,11 @@ func main() {
 
         // The detector sends signals to the clusterer instead of triggering directly
         detectionHandler := func(service, namespace, reason, podLogs string) {
-                log.Printf("[detection] signal: %s/%s — %s", namespace, service, reason)
+                logging.Info("detection signal",
+                        "namespace", namespace,
+                        "service", service,
+                        "reason", reason,
+                )
 
                 // Look up repo annotation
                 annotations, _ := k8sClient.LookupWorkloadAnnotations(ctx, service, namespace)
@@ -347,16 +404,16 @@ func main() {
                 })
         }
 
-        detector := detection.New(k8sClient.Clientset(), detectionHandler, os.Getenv("SENTINEL_SLACK_WEBHOOK"))
+        detector := detection.New(k8sClient.Clientset(), detectionHandler, cfg.SlackWebhook)
         go func() {
-                log.Printf("[main] detection layer started (live log streaming + pod status)")
+                logging.Info("detection layer started (live log streaming + pod status)")
                 detector.Run(ctx)
         }()
 
         go func() {
                 time.Sleep(2 * time.Second)
                 ready = true
-                log.Printf("[main] Sentinel ready — watching for incidents")
+                logging.Info("Sentinel ready — watching for incidents")
         }()
 
         // 9. HTTP API
@@ -388,7 +445,7 @@ func main() {
 
         go func() {
                 if err := apiServer.Start(); err != nil && err != http.ErrServerClosed {
-                        log.Printf("[main] API server: %v", err)
+                        logging.Error("API server failed", "error", err)
                 }
         }()
 
@@ -396,13 +453,13 @@ func main() {
         sigCh := make(chan os.Signal, 1)
         signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
         <-sigCh
-        log.Printf("[main] shutting down...")
+        logging.Info("shutting down...")
         cancel()
 
         shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
         defer shutdownCancel()
         _ = apiServer.Shutdown(shutdownCtx)
-        log.Printf("[main] stopped")
+        logging.Info("stopped")
 }
 
 // executeFix runs the appropriate executor based on fix type.
@@ -428,9 +485,8 @@ func executeFix(
                 return k8sExec.Restart(ctx, fp)
 
         case schemas.FixScale:
-                // Default to doubling replicas (capped at 10)
-                newReplicas := int32(2)
-                // v3.1: parse from fp.K8sAction
+                // v3.4.0: configurable default replicas (was hardcoded int32(2))
+                newReplicas := cfg.ScaleFixDefaultReplicas
                 return k8sExec.Scale(ctx, fp, newReplicas)
 
         case schemas.FixRollback:
@@ -458,7 +514,7 @@ func executeCodeFix(
         fp := incident.State.FixProposal
 
         // Phase 1: Prepare branch
-        log.Printf("[execution] Phase 1: preparing fix branch...")
+        logging.Info("execution Phase 1: preparing fix branch", "fix_id", fp.FixID)
         branchInfo := ghExec.PrepareBranch(ctx, incident)
         if !branchInfo.Success {
                 return fmt.Errorf("branch_preparation_failed: %s", branchInfo.Error)
@@ -472,22 +528,27 @@ func executeCodeFix(
         sandboxSummary := "skipped (no Docker Hub credentials)"
 
         if cfg.DockerHubToken != "" {
-                log.Printf("[execution] Phase 2: building canary image with Kaniko...")
+                logging.Info("execution Phase 2: building canary image with Kaniko", "fix_id", fp.FixID)
                 prodImage, err := k8sClient.GetProdImage(ctx, fp.TargetService, fp.TargetNamespace)
                 if err == nil && prodImage != "" {
                         canaryImage, err := kaniko.BuildForIncident(ctx, incident, branchInfo, prodImage)
                         if err != nil {
                                 sandboxSummary = fmt.Sprintf("kaniko_error: %v", err)
-                                log.Printf("[execution] kaniko failed: %v", err)
+                                logging.Error("kaniko build failed", "fix_id", fp.FixID, "error", err)
                         } else {
-                                log.Printf("[execution] canary image built: %s", canaryImage)
+                                logging.Info("canary image built", "image", canaryImage)
                                 fp.CanaryImage = &canaryImage
 
-                                log.Printf("[execution] Phase 3: running sandbox verification...")
+                                logging.Info("execution Phase 3: running sandbox verification", "fix_id", fp.FixID)
+                                sandboxStart := time.Now()
                                 sb := sandbox.Run(ctx, incident)
                                 sandboxVerified = sb.Verified
                                 sandboxSummary = sb.Summary
-                                log.Printf("[execution] sandbox: verified=%v (%s)", sandboxVerified, sandboxSummary)
+                                metrics.RecordSandboxVerification(sandboxVerified, time.Since(sandboxStart))
+                                logging.Info("sandbox verification complete",
+                                        "verified", sandboxVerified,
+                                        "summary", sandboxSummary,
+                                )
                         }
                 } else {
                         sandboxSummary = "skipped (could not find prod image)"
@@ -495,7 +556,7 @@ func executeCodeFix(
         }
 
         // Phase 4: Open PR
-        log.Printf("[execution] Phase 4: opening PR...")
+        logging.Info("execution Phase 4: opening PR", "fix_id", fp.FixID)
 
         // Build the full professional PR body (includes sandbox verification + agent reasoning)
         canaryImg := ""
@@ -529,8 +590,12 @@ func executeCodeFix(
         now := time.Now().UTC()
         incident.State.ExecutionResult.FinishedAt = &now
 
-        log.Printf("[execution] PR opened: %s (#%d) — sandbox_verified=%v",
-                prResult.PRURL, prResult.PRNumber, sandboxVerified)
+        logging.Info("PR opened",
+                "pr_url", prResult.PRURL,
+                "pr_number", prResult.PRNumber,
+                "sandbox_verified", sandboxVerified,
+        )
+        metrics.RecordPROpened()
         return nil
 }
 
@@ -545,7 +610,7 @@ func recordBetaOutcome(ctx context.Context, store *feedback.Store, incident sche
                 success,
         )
         if err != nil {
-                log.Printf("[feedback] record beta outcome: %v", err)
+                logging.Error("record beta outcome failed", "error", err)
                 return 1.0, 1.0
         }
         return alpha, beta

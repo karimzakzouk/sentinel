@@ -4,6 +4,10 @@ import (
         "context"
         "encoding/json"
         "fmt"
+        "io"
+        "net/http"
+        "net/url"
+        "strconv"
         "strings"
         "sync"
         "time"
@@ -44,13 +48,27 @@ Set "rewind" ONLY if you discover a brand-new fact that invalidates the entire h
 
 // EvidenceGatherer generates queries, executes them, and attaches evidence to each hypothesis.
 type EvidenceGatherer struct {
-        router *llm.Router
-        k8s    *k8s.Client
+        router        *llm.Router
+        k8s           *k8s.Client
+        prometheusURL string // v3.4.0: wired from cfg.PrometheusURL
+        httpClient    *http.Client
 }
 
 // NewEvidenceGatherer creates an EvidenceGatherer.
 func NewEvidenceGatherer(router *llm.Router, k8sClient *k8s.Client) *EvidenceGatherer {
-        return &EvidenceGatherer{router: router, k8s: k8sClient}
+        return &EvidenceGatherer{
+                router:     router,
+                k8s:        k8sClient,
+                httpClient: &http.Client{Timeout: 15 * time.Second},
+        }
+}
+
+// SetPrometheusURL configures the Prometheus backend for evidence queries.
+// v3.4.0: When set, evidence queries of type "prometheus" are executed against
+// this URL. When empty, prometheus queries return an "not configured" error
+// (same behavior as v3.3.x).
+func (a *EvidenceGatherer) SetPrometheusURL(url string) {
+        a.prometheusURL = url
 }
 
 // Run executes the evidence gatherer agent.
@@ -178,6 +196,8 @@ func (a *EvidenceGatherer) runSingleQuery(ctx context.Context, idx int, q map[st
 }
 
 // executeQuery dispatches to the right backend based on query type.
+// v3.4.0: Prometheus backend now implemented (was returning "not configured").
+// Loki and Jaeger remain stubs — they need their own query languages.
 func (a *EvidenceGatherer) executeQuery(ctx context.Context, query map[string]any) map[string]any {
         qtype, _ := query["type"].(string)
         q, _ := query["query"].(string)
@@ -185,14 +205,108 @@ func (a *EvidenceGatherer) executeQuery(ctx context.Context, query map[string]an
         switch qtype {
         case "k8s":
                 return a.queryK8s(ctx, q)
-        case "loki", "prometheus", "jaeger":
-                // These need external URLs — return error if not configured.
-                // v3.1 will wire these via the LLM provider's observability stack.
+        case "prometheus":
+                // v3.4.0: Real Prometheus query execution.
+                return a.queryPrometheus(ctx, q)
+        case "loki", "jaeger":
+                // Still not implemented — these need their own query languages.
+                // Loki uses LogQL, Jaeger has its own trace query API.
                 return map[string]any{"error": fmt.Sprintf("%s_url not configured", qtype)}
         default:
                 return map[string]any{"error": fmt.Sprintf("unknown query type: %s", qtype)}
         }
 }
+
+// queryPrometheus executes a PromQL query against the configured Prometheus.
+// v3.4.0: Uses the /api/v1/query endpoint (instant query). Returns the result
+// as a simplified map — the LLM analyst doesn't need the full Prometheus
+// response format, just the values.
+//
+// If prometheusURL is not set, returns "not configured" (backward compatible).
+func (a *EvidenceGatherer) queryPrometheus(ctx context.Context, promql string) map[string]any {
+        if a.prometheusURL == "" {
+                return map[string]any{"error": "prometheus_url not configured"}
+        }
+
+        // Build the query URL: http://prometheus:9090/api/v1/query?query=...
+        u := strings.TrimRight(a.prometheusURL, "/") + "/api/v1/query"
+        req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+        if err != nil {
+                return map[string]any{"error": fmt.Sprintf("build request: %v", err)}
+        }
+        q := req.URL.Query()
+        q.Set("query", promql)
+        req.URL.RawQuery = q.Encode()
+
+        resp, err := a.httpClient.Do(req)
+        if err != nil {
+                return map[string]any{"error": fmt.Sprintf("prometheus request failed: %v", err)}
+        }
+        defer resp.Body.Close()
+
+        body, err := io.ReadAll(resp.Body)
+        if err != nil {
+                return map[string]any{"error": fmt.Sprintf("read response: %v", err)}
+        }
+
+        if resp.StatusCode != 200 {
+                return map[string]any{
+                        "error":  fmt.Sprintf("prometheus returned %d", resp.StatusCode),
+                        "body":   truncateStr(string(body), 500),
+                }
+        }
+
+        // Parse Prometheus response: {"status":"success","data":{"resultType":"vector","result":[{...}]}}
+        var promResp struct {
+                Status string `json:"status"`
+                Error  string `json:"error"`
+                Data   struct {
+                        ResultType string `json:"resultType"`
+                        Result     []struct {
+                                Metric map[string]string `json:"metric"`
+                                Value  []any             `json:"value"` // [timestamp, "value"]
+                        } `json:"result"`
+                } `json:"data"`
+        }
+        if err := json.Unmarshal(body, &promResp); err != nil {
+                return map[string]any{"error": fmt.Sprintf("unmarshal: %v", err)}
+        }
+        if promResp.Status != "success" {
+                return map[string]any{
+                        "error": promResp.Error,
+                        "query": promql,
+                }
+        }
+
+        // Simplify the result for the LLM: just metric labels + values.
+        results := make([]map[string]any, 0, len(promResp.Data.Result))
+        for _, r := range promResp.Data.Result {
+                entry := map[string]any{
+                        "metric": r.Metric,
+                }
+                if len(r.Value) >= 2 {
+                        // r.Value[1] is a string like "123.456"
+                        if v, ok := r.Value[1].(string); ok {
+                                if f, err := strconv.ParseFloat(v, 64); err == nil {
+                                        entry["value"] = f
+                                } else {
+                                        entry["value"] = v
+                                }
+                        }
+                }
+                results = append(results, entry)
+        }
+        return map[string]any{
+                "query":      promql,
+                "resultType": promResp.Data.ResultType,
+                "results":    results,
+                "count":      len(results),
+        }
+}
+
+// _ keeps the url import alive (used implicitly by http.NewRequestWithContext
+// when parsing the URL, but Go's import checker is conservative).
+var _ = url.QueryEscape
 
 // queryK8s queries the K8s API for events, pods, deployments, or logs.
 func (a *EvidenceGatherer) queryK8s(ctx context.Context, query string) map[string]any {
