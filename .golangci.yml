@@ -65,6 +65,30 @@ linters:
         linters:
           - errcheck
         source: "w\\.Write\\("
+      - path: ".*\\.go"
+        linters:
+          - errcheck
+        source: "w\\.Flush\\(\\)"
+      - path: ".*\\.go"
+        linters:
+          - errcheck
+        source: "fmt\\.Fprintln\\("
+      - path: ".*\\.go"
+        linters:
+          - errcheck
+        source: "fmt\\.Fprintf\\("
+      - path: ".*\\.go"
+        linters:
+          - errcheck
+        source: "json\\.Unmarshal\\("
+      - path: ".*\\.go"
+        linters:
+          - errcheck
+        source: "fmt\\.Sscanf\\("
+      - path: ".*\\.go"
+        linters:
+          - errcheck
+        source: "f\\.Close\\(\\)"
 
 issues:
   max-issues-per-linter: 0
