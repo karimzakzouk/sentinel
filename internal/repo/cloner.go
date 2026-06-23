@@ -94,18 +94,18 @@ func (c *Cloner) Clone(ctx context.Context, repo, ref string) (string, error) {
                         Depth: 50,
                 })
                 if err != nil {
-                        os.RemoveAll(tmpDir)
+                        _ = os.RemoveAll(tmpDir)
                         return "", fmt.Errorf("clone %s@%s: %w", repo, ref, err)
                 }
                 // Checkout the specific commit
                 w, err := r.Worktree()
                 if err != nil {
-                        os.RemoveAll(tmpDir)
+                        _ = os.RemoveAll(tmpDir)
                         return "", fmt.Errorf("get worktree: %w", err)
                 }
                 hash := plumbing.NewHash(ref)
                 if err := w.Checkout(&git.CheckoutOptions{Hash: hash}); err != nil {
-                        os.RemoveAll(tmpDir)
+                        _ = os.RemoveAll(tmpDir)
                         return "", fmt.Errorf("checkout commit %s: %w", ref, err)
                 }
                 return tmpDir, nil
@@ -133,7 +133,7 @@ func (c *Cloner) Clone(ctx context.Context, repo, ref string) (string, error) {
                                 Depth: 1,
                         })
                         if err != nil {
-                                os.RemoveAll(tmpDir)
+                                _ = os.RemoveAll(tmpDir)
                                 return "", fmt.Errorf("clone %s@%s: %w", repo, ref, err)
                         }
                 }

@@ -19,8 +19,9 @@ linters:
     - gocritic       # common pitfalls
     - bodyclose      # http.Response.Body not closed
     - dupl           # duplicate code blocks
-    - goconst        # repeated constants should be named
     - nakedret       # naked return in long functions
+    # v3.5.0: 'goconst' disabled — too noisy for string-heavy code like
+    # error type names ("KeyError", "panic") which are intentionally inline.
 
   settings:
     errcheck:

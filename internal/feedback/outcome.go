@@ -222,7 +222,7 @@ func (w *OutcomeWatcher) fetchPodLogs(ctx context.Context, service, namespace st
         defer stream.Close()
 
         buf := new(bytes.Buffer)
-        buf.ReadFrom(stream)
+        _, _ = buf.ReadFrom(stream)
         return buf.String()
 }
 

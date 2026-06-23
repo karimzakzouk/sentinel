@@ -319,7 +319,9 @@ func (a *EvidenceGatherer) queryK8s(ctx context.Context, query string) map[strin
         kind, _ := parts["kind"]
         limit := int64(50)
         if l, ok := parts["limit"]; ok {
-                fmt.Sscanf(l, "%d", &limit)
+                if _, err := fmt.Sscanf(l, "%d", &limit); err != nil {
+                        // invalid limit — keep default
+                }
         }
 
         listOpts := metav1.ListOptions{Limit: limit}
