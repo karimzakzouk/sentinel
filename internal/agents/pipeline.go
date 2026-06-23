@@ -47,8 +47,8 @@ func (p *Pipeline) Run(ctx context.Context, state *schemas.AgentState) error {
         defer recoverPanic("pipeline")
 
         for state.Iterations < state.MaxIterations {
-                // 1. Investigator (30s timeout)
-                invCtx, invCancel := context.WithTimeout(ctx, 60*time.Second)
+                // 1. Investigator (120s timeout — two-round agentic loop = 2 LLM calls)
+                invCtx, invCancel := context.WithTimeout(ctx, 120*time.Second)
                 if err := p.investigator.Run(invCtx, state); err != nil {
                         invCancel()
                         return fmt.Errorf("investigator: %w", err)
@@ -101,8 +101,8 @@ func (p *Pipeline) Run(ctx context.Context, state *schemas.AgentState) error {
                         continue
                 }
 
-                // 4. Fix Proposer (60s timeout)
-                fpCtx, fpCancel := context.WithTimeout(ctx, 60*time.Second)
+                // 4. Fix Proposer (120s timeout — LLM free tiers can be slow)
+                fpCtx, fpCancel := context.WithTimeout(ctx, 120*time.Second)
                 if err := p.fixProposer.Run(fpCtx, state); err != nil {
                         fpCancel()
                         return fmt.Errorf("fix_proposer: %w", err)
