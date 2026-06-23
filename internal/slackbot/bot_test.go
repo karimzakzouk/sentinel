@@ -202,7 +202,8 @@ func TestIsPaused_Concurrent(t *testing.T) {
 
 // TestHandleEvents_URLVerification verifies the Slack URL verification challenge.
 func TestHandleEvents_URLVerification(t *testing.T) {
-        b := New("secret", "U123", nil, nil)
+        // Use empty signing secret — signature verification is skipped in dev mode
+        b := New("", "U123", nil, nil)
 
         body := `{"type":"url_verification","challenge":"test-challenge-123"}`
         req := newTestRequest("POST", "/slack/events", body)
@@ -215,5 +216,22 @@ func TestHandleEvents_URLVerification(t *testing.T) {
         }
         if !strings.Contains(w.Body.String(), "test-challenge-123") {
                 t.Errorf("response should echo challenge, got: %s", w.Body.String())
+        }
+}
+
+// TestHandleEvents_SignatureVerification verifies that requests with a
+// signing secret set are rejected without proper HMAC signature.
+func TestHandleEvents_SignatureVerification(t *testing.T) {
+        b := New("my-secret", "U123", nil, nil)
+
+        body := `{"type":"url_verification","challenge":"test"}`
+        req := newTestRequest("POST", "/slack/events", body)
+        // No signature headers — should be rejected
+        w := newTestResponse()
+
+        b.HandleEvents(w, req)
+
+        if w.Code != 401 {
+                t.Errorf("expected 401 for missing signature, got %d", w.Code)
         }
 }

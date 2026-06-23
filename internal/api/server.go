@@ -218,8 +218,8 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
                 writeJSON(w, 200, s.settings())
                 return
         }
-        // POST — update settings (v3.1 will implement this)
-        writeJSON(w, 501, map[string]string{"error": "settings update not implemented yet"})
+        // POST — update settings (not yet implemented — runtime settings are env-var only)
+        writeJSON(w, 501, map[string]string{"error": "settings update not implemented — use env vars"})
 }
 
 func (s *Server) handleInvestigate(w http.ResponseWriter, r *http.Request) {

@@ -101,6 +101,7 @@ type Config struct {
         // v3.5.0: Interactive Slack bot (Events API + slash commands)
         SlackSigningSecret string // verifies Slack webhook signatures
         SlackBotUserID     string // Sentinel's Slack user ID (for @mention parsing)
+        SlackBotToken      string // OAuth bot token (xoxb-...) for posting replies
 
         // v3.4.0: Structured logging level (DEBUG/INFO/WARN/ERROR). Default INFO.
         LogLevel string
@@ -195,6 +196,7 @@ func Load() *Config {
                 // v3.5.0: Interactive Slack bot
                 SlackSigningSecret: getenv("SENTINEL_SLACK_SIGNING_SECRET", ""),
                 SlackBotUserID:     getenv("SENTINEL_SLACK_BOT_USER_ID", ""),
+                SlackBotToken:      getenv("SENTINEL_SLACK_BOT_TOKEN", ""),
 
                 // v3.4.0: Structured logging level
                 LogLevel: getenv("SENTINEL_LOG_LEVEL", "INFO"),

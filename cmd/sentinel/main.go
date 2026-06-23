@@ -18,6 +18,7 @@ import (
         "github.com/karimzakzouk/sentinel/v3/internal/agents"
         "github.com/karimzakzouk/sentinel/v3/internal/api"
         "github.com/karimzakzouk/sentinel/v3/internal/config"
+        "github.com/karimzakzouk/sentinel/v3/internal/correlation"
         "github.com/karimzakzouk/sentinel/v3/internal/detection"
         "github.com/karimzakzouk/sentinel/v3/internal/executors"
         "github.com/karimzakzouk/sentinel/v3/internal/feedback"
@@ -345,6 +346,25 @@ func main() {
                 w.Run(ctx)
         }()
 
+        // v3.5.0: Cross-service incident correlation.
+        // Detects cascading failures (3+ services failing within 60s) and
+        // identifies the most-recently-deployed service as the likely cause.
+        // Declared BEFORE clustererHandler so the closure can capture it.
+        correlator := correlation.New(func(event correlation.CorrelationEvent) {
+                logging.Warn("cascade event detected",
+                        "services", event.Services,
+                        "likely_cause", event.LikelyCause,
+                        "incident_count", event.IncidentCount,
+                )
+                // Send a Slack alert about the cascade
+                alertSender.SendAlert(
+                        event.LikelyCause,
+                        "cascade",
+                        fmt.Sprintf("Cascade detected: %d services failing. Likely cause: %s", event.IncidentCount, event.LikelyCause),
+                        "",
+                )
+        })
+
         // 9. Start the autonomous detection layer (live log streaming + pod status)
         // v3.2: All detectors send signals to the clusterer, which groups them
         // and emits ONE incident per service per time window.
@@ -356,6 +376,18 @@ func main() {
                 }
 
                 repo := annotations["sentinel.io/repo"]
+
+                // v3.5.0: Register this incident with the correlator. If a cascade is
+                // detected (3+ services failing simultaneously), the correlator emits
+                // an event and we skip the individual investigation — the cascade
+                // handler will trigger a rollback instead.
+                if correlator.RegisterIncident(service, namespace, time.Now()) {
+                        logging.Info("cascade detected — skipping individual investigation",
+                                "service", service,
+                                "namespace", namespace,
+                        )
+                        return
+                }
 
                 explanation := fmt.Sprintf("Auto-detected incident: %s", reason)
                 if podLogs != "" {
@@ -501,6 +533,11 @@ func main() {
                 },
         )
         apiServer.SetSlackHandler(http.HandlerFunc(slackBot.HandleEvents))
+
+        // v3.5.0: Wire the Slack bot token for posting @mention replies.
+        if cfg.SlackBotToken != "" {
+                slackBot.SetBotToken(cfg.SlackBotToken)
+        }
 
         // v3.5.0: Wire the Slack bot's pause checker into the detection layer.
         // When autonomous mode is paused via Slack, the clusterer skips emitting

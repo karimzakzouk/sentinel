@@ -6,6 +6,7 @@ import (
         "log"
         "strings"
 
+        "github.com/karimzakzouk/sentinel/v3/internal/depanalysis"
         "github.com/karimzakzouk/sentinel/v3/internal/k8s"
         "github.com/karimzakzouk/sentinel/v3/internal/llm"
         "github.com/karimzakzouk/sentinel/v3/internal/repo"
@@ -158,6 +159,23 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
         if repoName == "" {
                 log.Printf("[investigator] no repo discovered — skipping code fetch")
                 return a.runWithoutRepo(ctx, state, podLogs)
+        }
+
+        // v3.5.0: Check if the error originates from a shared library (vendor/,
+        // node_modules/, site-packages/). If so, redirect the investigation to
+        // the library's repo instead of the service's repo.
+        parsedError := ParseError(podLogs)
+        if parsedError != nil && parsedError.SourceFile != "" {
+                slf := depanalysis.AnalyzeStackTrace(parsedError.SourceFile, podLogs)
+                if slf.IsSharedLib && slf.SourceRepo != "" {
+                        log.Printf("[investigator] shared library bug detected: dep=%s repo=%s (path: %s) — redirecting investigation to library repo",
+                                slf.DependencyName, slf.SourceRepo, slf.LibraryPath)
+                        // Override the repo to clone with the library's repo
+                        repoName = slf.SourceRepo
+                } else if slf.IsSharedLib {
+                        log.Printf("[investigator] shared library bug detected: dep=%s but source repo unknown (language=%s) — investigating service repo as fallback",
+                                slf.DependencyName, slf.Language)
+                }
         }
 
         // 2. Resolve which branch/commit to clone.
