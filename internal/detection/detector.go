@@ -222,23 +222,40 @@ func (d *Detector) handlePod(ctx context.Context, pod *corev1.Pod) {
         }
 }
 
-// lookupRepoFromOwner checks the pod's owner (Deployment/StatefulSet/etc.)
-// for the sentinel.io/repo annotation. v3.5.1: This handles the common case
+// lookupRepoFromOwner checks the pod's owner (Deployment/StatefulSet/ReplicaSet)
+// for the sentinel.io/repo annotation. v3.5.2: This handles the common case
 // where users annotate the Deployment instead of the pod template.
+//
+// K8s ownership chain: Deployment → ReplicaSet → Pod
+// So we need to handle ReplicaSet by walking up to the Deployment.
 func (d *Detector) lookupRepoFromOwner(ctx context.Context, pod *corev1.Pod) string {
         for _, ownerRef := range pod.OwnerReferences {
                 switch ownerRef.Kind {
+                case "ReplicaSet":
+                        // Pod → ReplicaSet → Deployment
+                        rs, err := d.clientset.AppsV1().ReplicaSets(pod.Namespace).Get(ctx, ownerRef.Name, metav1.GetOptions{})
+                        if err != nil {
+                                continue
+                        }
+                        // Check ReplicaSet annotations
+                        if repo, ok := rs.Annotations["sentinel.io/repo"]; ok {
+                                return repo
+                        }
+                        // Check ReplicaSet's pod template annotations
+                        if repo, ok := rs.Spec.Template.Annotations["sentinel.io/repo"]; ok {
+                                return repo
+                        }
+                        // Walk up to the Deployment that owns this ReplicaSet
+                        for _, rsOwner := range rs.OwnerReferences {
+                                if rsOwner.Kind == "Deployment" {
+                                        if repo := d.getDeploymentRepo(ctx, pod.Namespace, rsOwner.Name); repo != "" {
+                                                return repo
+                                        }
+                                }
+                        }
                 case "Deployment":
-                        deploy, err := d.clientset.AppsV1().Deployments(pod.Namespace).Get(ctx, ownerRef.Name, metav1.GetOptions{})
-                        if err == nil {
-                                // Check deployment annotations first
-                                if repo, ok := deploy.Annotations["sentinel.io/repo"]; ok {
-                                        return repo
-                                }
-                                // Check pod template annotations
-                                if repo, ok := deploy.Spec.Template.Annotations["sentinel.io/repo"]; ok {
-                                        return repo
-                                }
+                        if repo := d.getDeploymentRepo(ctx, pod.Namespace, ownerRef.Name); repo != "" {
+                                return repo
                         }
                 case "StatefulSet":
                         sts, err := d.clientset.AppsV1().StatefulSets(pod.Namespace).Get(ctx, ownerRef.Name, metav1.GetOptions{})
@@ -251,6 +268,22 @@ func (d *Detector) lookupRepoFromOwner(ctx context.Context, pod *corev1.Pod) str
                                 }
                         }
                 }
+        }
+        return ""
+}
+
+// getDeploymentRepo fetches a Deployment and checks both its metadata
+// annotations and pod template annotations for sentinel.io/repo.
+func (d *Detector) getDeploymentRepo(ctx context.Context, namespace, name string) string {
+        deploy, err := d.clientset.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
+        if err != nil {
+                return ""
+        }
+        if repo, ok := deploy.Annotations["sentinel.io/repo"]; ok {
+                return repo
+        }
+        if repo, ok := deploy.Spec.Template.Annotations["sentinel.io/repo"]; ok {
+                return repo
         }
         return ""
 }
