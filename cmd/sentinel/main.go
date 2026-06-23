@@ -85,8 +85,9 @@ func main() {
         outcomeWatcher := feedback.NewOutcomeWatcher(k8sClient.Clientset(), store)
         // v3.2: Vector store with HNSW index + LLM embeddings
         vectorStore := feedback.NewVectorStore(cfg.ResolvedBaseURL(), cfg.LLMAPIKey, "text-embedding-3-small")
-        // Load existing vectors from SQLite into HNSW index on startup
+        // Load existing vectors from SQLite into HNSW index on startup (delay 2s for DB to be ready)
         go func() {
+                time.Sleep(2 * time.Second)
                 loadCtx := context.Background()
                 if err := vectorStore.LoadFromDB(loadCtx, store); err != nil {
                         log.Printf("[main] vector store load: %v", err)
