@@ -34,11 +34,9 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v6
         with:
-          version: v1.61
-          # Run on all .go files, not just changed ones — catches issues
-          # in files that were previously clean but broke due to refactoring.
+          # v3.4.1: Use v2.x — v1.61 was built with Go 1.23 and can't lint Go 1.25 code.
+          version: v2.12.2
           args: --timeout=5m
-          # Install-only mode is faster; we use the official action config.
 
   test:
     name: Test + Build
