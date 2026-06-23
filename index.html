@@ -4,28 +4,18 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Sentinel — The Autonomous AI SRE</title>
-  <meta name="description" content="Sentinel is an autonomous AI Site Reliability Engineer. Detect, diagnose, fix, verify — autonomously. One binary, one pod, ~28MB.">
+  <meta name="description" content="Sentinel detects incidents in real-time, diagnoses them with an LLM, writes fixes, tests them in a sandbox, and opens Pull Requests — all autonomously. One binary, one pod, ~28MB.">
   <style>
     :root {
-      --bg: #0a0e1a;
-      --bg-alt: #131826;
-      --surface: #1a2033;
-      --border: #2a3148;
-      --text: #e4e7ef;
-      --text-dim: #8b92a8;
-      --accent: #00d9a3;
-      --accent-dim: #00a37c;
-      --danger: #ff5470;
-      --warning: #ffb84d;
-      --info: #4d9fff;
-      --code-bg: #0d1220;
-      --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-      --mono: 'SF Mono', Monaco, Menlo, Consolas, 'Liberation Mono', monospace;
+      --bg: #0a0e1a; --bg-alt: #131826; --surface: #1a2033; --border: #2a3148;
+      --text: #e4e7ef; --text-dim: #8b92a8; --accent: #00d9a3; --accent-dim: #00a37c;
+      --danger: #ff5470; --warning: #ffb84d; --info: #4d9fff; --code-bg: #0d1220;
+      --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
+      --mono: 'SF Mono', Monaco, Menlo, Consolas, monospace;
     }
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: var(--font); background: var(--bg); color: var(--text); line-height: 1.6; -webkit-font-smoothing: antialiased; }
-    a { color: var(--accent); text-decoration: none; }
-    a:hover { text-decoration: underline; }
+    a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
     code { font-family: var(--mono); background: var(--code-bg); padding: 2px 6px; border-radius: 4px; font-size: 0.9em; color: var(--accent); }
     pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 1.25rem; overflow-x: auto; font-family: var(--mono); font-size: 0.875rem; line-height: 1.5; }
     pre code { background: none; padding: 0; color: var(--text); }
@@ -33,7 +23,7 @@
     .hero h1 { font-size: clamp(2.5rem, 6vw, 4.5rem); font-weight: 800; letter-spacing: -0.03em; margin-bottom: 0.5rem; background: linear-gradient(135deg, var(--accent) 0%, var(--info) 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
     .hero .tagline { font-size: clamp(1.1rem, 2.5vw, 1.5rem); color: var(--text-dim); margin-bottom: 0.5rem; }
     .hero .subtagline { font-size: 1rem; color: var(--text-dim); margin-bottom: 2.5rem; }
-    .hero .badges { display: flex; gap: 0.75rem; justify-content: center; flex-wrap: wrap; margin-bottom: 2.5rem; }
+    .badges { display: flex; gap: 0.75rem; justify-content: center; flex-wrap: wrap; margin-bottom: 2.5rem; }
     .badge { display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.4rem 0.9rem; border-radius: 999px; background: var(--surface); border: 1px solid var(--border); font-size: 0.85rem; font-family: var(--mono); }
     .badge strong { color: var(--accent); }
     .cta-group { display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap; }
@@ -60,13 +50,15 @@
     .compare td:not(:first-child) { font-family: var(--mono); }
     .compare tr:last-child td { border-bottom: none; }
     .compare .yes { color: var(--accent); }
-    .compare .no { color: var(--danger); }
     .code-block { position: relative; margin: 1.5rem 0; }
     .code-block .copy { position: absolute; top: 0.5rem; right: 0.5rem; background: var(--surface); border: 1px solid var(--border); color: var(--text-dim); padding: 0.3rem 0.6rem; border-radius: 4px; font-size: 0.75rem; cursor: pointer; font-family: var(--font); }
     .code-block .copy:hover { color: var(--accent); border-color: var(--accent); }
+    .feature-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1.5rem; margin: 2rem 0; }
+    .feature { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; }
+    .feature h4 { color: var(--accent); margin-bottom: 0.5rem; font-size: 1.1rem; }
+    .feature p { color: var(--text-dim); font-size: 0.95rem; }
     footer { border-top: 1px solid var(--border); padding: 2rem 1.5rem; text-align: center; color: var(--text-dim); font-size: 0.9rem; margin-top: 2rem; }
-    footer a { color: var(--text-dim); }
-    footer a:hover { color: var(--accent); }
+    footer a { color: var(--text-dim); } footer a:hover { color: var(--accent); }
     @media (max-width: 600px) { .hero { padding: 4rem 1rem 3rem; } .pipeline { grid-template-columns: repeat(2, 1fr); } }
   </style>
 </head>
@@ -80,7 +72,7 @@
     <span class="badge"><strong>1</strong> pod</span>
     <span class="badge"><strong>~28MB</strong> image</span>
     <span class="badge"><strong>~50MB</strong> RAM</span>
-    <span class="badge"><strong>&lt;1s</strong> startup</span>
+    <span class="badge"><strong>~0s</strong> detection</span>
     <span class="badge"><strong>0</strong> external deps</span>
   </div>
   <div class="cta-group">
@@ -91,32 +83,54 @@
 
 <section id="what">
   <h2>What is Sentinel?</h2>
-  <p style="font-size: 1.1rem; color: var(--text-dim); margin-bottom: 1.5rem;">Sentinel plugs into any Kubernetes cluster, watches for incidents, diagnoses them with an LLM, writes fixes, tests them in a sandbox, and opens Pull Requests — all on its own.</p>
-  <p>When a pod goes into <code>CrashLoopBackOff</code>, Sentinel doesn't just alert you. It:</p>
-  <ol style="margin: 1rem 0 1rem 2rem; color: var(--text-dim);">
-    <li><strong style="color: var(--text);">Fetches the real pod logs</strong> from the crashing container</li>
-    <li><strong style="color: var(--text);">Clones your repo</strong> and searches the source code for the bug (same pattern as SWE-agent / OpenHands)</li>
-    <li><strong style="color: var(--text);">Diagnoses the root cause</strong> with a 4-agent LLM pipeline (Investigator → Evidence Gatherer → Analyst → Fix Proposer)</li>
-    <li><strong style="color: var(--text);">Writes a patch</strong> — the actual file changes, not a recommendation</li>
-    <li><strong style="color: var(--text);">Builds a canary image</strong> with Kaniko and tests it in a sandbox namespace</li>
-    <li><strong style="color: var(--text);">Opens a PR</strong> with a <code>sandbox-verified</code> label — ready for you to merge</li>
-  </ol>
-  <p>All in ~4 minutes. While you sleep.</p>
+  <p style="font-size: 1.1rem; color: var(--text-dim); margin-bottom: 1.5rem;">
+    Sentinel plugs into any Kubernetes cluster, watches for incidents in real-time, diagnoses them with an LLM, writes fixes, tests them in a sandbox, and opens Pull Requests — all on its own.
+  </p>
+
+  <div class="feature-grid">
+    <div class="feature">
+      <h4>🔴 Live Detection</h4>
+      <p>Streams pod logs in real-time. Catches runtime errors (ZeroDivisionError, panic, NullPointerException) the instant they happen. Zero delay, no polling.</p>
+    </div>
+    <div class="feature">
+      <h4>🧠 Agentic Investigation</h4>
+      <p>Clones your repo, searches the source code with regex, reads the relevant files — same pattern as SWE-agent and OpenHands. The LLM sees the actual buggy code.</p>
+    </div>
+    <div class="feature">
+      <h4>🔧 Autonomous Fixes</h4>
+      <p>Writes the actual file changes, not recommendations. Builds a canary image with Kaniko, tests it in a sandbox, opens a PR with <code>sandbox-verified</code> label.</p>
+    </div>
+    <div class="feature">
+      <h4>✅ 3-Level Verification</h4>
+      <p>Every fix is tested: (1) canary pod starts, (2) endpoints return 2xx, (3) the original error is gone. No unverified fixes ship.</p>
+    </div>
+    <div class="feature">
+      <h4>🛡️ Embedded Safety</h4>
+      <p>5 governance rules (production namespace, high-risk service, blast radius, schema-migration block, confidence threshold). No OPA sidecar — pure Go.</p>
+    </div>
+    <div class="feature">
+      <h4>📦 Zero Dependencies</h4>
+      <p>One Go binary, one pod, ~28MB. SQLite replaces Postgres + Weaviate. No Kafka, no Redis, no external services. Just plug and sleep.</p>
+    </div>
+  </div>
 </section>
 
 <section id="pipeline">
-  <h2>The 6-layer pipeline</h2>
+  <h2>The 6-Layer Pipeline</h2>
   <div class="pipeline">
-    <div class="step"><div class="num">1</div><div class="title">Watch</div><div class="desc">Real K8s Watch stream — ~1s detection</div></div>
+    <div class="step"><div class="num">1</div><div class="title">Detect</div><div class="desc">Live log streaming + pod status — ~0s latency</div></div>
     <div class="step"><div class="num">2</div><div class="title">Investigate</div><div class="desc">Clone repo, search source, form hypotheses</div></div>
     <div class="step"><div class="num">3</div><div class="title">Evidence</div><div class="desc">Query K8s API in parallel to test hypotheses</div></div>
     <div class="step"><div class="num">4</div><div class="title">Analyze</div><div class="desc">Bayes + Beta priors → root cause</div></div>
     <div class="step"><div class="num">5</div><div class="title">Govern</div><div class="desc">Embedded safety policy — allow / deny</div></div>
     <div class="step"><div class="num">6</div><div class="title">Execute</div><div class="desc">Kaniko build + 3-level sandbox + PR</div></div>
   </div>
+
   <h3>The agent loop (what makes it accurate)</h3>
   <p>Sentinel doesn't guess which files to look at. It does what real coding agents do:</p>
-  <div class="code-block"><button class="copy" onclick="copyCode(this)">copy</button><pre><code>1. Clone the repo locally (go-git, ~2 seconds)
+  <div class="code-block">
+    <button class="copy" onclick="copyCode(this)">copy</button>
+    <pre><code>1. Clone the repo locally (go-git, ~2 seconds)
 2. Walk the file tree (filtered: no node_modules, vendor, .git)
 3. LLM Round 1: "what should I search for?"
    → emits 3-8 search queries: ["DB_PASSWORD", "KeyError", "def main"]
@@ -126,8 +140,13 @@
    → returns hypotheses + files to read
 6. Read those files from disk (zero API calls)
 7. Pass source to Fix Proposer → writes the patch
-8. Open PR with sandbox-verified label</code></pre></div>
-  <p style="color: var(--text-dim); margin-top: 1rem;">Same pattern as <a href="https://github.com/SWE-agent/SWE-agent">SWE-agent</a>, <a href="https://github.com/All-Hands-AI/OpenHands">OpenHands</a>, and <a href="https://aider.chat">Aider</a>. Works for any repo, any language, any layout — because the LLM searches by content, not by filename.</p>
+8. Build canary image → sandbox verify → open PR</code></pre>
+  </div>
+  <p style="color: var(--text-dim); margin-top: 1rem;">
+    Same pattern as <a href="https://github.com/SWE-agent/SWE-agent">SWE-agent</a>,
+    <a href="https://github.com/All-Hands-AI/OpenHands">OpenHands</a>, and
+    <a href="https://aider.chat">Aider</a>. Works for any repo, any language, any layout.
+  </p>
 </section>
 
 <section id="numbers">
@@ -136,30 +155,37 @@
     <div class="stat"><div class="value">~28MB</div><div class="label">Image size (was 600MB in v2)</div></div>
     <div class="stat"><div class="value">1</div><div class="label">Pod (was 4 in v2)</div></div>
     <div class="stat"><div class="value">~50MB</div><div class="label">RAM at idle (was 1.5GB)</div></div>
-    <div class="stat"><div class="value">&lt;1s</div><div class="label">Cold start (was 5-10s)</div></div>
+    <div class="stat"><div class="value">~0s</div><div class="label">Detection latency (live streaming)</div></div>
     <div class="stat"><div class="value">0</div><div class="label">External services (SQLite embedded)</div></div>
     <div class="stat"><div class="value">6</div><div class="label">Go dependencies (was 50+ Python packages)</div></div>
   </div>
+
   <h3>How we got here</h3>
   <table class="compare">
-    <thead><tr><th>Metric</th><th>Typical AIOps</th><th>Sentinel v2</th><th>Sentinel v3</th></tr></thead>
+    <thead>
+      <tr><th>Metric</th><th>Typical AIOps</th><th>Sentinel v2</th><th>Sentinel v3</th></tr>
+    </thead>
     <tbody>
       <tr><td>Image size</td><td>1–5GB</td><td>600MB</td><td class="yes">~28MB</td></tr>
       <tr><td>Pods</td><td>5–20</td><td>4</td><td class="yes">1</td></tr>
       <tr><td>RAM at idle</td><td>2–8GB</td><td>1.5GB</td><td class="yes">~50MB</td></tr>
       <tr><td>Disk</td><td>50–200GB</td><td>30GB</td><td class="yes">~5GB</td></tr>
       <tr><td>External services</td><td>Postgres, Redis, Kafka, ES</td><td>Postgres, Weaviate</td><td class="yes">None (SQLite)</td></tr>
+      <tr><td>Detection</td><td>Polling (30-60s)</td><td>Polling (10s)</td><td class="yes">Live streaming (~0s)</td></tr>
       <tr><td>Language</td><td>Java / Python</td><td>Python</td><td class="yes">Go</td></tr>
+      <tr><td>Autonomous</td><td>No</td><td>Manual trigger</td><td class="yes">Yes (auto-detect + fix)</td></tr>
     </tbody>
   </table>
 </section>
 
 <section id="install">
   <h2>Install in 60 seconds</h2>
-  <div class="code-block"><button class="copy" onclick="copyCode(this)">copy</button><pre><code>helm repo add sentinel https://karimzakzoukz.github.io/sentinel/
+  <div class="code-block">
+    <button class="copy" onclick="copyCode(this)">copy</button>
+    <pre><code>helm repo add sentinel https://karimzakzoukz.github.io/sentinel/
 helm repo update
 
-helm install sentinel sentinel/sentinel --version 3.0.2 \
+helm install sentinel sentinel/sentinel --version 3.1.0 \
   --namespace sentinel --create-namespace \
   --set sentinel.githubToken=YOUR_GITHUB_TOKEN \
   --set sentinel.llm.apiKey=YOUR_LLM_API_KEY \
@@ -167,24 +193,23 @@ helm install sentinel sentinel/sentinel --version 3.0.2 \
   --set 'sentinel.rbac.writeNamespaces={sim}'
 
 kubectl -n sentinel get pods -w
-# sentinel-xxx   1/1 Running   0   1s</code></pre></div>
-  <h3>Trigger an incident</h3>
-  <div class="code-block"><button class="copy" onclick="copyCode(this)">copy</button><pre><code>cat &lt;&lt;EOF | kubectl apply -f -
-apiVersion: sentinel.io/v1alpha1
-kind: SentinelIncident
-metadata:
-  name: test-crashloop
-  namespace: sim
-spec:
-  service: my-app
-  namespace: sim
-  reason: CrashLoopBackOff detected on my-app
-  trigger: manual
-  repo: myorg/my-app
-EOF
+# sentinel-xxx   1/1 Running   0   1s</code></pre>
+  </div>
 
-kubectl -n sentinel logs -f deploy/sentinel</code></pre></div>
-  <p style="color: var(--text-dim); margin-top: 1rem;">Watch Sentinel clone your repo, search the source, diagnose the bug, build a canary image, verify it in a sandbox, and open a PR — all autonomously.</p>
+  <h3>Enroll your services</h3>
+  <p>Annotate your Deployments so Sentinel knows what to watch:</p>
+  <div class="code-block">
+    <button class="copy" onclick="copyCode(this)">copy</button>
+    <pre><code>metadata:
+  annotations:
+    sentinel.io/repo: myorg/my-app           # GitHub repo (required)
+    sentinel.io/branch: main                  # Branch that's deployed (required)
+    sentinel.io/git-commit: abc123...         # Exact commit (optional)</code></pre>
+  </div>
+  <p style="color: var(--text-dim); margin-top: 1rem;">
+    Once annotated, Sentinel automatically starts live-streaming the pod's logs.
+    When an error is detected → full pipeline runs autonomously → PR opened. No manual triggers needed.
+  </p>
 </section>
 
 <section id="providers">
@@ -205,8 +230,36 @@ kubectl -n sentinel logs -f deploy/sentinel</code></pre></div>
   </table>
 </section>
 
+<section id="architecture">
+  <h2>Architecture</h2>
+  <pre><code>sentinel/
+├── cmd/sentinel/              # Entrypoint
+├── internal/
+│   ├── schemas/               # All types (Go structs)
+│   ├── config/                # Env var loading + LLM provider resolution
+│   ├── llm/                   # OpenAI-compatible client (net/http, no SDK)
+│   ├── k8s/                   # Workload annotation lookup, pod logs, CR status
+│   ├── watcher/               # CRD watcher (manual trigger)
+│   ├── detection/             # Autonomous detection (live log streaming + pod status)
+│   ├── repo/                  # go-git cloner + local search engine
+│   ├── agents/                # 4-agent pipeline + state machine
+│   │   ├── pipeline.go        #   Wires agents + handles rewinds
+│   │   ├── investigator.go    #   Two-round agentic loop (clone → search → read)
+│   │   ├── evidence_gatherer.go #   K8s API queries in parallel
+│   │   ├── analyst.go         #   Bayes + Beta priors → root cause
+│   │   └── fix_proposer.go    #   Root cause → FixProposal (LLM)
+│   ├── safety/                # Embedded policy (5 if-statements, replaces OPA)
+│   ├── executors/             # GitHub PRs, K8s patches, sandbox, Kaniko
+│   ├── feedback/              # SQLite store (incidents + events + beta + vectors)
+│   └── api/                   # HTTP API
+├── chart/                     # Single-pod Helm chart
+├── Dockerfile                 # Distroless static, ~28MB
+├── go.mod
+└── README.md</code></pre>
+</section>
+
 <footer>
-  <p>Sentinel v3.0.2 — <a href="https://github.com/karimzakzoukz/sentinel">GitHub</a> · <a href="https://github.com/karimzakzoukz/sentinel/releases">Releases</a> · MIT License</p>
+  <p>Sentinel v3.1.0 — <a href="https://github.com/karimzakzoukz/sentinel">GitHub</a> · <a href="https://github.com/karimzakzoukz/sentinel/releases">Releases</a> · MIT License</p>
   <p style="margin-top: 0.5rem; font-size: 0.85rem;">This page also serves as the Helm chart repository. Run <code>helm repo add sentinel https://karimzakzoukz.github.io/sentinel/</code> to install.</p>
 </footer>
 
