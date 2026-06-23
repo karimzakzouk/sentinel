@@ -383,6 +383,16 @@ func executeCodeFix(
 
         // Phase 4: Open PR
         log.Printf("[execution] Phase 4: opening PR...")
+
+        // Build the full professional PR body (includes sandbox verification + agent reasoning)
+        canaryImg := ""
+        if fp.CanaryImage != nil {
+                canaryImg = *fp.CanaryImage
+        }
+        incident.UpdatedAt = time.Now().UTC()
+        fullPRBody := agents.BuildPRBody(incident, sandboxVerified, sandboxSummary, canaryImg)
+        fp.PRBody = &fullPRBody
+
         prResult := ghExec.OpenPR(ctx, incident, branchInfo, sandboxVerified, sandboxSummary)
         if !prResult.Success {
                 return fmt.Errorf("pr_open_failed: %s", prResult.Error)

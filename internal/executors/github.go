@@ -120,18 +120,10 @@ func (e *GitHubExecutor) OpenPR(ctx context.Context, inc *schemas.Incident, bran
                 return &PRResult{Success: false, Error: "no_github_token"}
         }
 
-        // Build the PR body — includes sandbox result
+        // PR body is pre-built by the execution phase (includes sandbox verification)
         prBody := ""
         if fp.PRBody != nil {
                 prBody = *fp.PRBody
-        }
-        if sandboxVerified {
-                prBody += "\n\n## Sandbox Verification\n✅ **PASSED** — Canary image deployed to sandbox namespace, 1% traffic mirrored, no errors detected.\n"
-        } else {
-                prBody += fmt.Sprintf("\n\n## Sandbox Verification\n⚠️ **NEEDS REVIEW** — Sandbox result: %s\n", sandboxSummary)
-        }
-        if fp.ProposedConfidence > 0 {
-                prBody += fmt.Sprintf("\n---\n_Autonomous fix by Sentinel. Confidence: %.1f%%_\n", fp.ProposedConfidence*100)
         }
 
         prTitle := fmt.Sprintf("[Sentinel] %s for %s", fp.FixType, fp.TargetService)
