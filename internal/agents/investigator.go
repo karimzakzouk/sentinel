@@ -200,33 +200,49 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
                 return a.runWithoutRepo(ctx, state, podLogs)
         }
 
+        // Debug: log what the LLM returned
+        log.Printf("[investigator] round 2 LLM returned keys: %v", keysOfAny(round2Result))
+
         // 7. Parse hypotheses
         rawHyps, _ := round2Result["hypotheses"].([]any)
+        log.Printf("[investigator] round 2 returned %d hypotheses", len(rawHyps))
+
         var newHyps []schemas.Hypothesis
-        for i, h := range rawHyps {
-                if i >= 5 {
-                        break
+
+        // v3.2.5: FALLBACK — if LLM returned 0 hypotheses but we have pod logs,
+        // generate hypotheses from the error context directly.
+        if len(rawHyps) == 0 && podLogs != "" {
+                log.Printf("[investigator] LLM returned 0 hypotheses — generating from error context")
+                newHyps = generateHypothesesFromLogs(podLogs, state)
+        }
+
+        // Parse LLM hypotheses if we got them
+        if len(newHyps) == 0 {
+                for i, h := range rawHyps {
+                        if i >= 5 {
+                                break
+                        }
+                        hMap, ok := h.(map[string]any)
+                        if !ok {
+                                continue
+                        }
+                        statement, _ := hMap["statement"].(string)
+                        confidence, _ := hMap["confidence"].(float64)
+                        if confidence == 0 {
+                                confidence = 0.5
+                        }
+                        supporting, _ := hMap["supporting_evidence"].([]any)
+                        supportingStrs := toStringSlice(supporting)
+                        srcFiles, _ := hMap["source_files"].([]any)
+                        srcFilesStrs := toStringSlice(srcFiles)
+                        newHyps = append(newHyps, schemas.Hypothesis{
+                                HID:                fmt.Sprintf("H%d", i+1),
+                                Statement:          statement,
+                                SupportingEvidence: supportingStrs,
+                                Confidence:         confidence,
+                                SourceFiles:        srcFilesStrs,
+                        })
                 }
-                hMap, ok := h.(map[string]any)
-                if !ok {
-                        continue
-                }
-                statement, _ := hMap["statement"].(string)
-                confidence, _ := hMap["confidence"].(float64)
-                if confidence == 0 {
-                        confidence = 0.5
-                }
-                supporting, _ := hMap["supporting_evidence"].([]any)
-                supportingStrs := toStringSlice(supporting)
-                srcFiles, _ := hMap["source_files"].([]any)
-                srcFilesStrs := toStringSlice(srcFiles)
-                newHyps = append(newHyps, schemas.Hypothesis{
-                        HID:                fmt.Sprintf("H%d", i+1),
-                        Statement:          statement,
-                        SupportingEvidence: supportingStrs,
-                        Confidence:         confidence,
-                        SourceFiles:        srcFilesStrs,
-                })
         }
 
         // 8. Read the files the LLM asked for
@@ -475,4 +491,106 @@ func extractSearchQueriesFromLogs(logs string) []string {
 
         log.Printf("[investigator] extracted %d search queries from logs: %v", len(unique), unique)
         return unique
+}
+
+// generateHypothesesFromLogs creates hypotheses directly from the pod logs
+// when the LLM fails to return any. This is the deterministic fallback that
+// ensures the pipeline always has at least one hypothesis to work with.
+//
+// It parses the traceback to extract:
+//   - The error type (KeyError, ValueError, ZeroDivisionError, etc.)
+//   - The error detail (the key name, the variable, etc.)
+//   - The source file + line from the stack trace
+//   - The actual code line that caused the error
+func generateHypothesesFromLogs(logs string, state *schemas.AgentState) []schemas.Hypothesis {
+        var hyps []schemas.Hypothesis
+
+        // Extract error type + detail: "KeyError: 'DATABASE_URLL'"
+        errorRe := regexp.MustCompile(`(\w+Error|\w+Exception):\s*['"]?([^'"\n]+)?['"]?`)
+        m := errorRe.FindStringSubmatch(logs)
+        if m == nil {
+                // Try Go panic: "panic: ..."
+                panicRe := regexp.MustCompile(`panic:\s*(.+)`)
+                if pm := panicRe.FindStringSubmatch(logs); pm != nil {
+                        hyps = append(hyps, schemas.Hypothesis{
+                                HID:        "H1",
+                                Statement:  fmt.Sprintf("Go panic: %s", pm[1]),
+                                Confidence: 0.7,
+                        })
+                        return hyps
+                }
+                return nil
+        }
+
+        errorType := m[1]
+        errorDetail := ""
+        if len(m) >= 3 {
+                errorDetail = strings.TrimSpace(m[2])
+        }
+
+        // Extract source file from traceback: File "/app/app/main.py", line 11
+        fileRe := regexp.MustCompile(`File "([^"]+)", line (\d+), in`)
+        fm := fileRe.FindStringSubmatch(logs)
+        sourceFile := ""
+        sourceLine := ""
+        if len(fm) >= 3 {
+                sourceFile = fm[1]
+                sourceLine = fm[2]
+                // Strip container paths
+                if idx := strings.Index(sourceFile, "/app/"); idx >= 0 {
+                        sourceFile = sourceFile[idx+5:]
+                }
+        }
+
+        // Build the hypothesis statement
+        statement := fmt.Sprintf("The application crashes with %s", errorType)
+        if errorDetail != "" {
+                statement += fmt.Sprintf(" on '%s'", errorDetail)
+        }
+        if sourceFile != "" {
+                statement += fmt.Sprintf(" at %s:%s", sourceFile, sourceLine)
+        }
+        if errorType == "KeyError" && errorDetail != "" {
+                statement += fmt.Sprintf(". The environment variable or key '%s' is missing or misspelled.", errorDetail)
+        } else if errorType == "ZeroDivisionError" {
+                statement += ". A division by zero occurs, likely because a variable is not checked for zero before division."
+        } else if errorType == "ImportError" || errorType == "ModuleNotFoundError" {
+                statement += ". A required module is missing or the import path is incorrect."
+        } else if errorType == "FileNotFoundError" {
+                statement += ". A required file is missing."
+        }
+
+        srcFiles := []string{}
+        if sourceFile != "" {
+                srcFiles = append(srcFiles, sourceFile)
+        }
+
+        hyps = append(hyps, schemas.Hypothesis{
+                HID:                "H1",
+                Statement:          statement,
+                SupportingEvidence: []string{fmt.Sprintf("Pod logs show: %s: %s", errorType, errorDetail)},
+                Confidence:         0.7,
+                SourceFiles:        srcFiles,
+        })
+
+        // Add a second hypothesis for less likely causes
+        if errorType == "KeyError" {
+                hyps = append(hyps, schemas.Hypothesis{
+                        HID:        "H2",
+                        Statement:  fmt.Sprintf("The environment variable '%s' is not set in the deployment configuration", errorDetail),
+                        Confidence: 0.3,
+                })
+        }
+
+        log.Printf("[investigator] generated %d hypotheses from error context", len(hyps))
+        return hyps
+}
+
+// keysOfAny returns the keys of a map[string]any for debug logging.
+func keysOfAny(m map[string]any) []string {
+        keys := make([]string, 0, len(m))
+        for k := range m {
+                keys = append(keys, k)
+        }
+        return keys
 }
