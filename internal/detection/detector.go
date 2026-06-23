@@ -78,16 +78,22 @@ type Detector struct {
 
         streams   map[string]context.CancelFunc
         streamsMu sync.Mutex
+
+        // v3.5.3: Track which pods we've already logged discovery for, to avoid
+        // log spam when the watch fires repeatedly for the same pod.
+        discoveredPods map[string]time.Time
+        discoveredMu   sync.Mutex
 }
 
 // New creates a Detector.
 func New(clientset *kubernetes.Clientset, handler IncidentHandler, alertURL string) *Detector {
         return &Detector{
-                clientset:  clientset,
-                handler:    handler,
-                alertURL:   alertURL,
-                recentSeen: make(map[ErrorFingerprint]time.Time),
-                streams:    make(map[string]context.CancelFunc),
+                clientset:      clientset,
+                handler:        handler,
+                alertURL:       alertURL,
+                recentSeen:     make(map[ErrorFingerprint]time.Time),
+                streams:        make(map[string]context.CancelFunc),
+                discoveredPods: make(map[string]time.Time),
         }
 }
 
@@ -212,8 +218,20 @@ func (d *Detector) handlePod(ctx context.Context, pod *corev1.Pod) {
                 return
         }
 
-        log.Printf("[detection] found annotated pod: %s/%s (phase=%s, repo=%s)",
-                pod.Namespace, pod.Name, pod.Status.Phase, repo)
+        // v3.5.3: Only log pod discovery once per pod UID (not on every watch tick).
+        // The watch fires on every status change, which can be 10+ times per second
+        // during startup. This was flooding the logs.
+        d.discoveredMu.Lock()
+        podUID := string(pod.UID)
+        if _, seen := d.discoveredPods[podUID]; seen {
+                // Already logged this pod — skip the discovery log but still check status
+                d.discoveredMu.Unlock()
+        } else {
+                d.discoveredPods[podUID] = time.Now()
+                d.discoveredMu.Unlock()
+                log.Printf("[detection] found annotated pod: %s/%s (phase=%s, repo=%s)",
+                        pod.Namespace, pod.Name, pod.Status.Phase, repo)
+        }
 
         d.checkPodStatus(ctx, pod, repo)
 
@@ -613,6 +631,15 @@ func (d *Detector) cleanupLoop(ctx context.Context) {
                                 }
                         }
                         d.mu.Unlock()
+
+                        // v3.5.3: Clean up old discovered pod entries (keep for 1h)
+                        d.discoveredMu.Lock()
+                        for uid, seen := range d.discoveredPods {
+                                if time.Since(seen) > time.Hour {
+                                        delete(d.discoveredPods, uid)
+                                }
+                        }
+                        d.discoveredMu.Unlock()
                 }
         }
 }
