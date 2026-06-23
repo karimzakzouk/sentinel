@@ -10,7 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 
-	"github.com/karimzakzoukz/sentinel/v3/internal/schemas"
+	"github.com/karimzakzouk/sentinel/v3/internal/schemas"
 )
 
 // K8sExecutor applies K8s patches (restart, scale, rollback).

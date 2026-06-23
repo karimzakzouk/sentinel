@@ -5,8 +5,8 @@ import (
 	"log"
 	"strings"
 
-	"github.com/karimzakzoukz/sentinel/v3/internal/repo"
-	"github.com/karimzakzoukz/sentinel/v3/internal/schemas"
+	"github.com/karimzakzouk/sentinel/v3/internal/repo"
+	"github.com/karimzakzouk/sentinel/v3/internal/schemas"
 )
 
 // resolveBranch determines which branch or commit to clone for this incident.

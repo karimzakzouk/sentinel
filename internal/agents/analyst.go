@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/karimzakzoukz/sentinel/v3/internal/llm"
-	"github.com/karimzakzoukz/sentinel/v3/internal/schemas"
+	"github.com/karimzakzouk/sentinel/v3/internal/llm"
+	"github.com/karimzakzouk/sentinel/v3/internal/schemas"
 )
 
 // categoryKeywordMap maps hypothesis keywords to categories for Beta-prior lookup.

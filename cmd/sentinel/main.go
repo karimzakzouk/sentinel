@@ -15,17 +15,17 @@ import (
 
         "github.com/google/uuid"
 
-        "github.com/karimzakzoukz/sentinel/v3/internal/agents"
-        "github.com/karimzakzoukz/sentinel/v3/internal/api"
-        "github.com/karimzakzoukz/sentinel/v3/internal/config"
-        "github.com/karimzakzoukz/sentinel/v3/internal/detection"
-        "github.com/karimzakzoukz/sentinel/v3/internal/executors"
-        "github.com/karimzakzoukz/sentinel/v3/internal/feedback"
-        "github.com/karimzakzoukz/sentinel/v3/internal/k8s"
-        "github.com/karimzakzoukz/sentinel/v3/internal/llm"
-        "github.com/karimzakzoukz/sentinel/v3/internal/safety"
-        "github.com/karimzakzoukz/sentinel/v3/internal/schemas"
-        "github.com/karimzakzoukz/sentinel/v3/internal/watcher"
+        "github.com/karimzakzouk/sentinel/v3/internal/agents"
+        "github.com/karimzakzouk/sentinel/v3/internal/api"
+        "github.com/karimzakzouk/sentinel/v3/internal/config"
+        "github.com/karimzakzouk/sentinel/v3/internal/detection"
+        "github.com/karimzakzouk/sentinel/v3/internal/executors"
+        "github.com/karimzakzouk/sentinel/v3/internal/feedback"
+        "github.com/karimzakzouk/sentinel/v3/internal/k8s"
+        "github.com/karimzakzouk/sentinel/v3/internal/llm"
+        "github.com/karimzakzouk/sentinel/v3/internal/safety"
+        "github.com/karimzakzouk/sentinel/v3/internal/schemas"
+        "github.com/karimzakzouk/sentinel/v3/internal/watcher"
 )
 
 func main() {

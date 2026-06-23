@@ -10,9 +10,9 @@ import (
 
         metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-        "github.com/karimzakzoukz/sentinel/v3/internal/k8s"
-        "github.com/karimzakzoukz/sentinel/v3/internal/llm"
-        "github.com/karimzakzoukz/sentinel/v3/internal/schemas"
+        "github.com/karimzakzouk/sentinel/v3/internal/k8s"
+        "github.com/karimzakzouk/sentinel/v3/internal/llm"
+        "github.com/karimzakzouk/sentinel/v3/internal/schemas"
 )
 
 const evidenceSystemPrompt = `You are Sentinel's Evidence Gatherer agent.

@@ -9,9 +9,9 @@ import (
 
         "github.com/google/uuid"
 
-        "github.com/karimzakzoukz/sentinel/v3/internal/k8s"
-        "github.com/karimzakzoukz/sentinel/v3/internal/llm"
-        "github.com/karimzakzoukz/sentinel/v3/internal/schemas"
+        "github.com/karimzakzouk/sentinel/v3/internal/k8s"
+        "github.com/karimzakzouk/sentinel/v3/internal/llm"
+        "github.com/karimzakzouk/sentinel/v3/internal/schemas"
 )
 
 const fixProposerSystemPrompt = `You are Sentinel's Fix Proposer agent.

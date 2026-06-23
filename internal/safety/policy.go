@@ -4,7 +4,7 @@
 package safety
 
 import (
-	"github.com/karimzakzoukz/sentinel/v3/internal/schemas"
+	"github.com/karimzakzouk/sentinel/v3/internal/schemas"
 )
 
 // Policy is the embedded safety policy.

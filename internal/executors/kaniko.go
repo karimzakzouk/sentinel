@@ -12,7 +12,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
-	"github.com/karimzakzoukz/sentinel/v3/internal/schemas"
+	"github.com/karimzakzouk/sentinel/v3/internal/schemas"
 )
 
 // KanikoBuilder builds Docker images inside Kubernetes without a daemon.

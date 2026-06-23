@@ -12,9 +12,9 @@ import (
         "context"
         "fmt"
 
-        "github.com/karimzakzoukz/sentinel/v3/internal/k8s"
-        "github.com/karimzakzoukz/sentinel/v3/internal/llm"
-        "github.com/karimzakzoukz/sentinel/v3/internal/schemas"
+        "github.com/karimzakzouk/sentinel/v3/internal/k8s"
+        "github.com/karimzakzouk/sentinel/v3/internal/llm"
+        "github.com/karimzakzouk/sentinel/v3/internal/schemas"
 )
 
 // Pipeline runs all 4 agents in sequence with rewind support.

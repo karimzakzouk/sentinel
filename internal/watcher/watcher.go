@@ -16,8 +16,8 @@ import (
         "k8s.io/apimachinery/pkg/watch"
         "k8s.io/client-go/dynamic"
 
-        "github.com/karimzakzoukz/sentinel/v3/internal/k8s"
-        "github.com/karimzakzoukz/sentinel/v3/internal/schemas"
+        "github.com/karimzakzouk/sentinel/v3/internal/k8s"
+        "github.com/karimzakzouk/sentinel/v3/internal/schemas"
 )
 
 var sentinelIncidentGVR = schema.GroupVersionResource{

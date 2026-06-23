@@ -9,10 +9,10 @@ import (
 
         "github.com/google/uuid"
 
-        "github.com/karimzakzoukz/sentinel/v3/internal/k8s"
-        "github.com/karimzakzoukz/sentinel/v3/internal/llm"
-        "github.com/karimzakzoukz/sentinel/v3/internal/repo"
-        "github.com/karimzakzoukz/sentinel/v3/internal/schemas"
+        "github.com/karimzakzouk/sentinel/v3/internal/k8s"
+        "github.com/karimzakzouk/sentinel/v3/internal/llm"
+        "github.com/karimzakzouk/sentinel/v3/internal/repo"
+        "github.com/karimzakzouk/sentinel/v3/internal/schemas"
 )
 
 const investigatorRound1Prompt = `You are Sentinel's Investigator agent — a senior SRE forming root cause hypotheses.
