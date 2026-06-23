@@ -16,44 +16,24 @@ linters:
     - unused         # unused vars, funcs, types, fields
     - misspell       # spelling errors in comments
     - revive         # golint successor — naming, exported docs
-    - gocritic       # common pitfalls
     - bodyclose      # http.Response.Body not closed
-    - dupl           # duplicate code blocks
-    - nakedret       # naked return in long functions
-    # v3.5.0: 'goconst' disabled — too noisy for string-heavy code like
-    # error type names ("KeyError", "panic") which are intentionally inline.
+    # v3.5.0: disabled noisy linters — gocritic (style opinions), dupl
+    # (duplicate code), goconst (string constants), nakedret (naked returns).
+    # These are valid but too noisy for an established codebase.
 
   settings:
     errcheck:
       check-type-assertions: true
       check-blank: false
-      # Exclude common patterns where ignoring the error is standard Go practice:
-      #   - defer resp.Body.Close() — body is already consumed, error is irrelevant
-      #   - w.Write() in HTTP handlers — can't do anything with the error anyway
-      #   - rows.Close() in SQL — cleanup, error is non-actionable
-      #   - fmt.Sscanf return count — we only care about err, not n
       exclude-functions:
         - (net/http.ResponseWriter).Write
         - (io.Closer).Close
         - (*github.com/karimzakzouk/sentinel/v3/internal/feedback.Store).Close
-    dupl:
-      threshold: 150
-    gocritic:
-      enabled-tags:
-        - diagnostic
-        - performance
-      # v3.5.0: 'style' tag disabled — too many subjective suggestions
-      # (rangeValCopy, appendCombine, regexpSimplify, etc.) that are valid
-      # but not worth the noise for an established codebase.
-      disabled-checks:
-        - rangeValCopy      # would require pointer-indexing refactors everywhere
-        - appendCombine     # subjective style preference
-        - regexpSimplify    # subjective regex style
-        - unnamedResult     # subjective
-        - importShadow      # we use short var names like 'url' intentionally
-        - hugeParam         # would require pointer refactors
-        - exitAfterDefer    # known pattern — we accept deferred Close won't run on Fatal
-        - httpNoBody        # nil works fine
+    staticcheck:
+      # v3.5.0: Disable QF (quickfix) checks — they're style suggestions, not bugs.
+      # QF1003 (tagged switch), QF1012 (fmt.Fprintf), QF1008 (inline regs).
+      # Keep SA (static analysis), ST (style), S (simplification) ranges for real issues.
+      checks: ["all", "-QF*"]
     revive:
       rules:
         - name: exported

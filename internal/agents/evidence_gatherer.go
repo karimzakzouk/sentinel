@@ -312,15 +312,16 @@ var _ = url.QueryEscape
 func (a *EvidenceGatherer) queryK8s(ctx context.Context, query string) map[string]any {
         // Parse the query: "namespace:N kind:K [labelSelector:K=V] [fieldSelector:K=V] [limit:N]"
         parts := parseQueryParts(query)
-        namespace, _ := parts["namespace"]
+        namespace := parts["namespace"]
         if namespace == "" {
                 namespace = "default"
         }
-        kind, _ := parts["kind"]
+        kind := parts["kind"]
         limit := int64(50)
         if l, ok := parts["limit"]; ok {
                 if _, err := fmt.Sscanf(l, "%d", &limit); err != nil {
-                        // invalid limit — keep default
+                        // invalid limit — keep default 50
+                        limit = 50
                 }
         }
 
