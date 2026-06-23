@@ -415,8 +415,8 @@ func extractJSON(text string) map[string]any {
 }
 
 var (
-        jsonBlockRe = regexp.MustCompile("(?s)```(?:json)?\\s*(\\{.*?\\}|\\[.*?\\])\\s*```")
-        bareJSONRe  = regexp.MustCompile("(?s)(\\{.*\\}|\\[.*\\])")
+        jsonBlockRe = regexp.MustCompile(`(?s)` + "```(?:json)?\\s*(\\{.*?\\}|\\[.*?\\])\\s*```")
+        bareJSONRe  = regexp.MustCompile(`(?s)(\{.*\}|\[.*\])`)
 )
 
 func tryParse(s string) (map[string]any, bool) {
@@ -489,13 +489,6 @@ func repairTruncated(text string) string {
 
 func min(a, b int) int {
         if a < b {
-                return a
-        }
-        return b
-}
-
-func max(a, b int) int {
-        if a > b {
                 return a
         }
         return b

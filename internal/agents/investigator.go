@@ -2,12 +2,9 @@ package agents
 
 import (
         "context"
-        "encoding/json"
         "fmt"
         "log"
         "strings"
-
-        "github.com/google/uuid"
 
         "github.com/karimzakzouk/sentinel/v3/internal/k8s"
         "github.com/karimzakzouk/sentinel/v3/internal/llm"
@@ -519,15 +516,6 @@ func toStringSlice(in []any) []string {
                 }
         }
         return out
-}
-
-// uuidNew is a convenience wrapper.
-func uuidNew() uuid.UUID { return uuid.New() }
-
-// jsonMarshal helper.
-func jsonMarshalString(v any) string {
-        b, _ := json.Marshal(v)
-        return string(b)
 }
 
 // keysOfAny returns the keys of a map[string]any for debug logging.

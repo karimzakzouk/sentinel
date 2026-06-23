@@ -30,10 +30,10 @@ linters:
         - (io.Closer).Close
         - (*github.com/karimzakzouk/sentinel/v3/internal/feedback.Store).Close
     staticcheck:
-      # v3.5.0: Disable QF (quickfix) checks — they're style suggestions, not bugs.
-      # QF1003 (tagged switch), QF1012 (fmt.Fprintf), QF1008 (inline regs).
-      # Keep SA (static analysis), ST (style), S (simplification) ranges for real issues.
-      checks: ["all", "-QF*"]
+      # v3.5.0: Disable QF (quickfix) + ST1003 (naming) + ST1020 (comment format).
+      # QF = style suggestions, ST1003 = would require renaming exported struct fields
+      # (breaks JSON), ST1020 = comment format pedantry.
+      checks: ["all", "-QF*", "-ST1003", "-ST1020"]
     revive:
       rules:
         - name: exported
