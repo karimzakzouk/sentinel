@@ -201,6 +201,9 @@ func (d *Detector) handlePod(ctx context.Context, pod *corev1.Pod) {
                 return
         }
 
+        log.Printf("[detection] found annotated pod: %s/%s (phase=%s, repo=%s)",
+                pod.Namespace, pod.Name, pod.Status.Phase, repo)
+
         d.checkPodStatus(ctx, pod, repo)
 
         if pod.Status.Phase == corev1.PodRunning {
@@ -210,12 +213,30 @@ func (d *Detector) handlePod(ctx context.Context, pod *corev1.Pod) {
 
 func (d *Detector) checkPodStatus(ctx context.Context, pod *corev1.Pod, repo string) {
         for _, cs := range pod.Status.ContainerStatuses {
+                // CrashLoopBackOff — the classic crash loop
                 if cs.State.Waiting != nil && cs.State.Waiting.Reason == "CrashLoopBackOff" {
                         if d.shouldTrigger(pod.Namespace, d.getServiceFromPod(pod), "CrashLoopBackOff") {
                                 log.Printf("[detection] CrashLoopBackOff: %s/%s", pod.Namespace, pod.Name)
                                 logs := d.fetchPodLogs(ctx, pod)
                                 reason := fmt.Sprintf("CrashLoopBackOff: %s", cs.State.Waiting.Message)
                                 d.triggerIncident(pod, repo, reason, logs)
+                        }
+                        return
+                }
+                // v3.5.0: Catch pods that crashed but haven't yet escalated to CrashLoopBackOff.
+                // When a container crashes, K8s sets LastTerminationState.Terminated with the
+                // exit code. The pod goes through Error → (restart) → Error → ... → CrashLoopBackOff.
+                // Without this check, Sentinel waits 2-3 minutes for CrashLoopBackOff before reacting.
+                if cs.LastTerminationState.Terminated != nil && cs.LastTerminationState.Terminated.ExitCode != 0 {
+                        reason := cs.LastTerminationState.Terminated.Reason
+                        if reason == "" {
+                                reason = fmt.Sprintf("ExitCode=%d", cs.LastTerminationState.Terminated.ExitCode)
+                        }
+                        if d.shouldTrigger(pod.Namespace, d.getServiceFromPod(pod), reason) {
+                                log.Printf("[detection] container crashed: %s/%s (reason=%s, restartCount=%d)",
+                                        pod.Namespace, pod.Name, reason, cs.RestartCount)
+                                logs := d.fetchPodLogs(ctx, pod)
+                                d.triggerIncident(pod, repo, fmt.Sprintf("Container crash: %s", reason), logs)
                         }
                         return
                 }
