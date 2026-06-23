@@ -1,9 +1,5 @@
 # golangci-lint v2 configuration for Sentinel
-# v3.4.1: Migrated from v1 format to v2 format (required for Go 1.25 + golangci-lint v2.x)
-#
-# The dead code removed in v3.3.1 (logpreprocess.go, RetrieveSimilarIncidents,
-# extractSearchQueriesFromLogs, etc.) should have been caught by these linters
-# years ago — this config prevents regression.
+# v3.5.0: Migrated to v2 format, tuned exclusions for real-world Go patterns.
 
 version: "2"
 
@@ -13,7 +9,7 @@ run:
 linters:
   default: none
   enable:
-    - errcheck       # catch ignored errors (the _ = store.UpsertIncident pattern)
+    - errcheck       # catch ignored errors
     - govet          # go vet
     - ineffassign    # ineffectual assignments
     - staticcheck    # SA+ST+S+SC ranges (includes gosimple in v2)
@@ -25,17 +21,25 @@ linters:
     - dupl           # duplicate code blocks
     - goconst        # repeated constants should be named
     - nakedret       # naked return in long functions
-    # v2 notes: 'typecheck' is built-in, 'gosimple' merged into staticcheck
 
   settings:
     errcheck:
       check-type-assertions: true
       check-blank: false
+      # Exclude common patterns where ignoring the error is standard Go practice:
+      #   - defer resp.Body.Close() — body is already consumed, error is irrelevant
+      #   - w.Write() in HTTP handlers — can't do anything with the error anyway
+      #   - rows.Close() in SQL — cleanup, error is non-actionable
+      #   - fmt.Sscanf return count — we only care about err, not n
+      exclude-functions:
+        - (net/http.ResponseWriter).Write
+        - (io.Closer).Close
+        - (*github.com/karimzakzouk/sentinel/v3/internal/feedback.Store).Close
     dupl:
       threshold: 150
     goconst:
       min-len: 3
-      min-occurrences: 3
+      min-occurrences: 5  # raised from 3 to avoid noise on short strings like "title"
     gocritic:
       enabled-tags:
         - diagnostic
@@ -44,10 +48,9 @@ linters:
     revive:
       rules:
         - name: exported
-          disabled: true  # too noisy for an internal/ package layout
+          disabled: true
 
   exclusions:
-    # Allow these patterns in test files
     paths:
       - "_test\\.go"
     rules:
@@ -56,6 +59,23 @@ linters:
           - dupl
           - errcheck
           - gocritic
+      # Common deferred cleanup patterns — errcheck exclusions
+      - path: ".*\\.go"
+        linters:
+          - errcheck
+        source: "defer .+\\.Close\\(\\)"
+      - path: ".*\\.go"
+        linters:
+          - errcheck
+        source: "\\.Body\\.Close\\(\\)"
+      - path: ".*\\.go"
+        linters:
+          - errcheck
+        source: "rows\\.Close\\(\\)"
+      - path: ".*\\.go"
+        linters:
+          - errcheck
+        source: "w\\.Write\\("
 
 issues:
   max-issues-per-linter: 0
