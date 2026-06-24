@@ -809,6 +809,11 @@ func (a *vectorStoreAdapter) Search(ctx context.Context, text string, k int) ([]
         return out, scores, nil
 }
 
+// v3.7.0: Pass through hash fallback status
+func (a *vectorStoreAdapter) UsingHashFallback() bool {
+        return a.vs.UsingHashFallback()
+}
+
 // prReviewVectorAdapter bridges feedback.VectorStore to prreview.VectorStore.
 // v3.5.0: Used by the predictive PR review feature to score PR diffs against
 // incident memory. Same pattern as vectorStoreAdapter above.
@@ -833,4 +838,9 @@ func (a *prReviewVectorAdapter) Search(ctx context.Context, text string, k int) 
                 }
         }
         return out, scores, nil
+}
+
+// v3.7.0: Pass through hash fallback status
+func (a *prReviewVectorAdapter) UsingHashFallback() bool {
+        return a.vs.UsingHashFallback()
 }
