@@ -989,7 +989,7 @@ function IncidentDetail({ incident }: { incident: Incident }) {
                     {i + 1}
                   </div>
                   <span className="text-xs text-zinc-300 font-medium">{agent}</span>
-                  {skipped && <span className="text-[10px] text-zinc-600 italic">skipped ({t.reason})</span>}
+                  {skipped && <span className="text-[10px] text-zinc-600 italic">skipped ({String(t.reason || "")})</span>}
                   <span className="text-[10px] text-zinc-600 font-mono ml-auto">
                     {Object.entries(t)
                       .filter(([k]) => k !== "agent" && k !== "skipped" && k !== "reason")
