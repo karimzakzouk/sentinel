@@ -285,7 +285,7 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
         writeJSON(w, 200, map[string]string{
                 "status":  "ok",
                 "service": "core",
-                "version": "3.7.0",
+                "version": "3.7.1",
         })
 }
 
