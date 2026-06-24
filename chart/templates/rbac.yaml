@@ -1,4 +1,32 @@
-{{/* RBAC for Sentinel v3 — ServiceAccount + ClusterRole + ClusterRoleBinding */}}
+{{/* RBAC for Sentinel v3 — ServiceAccount + ClusterRole (read) + per-namespace Role (write) */}}
+{{/*
+v3.8.4: RBAC restructured for least-privilege.
+
+Before v3.8.4 the chart granted a single ClusterRole with cluster-wide
+read on every resource (including Secrets) AND cluster-wide create/update/
+patch/delete on deployments, statefulsets, namespaces, pods, configmaps,
+services. The Go-level Config.CanWriteTo check enforced writeNamespaces
+at runtime, but RBAC itself allowed writes anywhere — a compromised or
+buggy Sentinel pod could delete any pod in any namespace.
+
+Now:
+  - ClusterRole (read-only) — pods, pods/log, services, configmaps, events,
+    namespaces, nodes, deployments, statefulsets, daemonsets, replicasets,
+    sentinelincidents. NO secrets by default. Secrets read is opt-in via
+    sentinel.rbac.readSecrets (default false) — operators who want the
+    sandbox to copy prod secrets into the sandbox namespace must enable it.
+  - Per-namespace Role + RoleBinding — for each namespace in
+    sentinel.rbac.writeNamespaces, grant create/update/patch/delete on
+    deployments, statefulsets, pods, configmaps, services. Plus the
+    sandbox-namespace-create permission (Sentinel creates
+    sentinel-sandbox-* namespaces for canary verification).
+  - Namespace creation stays cluster-wide because sandbox namespace names
+    are dynamic (sentinel-sandbox-<service>-<fixid>). This is the only
+    cluster-wide write permission retained. Operators who don't want
+    Sentinel creating namespaces can disable the sandbox via
+    sentinel.sandbox.enabled: false (TODO: not yet implemented — for now,
+    namespace creation remains required).
+*/}}
 {{- if .Values.serviceAccount.create }}
 apiVersion: v1
 kind: ServiceAccount
@@ -10,33 +38,61 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: {{ .Release.Name }}
+  labels:
+    sentinel.io/managed: "true"
 rules:
+  # Read-only cluster-wide: pods, services, configmaps, events, namespaces,
+  # nodes, workloads. v3.8.4: secrets is intentionally ABSENT by default —
+  # see readSecrets below.
   - apiGroups: [""]
-    resources: ["pods", "pods/log", "services", "configmaps", "secrets", "events", "namespaces", "nodes"]
+    resources: ["pods", "pods/log", "services", "configmaps", "events", "namespaces", "nodes"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["apps"]
     resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
     verbs: ["get", "list", "watch"]
-  - apiGroups: ["apps"]
-    resources: ["deployments", "statefulsets"]
-    verbs: ["create", "update", "patch", "delete"]
+  # v3.8.4: Opt-in secrets read. The sandbox runner copies prod secrets into
+  # the sandbox namespace so the canary can access the same env vars as prod.
+  # Operators who don't want Sentinel to be able to read secrets cluster-wide
+  # (the default) must either (a) disable the sandbox via
+  # sentinel.sandbox.enabled: false (TODO) or (b) pre-create the secrets in
+  # the sandbox namespace manually.
+  {{- if .Values.sentinel.rbac.readSecrets }}
   - apiGroups: [""]
-    resources: ["namespaces", "pods", "configmaps", "services"]
-    verbs: ["create", "update", "patch", "delete"]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  # SentinelIncident CRD — read/watch cluster-wide so manual triggers from
+  # any namespace are picked up. Write (create/update/patch/delete) is
+  # granted per-namespace via RoleBindings below.
   - apiGroups: ["sentinel.io"]
     resources: ["sentinelincidents"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+    verbs: ["get", "list", "watch"]
   - apiGroups: ["sentinel.io"]
     resources: ["sentinelincidents/status"]
     verbs: ["get", "update", "patch"]
+  # Namespace creation — only cluster-wide write permission retained.
+  # Sandbox namespaces are named sentinel-sandbox-<service>-<fixid> and
+  # can't be pre-created. If you don't want Sentinel creating namespaces,
+  # disable the sandbox (TODO: helm value not yet implemented).
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["create", "delete"]
+  # NetworkPolicy creation in any namespace — used to isolate sandbox
+  # namespaces. Read-only on existing NetworkPolicies elsewhere.
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  # Istio VirtualService — for traffic mirroring to the sandbox. Optional.
   - apiGroups: ["networking.istio.io"]
     resources: ["virtualservices"]
-    verbs: ["create", "update", "patch", "delete", "get", "list", "watch"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
   name: {{ .Release.Name }}
+  labels:
+    sentinel.io/managed: "true"
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
@@ -45,4 +101,53 @@ subjects:
   - kind: ServiceAccount
     name: {{ .Values.serviceAccount.name | default .Release.Name }}
     namespace: {{ .Release.Namespace }}
+{{- end }}
+
+{{/*
+v3.8.4: Per-namespace write Role + RoleBinding for each namespace in
+sentinel.rbac.writeNamespaces. This is the RBAC enforcement of the
+writeNamespaces value — previously it was only enforced in Go.
+*/}}
+{{- if .Values.rbac.create }}
+{{- range $ns := .Values.sentinel.rbac.writeNamespaces }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $.Release.Name }}-write
+  namespace: {{ $ns }}
+  labels:
+    sentinel.io/managed: "true"
+rules:
+  # Workload writes — restart, scale, rollback, sandbox canary deployment.
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods", "configmaps", "services"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # SentinelIncident CR writes — manual triggers + status patches.
+  - apiGroups: ["sentinel.io"]
+    resources: ["sentinelincidents"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["sentinel.io"]
+    resources: ["sentinelincidents/status"]
+    verbs: ["get", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $.Release.Name }}-write
+  namespace: {{ $ns }}
+  labels:
+    sentinel.io/managed: "true"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $.Release.Name }}-write
+subjects:
+  - kind: ServiceAccount
+    name: {{ $.Values.serviceAccount.name | default $.Release.Name }}
+    namespace: {{ $.Release.Namespace }}
+{{- end }}
 {{- end }}

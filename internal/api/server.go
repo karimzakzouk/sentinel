@@ -3,6 +3,7 @@ package api
 
 import (
         "context"
+        "crypto/subtle"
         "encoding/json"
         "fmt"
         "io"
@@ -46,6 +47,13 @@ type Server struct {
 
         // v3.8.0: Runtime config persistence
         rtCfgSaver RuntimeCfgSaver
+
+        // v3.8.4: Bearer token required for admin endpoints. Empty = auth
+        // disabled (the server logs a loud warning at startup). When set,
+        // every request to /admin/* or POST /settings must carry
+        // 'Authorization: Bearer <token>'. Health/readiness/metrics/SSE/web UI
+        // remain unauthenticated so dashboards and probes still work.
+        apiToken string
 }
 
 type Store interface {
@@ -88,8 +96,85 @@ func New(addr string, store Store, settings SettingsGetter, investigate Investig
         mux.HandleFunc("/slack/events", s.handleSlack)
         mux.HandleFunc("/", s.handleWebUI)
 
-        s.http = &http.Server{Addr: addr, Handler: mux}
+        // v3.8.4: Wrap the mux in an auth middleware that gates admin endpoints
+        // on a bearer token. The middleware is a no-op when apiToken is empty
+        // (set via SetAPIToken), but we still register it so the wrapping order
+        // is consistent.
+        s.http = &http.Server{Addr: addr, Handler: s.authMiddleware(mux)}
         return s
+}
+
+// SetAPIToken enables bearer-token auth on admin endpoints. Empty = disabled.
+// v3.8.4: When set, every request to /admin/* or POST /settings must carry
+// 'Authorization: Bearer <token>'. Mismatched or missing tokens get a 401.
+// Health/readiness/metrics/SSE/web UI remain unauthenticated so dashboards
+// and probes still work.
+func (s *Server) SetAPIToken(token string) {
+        s.apiToken = token
+        if token == "" {
+                log.Printf("[api] WARNING: SENTINEL_API_TOKEN is empty — admin API is unauthenticated. Set it in production to prevent unauthorized investigation triggers, pause/resume, and settings changes.")
+        } else {
+                log.Printf("[api] admin API auth enabled (bearer token set)")
+        }
+}
+
+// authMiddleware wraps the inner handler with bearer-token auth for admin
+// endpoints. Non-admin endpoints pass through unchanged. When apiToken is
+// empty, all requests pass through (with a startup warning logged).
+//
+// Admin endpoints (require auth when apiToken is set):
+//   - /admin/investigate (POST)
+//   - /admin/pause        (POST)
+//   - /admin/resume       (POST)
+//   - /settings           (POST only — GET is read-only)
+//
+// Webhook and Slack endpoints do their own signature verification and are
+// not gated by this middleware.
+func (s *Server) authMiddleware(next http.Handler) http.Handler {
+        return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+                if s.apiToken == "" {
+                        next.ServeHTTP(w, r)
+                        return
+                }
+
+                isAdmin := strings.HasPrefix(r.URL.Path, "/admin/")
+                isSettingsWrite := r.URL.Path == "/settings" && r.Method == http.MethodPost
+
+                if !isAdmin && !isSettingsWrite {
+                        next.ServeHTTP(w, r)
+                        return
+                }
+
+                // Require bearer token.
+                authHeader := r.Header.Get("Authorization")
+                const prefix = "Bearer "
+                if !strings.HasPrefix(authHeader, prefix) {
+                        writeJSON(w, 401, map[string]string{
+                                "error": "missing or malformed Authorization header (expected 'Bearer <token>')",
+                        })
+                        return
+                }
+                provided := authHeader[len(prefix):]
+                // Constant-time comparison to prevent timing attacks on the token.
+                if !secureCompare(provided, s.apiToken) {
+                        writeJSON(w, 401, map[string]string{"error": "invalid token"})
+                        return
+                }
+
+                next.ServeHTTP(w, r)
+        })
+}
+
+// secureCompare does a constant-time string comparison so that an attacker
+// can't time-side-channel the token byte-by-byte. Wraps
+// crypto/subtle.ConstantTimeCompare, returning false on length mismatch
+// (which is technically a length leak but not a content leak — acceptable
+// for bearer tokens where the length is already obvious from the header).
+func secureCompare(a, b string) bool {
+        if len(a) != len(b) {
+                return false
+        }
+        return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }
 
 func (s *Server) SetWebhookHandler(h http.Handler)     { s.webhookHandler = h }

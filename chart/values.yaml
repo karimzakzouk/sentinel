@@ -37,6 +37,13 @@ sentinel:
     # writeNamespaces:
     #   - sim
     #   - staging
+    # v3.8.4: Opt-in secrets read. When true, the chart grants the Sentinel
+    # ServiceAccount get/list/watch on Secrets cluster-wide. Required for
+    # the sandbox runner to copy prod secrets into the sandbox namespace
+    # (so the canary can access the same env vars as prod). Default false
+    # — operators who don't want Sentinel reading secrets cluster-wide
+    # must either pre-create sandbox secrets manually or disable the sandbox.
+    readSecrets: false
 
   # Namespaces treated as production (stricter governance)
   productionNamespaces: "prod,production,payments"
@@ -103,10 +110,12 @@ rbac:
   clusterScope: true
 
 # NetworkPolicy — deny by default, allow only needed egress.
-# OFF by default in v3.0.1+ — k3s dev clusters often have CNI quirks that
-# break egress to the K8s API (10.43.0.1:443). Enable for production.
+# v3.8.4: Enabled by default for new installs. Was off by default since
+# v3.0.1 due to k3s CNI quirks; the k3s issue was fixed in k3s v1.27+
+# and most production CNIs (Calico, Cilium, AWS VPC CNI, Azure CNI,
+# GCE CNI) support NetworkPolicy. Operators on old k3s can disable.
 networkPolicy:
-  enabled: false
+  enabled: true
 
 # Ingress (optional)
 ingress:

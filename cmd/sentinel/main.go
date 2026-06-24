@@ -543,6 +543,10 @@ func main() {
                 },
                 func() bool { return ready },
         )
+        // v3.8.4: Enable admin API bearer-token auth when SENTINEL_API_TOKEN is set.
+        // Empty token = auth disabled (logs a loud warning). Health/readiness/metrics
+        // endpoints remain open so kubelet probes and Prometheus still work.
+        apiServer.SetAPIToken(cfg.APIToken)
 
         // v3.5.0: Wire predictive PR review (GitHub webhook receiver).
         // v3.8.0: If GitHub App credentials are configured, use the app for
