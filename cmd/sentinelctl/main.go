@@ -51,6 +51,22 @@ func main() {
                 os.Exit(0)
         }
 
+        // v3.8.4: Check for --help / -h / --version ANYWHERE in args before
+        // doing anything else. These are "meta flags" that should work no matter
+        // where they appear — `sentinelctl trigger --help` should print help,
+        // not trigger an investigation with service="--help" (which is what
+        // happened before this fix — dangerous).
+        for _, a := range os.Args[1:] {
+                switch a {
+                case "--help", "-h", "help":
+                        printHelp()
+                        os.Exit(0)
+                case "--version", "-V":
+                        fmt.Printf("sentinelctl %s\n", version.Version)
+                        os.Exit(0)
+                }
+        }
+
         // Global flags with defaults from env vars.
         server := getenv("SENTINEL_SERVER", "http://localhost:8000")
         token := getenv("SENTINEL_API_TOKEN", "")
@@ -81,6 +97,11 @@ func main() {
         // Extract global flags from the remaining args. Returns the positional
         // args + subcommand-specific flags.
         positional, server, token, jsonOut, timeout := extractGlobalFlags(filtered, server, token, jsonOut, timeout)
+
+        // v3.8.4: Strip trailing slash from server URL so we don't produce
+        // double-slash URLs like http://host//incidents. Most servers handle
+        // it but it's sloppy and some strict proxies reject it.
+        server = strings.TrimRight(server, "/")
 
         c := &client{
                 baseURL: server,
@@ -445,6 +466,15 @@ func (c *client) handleTrigger(args []string) {
                 os.Exit(1)
         }
         service := args[0]
+        // v3.8.4: Reject service names that start with '-'. This is defense-in-depth
+        // — the meta-flag check in main() should catch --help/-h before we get here,
+        // but if a future flag is added that isn't in the meta-flag list, we don't
+        // want to accidentally trigger an investigation with service="--whatever".
+        if strings.HasPrefix(service, "-") {
+                fmt.Fprintf(os.Stderr, "Error: service name must not start with '-' (got %q)\n", service)
+                fmt.Fprintln(os.Stderr, "Did you mean to pass a flag before the service name?")
+                os.Exit(1)
+        }
         ns := "default"
         // v3.8.4: Support both --namespace sim and --namespace=sim (and -n
         // shorthand). Previous version only handled the space form, so
@@ -707,6 +737,8 @@ Flags:
   --json                  Output raw JSON instead of tables
   --timeout D             HTTP timeout (default: 30s)
   --namespace NS          Namespace (for trigger command)
+  --help, -h              Show this help (works anywhere in args)
+  --version, -V           Show version (works anywhere in args)
 
 Environment:
   SENTINEL_SERVER         Default API URL (same as --server)
