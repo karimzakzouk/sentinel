@@ -36,8 +36,10 @@ import (
         "github.com/karimzakzouk/sentinel/v3/internal/watcher"
 )
 
-// v3.7.0: Package-level broadcaster for SSE events.
+// v3.7.0: Package-level broadcaster for SSE events. Assigned in main() to the
+// API server, used by the investigation handler to push real-time updates.
 var broadcaster events.Broadcaster = events.Noop()
+var _ = broadcaster // used in handler closures below
 
 func main() {
         addr := flag.String("addr", "", "HTTP listen address (overrides env)")
