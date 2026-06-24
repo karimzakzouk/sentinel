@@ -31,6 +31,23 @@ type Config struct {
         GitHubToken string
         // v3.5.0: GitHub webhook secret for PR review signature verification.
         GitHubWebhookSecret string
+        // v3.8.4: Optional allowlist of GitHub repos (owner/name) that Sentinel
+        // is allowed to clone and open PRs against. Sourced from the
+        // sentinel.io/repo pod annotation. Empty list = allow all (legacy
+        // behavior, NOT recommended for production). When non-empty, any pod
+        // annotated with a repo outside this list is skipped with a security
+        // warning. This is the primary defense against a malicious or
+        // compromised user annotating their own pod with an arbitrary repo
+        // string and having Sentinel clone it (and exfiltrate the PAT to
+        // github.com in the process).
+        AllowedGitHubRepos []string
+        // v3.8.4: Bearer token required to call admin API endpoints
+        // (/admin/*, /settings POST, /incidents POST, /pause, /resume).
+        // Empty = auth disabled (NOT recommended for production; the API
+        // will log a loud warning at startup). When set, every admin
+        // request must carry 'Authorization: Bearer <token>'. Health/readiness
+        // and metrics endpoints remain unauthenticated.
+        APIToken string
 
         // Docker Hub (for Kaniko sandbox image builder)
         DockerHubUsername string
@@ -144,6 +161,8 @@ func Load() *Config {
                 ReleaseName:            getenv("SENTINEL_RELEASE_NAME", "sentinel"),
                 GitHubToken:            getenv("SENTINEL_GITHUB_TOKEN", ""),
                 GitHubWebhookSecret:    getenv("SENTINEL_GITHUB_WEBHOOK_SECRET", ""),
+                AllowedGitHubRepos:     splitCSV(getenv("SENTINEL_ALLOWED_GITHUB_REPOS", "")),
+                APIToken:               getenv("SENTINEL_API_TOKEN", ""),
                 DockerHubUsername:      getenv("SENTINEL_DOCKER_HUB_USERNAME", ""),
                 DockerHubToken:         getenv("SENTINEL_DOCKER_HUB_TOKEN", ""),
                 ProductionNamespaces:   splitCSV(getenv("SENTINEL_PRODUCTION_NAMESPACES", "prod,production,payments")),
@@ -254,6 +273,41 @@ func (c *Config) IsProductionNamespace(namespace string) bool {
                 }
         }
         return false
+}
+
+// IsRepoAllowed returns true if the given GitHub repo (in "owner/name" form,
+// optionally with a trailing ".git") is in the AllowedGitHubRepos allowlist.
+// If the allowlist is empty, all repos are allowed (legacy behavior —
+// NOT recommended for production; set the allowlist via
+// SENTINEL_ALLOWED_GITHUB_REPOS=owner1/repo1,owner2/repo2).
+//
+// v3.8.4: This is the primary defense against the SSRF-style attack where a
+// user with pod-edit permission annotates their pod with an arbitrary repo
+// string and Sentinel dutifully clones it (sending the GitHub PAT to
+// github.com for any repo the PAT can access). With the allowlist set, only
+// explicitly-listed repos can be cloned.
+//
+// Matching is case-insensitive (GitHub repo paths are case-insensitive).
+// A trailing ".git" on either side is stripped before comparison.
+func (c *Config) IsRepoAllowed(repo string) bool {
+        if len(c.AllowedGitHubRepos) == 0 {
+                return true
+        }
+        normalized := normalizeRepoForCompare(repo)
+        for _, allowed := range c.AllowedGitHubRepos {
+                if normalizeRepoForCompare(allowed) == normalized {
+                        return true
+                }
+        }
+        return false
+}
+
+// normalizeRepoForCompare lowercases the repo string and strips a trailing
+// ".git" so "Acme/App.git" matches "acme/app".
+func normalizeRepoForCompare(repo string) string {
+        r := strings.ToLower(strings.TrimSpace(repo))
+        r = strings.TrimSuffix(r, ".git")
+        return r
 }
 
 func getenv(key, def string) string {

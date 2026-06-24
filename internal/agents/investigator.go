@@ -76,6 +76,36 @@ type Investigator struct {
         gitHubToken string
         cloner      *repo.Cloner
         vectorStore VectorStore
+
+        // v3.8.4: Optional allowlist of GitHub repos (owner/name) that this
+        // Investigator is allowed to clone. Empty = allow all (legacy behavior,
+        // not recommended for production). Set via SetAllowedRepos from main.go
+        // using config.AllowedGitHubRepos.
+        allowedRepos []string
+}
+
+// SetAllowedRepos sets the GitHub repo allowlist. See Config.IsRepoAllowed.
+func (a *Investigator) SetAllowedRepos(repos []string) {
+        a.allowedRepos = repos
+}
+
+// isRepoAllowed matches Config.IsRepoAllowed but local to the Investigator
+// (which doesn't hold a *config.Config to avoid an import cycle). Empty
+// allowlist means allow all.
+func (a *Investigator) isRepoAllowed(repo string) bool {
+        if len(a.allowedRepos) == 0 {
+                return true
+        }
+        normalized := strings.ToLower(strings.TrimSpace(repo))
+        normalized = strings.TrimSuffix(normalized, ".git")
+        for _, allowed := range a.allowedRepos {
+                a := strings.ToLower(strings.TrimSpace(allowed))
+                a = strings.TrimSuffix(a, ".git")
+                if a == normalized {
+                        return true
+                }
+        }
+        return false
 }
 
 // VectorStore is the interface for incident memory retrieval.
@@ -170,6 +200,16 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
                 return a.runWithoutRepo(ctx, state, podLogs)
         }
 
+        // v3.8.4: Enforce the GitHub repo allowlist. The repo string comes from
+        // the sentinel.io/repo pod annotation, which any user with pod-edit
+        // permission can set. Without this check, a malicious user could
+        // annotate their pod with an arbitrary repo and have Sentinel clone it
+        // (sending the GitHub PAT to github.com for any repo the PAT can read).
+        if !a.isRepoAllowed(repoName) {
+                log.Printf("[investigator] SECURITY: repo %q is not in the allowed list — refusing to clone. Set SENTINEL_ALLOWED_GITHUB_REPOS to allow it.", repoName)
+                return a.runWithoutRepo(ctx, state, podLogs)
+        }
+
         // v3.5.0: Check if the error originates from a shared library (vendor/,
         // node_modules/, site-packages/). If so, redirect the investigation to
         // the library's repo instead of the service's repo.
@@ -181,6 +221,14 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
                                 slf.DependencyName, slf.SourceRepo, slf.LibraryPath)
                         // Override the repo to clone with the library's repo
                         repoName = slf.SourceRepo
+                        // v3.8.4: Re-check the allowlist against the redirected repo.
+                        // A bug in a shared library could itself be a prompt-injection
+                        // vector if the source-repo lookup is ever coerced into
+                        // returning an arbitrary string.
+                        if !a.isRepoAllowed(repoName) {
+                                log.Printf("[investigator] SECURITY: redirected library repo %q is not in the allowed list — refusing to clone.", repoName)
+                                return a.runWithoutRepo(ctx, state, podLogs)
+                        }
                 } else if slf.IsSharedLib {
                         log.Printf("[investigator] shared library bug detected: dep=%s but source repo unknown (language=%s) — investigating service repo as fallback",
                                 slf.DependencyName, slf.Language)

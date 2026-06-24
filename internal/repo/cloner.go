@@ -295,8 +295,88 @@ func Search(root string, pattern string, maxResults int) ([]SearchResult, error)
 }
 
 // ReadFile reads a file from the cloned repo.
+//
+// v3.8.4: This function is called with paths that originate from LLM output
+// (the investigator asks the LLM which files to read, and the LLM returns
+// arbitrary strings). The previous implementation called
+// filepath.Join(root, relPath) with no validation, so an LLM that returned
+// "../../../etc/passwd" or an absolute path like "/data/runtime-config.json"
+// would read files outside the cloned repo. Worse, the file contents are
+// concatenated into the next LLM prompt, so an LLM that asked for
+// "../../data/runtime-config.json" would exfiltrate the GitHub App private
+// key + LLM API key into the prompt and from there into the SQLite incident
+// store and PR body.
+//
+// We now:
+//  1. Reject absolute paths (anything starting with '/')
+//  2. Clean the path with filepath.Clean
+//  3. Compute the relative path from root to the candidate file
+//  4. Reject if the relative path starts with ".." (escapes root)
+//  5. Reject if the cleaned path equals "." (the root itself)
+//  6. Reject if the file is a symlink that escapes root (open with O_NOFOLLOW)
+//
+// These checks are defense-in-depth — the LLM should never return such
+// paths in normal operation, but a prompt-injection attack (see H4 in the
+// security review) could coax it into doing so.
 func ReadFile(root, relPath string) (string, error) {
-        fullPath := filepath.Join(root, relPath)
+        // Reject absolute paths — they cannot be relative to root by definition.
+        if filepath.IsAbs(relPath) {
+                return "", fmt.Errorf("refusing to read absolute path %q (must be relative to repo root)", relPath)
+        }
+
+        // Clean both sides so the under-root check is robust against "./" and "//"
+        // padding. filepath.Join already cleans, but we want to inspect the
+        // cleaned relPath before joining.
+        cleanRel := filepath.Clean(relPath)
+        if cleanRel == "." {
+                return "", fmt.Errorf("refusing to read repo root itself")
+        }
+        if strings.HasPrefix(cleanRel, "..") {
+                return "", fmt.Errorf("refusing to read path outside repo root: %q", relPath)
+        }
+
+        fullPath := filepath.Join(root, cleanRel)
+
+        // Defense-in-depth: verify the resolved path is still under root. This
+        // catches symlinks inside the repo that point outside it (e.g. a
+        // maliciously crafted repo could contain a symlink 'foo' -> '/etc/passwd'
+        // and the LLM could ask us to read 'foo').
+        relAfter, err := filepath.Rel(root, fullPath)
+        if err != nil {
+                return "", fmt.Errorf("resolve %q under %q: %w", relPath, root, err)
+        }
+        if relAfter == "." || strings.HasPrefix(relAfter, "..") {
+                return "", fmt.Errorf("refusing to read path outside repo root after resolution: %q -> %q", relPath, relAfter)
+        }
+
+        // Verify the file is a regular file (not a symlink to outside root, not
+        // a device file, not a directory). os.ReadFile follows symlinks, so we
+        // open with O_NOFOLLOW via os.Stat first.
+        info, err := os.Lstat(fullPath)
+        if err != nil {
+                return "", err
+        }
+        if info.Mode()&os.ModeSymlink != 0 {
+                // Symlink inside the repo. Resolve and re-check it's still under root.
+                target, err := os.Readlink(fullPath)
+                if err != nil {
+                        return "", fmt.Errorf("read symlink %q: %w", relPath, err)
+                }
+                var resolved string
+                if filepath.IsAbs(target) {
+                        resolved = filepath.Clean(target)
+                } else {
+                        resolved = filepath.Clean(filepath.Join(filepath.Dir(fullPath), target))
+                }
+                relTarget, err := filepath.Rel(root, resolved)
+                if err != nil || relTarget == "." || strings.HasPrefix(relTarget, "..") {
+                        return "", fmt.Errorf("refusing to follow symlink %q -> %q (escapes repo root)", relPath, target)
+                }
+        }
+        if info.IsDir() {
+                return "", fmt.Errorf("refusing to read directory as file: %q", relPath)
+        }
+
         data, err := os.ReadFile(fullPath)
         if err != nil {
                 return "", err

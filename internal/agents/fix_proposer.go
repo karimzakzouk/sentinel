@@ -5,6 +5,7 @@ import (
         "encoding/json"
         "fmt"
         "log"
+        "path/filepath"
         "strings"
 
         "github.com/google/uuid"
@@ -13,6 +14,90 @@ import (
         "github.com/karimzakzouk/sentinel/v3/internal/llm"
         "github.com/karimzakzouk/sentinel/v3/internal/schemas"
 )
+
+// validateFilePath validates a file path returned by the LLM for a code fix.
+//
+// v3.8.4: This function is called with paths that originate from LLM output,
+// which in turn was influenced by pod-log content (attacker-controllable).
+// Without validation, an LLM that returned "../../../etc/passwd" or
+// ".github/workflows/ci.yml" (allowing a malicious CI workflow to be
+// smuggled into the PR) would have those paths accepted.
+//
+// Rules:
+//  1. Reject empty paths
+//  2. Reject absolute paths (anything starting with '/')
+//  3. Reject paths containing '..' segments (path traversal)
+//  4. Reject paths that escape the repo root after cleaning
+//  5. Reject sensitive paths by default:
+//     - .github/workflows/* (CI/CD tampering)
+//     - .github/actions/* (composite action tampering)
+//     - Dockerfile (build-chain tampering) — only allowed when explicitly
+//       returned as the dockerfile_path, not as a file_to_change
+//     - package.json / pyproject.toml / go.mod postinstall hooks
+//     - .gitlab-ci.yml, .circleci/config.yml, Jenkinsfile, etc.
+//  6. Reject paths with control characters or null bytes
+//  7. Cap path length at 500 chars
+//
+// Returns the cleaned path on success, or "" if rejected. Callers should
+// skip files with empty return values (do not abort the whole proposal —
+// one bad path shouldn't kill a fix that has other valid files).
+func validateFilePath(path string) string {
+        if path == "" {
+                return ""
+        }
+        if len(path) > 500 {
+                log.Printf("[fix_proposer] SECURITY: rejecting path (too long): %q", path)
+                return ""
+        }
+
+        // Reject control chars and null bytes.
+        for _, r := range path {
+                if r < 0x20 || r == 0x7f {
+                        log.Printf("[fix_proposer] SECURITY: rejecting path (control char): %q", path)
+                        return ""
+                }
+        }
+
+        // Reject absolute paths.
+        if filepath.IsAbs(path) {
+                log.Printf("[fix_proposer] SECURITY: rejecting absolute path: %q", path)
+                return ""
+        }
+
+        clean := filepath.Clean(path)
+        if clean == "." {
+                log.Printf("[fix_proposer] SECURITY: rejecting path (resolves to repo root): %q", path)
+                return ""
+        }
+        if strings.HasPrefix(clean, "..") {
+                log.Printf("[fix_proposer] SECURITY: rejecting path traversal: %q", path)
+                return ""
+        }
+
+        // Reject sensitive paths. Use filepath.ToSlash so the check works on
+        // Windows-style paths too (LLMs sometimes return backslashes).
+        cleanSlash := filepath.ToSlash(clean)
+        sensitive := false
+        switch {
+        case strings.HasPrefix(cleanSlash, ".github/workflows/"),
+                strings.HasPrefix(cleanSlash, ".github/actions/"),
+                strings.HasPrefix(cleanSlash, ".gitlab-ci.yml"),
+                strings.HasPrefix(cleanSlash, ".circleci/"),
+                strings.HasPrefix(cleanSlash, "Jenkinsfile"),
+                strings.HasPrefix(cleanSlash, ".drone.yml"),
+                strings.HasPrefix(cleanSlash, "cloudbuild.yaml"),
+                strings.HasPrefix(cleanSlash, "cloudbuild.yml"),
+                strings.HasPrefix(cleanSlash, ".azure-pipelines.yml"),
+                strings.HasPrefix(cleanSlash, "azure-pipelines.yml"):
+                sensitive = true
+        }
+        if sensitive {
+                log.Printf("[fix_proposer] SECURITY: rejecting CI/CD-sensitive path: %q", path)
+                return ""
+        }
+
+        return clean
+}
 
 const fixProposerSystemPrompt = `You are Sentinel's Fix Proposer agent.
 
@@ -172,6 +257,16 @@ func (a *FixProposer) Run(ctx context.Context, state *schemas.AgentState) error 
                         }
                         _ = matched
                 }
+                // v3.8.4: Validate the path against the security allowlist.
+                // This rejects path traversal, absolute paths, and CI/CD-
+                // sensitive files (.github/workflows/*, Jenkinsfile, etc.)
+                // that an LLM (potentially under prompt-injection from
+                // attacker-controlled pod logs) should not be modifying.
+                validated := validateFilePath(path)
+                if validated == "" {
+                        continue
+                }
+                path = validated
                 files = append(files, schemas.FileChange{Path: path, NewContent: content})
         }
 
@@ -274,8 +369,10 @@ func (a *FixProposer) llmCodeFix(ctx context.Context, state *schemas.AgentState,
                 }
                 path, _ := fcMap["path"].(string)
                 content, _ := fcMap["new_content"].(string)
-                if path != "" {
-                        proposal.FilesToChange = append(proposal.FilesToChange, schemas.FileChange{Path: path, NewContent: content})
+                // v3.8.4: Apply the same path validation as the main path.
+                validated := validateFilePath(path)
+                if validated != "" {
+                        proposal.FilesToChange = append(proposal.FilesToChange, schemas.FileChange{Path: validated, NewContent: content})
                 }
         }
         if desc, ok := result["description"].(string); ok && desc != "" {
@@ -348,8 +445,15 @@ func buildPRBody(state *schemas.AgentState, rc *schemas.RootCause, fixType strin
         }
         parts = append(parts, "")
         parts = append(parts, "## Verification")
-        parts = append(parts, "This fix was tested in a sandbox namespace with 1% mirrored production traffic.")
-        parts = append(parts, "No 5xx errors were observed during the verification window.")
+        // v3.8.4: This is a placeholder body written BEFORE sandbox verification
+        // runs. The actual PR body is overwritten by agents.BuildPRBody in
+        // main.go after the sandbox runs (or is skipped). The placeholder
+        // must NOT claim sandbox verification was performed — it hasn't been
+        // yet. The previous text ("This fix was tested in a sandbox namespace
+        // with 1% mirrored production traffic") was a hardcoded lie that
+        // would persist in the PR if the execution path failed before
+        // reaching BuildPRBody.
+        parts = append(parts, "_Sandbox verification status will be appended by the execution layer._")
         parts = append(parts, "")
         parts = append(parts, "---")
         parts = append(parts, "_This PR was opened autonomously by Sentinel. Please review before merging._")
