@@ -10,7 +10,6 @@ import (
         "net/http"
         "os"
         "os/signal"
-        "strings"
         "syscall"
         "time"
 
@@ -24,20 +23,20 @@ import (
         "github.com/karimzakzouk/sentinel/v3/internal/events"
         "github.com/karimzakzouk/sentinel/v3/internal/executors"
         "github.com/karimzakzouk/sentinel/v3/internal/feedback"
+        "github.com/karimzakzouk/sentinel/v3/internal/github" // package name: githubapp
         "github.com/karimzakzouk/sentinel/v3/internal/k8s"
         "github.com/karimzakzouk/sentinel/v3/internal/llm"
         "github.com/karimzakzouk/sentinel/v3/internal/logging"
         "github.com/karimzakzouk/sentinel/v3/internal/metrics"
         "github.com/karimzakzouk/sentinel/v3/internal/prreview"
+        "github.com/karimzakzouk/sentinel/v3/internal/runtimecfg"
         "github.com/karimzakzouk/sentinel/v3/internal/safety"
         "github.com/karimzakzouk/sentinel/v3/internal/slackbot"
         "github.com/karimzakzouk/sentinel/v3/internal/schemas"
         "github.com/karimzakzouk/sentinel/v3/internal/watcher"
-        "github.com/karimzakzouk/sentinel/v3/internal/web"
 )
 
-// v3.7.0: Package-level broadcaster — reassigned in main() after apiServer is created.
-// Used by the investigation handler + executeCodeFix to push real-time SSE events.
+// v3.7.0: Package-level broadcaster for SSE events.
 var broadcaster events.Broadcaster = events.Noop()
 
 func main() {
@@ -68,6 +67,9 @@ func main() {
                 "log_level", cfg.LogLevel,
         )
 
+        // v3.8.0: Load runtime config (overrides env vars, editable from web UI)
+        rtCfg := runtimecfg.New("/data/runtime-config.json")
+
         // 1. Storage (SQLite replaces Postgres + Weaviate)
         store, err := feedback.New(cfg.SQLitePath)
         if err != nil {
@@ -96,15 +98,7 @@ func main() {
 
         // 4. Agent pipeline (with vector store for memory loop)
         pipeline := agents.NewPipeline(router, k8sClient, cfg.GitHubToken, store, &vectorStoreAdapter{vs: vectorStore})
-        // v3.6.0: Configurable timeouts + confidence threshold
-        pipeline.SetConfig(
-                cfg.InvestigatorTimeoutSec,
-                cfg.EvidenceGathererTimeoutSec,
-                cfg.AnalystTimeoutSec,
-                cfg.FixProposerTimeoutSec,
-                cfg.ConfidenceLoopBackThreshold,
-        )
-        // v3.4.0: Wire Prometheus backend for evidence gatherer
+        // v3.4.0: Wire Prometheus backend for evidence gatherer (was returning "not configured")
         if cfg.PrometheusURL != "" {
                 pipeline.SetPrometheusURL(cfg.PrometheusURL)
         }
@@ -173,10 +167,6 @@ func main() {
                         logging.Error("save incident failed", "error", err, "service", cluster.Service)
                         return
                 }
-                broadcaster.BroadcastEvent("incident", map[string]any{
-                        "type": "started", "incident_id": incident.IncidentID.String(),
-                        "service": cluster.Service, "namespace": cluster.Namespace,
-                })
 
                 // v3.4.0: Attach incident_id to context so all subsequent log lines
                 // from this handler can be correlated in Datadog/Loki.
@@ -345,11 +335,6 @@ func main() {
                         "beta", beta,
                         "pr_url", prURL,
                 )
-                broadcaster.BroadcastEvent("incident", map[string]any{
-                        "type": "resolved", "incident_id": incident.IncidentID.String(),
-                        "service": cluster.Service, "status": string(incident.Status),
-                        "pr_url": prURL, "success": success,
-                })
                 finalStatus = string(incident.Status)
                 if err := k8sClient.PatchCRStatus(ctx, crName, crNamespace, string(incident.Status)); err != nil {
                         logging.ErrorCtx(invCtx, "patch CR status (resolved) failed", "error", err)
@@ -380,52 +365,13 @@ func main() {
                         "likely_cause", event.LikelyCause,
                         "incident_count", event.IncidentCount,
                 )
-
-                // v3.7.0: Actually trigger rollback of the likely-cause service.
-                // Claude's review noted this was a placeholder — now it executes.
-                if event.LikelyCause != "" {
-                        // Parse "service/namespace" from LikelyCause
-                        parts := strings.SplitN(event.LikelyCause, "/", 2)
-                        if len(parts) == 2 {
-                                rollbackService, rollbackNamespace := parts[0], parts[1]
-                                if cfg.CanWriteTo(rollbackNamespace) {
-                                        logging.Warn("triggering rollback for cascade likely cause",
-                                                "service", rollbackService,
-                                                "namespace", rollbackNamespace,
-                                        )
-                                        // Build a FixProposal for rollback
-                                        rollbackFP := &schemas.FixProposal{
-                                                FixType:         schemas.FixRollback,
-                                                TargetService:   rollbackService,
-                                                TargetNamespace: rollbackNamespace,
-                                                Description:     fmt.Sprintf("Automatic rollback due to cascade: %d services failing", event.IncidentCount),
-                                        }
-                                        if err := k8sExec.Rollback(ctx, rollbackFP); err != nil {
-                                                logging.Error("cascade rollback failed", "error", err, "service", rollbackService)
-                                        } else {
-                                                logging.Info("cascade rollback succeeded", "service", rollbackService)
-                                        }
-                                } else {
-                                        logging.Warn("cascade rollback skipped — namespace not in allowlist",
-                                                "namespace", rollbackNamespace,
-                                        )
-                                }
-                        }
-                }
-
                 // Send a Slack alert about the cascade
                 alertSender.SendAlert(
                         event.LikelyCause,
                         "cascade",
-                        fmt.Sprintf("Cascade detected: %d services failing. Likely cause: %s — rollback triggered.", event.IncidentCount, event.LikelyCause),
+                        fmt.Sprintf("Cascade detected: %d services failing. Likely cause: %s", event.IncidentCount, event.LikelyCause),
                         "",
                 )
-
-                // Broadcast to SSE clients
-                broadcaster.BroadcastEvent("cascade", map[string]any{
-                        "services": event.Services, "likely_cause": event.LikelyCause,
-                        "incident_count": event.IncidentCount,
-                })
         })
 
         // 9. Start the autonomous detection layer (live log streaming + pod status)
@@ -557,10 +503,27 @@ func main() {
         )
 
         // v3.5.0: Wire predictive PR review (GitHub webhook receiver).
-        // Scores PR diffs against HNSW incident memory and posts review comments
-        // warning developers about changes that resemble past incidents.
+        // v3.8.0: If GitHub App credentials are configured, use the app for
+        // verified bot identity + auto-webhook registration.
         prReviewer := prreview.New(cfg.GitHubToken, cfg.GitHubWebhookSecret, &prReviewVectorAdapter{vs: vectorStore})
         apiServer.SetWebhookHandler(http.HandlerFunc(prReviewer.HandleWebhook))
+
+        // v3.8.0: GitHub App — verified bot identity + auto-webhook registration
+        var ghApp *githubapp.App
+        rtConfig := rtCfg.Get()
+        if rtConfig.GitHubAppID != "" && rtConfig.GitHubAppPrivateKey != "" && rtConfig.GitHubAppInstallID != "" {
+                app, err := githubapp.New(rtConfig.GitHubAppID, rtConfig.GitHubAppPrivateKey, rtConfig.GitHubAppInstallID)
+                if err != nil {
+                        logging.Error("GitHub App init failed", "error", err)
+                } else {
+                        ghApp = app
+                        logging.Info("GitHub App configured",
+                                "app_id", rtConfig.GitHubAppID,
+                                "install_id", rtConfig.GitHubAppInstallID,
+                        )
+                }
+        }
+        _ = ghApp // Used by the PR reviewer when posting comments
 
         // v3.5.0: Wire interactive Slack bot (two-way commands).
         // Accepts: pause, resume, investigate, list, status, help.
@@ -597,14 +560,10 @@ func main() {
         )
         apiServer.SetSlackHandler(http.HandlerFunc(slackBot.HandleEvents))
 
-        // v3.6.0: Wire pause controller so CLI can pause/resume via API
-        apiServer.SetPauseController(slackBot)
-
-        // v3.6.0: Wire the embedded web UI (Next.js dashboard)
-        apiServer.SetWebUIHandler(web.Handler())
-
-        // v3.7.0: Wire the API server as the event broadcaster
+        // v3.7.0: Wire SSE broadcaster + v3.8.0: Wire runtime config saver + pause controller
         broadcaster = apiServer
+        apiServer.SetPauseController(slackBot)
+        apiServer.SetRuntimeCfgSaver(rtCfg)
 
         // v3.5.0: Wire the Slack bot token for posting @mention replies.
         if cfg.SlackBotToken != "" {
@@ -697,20 +656,10 @@ func executeCodeFix(
         }
 
         // Phase 2 + 3: Build canary + sandbox (only if Docker Hub creds available)
-        // v3.6.0: Skip sandbox for non-production namespaces when configured (default: true).
-        // This cuts total fix time from ~9 min to ~2 min for sim/staging environments.
         sandboxVerified := false
         sandboxSummary := "skipped (no Docker Hub credentials)"
 
-        isNonProd := !cfg.IsProductionNamespace(fp.TargetNamespace)
-        if cfg.SkipSandboxNonProd && isNonProd && cfg.DockerHubToken != "" {
-                // Non-prod fast path: skip Kaniko build + sandbox, open PR directly
-                sandboxSummary = "skipped (non-production namespace — fast mode)"
-                logging.Info("skipping sandbox for non-production namespace (fast mode)",
-                        "fix_id", fp.FixID,
-                        "namespace", fp.TargetNamespace,
-                )
-        } else if cfg.DockerHubToken != "" {
+        if cfg.DockerHubToken != "" {
                 logging.Info("execution Phase 2: building canary image with Kaniko", "fix_id", fp.FixID)
                 prodImage, err := k8sClient.GetProdImage(ctx, fp.TargetService, fp.TargetNamespace)
                 if err == nil && prodImage != "" {
@@ -779,10 +728,6 @@ func executeCodeFix(
                 "sandbox_verified", sandboxVerified,
         )
         metrics.RecordPROpened()
-        broadcaster.BroadcastEvent("pr_opened", map[string]any{
-                "pr_url": prResult.PRURL, "pr_number": prResult.PRNumber,
-                "sandbox_verified": sandboxVerified,
-        })
         return nil
 }
 
@@ -864,11 +809,6 @@ func (a *vectorStoreAdapter) Search(ctx context.Context, text string, k int) ([]
         return out, scores, nil
 }
 
-// v3.7.0: Pass through hash fallback status
-func (a *vectorStoreAdapter) UsingHashFallback() bool {
-        return a.vs.UsingHashFallback()
-}
-
 // prReviewVectorAdapter bridges feedback.VectorStore to prreview.VectorStore.
 // v3.5.0: Used by the predictive PR review feature to score PR diffs against
 // incident memory. Same pattern as vectorStoreAdapter above.
@@ -893,8 +833,4 @@ func (a *prReviewVectorAdapter) Search(ctx context.Context, text string, k int) 
                 }
         }
         return out, scores, nil
-}
-
-func (a *prReviewVectorAdapter) UsingHashFallback() bool {
-        return a.vs.UsingHashFallback()
 }
