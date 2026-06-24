@@ -100,7 +100,15 @@ func main() {
 
         // 4. Agent pipeline (with vector store for memory loop)
         pipeline := agents.NewPipeline(router, k8sClient, cfg.GitHubToken, store, &vectorStoreAdapter{vs: vectorStore})
-        // v3.4.0: Wire Prometheus backend for evidence gatherer (was returning "not configured")
+        // v3.6.0: Configurable timeouts + confidence threshold (re-wired v3.8.1 — was accidentally dropped)
+        pipeline.SetConfig(
+                cfg.InvestigatorTimeoutSec,
+                cfg.EvidenceGathererTimeoutSec,
+                cfg.AnalystTimeoutSec,
+                cfg.FixProposerTimeoutSec,
+                cfg.ConfidenceLoopBackThreshold,
+        )
+        // v3.4.0: Wire Prometheus backend for evidence gatherer
         if cfg.PrometheusURL != "" {
                 pipeline.SetPrometheusURL(cfg.PrometheusURL)
         }
@@ -169,6 +177,10 @@ func main() {
                         logging.Error("save incident failed", "error", err, "service", cluster.Service)
                         return
                 }
+                broadcaster.BroadcastEvent("incident", map[string]any{
+                        "type": "started", "incident_id": incident.IncidentID.String(),
+                        "service": cluster.Service, "namespace": cluster.Namespace,
+                })
 
                 // v3.4.0: Attach incident_id to context so all subsequent log lines
                 // from this handler can be correlated in Datadog/Loki.
@@ -337,6 +349,11 @@ func main() {
                         "beta", beta,
                         "pr_url", prURL,
                 )
+                broadcaster.BroadcastEvent("incident", map[string]any{
+                        "type": "resolved", "incident_id": incident.IncidentID.String(),
+                        "service": cluster.Service, "status": string(incident.Status),
+                        "pr_url": prURL, "success": success,
+                })
                 finalStatus = string(incident.Status)
                 if err := k8sClient.PatchCRStatus(ctx, crName, crNamespace, string(incident.Status)); err != nil {
                         logging.ErrorCtx(invCtx, "patch CR status (resolved) failed", "error", err)
@@ -658,10 +675,17 @@ func executeCodeFix(
         }
 
         // Phase 2 + 3: Build canary + sandbox (only if Docker Hub creds available)
+        // v3.6.0: Skip sandbox for non-production namespaces when configured (default: true).
+        // v3.8.1: Re-wired — was accidentally dropped in server.go rewrite.
         sandboxVerified := false
         sandboxSummary := "skipped (no Docker Hub credentials)"
 
-        if cfg.DockerHubToken != "" {
+        isNonProd := !cfg.IsProductionNamespace(fp.TargetNamespace)
+        if cfg.SkipSandboxNonProd && isNonProd && cfg.DockerHubToken != "" {
+                sandboxSummary = "skipped (non-production namespace — fast mode)"
+                logging.Info("skipping sandbox for non-production namespace (fast mode)",
+                        "fix_id", fp.FixID, "namespace", fp.TargetNamespace)
+        } else if cfg.DockerHubToken != "" {
                 logging.Info("execution Phase 2: building canary image with Kaniko", "fix_id", fp.FixID)
                 prodImage, err := k8sClient.GetProdImage(ctx, fp.TargetService, fp.TargetNamespace)
                 if err == nil && prodImage != "" {
@@ -730,6 +754,10 @@ func executeCodeFix(
                 "sandbox_verified", sandboxVerified,
         )
         metrics.RecordPROpened()
+        broadcaster.BroadcastEvent("pr_opened", map[string]any{
+                "pr_url": prResult.PRURL, "pr_number": prResult.PRNumber,
+                "sandbox_verified": sandboxVerified,
+        })
         return nil
 }
 

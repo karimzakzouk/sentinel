@@ -5,6 +5,7 @@ import (
         "context"
         "encoding/json"
         "fmt"
+        "io"
         "log"
         "net/http"
         "strings"
@@ -364,7 +365,6 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 func readBody(r *http.Request) (string, error) {
-        var buf strings.Builder
-        _, err := fmt.Fprint(&buf, r.Body)
-        return buf.String(), err
+        data, err := io.ReadAll(r.Body)
+        return string(data), err
 }
