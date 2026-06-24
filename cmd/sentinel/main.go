@@ -34,6 +34,7 @@ import (
         "github.com/karimzakzouk/sentinel/v3/internal/slackbot"
         "github.com/karimzakzouk/sentinel/v3/internal/schemas"
         "github.com/karimzakzouk/sentinel/v3/internal/watcher"
+        "github.com/karimzakzouk/sentinel/v3/internal/web"
 )
 
 // v3.7.0: Package-level broadcaster for SSE events. Assigned in main() to the
@@ -626,6 +627,12 @@ func main() {
         // Empty token = auth disabled (logs a loud warning). Health/readiness/metrics
         // endpoints remain open so kubelet probes and Prometheus still work.
         apiServer.SetAPIToken(cfg.APIToken)
+
+        // v3.8.5: Wire the embedded web UI. The UI is a Next.js static export
+        // compiled into the binary via go:embed (internal/web/out/). Without
+        // this call, the API server serves a placeholder "Web UI not built"
+        // page even though the UI is embedded in the binary.
+        apiServer.SetWebUIHandler(web.Handler())
 
         // v3.5.0: Wire predictive PR review (GitHub webhook receiver).
         // v3.8.0: If GitHub App credentials are configured, use the app for

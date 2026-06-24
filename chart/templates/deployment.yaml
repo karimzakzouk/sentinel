@@ -74,6 +74,20 @@ spec:
               value: {{ .Release.Name | quote }}
             - name: PORT
               value: "8000"
+            # v3.8.5: Admin API bearer token (was missing in v3.8.4 — the
+            # value was in values.yaml but never passed to the pod).
+            {{- if .Values.sentinel.apiToken }}
+            - name: SENTINEL_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-secrets
+                  key: apiToken
+            {{- end }}
+            # v3.8.5: GitHub repo allowlist (was missing in v3.8.4).
+            {{- if .Values.sentinel.allowedGithubRepos }}
+            - name: SENTINEL_ALLOWED_GITHUB_REPOS
+              value: {{ .Values.sentinel.allowedGithubRepos | quote }}
+            {{- end }}
             # v3.4.0: Observability backends (for Evidence Gatherer)
             {{- if .Values.sentinel.observability.prometheusUrl }}
             - name: SENTINEL_PROMETHEUS_URL

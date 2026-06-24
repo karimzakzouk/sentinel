@@ -11,12 +11,22 @@
 image:
   registry: "docker.io/karimzakzouk"
   repository: "sentinel-v3"
-  tag: "3.8.4"
+  tag: "3.8.5"
   pullPolicy: Always
 
 sentinel:
   # GitHub token — REQUIRED for code_fix / roll_forward (opens PRs)
   githubToken: ""
+
+  # v3.8.5: Admin API bearer token. Required for sentinelctl admin commands
+  # (trigger, pause, resume, config set). Empty = admin API unauthenticated
+  # (NOT recommended — the server logs a loud warning at startup).
+  apiToken: ""
+
+  # v3.8.5: GitHub repo allowlist (CSV of owner/name). When set, Sentinel
+  # only clones repos in this list. Empty = allow all (NOT recommended).
+  # Example: "karimzakzouk/demo-app,karimzakzouk/sentinel"
+  allowedGithubRepos: ""
 
   # LLM settings — any OpenAI-compatible endpoint
   llm:
@@ -110,12 +120,12 @@ rbac:
   clusterScope: true
 
 # NetworkPolicy — deny by default, allow only needed egress.
-# v3.8.4: Enabled by default for new installs. Was off by default since
-# v3.0.1 due to k3s CNI quirks; the k3s issue was fixed in k3s v1.27+
-# and most production CNIs (Calico, Cilium, AWS VPC CNI, Azure CNI,
-# GCE CNI) support NetworkPolicy. Operators on old k3s can disable.
+# v3.8.5: Disabled by default. k3s (the most common dev cluster) has CNI
+# quirks that cause intermittent timeouts to the K8s API (10.43.0.1:443)
+# even when the NetworkPolicy allows 0.0.0.0/0:443. Production clusters
+# with Calico/Cilium should enable this.
 networkPolicy:
-  enabled: true
+  enabled: false
 
 # Ingress (optional)
 ingress:
