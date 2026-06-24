@@ -108,18 +108,19 @@ func (m *Manager) Get() *RuntimeConfig {
 
 func countOverrides(c *RuntimeConfig) int {
         n := 0
-        v := map[string]bool{
-                c.LLMProvider: true, c.LLMBaseURL: true, c.LLMAPIKey: true,
-                c.LLMFastModel: true, c.LLMFrontierModel: true, c.LLMEmbeddingModel: true,
-                c.PrometheusURL: true, c.LokiURL: true, c.JaegerURL: true,
-                c.GitHubAppID: true, c.GitHubAppPrivateKey: true, c.GitHubAppInstallID: true,
-                c.LogLevel: true,
-        }
-        for _, set := range v {
-                if set {
-                        n++
-                }
-        }
+        if c.LLMProvider != "" { n++ }
+        if c.LLMBaseURL != "" { n++ }
+        if c.LLMAPIKey != "" { n++ }
+        if c.LLMFastModel != "" { n++ }
+        if c.LLMFrontierModel != "" { n++ }
+        if c.LLMEmbeddingModel != "" { n++ }
+        if c.PrometheusURL != "" { n++ }
+        if c.LokiURL != "" { n++ }
+        if c.JaegerURL != "" { n++ }
+        if c.GitHubAppID != "" { n++ }
+        if c.GitHubAppPrivateKey != "" { n++ }
+        if c.GitHubAppInstallID != "" { n++ }
+        if c.LogLevel != "" { n++ }
         if c.InvestigatorTimeoutSec > 0 { n++ }
         if c.EvidenceGathererTimeoutSec > 0 { n++ }
         if c.AnalystTimeoutSec > 0 { n++ }

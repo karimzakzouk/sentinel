@@ -50,9 +50,11 @@ COPY . .
 COPY --from=web-builder /out/ internal/web/out/
 
 ARG VERSION=dev
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
     -ldflags="-s -w -extldflags '-static' -X main.Version=${VERSION}" \
     -trimpath \
     -o /sentinel ./cmd/sentinel
@@ -60,7 +62,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # Also build the CLI
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
     -ldflags="-s -w" \
     -trimpath \
     -o /sentinelctl ./cmd/sentinelctl

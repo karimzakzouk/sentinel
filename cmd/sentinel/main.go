@@ -140,12 +140,23 @@ func main() {
                 }
         }()
 
+        // v3.8.2: Concurrency limiter — max 3 concurrent investigations to prevent
+        // LLM API quota exhaustion during incident storms (Claude's review).
+        invSem := make(chan struct{}, 3)
+
         // 7. The full investigation handler — runs the agent pipeline + execution
         handler := func(ctx context.Context, cluster schemas.AnomalyCluster, crName, crNamespace string) {
+                // v3.8.2: Acquire semaphore — blocks if 3 investigations are already running
+                select {
+                case invSem <- struct{}{}:
+                        defer func() { <-invSem }()
+                case <-ctx.Done():
+                        return
+                }
+
                 // v3.4.0: Metrics — track investigation count + duration + active gauge.
-                // finalStatus is captured by the defer; updated at each return point.
                 invStart := time.Now()
-                finalStatus := "failed" // default if we exit early
+                finalStatus := "failed"
                 metrics.RecordInvestigationStart()
                 defer func() {
                         metrics.RecordInvestigationComplete(finalStatus, time.Since(invStart))

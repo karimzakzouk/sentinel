@@ -9,9 +9,10 @@ Detect. Diagnose. Fix. Verify. — autonomously.
 [![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go)](https://go.dev)
 [![Image Size](https://img.shields.io/badge/image-~28MB-success)](https://hub.docker.com/r/karimzakzouk/sentinel-v3)
 [![Pods](https://img.shields.io/badge/pods-1-blue)]()
+[![Arch](https://img.shields.io/badge/arch-amd64%20%7C%20arm64-success)]()
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-[Install](#install) · [How It Works](#how-it-works) · [Architecture](#architecture) · [Configuration](#configuration)
+[Install](#install) · [How It Works](#how-it-works) · [Architecture](#architecture) · [Configuration](#configuration) · [CLI](#cli) · [Web UI](#web-ui)
 
 </div>
 
@@ -39,7 +40,7 @@ All in ~4 minutes. While you sleep. No human intervention required.
 helm repo add sentinel https://karimzakzouk.github.io/sentinel/
 helm repo update
 
-helm install sentinel sentinel/sentinel --version 3.5.0 \
+helm install sentinel sentinel/sentinel --version 3.8.2 \
   --namespace sentinel --create-namespace \
   --set sentinel.githubToken=YOUR_GITHUB_TOKEN \
   --set sentinel.llm.apiKey=YOUR_LLM_API_KEY \
@@ -282,23 +283,77 @@ go test ./... -race
 helm lint chart/
 ```
 
-## What's New in v3.5.0
+## What's New in v3.8.2
 
-- **24-hour feedback loop** — Two-phase outcome watcher: Phase 1 (10min recovery check) + Phase 2 (24h re-occurrence watch). If the same error fingerprint reappears within 24h, the Beta prior is corrected from success → failure. The system now learns from real production outcomes, not just sandbox results.
-- **Predictive PR review** — GitHub webhook receiver scores every PR diff against incident memory. If a change resembles a past incident (especially a failure), Sentinel posts a review comment warning the developer before they merge.
-- **Interactive Slack bot** — Two-way commands: `pause`, `resume`, `investigate <service>`, `show me the last N incidents`, `status`. Autonomous mode can be paused via Slack without restarting Sentinel.
-- **Cross-service incident correlation** — Detects cascading failures (3+ services failing within 60s). Identifies the most-recently-deployed service as the likely cause and skips individual investigations.
-- **Multi-repo shared library support** — Detects when an error originates from `vendor/`, `node_modules/`, `site-packages/`, etc. and redirects the investigation to the library's repo instead of opening 12 PRs in 12 services.
-- **Production readiness** — LLM retry/backoff (429/5xx), structured logging (slog + JSON + incident_id correlation), real Prometheus metrics, golangci-lint CI, govulncheck security scanning, configurable timeouts/thresholds (12 hardcoded values → env vars).
+- **Professional Web UI** — Dark-themed dashboard embedded in the binary. Sidebar navigation, real-time incident feed, pipeline trace visualization, hypothesis confidence bars, code diff view, live log streaming, memory/RAG viewer, editable settings page. One binary, one pod, UI included.
+- **CLI (`sentinelctl`)** — Zero-dependency binary for incidents list/get, trigger investigation, pause/resume, stats, config view, metrics. Table output by default, `--json` for scripts.
+- **GitHub App** — Verified bot identity, auto-webhook registration, installation token management. One-click install from GitHub Marketplace.
+- **Settings persistence** — Edit any config from the web UI. Changes persist to `/data/runtime-config.json`. No restart needed.
+- **SSE real-time updates** — Pipeline trace animates live as each step completes. Status indicator shows LIVE when connected.
+- **24-hour feedback loop** — Two-phase outcome watcher: Phase 1 (10min recovery) + Phase 2 (24h re-occurrence). Learns from real production outcomes.
+- **Predictive PR review** — Scores PR diffs against incident memory. Posts warnings on changes that resemble past incidents.
+- **Interactive Slack bot** — Two-way commands: pause, resume, investigate, list incidents, status.
+- **Cross-service correlation** — Detects cascading failures (3+ services in 60s), triggers automatic rollback.
+- **Shared library support** — Redirects investigation to library repo when error is in vendor/node_modules.
+- **Concurrency limiter** — Max 3 concurrent investigations to prevent LLM quota exhaustion.
+- **Arm64 support** — Multi-arch Docker images (amd64 + arm64).
+- **Production hardening** — LLM retry/backoff, structured logging (slog), Prometheus metrics, golangci-lint CI, govulncheck CVE scanning, configurable timeouts, Makefile, goreleaser config.
+
+## CLI
+
+```bash
+# Build
+make build-cli
+
+# Or install
+make install-cli
+
+# Usage
+sentinelctl incidents list
+sentinelctl incidents get <id>
+sentinelctl trigger demo-app --namespace sim
+sentinelctl pause --duration 60
+sentinelctl resume
+sentinelctl stats
+sentinelctl config view
+sentinelctl metrics
+
+# JSON output for scripts
+sentinelctl incidents list --json
+```
+
+## Web UI
+
+The dashboard is embedded in the Go binary via `go:embed`. No separate deployment.
+
+```bash
+# Port-forward to access
+kubectl -n sentinel port-forward deployment/sentinel 8000:8000
+
+# Open http://localhost:8000
+```
+
+Pages:
+- **Dashboard** — Metric cards, recent incidents, system status, resolution rate donut chart
+- **Incidents** — Full table with search, click for full-page detail view (pipeline trace, root cause, hypotheses, fix diff, execution, agent trace)
+- **Live Logs** — Terminal-style log viewer with filtering
+- **Memory** — HNSW vector store viewer showing learned incidents + Beta priors
+- **Settings** — Editable config for everything (LLM, pipeline, GitHub, Slack, observability, RBAC)
+
+To rebuild the UI:
+```bash
+make web    # Build Next.js static export + copy to embed directory
+make build  # Compile Go binary with embedded UI
+```
 
 ## What's Next
 
-- [ ] CLI (`sentinel incidents list`, `sentinel settings set`)
 - [ ] Real embedding model (sentence-transformers via ONNX) for semantic RAG
 - [ ] HTTP prober (detect 5xx errors that don't show in logs)
-- [ ] Multi-arch (arm64) support
 - [ ] Loki + Jaeger evidence backends (Prometheus is wired; Loki/Jaeger are stubs)
+- [ ] Integration tests with mock K8s API
+- [ ] Homebrew tap for `brew install sentinel`
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE)
