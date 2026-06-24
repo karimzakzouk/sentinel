@@ -230,7 +230,118 @@ func (s *Store) GetIncident(ctx context.Context, id uuid.UUID) (*schemas.Inciden
         return &inc, nil
 }
 
-// ListRecentIncidents returns the most recent N incidents.
+// FindIncidentByPrefix finds an incident whose UUID starts with the given
+// prefix. If multiple incidents match, returns the most recently updated one.
+// Returns nil (no error) if no match.
+//
+// v3.8.4: Added so the CLI can accept the 8-char truncated IDs it displays
+// in `incidents list` output. Without this, `sentinelctl incidents get
+// 91cce5a5` would fail with "invalid incident ID" because the server did
+// uuid.Parse("91cce5a5") which requires a full 36-char UUID.
+//
+// The prefix must be at least 4 chars to prevent accidental collisions on
+// short prefixes (a 1-char prefix would match ~1/16 of all UUIDs).
+func (s *Store) FindIncidentByPrefix(ctx context.Context, prefix string) (*schemas.Incident, error) {
+        if len(prefix) < 4 {
+                return nil, nil
+        }
+        // Normalize: lowercase, strip hyphens so "91cce5a5" and "91cce5a5-1234"
+        // both work against stored UUIDs (which are stored as lowercase strings
+        // with hyphens).
+        cleaned := strings.ToLower(strings.ReplaceAll(prefix, "-", ""))
+        if len(cleaned) > 36 {
+                return nil, nil
+        }
+
+        s.mu.RLock()
+        defer s.mu.RUnlock()
+
+        // Pull the most recent 500 incidents and scan in Go. SQLite's LIKE on
+        // a hyphenated UUID is awkward (the stored form has hyphens, the prefix
+        // doesn't), and an index on incident_id won't help with prefix matches
+        // anyway. 500 is plenty — if you have >500 recent incidents, use the
+        // full UUID.
+        rows, err := s.db.QueryContext(ctx, `
+                SELECT incident_id, created_at, updated_at, service, namespace, status, severity, cluster_json, state_json, beta_alpha, beta_beta, git_commit_at_resolution, postmortem
+                FROM incidents ORDER BY updated_at DESC LIMIT 500
+        `)
+        if err != nil {
+                return nil, err
+        }
+        defer rows.Close()
+
+        var best *schemas.Incident
+        var bestUpdatedAt time.Time
+        for rows.Next() {
+                inc, updatedAt, err := scanIncidentRow(rows)
+                if err != nil {
+                        return nil, err
+                }
+                // Compare against the prefix. The stored incident_id is a full
+                // UUID string like "91cce5a5-1234-5678-9abc-def012345678".
+                // Strip its hyphens too for the comparison.
+                stored := strings.ReplaceAll(strings.ToLower(inc.IncidentID.String()), "-", "")
+                if strings.HasPrefix(stored, cleaned) {
+                        if best == nil || updatedAt.After(bestUpdatedAt) {
+                                best = inc
+                                bestUpdatedAt = updatedAt
+                        }
+                }
+        }
+        return best, nil
+}
+
+// scanIncidentRow is the shared row-scan logic for GetIncident,
+// FindIncidentByPrefix, and ListRecentIncidents. Takes a sql.Rows (so it
+// works for both single-row QueryRow and multi-row Query).
+type rowScanner interface {
+        Scan(dest ...any) error
+}
+
+func scanIncidentRow(row rowScanner) (*schemas.Incident, time.Time, error) {
+        var inc schemas.Incident
+        var incidentIDStr, statusStr, severityStr, clusterJSON, stateJSON string
+        var betaAlpha, betaBeta float64
+        var createdAt, updatedAt time.Time
+        var gitCommit, postmortem sql.NullString
+
+        if err := row.Scan(
+                &incidentIDStr, &createdAt, &updatedAt,
+                &inc.Cluster.Service, &inc.Cluster.Namespace, &statusStr, &severityStr,
+                &clusterJSON, &stateJSON, &betaAlpha, &betaBeta,
+                &gitCommit, &postmortem,
+        ); err != nil {
+                return nil, time.Time{}, err
+        }
+
+        parsedID, err := uuid.Parse(incidentIDStr)
+        if err != nil {
+                return nil, time.Time{}, fmt.Errorf("parse incident ID: %w", err)
+        }
+        inc.IncidentID = parsedID
+        inc.CreatedAt = createdAt
+        inc.UpdatedAt = updatedAt
+        inc.Status = schemas.IncidentStatus(statusStr)
+        inc.Cluster.Severity = schemas.Severity(severityStr)
+        inc.BetaAlpha = betaAlpha
+        inc.BetaBeta = betaBeta
+        if gitCommit.Valid {
+                s := gitCommit.String
+                inc.GitCommitAtResolution = &s
+        }
+        if postmortem.Valid {
+                s := postmortem.String
+                inc.Postmortem = &s
+        }
+
+        if err := json.Unmarshal([]byte(clusterJSON), &inc.Cluster); err != nil {
+                return nil, time.Time{}, fmt.Errorf("unmarshal cluster: %w", err)
+        }
+        if err := json.Unmarshal([]byte(stateJSON), &inc.State); err != nil {
+                return nil, time.Time{}, fmt.Errorf("unmarshal state: %w", err)
+        }
+        return &inc, updatedAt, nil
+}
 func (s *Store) ListRecentIncidents(ctx context.Context, limit int) ([]*schemas.Incident, error) {
         s.mu.RLock()
         defer s.mu.RUnlock()

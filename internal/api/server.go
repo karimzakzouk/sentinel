@@ -260,18 +260,46 @@ func (s *Server) handleIncidents(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleIncident(w http.ResponseWriter, r *http.Request) {
         idStr := strings.TrimPrefix(r.URL.Path, "/incidents/")
+
+        // v3.8.4: Try full UUID first. If that fails (e.g. the CLI sent an 8-char
+        // truncated ID like "91cce5a5" from `incidents list` output), fall back
+        // to prefix matching via FindIncidentByPrefix.
         id, err := uuid.Parse(idStr)
-        if err != nil {
-                writeJSON(w, 400, map[string]string{"error": "invalid incident ID"})
+        if err == nil {
+                // Full UUID — direct lookup.
+                incident, err := s.store.GetIncident(r.Context(), id)
+                if err != nil {
+                        writeJSON(w, 500, map[string]string{"error": err.Error()})
+                        return
+                }
+                if incident == nil {
+                        writeJSON(w, 404, map[string]string{"error": "incident not found"})
+                        return
+                }
+                writeJSON(w, 200, incident)
                 return
         }
-        incident, err := s.store.GetIncident(r.Context(), id)
+
+        // Not a full UUID — try prefix matching if the store supports it.
+        // v3.8.4: This makes `sentinelctl incidents get 91cce5a5` work, which
+        // is what users naturally type after seeing the 8-char truncated ID
+        // in `incidents list` output.
+        prefixSearcher, ok := s.store.(interface {
+                FindIncidentByPrefix(ctx context.Context, prefix string) (any, error)
+        })
+        if !ok {
+                writeJSON(w, 400, map[string]string{
+                        "error": "invalid incident ID (prefix matching not supported by this store)",
+                })
+                return
+        }
+        incident, err := prefixSearcher.FindIncidentByPrefix(r.Context(), idStr)
         if err != nil {
                 writeJSON(w, 500, map[string]string{"error": err.Error()})
                 return
         }
         if incident == nil {
-                writeJSON(w, 404, map[string]string{"error": "incident not found"})
+                writeJSON(w, 404, map[string]string{"error": "no incident matches that ID prefix (need at least 4 chars)"})
                 return
         }
         writeJSON(w, 200, incident)
