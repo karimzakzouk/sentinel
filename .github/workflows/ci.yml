@@ -60,7 +60,9 @@ jobs:
 
       - name: Build binary (verify it compiles)
         run: |
-          go build -ldflags='-s -w -X main.Version=dev' -trimpath -o /tmp/sentinel ./cmd/sentinel
+          # v3.8.4: VERSION is sourced from the VERSION file (single source of truth).
+          VERSION=$(cat VERSION | tr -d '[:space:]')
+          go build -ldflags="-s -w -X main.Version=${VERSION} -X github.com/karimzakzouk/sentinel/v3/internal/version.Version=${VERSION}" -trimpath -o /tmp/sentinel ./cmd/sentinel
           ls -lh /tmp/sentinel
 
       - name: Helm lint
@@ -70,6 +72,24 @@ jobs:
         run: |
           helm template test chart/ > /tmp/rendered.yaml
           test $(grep -c "kind:" /tmp/rendered.yaml) -ge 6
+
+      - name: Version sync check (v3.8.4)
+        run: |
+          # VERSION is the single source of truth. Chart.yaml, values.yaml,
+          # and the README helm-install examples must all agree with it.
+          V=$(cat VERSION | tr -d '[:space:]')
+          echo "VERSION file: $V"
+          CHART_V=$(grep '^version:' chart/Chart.yaml | awk '{print $2}')
+          CHART_AV=$(grep '^appVersion:' chart/Chart.yaml | sed 's/appVersion: "//;s/"//')
+          VALUES_V=$(grep '^  tag:' chart/values.yaml | sed 's/.*tag: "//;s/"//')
+          echo "Chart.yaml version:    $CHART_V"
+          echo "Chart.yaml appVersion: $CHART_AV"
+          echo "values.yaml image.tag: $VALUES_V"
+          if [[ "$V" != "$CHART_V" ]] || [[ "$V" != "$CHART_AV" ]] || [[ "$V" != "$VALUES_V" ]]; then
+            echo "FAIL: version drift detected. Run 'make release-bump' to sync."
+            exit 1
+          fi
+          echo "All versions in sync: $V"
 
   security:
     name: Security scan (govulncheck)

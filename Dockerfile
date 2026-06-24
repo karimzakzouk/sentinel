@@ -16,8 +16,12 @@ RUN npm install --frozen-lockfile 2>/dev/null || npm install
 # Copy web source and build
 COPY web/ .
 
-# Build the Next.js static export
-RUN npx next build 2>&1 || true
+# v3.8.4: Build the Next.js static export. Previous version piped through
+# `|| true` to allow broken UI builds to fall through to a placeholder —
+# that masked real CI failures (a broken JS bundle would produce a green
+# build with no dashboard). Now we let the build fail loudly. The fallback
+# HTML below catches only the "out/ dir missing" case, not "build errored".
+RUN npx next build
 
 # Copy built files to output directory
 RUN mkdir -p /out && \
@@ -49,13 +53,16 @@ COPY . .
 # Copy the built web UI into the embed directory (overwrites placeholder)
 COPY --from=web-builder /out/ internal/web/out/
 
+# v3.8.4: VERSION comes from the VERSION file (single source of truth).
+# The build arg still exists for backward compatibility with CI that
+# passes --build-arg VERSION=X.Y.Z, but defaults to reading VERSION.
 ARG VERSION=dev
 ARG TARGETOS=linux
 ARG TARGETARCH=amd64
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
-    -ldflags="-s -w -extldflags '-static' -X main.Version=${VERSION}" \
+    -ldflags="-s -w -extldflags '-static' -X main.Version=${VERSION} -X github.com/karimzakzouk/sentinel/v3/internal/version.Version=${VERSION}" \
     -trimpath \
     -o /sentinel ./cmd/sentinel
 
@@ -63,7 +70,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
-    -ldflags="-s -w" \
+    -ldflags="-s -w -X github.com/karimzakzouk/sentinel/v3/internal/version.Version=${VERSION}" \
     -trimpath \
     -o /sentinelctl ./cmd/sentinelctl
 

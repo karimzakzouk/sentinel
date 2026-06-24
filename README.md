@@ -40,7 +40,7 @@ All in ~4 minutes. While you sleep. No human intervention required.
 helm repo add sentinel https://karimzakzouk.github.io/sentinel/
 helm repo update
 
-helm install sentinel sentinel/sentinel --version 3.8.2 \
+helm install sentinel sentinel/sentinel --version 3.8.4 \
   --namespace sentinel --create-namespace \
   --set sentinel.githubToken=YOUR_GITHUB_TOKEN \
   --set sentinel.llm.apiKey=YOUR_LLM_API_KEY \

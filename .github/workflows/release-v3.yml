@@ -86,11 +86,21 @@ jobs:
       - name: Get version
         id: version
         run: |
+          # v3.8.4: Single source of truth is the VERSION file. The git tag
+          # must match it — if it doesn't, fail the release loudly instead
+          # of silently shipping a mis-versioned image.
+          FILE_VERSION=$(cat VERSION | tr -d '[:space:]')
           if [[ "${GITHUB_REF}" == refs/tags/v3* ]]; then
-            echo "version=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+            TAG_VERSION=${GITHUB_REF_NAME#v}
+            if [[ "${TAG_VERSION}" != "${FILE_VERSION}" ]]; then
+              echo "ERROR: git tag version (${TAG_VERSION}) does not match VERSION file (${FILE_VERSION})"
+              echo "The VERSION file is the single source of truth. Edit it, then re-tag."
+              exit 1
+            fi
+            echo "version=${TAG_VERSION}" >> $GITHUB_OUTPUT
             echo "is_tag=true" >> $GITHUB_OUTPUT
           else
-            echo "version=3.5.0-dev" >> $GITHUB_OUTPUT
+            echo "version=${FILE_VERSION}-dev" >> $GITHUB_OUTPUT
             echo "is_tag=false" >> $GITHUB_OUTPUT
           fi
 
