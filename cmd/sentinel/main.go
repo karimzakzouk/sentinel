@@ -70,7 +70,16 @@ func main() {
         )
 
         // v3.8.0: Load runtime config (overrides env vars, editable from web UI)
-        rtCfg := runtimecfg.New("/data/runtime-config.json")
+        // v3.8.4: Path now configurable via SENTINEL_RUNTIME_CONFIG_PATH env var.
+        // Was hardcoded to /data/runtime-config.json which doesn't exist when
+        // running locally (outside K8s). Defaults to /data/runtime-config.json
+        // for in-cluster deployments, but operators running locally can set
+        // SENTINEL_RUNTIME_CONFIG_PATH=/tmp/runtime-config.json or similar.
+        runtimeCfgPath := os.Getenv("SENTINEL_RUNTIME_CONFIG_PATH")
+        if runtimeCfgPath == "" {
+                runtimeCfgPath = "/data/runtime-config.json"
+        }
+        rtCfg := runtimecfg.New(runtimeCfgPath)
 
         // 1. Storage (SQLite replaces Postgres + Weaviate)
         store, err := feedback.New(cfg.SQLitePath)

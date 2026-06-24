@@ -17,6 +17,7 @@ import (
         "k8s.io/client-go/dynamic"
         "k8s.io/client-go/kubernetes"
         "k8s.io/client-go/rest"
+        "k8s.io/client-go/tools/clientcmd"
 )
 
 // Sentinel annotation keys we recognize on workloads.
@@ -38,11 +39,33 @@ type Client struct {
         config    *rest.Config
 }
 
-// New creates a Client using in-cluster config.
+// New creates a Client using in-cluster config, with fallback to the local
+// kubeconfig for dev/testing.
+//
+// v3.8.4: Previously only tried rest.InClusterConfig() and hard-crashed
+// (log.Fatalf in main.go) when not running inside a pod. That made local
+// testing impossible — the server wouldn't even start without
+// KUBERNETES_SERVICE_HOST being set. Now tries in-cluster first, then
+// falls back to ~/.kube/config (or $KUBECONFIG), matching the behavior
+// of every other K8s tool (kubectl, helm, client-go examples).
+//
+// If neither works, returns an error so main.go can decide whether to
+// fatal (production) or log-and-continue (local dev with --no-k8s flag,
+// which is a TODO).
 func New() (*Client, error) {
         config, err := rest.InClusterConfig()
         if err != nil {
-                return nil, fmt.Errorf("in-cluster config: %w", err)
+                // Fall back to local kubeconfig for dev/testing.
+                // v3.8.4: Use client-go's clientcmd loading rules which respect
+                // KUBECONFIG env var and default to ~/.kube/config.
+                loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
+                configOverrides := &clientcmd.ConfigOverrides{}
+                clientConfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, configOverrides)
+                cfg, cfgErr := clientConfig.ClientConfig()
+                if cfgErr != nil {
+                        return nil, fmt.Errorf("in-cluster config: %w; kubeconfig fallback: %v", err, cfgErr)
+                }
+                config = cfg
         }
         clientset, err := kubernetes.NewForConfig(config)
         if err != nil {

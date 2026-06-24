@@ -8,6 +8,7 @@ import (
         "fmt"
         "log"
         "os"
+        "path/filepath"
         "sync"
 )
 
@@ -100,6 +101,17 @@ func (m *Manager) Save(cfg *RuntimeConfig) error {
         data, err := json.MarshalIndent(cfg, "", "  ")
         if err != nil {
                 return err
+        }
+        // v3.8.4: Create the parent directory if it doesn't exist. The default
+        // path /data/runtime-config.json works in K8s (PVC mounted at /data)
+        // but fails locally with "no such file or directory" when /data doesn't
+        // exist. This makes local testing work without requiring operators to
+        // pre-create the directory.
+        dir := filepath.Dir(m.filePath)
+        if dir != "" && dir != "." {
+                if err := os.MkdirAll(dir, 0755); err != nil {
+                        return fmt.Errorf("create config dir %s: %w", dir, err)
+                }
         }
         if err := os.WriteFile(m.filePath, data, 0600); err != nil {
                 return err
