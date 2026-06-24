@@ -147,7 +147,6 @@ func main() {
 // first non-flag arg. We do our own scan to recognize the value-consuming
 // flags and skip their values.
 func findSubcommand(args []string) (cmd string, allArgs []string) {
-        allArgs = args
         for i := 0; i < len(args); i++ {
                 a := args[i]
                 if a == "--" {
@@ -297,12 +296,11 @@ func (c *client) get(path string) ([]byte, error) {
         return c.do("GET", path, nil, false)
 }
 
-func (c *client) post(path string, payload any) ([]byte, error) {
-        return c.postAuth(path, payload, false)
-}
-
-// postAuth is like post but attaches the bearer token. Used for admin
-// endpoints (/admin/investigate, /admin/pause, /admin/resume, POST /settings).
+// postAuth sends a POST with an optional bearer token. authRequired=true
+// attaches the token (used for /admin/* and POST /settings); false sends
+// without (currently no POST endpoints are unauthenticated, but kept for
+// future use). v3.8.4: replaced the unused post() wrapper with this single
+// method — golangci-lint flagged the unused post() function.
 func (c *client) postAuth(path string, payload any, authRequired bool) ([]byte, error) {
         var body io.Reader
         if payload != nil {
