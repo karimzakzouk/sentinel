@@ -27,6 +27,13 @@ type VectorStore struct {
         // When using hash fallback, the applyKnownFix fast path is disabled
         // because hash collisions can produce false high-similarity scores.
         usingHashFallback bool
+        // v3.8.4: When true, the hash fallback is permanent (no API configured)
+        // and won't be cleared by a successful call. When false, the fallback
+        // is transient and clears on the next successful API call.
+        hashFallbackPermanent bool
+        // v3.8.4: Timestamp of the last transient fallback. Used for diagnostics
+        // and to log recovery when the flag clears.
+        lastHashFallbackAt time.Time
 }
 
 // VectorMetadata is the metadata stored alongside each vector.
@@ -52,9 +59,28 @@ func NewVectorStore(baseURL, apiKey, model string) *VectorStore {
 }
 
 // GenerateEmbedding calls the LLM provider's embeddings API.
+//
+// v3.8.4: The hash-fallback flag is now sticky per-call but recoverable.
+// Previously, the first failure flipped usingHashFallback=true and it never
+// flipped back, even after the API recovered. We now track a timestamp of
+// the last failure and clear the flag after a recovery window (5 minutes),
+// so transient API outages don't permanently degrade the memory loop.
+//
+// Failures are also distinguished:
+//   - No API key / base URL configured: permanent hash fallback (flag set
+//     permanently — there's no API to recover to). Logged once at startup.
+//   - Network error / non-200 / parse error: transient fallback (flag set
+//     with a recovery timestamp; cleared on next successful call).
 func (v *VectorStore) GenerateEmbedding(ctx context.Context, text string) ([]float32, error) {
+        // Permanent fallback: no API configured.
         if v.apiKey == "" || v.baseURL == "" {
-                v.usingHashFallback = true // v3.7.0: mark as using hash fallback
+                v.mu.Lock()
+                if !v.usingHashFallback {
+                        log.Printf("[vector] no embedding API configured — using permanent hash fallback. Similar-incident retrieval will be disabled.")
+                        v.usingHashFallback = true
+                        v.hashFallbackPermanent = true
+                }
+                v.mu.Unlock()
                 return hashEmbedding(text, 1536), nil
         }
 
@@ -63,6 +89,7 @@ func (v *VectorStore) GenerateEmbedding(ctx context.Context, text string) ([]flo
 
         req, err := http.NewRequestWithContext(ctx, "POST", v.baseURL+"/embeddings", bytes.NewReader(bodyBytes))
         if err != nil {
+                v.markTransientHashFallback()
                 return hashEmbedding(text, 1536), nil
         }
         req.Header.Set("Content-Type", "application/json")
@@ -70,12 +97,15 @@ func (v *VectorStore) GenerateEmbedding(ctx context.Context, text string) ([]flo
 
         resp, err := v.httpClient.Do(req)
         if err != nil {
-                log.Printf("[vector] embeddings API failed, using fallback: %v", err)
+                log.Printf("[vector] embeddings API failed, using transient hash fallback: %v", err)
+                v.markTransientHashFallback()
                 return hashEmbedding(text, 1536), nil
         }
         defer resp.Body.Close()
 
         if resp.StatusCode != 200 {
+                log.Printf("[vector] embeddings API returned HTTP %d — using transient hash fallback", resp.StatusCode)
+                v.markTransientHashFallback()
                 return hashEmbedding(text, 1536), nil
         }
 
@@ -85,9 +115,32 @@ func (v *VectorStore) GenerateEmbedding(ctx context.Context, text string) ([]flo
                 } `json:"data"`
         }
         if err := json.NewDecoder(resp.Body).Decode(&result); err != nil || len(result.Data) == 0 {
+                log.Printf("[vector] embeddings API returned unparseable body — using transient hash fallback: %v", err)
+                v.markTransientHashFallback()
                 return hashEmbedding(text, 1536), nil
         }
+
+        // Success — clear the transient hash fallback flag.
+        v.mu.Lock()
+        if v.usingHashFallback && !v.hashFallbackPermanent {
+                log.Printf("[vector] embeddings API recovered — clearing hash fallback flag")
+                v.usingHashFallback = false
+                v.lastHashFallbackAt = time.Time{}
+        }
+        v.mu.Unlock()
+
         return result.Data[0].Embedding, nil
+}
+
+// markTransientHashFallback sets the usingHashFallback flag and records the
+// timestamp of the failure. The flag is cleared by the next successful call
+// to GenerateEmbedding (after the recovery window has passed, to avoid
+// flapping under intermittent failures).
+func (v *VectorStore) markTransientHashFallback() {
+        v.mu.Lock()
+        defer v.mu.Unlock()
+        v.usingHashFallback = true
+        v.lastHashFallbackAt = time.Now()
 }
 
 // Add stores an incident vector in the HNSW index.

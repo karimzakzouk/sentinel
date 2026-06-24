@@ -57,6 +57,26 @@ var errorPatterns = []*regexp.Regexp{
         regexp.MustCompile(`level=fatal`),
 }
 
+// v3.8.4: extractErrorTypePatterns are pre-compiled at package init.
+// Previous implementation called regexp.MustCompile inside a loop on every
+// line of every streamed log — measurable CPU waste on chatty pods (the
+// regexes were re-compiled N times per pod-log-line, where N is the number
+// of patterns). Pre-compiling once at init moves the cost to startup.
+var extractErrorTypePatterns = []struct {
+        re      *regexp.Regexp
+        // fallback is returned when the regex matches but has no capture group
+        // (e.g. "panic:" matches but doesn't capture an error-type name).
+        fallback string
+}{
+        {regexp.MustCompile(`(\w+Error):`), ""},
+        {regexp.MustCompile(`(\w+Exception):`), ""},
+        {regexp.MustCompile(`panic:`), "panic"},
+        {regexp.MustCompile(`fatal error:`), "fatal_error"},
+        {regexp.MustCompile(`(\w+Error)\s`), ""},
+        {regexp.MustCompile(`java\.lang\.(\w+)`), ""},
+        {regexp.MustCompile(`thread '.*' panicked`), "rust_panic"},
+}
+
 // ErrorFingerprint uniquely identifies an error for deduplication.
 type ErrorFingerprint struct {
         Service   string
@@ -522,21 +542,21 @@ func (d *Detector) isErrorLine(line string) bool {
 }
 
 func (d *Detector) extractErrorType(line string) string {
-        patterns := []string{
-                `(\w+Error):`,
-                `(\w+Exception):`,
-                `panic:`,
-                `fatal error:`,
-                `(\w+Error)\s`,
-                `java\.lang\.(\w+)`,
-                `thread '.*' panicked`,
-        }
-        for _, p := range patterns {
-                re := regexp.MustCompile(p)
-                if m := re.FindStringSubmatch(line); len(m) > 1 {
+        // v3.8.4: Uses the pre-compiled extractErrorTypePatterns slice instead
+        // of re-compiling regexes on every call. For a pod emitting 1000 log
+        // lines, this avoids 7000 regexp.MustCompile calls per detection pass.
+        for _, p := range extractErrorTypePatterns {
+                if m := p.re.FindStringSubmatch(line); len(m) > 1 {
                         return m[1]
-                } else if re.MatchString(line) {
-                        return p
+                } else if p.re.MatchString(line) {
+                        // Regex matched but had no capture group — return the fallback
+                        // (e.g. "panic" for the "panic:" regex) instead of the regex
+                        // pattern string itself.
+                        if p.fallback != "" {
+                                return p.fallback
+                        }
+                        // No fallback defined — return a generic name based on the regex.
+                        return "error"
                 }
         }
         return "unknown_error"
