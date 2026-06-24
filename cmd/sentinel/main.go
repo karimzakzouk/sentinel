@@ -904,8 +904,37 @@ func (a *storeAdapter) ListRecentIncidents(ctx context.Context, limit int) ([]an
 }
 
 // v3.3.1: GetIncident — was missing, causing /incidents/{id} to return 404.
+// v3.8.4: Fixed nil-interface trap. feedback.Store.GetIncident returns
+// (*schemas.Incident)(nil) for not-found, but boxing a typed nil pointer
+// into `any` produces a non-nil interface. Without the explicit nil check,
+// every lookup of a non-existent UUID returned 200 with body "null" instead
+// of 404. The CLI then tried to parse "null" as a JSON object and failed
+// with "cannot unmarshal null into map[string]interface{}".
 func (a *storeAdapter) GetIncident(ctx context.Context, id uuid.UUID) (any, error) {
-        return a.store.GetIncident(ctx, id)
+        inc, err := a.store.GetIncident(ctx, id)
+        if err != nil {
+                return nil, err
+        }
+        if inc == nil {
+                return nil, nil
+        }
+        return inc, nil
+}
+
+// v3.8.4: FindIncidentByPrefix — bridges feedback.Store.FindIncidentByPrefix
+// to the api.Store interface. Without this adapter method, the type assertion
+// in handleIncident would fail (storeAdapter doesn't have the method) and
+// every short-ID lookup would return 400 "prefix matching not supported".
+// Also applies the same nil-interface fix as GetIncident above.
+func (a *storeAdapter) FindIncidentByPrefix(ctx context.Context, prefix string) (any, error) {
+        inc, err := a.store.FindIncidentByPrefix(ctx, prefix)
+        if err != nil {
+                return nil, err
+        }
+        if inc == nil {
+                return nil, nil
+        }
+        return inc, nil
 }
 
 // vectorStoreAdapter bridges feedback.VectorStore to agents.VectorStore interface.

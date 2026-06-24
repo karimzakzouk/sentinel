@@ -59,6 +59,12 @@ type Server struct {
 type Store interface {
         ListRecentIncidents(ctx context.Context, limit int) ([]any, error)
         GetIncident(ctx context.Context, id uuid.UUID) (any, error)
+        // v3.8.4: FindIncidentByPrefix supports short-ID lookup. The CLI
+        // displays 8-char truncated IDs in `incidents list` output; without
+        // this, `incidents get <8-char-id>` fails because GetIncident requires
+        // a full UUID. Returns nil (no error) if no match; prefix must be ≥4
+        // chars to prevent accidental collisions.
+        FindIncidentByPrefix(ctx context.Context, prefix string) (any, error)
 }
 
 type SettingsGetter func() map[string]any
@@ -280,20 +286,14 @@ func (s *Server) handleIncident(w http.ResponseWriter, r *http.Request) {
                 return
         }
 
-        // Not a full UUID — try prefix matching if the store supports it.
-        // v3.8.4: This makes `sentinelctl incidents get 91cce5a5` work, which
-        // is what users naturally type after seeing the 8-char truncated ID
-        // in `incidents list` output.
-        prefixSearcher, ok := s.store.(interface {
-                FindIncidentByPrefix(ctx context.Context, prefix string) (any, error)
-        })
-        if !ok {
-                writeJSON(w, 400, map[string]string{
-                        "error": "invalid incident ID (prefix matching not supported by this store)",
-                })
-                return
-        }
-        incident, err := prefixSearcher.FindIncidentByPrefix(r.Context(), idStr)
+        // Not a full UUID — try prefix matching. v3.8.4: This makes
+        // `sentinelctl incidents get 91cce5a5` work, which is what users
+        // naturally type after seeing the 8-char truncated ID in
+        // `incidents list` output. FindIncidentByPrefix is now part of the
+        // Store interface (was a broken type assertion before — the assertion
+        // targeted *feedback.Store but s.store is a *storeAdapter wrapper,
+        // so it always failed with ok=false and returned 400).
+        incident, err := s.store.FindIncidentByPrefix(r.Context(), idStr)
         if err != nil {
                 writeJSON(w, 500, map[string]string{"error": err.Error()})
                 return
