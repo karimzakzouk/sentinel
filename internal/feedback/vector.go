@@ -23,6 +23,10 @@ type VectorStore struct {
         httpClient *http.Client
         metadata   map[uint64]*VectorMetadata
         nextID     uint64
+        // v3.7.0: Track whether we're using real embeddings or hash fallback.
+        // When using hash fallback, the applyKnownFix fast path is disabled
+        // because hash collisions can produce false high-similarity scores.
+        usingHashFallback bool
 }
 
 // VectorMetadata is the metadata stored alongside each vector.
@@ -50,6 +54,7 @@ func NewVectorStore(baseURL, apiKey, model string) *VectorStore {
 // GenerateEmbedding calls the LLM provider's embeddings API.
 func (v *VectorStore) GenerateEmbedding(ctx context.Context, text string) ([]float32, error) {
         if v.apiKey == "" || v.baseURL == "" {
+                v.usingHashFallback = true // v3.7.0: mark as using hash fallback
                 return hashEmbedding(text, 1536), nil
         }
 
@@ -148,6 +153,14 @@ func (v *VectorStore) Search(ctx context.Context, text string, k int) ([]*Vector
                 scores = append(scores, sim)
         }
         return metas, scores, nil
+}
+
+// UsingHashFallback returns true when no real embedding API is configured.
+// v3.7.0: When this returns true, the investigator should disable the
+// applyKnownFix fast path (high similarity > 0.85) because hash embeddings
+// can produce false high-similarity scores due to hash collisions.
+func (v *VectorStore) UsingHashFallback() bool {
+        return v.usingHashFallback
 }
 
 // LoadFromDB rebuilds the HNSW index from stored vectors in SQLite.

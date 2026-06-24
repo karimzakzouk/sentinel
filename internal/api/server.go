@@ -19,6 +19,7 @@ import (
         "log"
         "net/http"
         "strings"
+        "sync"
         "time"
 
         "github.com/google/uuid"
@@ -32,11 +33,34 @@ type Server struct {
         settings        SettingsGetter
         investigate     InvestigateFunc
         readyChecker    ReadyChecker
-        webhookHandler  http.Handler // v3.5.0: GitHub webhook receiver (predictive PR review)
-        slackHandler    http.Handler // v3.5.0: Slack Events API (interactive bot)
-        pauseController PauseController // v3.6.0: CLI pause/resume via API
-        webUIHandler    http.Handler // v3.6.0: Embedded web UI
+        webhookHandler  http.Handler
+        slackHandler    http.Handler
+        pauseController PauseController
+        webUIHandler    http.Handler
         http            *http.Server
+
+        // v3.7.0: SSE event broadcasting
+        eventSubs   map[chan ServerEvent]bool
+        eventSubsMu sync.Mutex
+}
+
+// ServerEvent is an event pushed to connected SSE clients.
+type ServerEvent struct {
+        Type string      `json:"type"` // "incident", "log", "metric", "status"
+        Data interface{} `json:"data"`
+}
+
+// BroadcastEvent pushes an event to all connected SSE clients.
+// v3.7.0: Called from the investigation handler to push real-time updates.
+func (s *Server) BroadcastEvent(eventType string, data interface{}) {
+        s.eventSubsMu.Lock()
+        defer s.eventSubsMu.Unlock()
+        for ch := range s.eventSubs {
+                select {
+                case ch <- ServerEvent{Type: eventType, Data: data}:
+                default: // drop if client is slow
+                }
+        }
 }
 
 // PauseController controls autonomous mode pause/resume.
@@ -69,6 +93,7 @@ func New(addr string, store Store, settings SettingsGetter, investigate Investig
                 settings:     settings,
                 investigate:  investigate,
                 readyChecker: ready,
+                eventSubs:    make(map[chan ServerEvent]bool),
         }
         mux := http.NewServeMux()
         mux.HandleFunc("/healthz", s.handleHealthz)
@@ -82,6 +107,8 @@ func New(addr string, store Store, settings SettingsGetter, investigate Investig
         // v3.6.0: CLI pause/resume via API
         mux.HandleFunc("/admin/pause", s.handlePause)
         mux.HandleFunc("/admin/resume", s.handleResume)
+        // v3.7.0: Server-Sent Events for real-time UI updates
+        mux.HandleFunc("/events", s.handleSSE)
         // v3.5.0: Predictive PR review webhook receiver.
         // webhookHandler is nil by default — set via SetWebhookHandler.
         mux.HandleFunc("/webhook/github", s.handleWebhook)
@@ -187,12 +214,60 @@ func (s *Server) handleSlack(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleWebUI(w http.ResponseWriter, r *http.Request) {
         if s.webUIHandler == nil {
-                // No web UI built — serve placeholder
                 w.Header().Set("Content-Type", "text/html; charset=utf-8")
                 w.Write([]byte(`<!DOCTYPE html><html><head><title>Sentinel</title></head><body style="background:#0A0A0B;color:#A1A1AA;font-family:monospace;padding:40px;"><h1 style="color:#06B6D4;">Sentinel</h1><p>Web UI not built. The API is running at <code>/healthz</code>, <code>/incidents</code>, <code>/metrics</code>.</p></body></html>`))
                 return
         }
         s.webUIHandler.ServeHTTP(w, r)
+}
+
+// handleSSE handles Server-Sent Events connections for real-time UI updates.
+// v3.7.0: The UI connects to /events and receives push notifications when
+// incidents are detected, pipeline steps complete, PRs open, etc.
+func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
+        w.Header().Set("Content-Type", "text/event-stream")
+        w.Header().Set("Cache-Control", "no-cache")
+        w.Header().Set("Connection", "keep-alive")
+        w.Header().Set("Access-Control-Allow-Origin", "*")
+
+        flusher, ok := w.(http.Flusher)
+        if !ok {
+                http.Error(w, "streaming not supported", http.StatusInternalServerError)
+                return
+        }
+
+        // Register this client
+        ch := make(chan ServerEvent, 16)
+        s.eventSubsMu.Lock()
+        s.eventSubs[ch] = true
+        s.eventSubsMu.Unlock()
+        defer func() {
+                s.eventSubsMu.Lock()
+                delete(s.eventSubs, ch)
+                s.eventSubsMu.Unlock()
+        }()
+
+        // Send initial connection event
+        fmt.Fprintf(w, "event: connected\ndata: {\"status\":\"connected\"}\n\n")
+        flusher.Flush()
+
+        // Ping ticker (keep-alive every 15s)
+        ticker := time.NewTicker(15 * time.Second)
+        defer ticker.Stop()
+
+        for {
+                select {
+                case <-r.Context().Done():
+                        return
+                case event := <-ch:
+                        data, _ := json.Marshal(event)
+                        fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event.Type, data)
+                        flusher.Flush()
+                case <-ticker.C:
+                        fmt.Fprintf(w, ": ping\n\n")
+                        flusher.Flush()
+                }
+        }
 }
 
 // Start begins serving HTTP.
@@ -210,7 +285,7 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
         writeJSON(w, 200, map[string]string{
                 "status":  "ok",
                 "service": "core",
-                "version": "3.6.5",
+                "version": "3.7.0",
         })
 }
 

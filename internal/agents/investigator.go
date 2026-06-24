@@ -81,6 +81,9 @@ type Investigator struct {
 // VectorStore is the interface for incident memory retrieval.
 type VectorStore interface {
         Search(ctx context.Context, text string, k int) ([]*VectorMetadata, []float32, error)
+        // v3.7.0: Hash fallback check — when true, the applyKnownFix fast path
+        // is disabled because hash embeddings can produce false high-similarity.
+        UsingHashFallback() bool
 }
 
 // VectorMetadata is a past incident stored in the vector index.
@@ -128,15 +131,21 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
         // 0.5 MEMORY LOOP — query HNSW for similar past incidents.
         // If we've seen this exact pattern before AND it was successfully fixed,
         // skip the full investigation and apply the known fix directly.
+        // v3.7.0: Disabled when using hash embeddings — hash collisions can
+        // produce false high-similarity scores. Only use real embeddings for
+        // the applyKnownFix fast path.
         if a.vectorStore != nil && podLogs != "" {
                 similar, scores, err := a.vectorStore.Search(ctx, podLogs, 5)
                 if err == nil && len(similar) > 0 {
                         log.Printf("[memory] found %d similar incidents (top score: %.3f)", len(similar), scores[0])
 
                         // High similarity + prior success → skip investigation, apply known fix
-                        if scores[0] > 0.85 && similar[0].Outcome == "success" {
+                        // v3.7.0: Only when using real embeddings (not hash fallback)
+                        if scores[0] > 0.85 && similar[0].Outcome == "success" && !a.vectorStore.UsingHashFallback() {
                                 log.Printf("[memory] HIGH MATCH (score=%.3f) — applying known fix from incident %s", scores[0], similar[0].IncidentID)
                                 return a.applyKnownFix(ctx, state, similar[0], podLogs)
+                        } else if scores[0] > 0.85 && a.vectorStore.UsingHashFallback() {
+                                log.Printf("[memory] HIGH MATCH (score=%.3f) but using hash embeddings — skipping applyKnownFix for safety", scores[0])
                         }
 
                         // Medium similarity → use as context for the LLM

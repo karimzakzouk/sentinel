@@ -53,6 +53,7 @@ type Warning struct {
 // Satisfied by feedback.VectorStore (via an adapter in main.go).
 type VectorStore interface {
         Search(ctx context.Context, text string, k int) ([]*VectorMetadata, []float32, error)
+        UsingHashFallback() bool
 }
 
 // VectorMetadata is a past incident stored in the vector index.
