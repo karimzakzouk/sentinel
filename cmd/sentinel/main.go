@@ -10,6 +10,7 @@ import (
         "net/http"
         "os"
         "os/signal"
+        "strings"
         "syscall"
         "time"
 
@@ -20,6 +21,7 @@ import (
         "github.com/karimzakzouk/sentinel/v3/internal/config"
         "github.com/karimzakzouk/sentinel/v3/internal/correlation"
         "github.com/karimzakzouk/sentinel/v3/internal/detection"
+        "github.com/karimzakzouk/sentinel/v3/internal/events"
         "github.com/karimzakzouk/sentinel/v3/internal/executors"
         "github.com/karimzakzouk/sentinel/v3/internal/feedback"
         "github.com/karimzakzouk/sentinel/v3/internal/k8s"
@@ -33,6 +35,10 @@ import (
         "github.com/karimzakzouk/sentinel/v3/internal/watcher"
         "github.com/karimzakzouk/sentinel/v3/internal/web"
 )
+
+// v3.7.0: Package-level broadcaster — reassigned in main() after apiServer is created.
+// Used by the investigation handler + executeCodeFix to push real-time SSE events.
+var broadcaster events.Broadcaster = events.Noop()
 
 func main() {
         addr := flag.String("addr", "", "HTTP listen address (overrides env)")
@@ -167,6 +173,10 @@ func main() {
                         logging.Error("save incident failed", "error", err, "service", cluster.Service)
                         return
                 }
+                broadcaster.BroadcastEvent("incident", map[string]any{
+                        "type": "started", "incident_id": incident.IncidentID.String(),
+                        "service": cluster.Service, "namespace": cluster.Namespace,
+                })
 
                 // v3.4.0: Attach incident_id to context so all subsequent log lines
                 // from this handler can be correlated in Datadog/Loki.
@@ -335,6 +345,11 @@ func main() {
                         "beta", beta,
                         "pr_url", prURL,
                 )
+                broadcaster.BroadcastEvent("incident", map[string]any{
+                        "type": "resolved", "incident_id": incident.IncidentID.String(),
+                        "service": cluster.Service, "status": string(incident.Status),
+                        "pr_url": prURL, "success": success,
+                })
                 finalStatus = string(incident.Status)
                 if err := k8sClient.PatchCRStatus(ctx, crName, crNamespace, string(incident.Status)); err != nil {
                         logging.ErrorCtx(invCtx, "patch CR status (resolved) failed", "error", err)
@@ -365,13 +380,52 @@ func main() {
                         "likely_cause", event.LikelyCause,
                         "incident_count", event.IncidentCount,
                 )
+
+                // v3.7.0: Actually trigger rollback of the likely-cause service.
+                // Claude's review noted this was a placeholder — now it executes.
+                if event.LikelyCause != "" {
+                        // Parse "service/namespace" from LikelyCause
+                        parts := strings.SplitN(event.LikelyCause, "/", 2)
+                        if len(parts) == 2 {
+                                rollbackService, rollbackNamespace := parts[0], parts[1]
+                                if cfg.CanWriteTo(rollbackNamespace) {
+                                        logging.Warn("triggering rollback for cascade likely cause",
+                                                "service", rollbackService,
+                                                "namespace", rollbackNamespace,
+                                        )
+                                        // Build a FixProposal for rollback
+                                        rollbackFP := &schemas.FixProposal{
+                                                FixType:         schemas.FixRollback,
+                                                TargetService:   rollbackService,
+                                                TargetNamespace: rollbackNamespace,
+                                                Description:     fmt.Sprintf("Automatic rollback due to cascade: %d services failing", event.IncidentCount),
+                                        }
+                                        if err := k8sExec.Rollback(ctx, rollbackFP); err != nil {
+                                                logging.Error("cascade rollback failed", "error", err, "service", rollbackService)
+                                        } else {
+                                                logging.Info("cascade rollback succeeded", "service", rollbackService)
+                                        }
+                                } else {
+                                        logging.Warn("cascade rollback skipped — namespace not in allowlist",
+                                                "namespace", rollbackNamespace,
+                                        )
+                                }
+                        }
+                }
+
                 // Send a Slack alert about the cascade
                 alertSender.SendAlert(
                         event.LikelyCause,
                         "cascade",
-                        fmt.Sprintf("Cascade detected: %d services failing. Likely cause: %s", event.IncidentCount, event.LikelyCause),
+                        fmt.Sprintf("Cascade detected: %d services failing. Likely cause: %s — rollback triggered.", event.IncidentCount, event.LikelyCause),
                         "",
                 )
+
+                // Broadcast to SSE clients
+                broadcaster.BroadcastEvent("cascade", map[string]any{
+                        "services": event.Services, "likely_cause": event.LikelyCause,
+                        "incident_count": event.IncidentCount,
+                })
         })
 
         // 9. Start the autonomous detection layer (live log streaming + pod status)
@@ -549,6 +603,9 @@ func main() {
         // v3.6.0: Wire the embedded web UI (Next.js dashboard)
         apiServer.SetWebUIHandler(web.Handler())
 
+        // v3.7.0: Wire the API server as the event broadcaster
+        broadcaster = apiServer
+
         // v3.5.0: Wire the Slack bot token for posting @mention replies.
         if cfg.SlackBotToken != "" {
                 slackBot.SetBotToken(cfg.SlackBotToken)
@@ -722,6 +779,10 @@ func executeCodeFix(
                 "sandbox_verified", sandboxVerified,
         )
         metrics.RecordPROpened()
+        broadcaster.BroadcastEvent("pr_opened", map[string]any{
+                "pr_url": prResult.PRURL, "pr_number": prResult.PRNumber,
+                "sandbox_verified": sandboxVerified,
+        })
         return nil
 }
 

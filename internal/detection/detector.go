@@ -149,6 +149,9 @@ func (d *Detector) watchPodsInNamespace(ctx context.Context, namespace string) {
                 return
         }
 
+        // v3.7.0: Replaced goto restart with a named loop for clarity.
+        // (Claude's review noted the goto was unusual and would confuse contributors.)
+watchLoop:
         for {
                 select {
                 case <-ctx.Done():
@@ -183,7 +186,7 @@ func (d *Detector) watchPodsInNamespace(ctx context.Context, namespace string) {
                                 if !ok {
                                         watcher.Stop()
                                         time.Sleep(5 * time.Second)
-                                        goto restart
+                                        continue watchLoop // v3.7.0: named loop instead of goto restart
                                 }
                                 pod, ok := event.Object.(*corev1.Pod)
                                 if !ok {
@@ -192,8 +195,6 @@ func (d *Detector) watchPodsInNamespace(ctx context.Context, namespace string) {
                                 d.handlePod(ctx, pod)
                         }
                 }
-
-        restart:
         }
 }
 
