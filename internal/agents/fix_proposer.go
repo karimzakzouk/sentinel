@@ -228,46 +228,24 @@ func (a *FixProposer) Run(ctx context.Context, state *schemas.AgentState) error 
 
         // Parse files_to_change + fix file paths against fetched_code keys
         rawFiles, _ := result["files_to_change"].([]any)
-        files := []schemas.FileChange{}
-        for _, rf := range rawFiles {
-                fcMap, ok := rf.(map[string]any)
-                if !ok {
-                        continue
+        files := parseFilesToChange(rawFiles, state)
+
+        // v3.8.6: If the LLM returned no files, retry with a simpler, more
+        // explicit prompt. Free-tier models (gpt-oss-120b:free, etc.) often
+        // fail to produce the full file content in the first call — they
+        // return the fix_type and description but leave files_to_change empty
+        // or malformed. The retry prompt shows the exact file to fix and
+        // asks for just the fixed version, which is a much simpler task.
+        if len(files) == 0 && len(state.FetchedCode) > 0 {
+                log.Printf("[fix_proposer] LLM returned 0 files on first attempt — retrying with simplified prompt")
+                log.Printf("[fix_proposer] LLM response keys: %v", keysOfMap(result))
+
+                files = a.retryFixWithSimplifiedPrompt(ctx, state, result)
+                if len(files) > 0 {
+                        log.Printf("[fix_proposer] retry succeeded — got %d file(s)", len(files))
+                } else {
+                        log.Printf("[fix_proposer] retry also returned 0 files — giving up")
                 }
-                path, _ := fcMap["path"].(string)
-                content, _ := fcMap["new_content"].(string)
-                if path == "" {
-                        continue
-                }
-                // Fix file paths: LLM often uses container paths (e.g. "app/app/main.py")
-                // instead of repo paths (e.g. "app/main.py"). Match against fetched_code keys.
-                if len(state.FetchedCode) > 0 {
-                        matched := false
-                        for repoPath := range state.FetchedCode {
-                                if strings.HasSuffix(path, repoPath) && path != repoPath {
-                                        path = repoPath
-                                        matched = true
-                                        break
-                                }
-                                if strings.HasSuffix(repoPath, path) && repoPath != path {
-                                        path = repoPath
-                                        matched = true
-                                        break
-                                }
-                        }
-                        _ = matched
-                }
-                // v3.8.4: Validate the path against the security allowlist.
-                // This rejects path traversal, absolute paths, and CI/CD-
-                // sensitive files (.github/workflows/*, Jenkinsfile, etc.)
-                // that an LLM (potentially under prompt-injection from
-                // attacker-controlled pod logs) should not be modifying.
-                validated := validateFilePath(path)
-                if validated == "" {
-                        continue
-                }
-                path = validated
-                files = append(files, schemas.FileChange{Path: path, NewContent: content})
         }
 
         dockerfilePath, _ := result["dockerfile_path"].(string)
@@ -351,6 +329,164 @@ func (a *FixProposer) buildUserMessage(state *schemas.AgentState) string {
         parts = append(parts, "IMPORTANT: Use the EXACT file path from '### <path>' above in your files_to_change.")
         parts = append(parts, "Do NOT use container paths (like /app/app/main.py) — use the repo path (like app/main.py).")
         return strings.Join(parts, "\n")
+}
+
+// parseFilesToChange extracts FileChange entries from the LLM's raw
+// files_to_change array, fixing container paths and validating security.
+// Extracted so the retry path can reuse the same logic.
+func parseFilesToChange(rawFiles []any, state *schemas.AgentState) []schemas.FileChange {
+        files := []schemas.FileChange{}
+        for _, rf := range rawFiles {
+                fcMap, ok := rf.(map[string]any)
+                if !ok {
+                        continue
+                }
+                path, _ := fcMap["path"].(string)
+                content, _ := fcMap["new_content"].(string)
+                if path == "" {
+                        continue
+                }
+                // Fix file paths: LLM often uses container paths (e.g. "app/app/main.py")
+                // instead of repo paths (e.g. "app/main.py"). Match against fetched_code keys.
+                if len(state.FetchedCode) > 0 {
+                        for repoPath := range state.FetchedCode {
+                                if strings.HasSuffix(path, repoPath) && path != repoPath {
+                                        path = repoPath
+                                        break
+                                }
+                                if strings.HasSuffix(repoPath, path) && repoPath != path {
+                                        path = repoPath
+                                        break
+                                }
+                        }
+                }
+                validated := validateFilePath(path)
+                if validated == "" {
+                        continue
+                }
+                path = validated
+                files = append(files, schemas.FileChange{Path: path, NewContent: content})
+        }
+        return files
+}
+
+// retryFixWithSimplifiedPrompt is called when the first LLM attempt returns
+// 0 files. It builds a much simpler prompt that:
+//  1. Shows the LLM the exact file that needs fixing (from FetchedCode)
+//  2. Shows the root cause statement
+//  3. Asks ONLY for the fixed file content — no complex JSON structure
+//
+// This works with weaker/free-tier models that can't handle the full
+// fix-proposer prompt (which asks for a complex JSON object with multiple
+// fields). The retry prompt is dead simple: "here's the file, here's the
+// bug, give me the fixed file."
+//
+// v3.8.6.
+func (a *FixProposer) retryFixWithSimplifiedPrompt(ctx context.Context, state *schemas.AgentState, firstResult map[string]any) []schemas.FileChange {
+        // Pick the most relevant file from FetchedCode. The root cause usually
+        // references a specific file — try to find it. Otherwise use the first.
+        targetPath := ""
+        targetContent := ""
+        if state.RootCause != nil && len(state.RootCause.SourceFiles) > 0 {
+                for _, sf := range state.RootCause.SourceFiles {
+                        if content, ok := state.FetchedCode[sf]; ok {
+                                targetPath = sf
+                                targetContent = content
+                                break
+                        }
+                }
+        }
+        if targetPath == "" {
+                // Fall back to the first fetched file
+                for p, c := range state.FetchedCode {
+                        targetPath = p
+                        targetContent = c
+                        break
+                }
+        }
+        if targetPath == "" {
+                return nil
+        }
+
+        // Use the description from the first attempt if available (it usually
+        // correctly describes the fix even when it doesn't produce the file).
+        description := ""
+        if d, ok := firstResult["description"].(string); ok {
+                description = d
+        }
+
+        // Build a dead-simple prompt: "here's the file, here's the bug, fix it."
+        simplifiedPrompt := "You are a code fixer. Below is a Python file that has a bug. Fix the bug and return the COMPLETE fixed file.\n\n" +
+                "BUG: " + description + "\n" +
+                "ROOT CAUSE: " + state.RootCause.Statement + "\n\n" +
+                "CURRENT FILE (" + targetPath + "):\n" +
+                "---\n" +
+                targetContent + "\n" +
+                "---\n\n" +
+                "Return a JSON object with EXACTLY this format:\n" +
+                "{\n" +
+                "  \"path\": \"" + targetPath + "\",\n" +
+                "  \"new_content\": \"<the complete fixed file contents>\"\n" +
+                "}\n\n" +
+                "Rules:\n" +
+                "- Return the COMPLETE file, not a diff\n" +
+                "- Only change what's necessary to fix the bug\n" +
+                "- The \"path\" must be exactly \"" + targetPath + "\"\n" +
+                "- Do NOT include any text before or after the JSON"
+
+        result, err := a.router.FrontierJSON(ctx, "You are a code fixer. Return only valid JSON.", simplifiedPrompt, 4000)
+        if err != nil {
+                log.Printf("[fix_proposer] retry LLM call failed: %v", err)
+                return nil
+        }
+
+        // The retry returns a single file, not an array. Parse it directly.
+        path, _ := result["path"].(string)
+        content, _ := result["new_content"].(string)
+
+        // Also try the array format in case the LLM wrapped it
+        if path == "" {
+                if rawFiles, ok := result["files_to_change"].([]any); ok && len(rawFiles) > 0 {
+                        if fcMap, ok := rawFiles[0].(map[string]any); ok {
+                                path, _ = fcMap["path"].(string)
+                                content, _ = fcMap["new_content"].(string)
+                        }
+                }
+        }
+
+        if path == "" || content == "" {
+                log.Printf("[fix_proposer] retry returned empty path or content (path=%q, content_len=%d)", path, len(content))
+                return nil
+        }
+
+        // Fix path against fetched_code keys
+        for repoPath := range state.FetchedCode {
+                if strings.HasSuffix(path, repoPath) && path != repoPath {
+                        path = repoPath
+                        break
+                }
+                if strings.HasSuffix(repoPath, path) && repoPath != path {
+                        path = repoPath
+                        break
+                }
+        }
+
+        validated := validateFilePath(path)
+        if validated == "" {
+                log.Printf("[fix_proposer] retry: path validation rejected %q", path)
+                return nil
+        }
+
+        return []schemas.FileChange{{Path: validated, NewContent: content}}
+}
+
+// keysOfMap returns the keys of a map for debug logging.
+func keysOfMap(m map[string]any) []string {
+        keys := make([]string, 0, len(m))
+        for k := range m {
+                keys = append(keys, k)
+        }
+        return keys
 }
 
 // llmCodeFix is used for roll_forward cases where we still need an LLM-generated patch.
