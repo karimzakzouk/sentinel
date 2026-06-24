@@ -161,6 +161,14 @@ func (b *Bot) HandleEvents(w http.ResponseWriter, r *http.Request) {
 
 // verifySlackSignature verifies the HMAC-SHA256 signature Slack sends.
 // v3.5.0: Uses the signing secret + timestamp + body to compute HMAC.
+//
+// v3.8.4: Now enforces timestamp freshness. Previous implementation skipped
+// the check to "avoid clock skew issues in test environments" — that left
+// the bot vulnerable to indefinite replay attacks (a captured Slack request
+// could be re-sent forever to trigger investigations). The freshness window
+// is 5 minutes, matching Slack's own retry policy. Clock skew of more than
+// 5 minutes between Sentinel and Slack's servers is a real ops problem
+// worth surfacing, not papering over.
 func (b *Bot) verifySlackSignature(r *http.Request, body []byte) bool {
         timestamp := r.Header.Get("X-Slack-Request-Timestamp")
         sig := r.Header.Get("X-Slack-Signature")
@@ -168,9 +176,26 @@ func (b *Bot) verifySlackSignature(r *http.Request, body []byte) bool {
                 return false
         }
 
-        // Reject requests older than 5 minutes (replay attack prevention)
-        // Note: we skip strict timestamp validation here to avoid clock skew issues
-        // in test environments. In production, Slack enforces this on their side.
+        // v3.8.4: Parse the timestamp and reject requests older than 5 minutes.
+        // Slack's own retry policy retries failed deliveries for up to 3 hours,
+        // but a *successful* delivery followed by a replay attack is the threat
+        // we're defending against — 5 minutes is generous enough for normal
+        // network latency and tight enough to make replay impractical.
+        ts, err := strconv.ParseInt(timestamp, 10, 64)
+        if err != nil {
+                log.Printf("[slackbot] invalid X-Slack-Request-Timestamp %q: %v", timestamp, err)
+                return false
+        }
+        age := time.Now().Unix() - ts
+        if age > 300 {
+                log.Printf("[slackbot] rejecting Slack request with stale timestamp (age %ds > 300s) — possible replay attack", age)
+                return false
+        }
+        // Also reject future timestamps (clock skew > 60s in the other direction).
+        if age < -60 {
+                log.Printf("[slackbot] rejecting Slack request with future timestamp (age %ds) — clock skew or attack", age)
+                return false
+        }
 
         // Compute: HMAC-SHA256(signingSecret, "v0:timestamp:body")
         base := "v0:" + timestamp + ":" + string(body)

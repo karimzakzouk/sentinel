@@ -96,20 +96,32 @@ func TestVerifySignature_Invalid(t *testing.T) {
 }
 
 // TestVerifySignature_NoSecret verifies that with no secret configured,
-// verification is skipped (dev mode).
+// verification is refused (v3.8.4: was previously accepted for dev mode,
+// but that allowed forged webhooks to drive Sentinel into fetching
+// arbitrary diff_url values with the GitHub PAT attached).
 func TestVerifySignature_NoSecret(t *testing.T) {
         r := New("token", "", nil)
-        if !r.VerifySignature([]byte("payload"), "sha256=anything") {
-                t.Error("with no secret, all signatures should be accepted (dev mode)")
+        if r.VerifySignature([]byte("payload"), "sha256=anything") {
+                t.Error("with no secret configured, all signatures should be REFUSED (security: forged webhooks could exfiltrate the PAT)")
         }
 }
 
-// TestHandleWebhook_Ping verifies the ping event returns 200.
+// TestHandleWebhook_Ping verifies the ping event returns 200 when a
+// valid webhook secret is configured and the signature verifies.
+// v3.8.4: Previous version tested with no secret (which used to skip
+// verification) — now we require a real secret.
 func TestHandleWebhook_Ping(t *testing.T) {
-        r := New("token", "", &mockVectorStore{})
+        secret := "test-webhook-secret"
+        r := New("token", secret, &mockVectorStore{})
 
-        req := httptest.NewRequest("POST", "/webhook/github", strings.NewReader(`{}`))
+        payload := []byte(`{}`)
+        mac := hmac.New(sha256.New, []byte(secret))
+        mac.Write(payload)
+        sig := "sha256=" + hex.EncodeToString(mac.Sum(nil))
+
+        req := httptest.NewRequest("POST", "/webhook/github", strings.NewReader(string(payload)))
         req.Header.Set("X-GitHub-Event", "ping")
+        req.Header.Set("X-Hub-Signature-256", sig)
         w := httptest.NewRecorder()
 
         r.HandleWebhook(w, req)

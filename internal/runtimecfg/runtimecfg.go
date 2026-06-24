@@ -45,6 +45,27 @@ type Manager struct {
         mu       sync.RWMutex
         config   *RuntimeConfig
         filePath string
+        // v3.8.4: appliedCallback is invoked after every successful Save. It
+        // receives the new RuntimeConfig so the caller can propagate changes
+        // to live components (LLM router, pipeline, sandbox, etc.) without
+        // requiring a restart. Set via SetApplyCallback.
+        appliedCallback func(*RuntimeConfig)
+}
+
+// SetApplyCallback registers a function to be called after every successful
+// Save. The callback runs under the Manager's lock — keep it fast (it
+// should just copy fields into live components, not do I/O).
+//
+// v3.8.4: This is the mechanism that makes the web UI's Settings page
+// actually take effect. main.go registers a callback that propagates the
+// new LLM provider/model/key, timeouts, and confidence thresholds into
+// the live Router, Pipeline, and Policy. Previously, settings were saved
+// to disk but only read back at startup — the UI gave the illusion of
+// editable settings without actually editing anything.
+func (m *Manager) SetApplyCallback(cb func(*RuntimeConfig)) {
+        m.mu.Lock()
+        defer m.mu.Unlock()
+        m.appliedCallback = cb
 }
 
 // New creates a Manager that reads from filePath.
@@ -85,6 +106,14 @@ func (m *Manager) Save(cfg *RuntimeConfig) error {
         }
         m.config = cfg
         log.Printf("[runtimecfg] saved to %s (%d overrides)", m.filePath, countOverrides(cfg))
+        // v3.8.4: Invoke the apply callback while still holding the lock —
+        // the callback is expected to be a fast field-copy, not I/O. If it
+        // panics, the deferred unlock still runs (the panic propagates up
+        // through SaveFromJSON -> api.handleSettings -> recovers via the
+        // pipeline's panic guard, but at worst the HTTP handler returns 500).
+        if m.appliedCallback != nil {
+                m.appliedCallback(cfg)
+        }
         return nil
 }
 

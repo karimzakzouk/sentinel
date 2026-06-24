@@ -128,19 +128,21 @@ const mockLogs: LogEntry[] = [
 
 // ─── API ────────────────────────────────────────────────────────────────────
 
-const API_BASE = typeof window !== "undefined" ? (window as unknown as { __SENTINEL_API__?: string }).__SENTINEL_API__ || "" : "";
+// v3.8.4: API_BASE is always same-origin in production (the Go binary serves
+// the embedded Next.js static export). The old __SENTINEL_API__ window global
+// was never set anywhere in the Go code and was dead code; removed.
+const API_BASE = "";
 
+// v3.8.4: fetchAPI no longer silently falls back to mock data on error.
+// Previous implementation returned mockIncidents / fake metrics / fake
+// settings when the API was unreachable — dangerous for an SRE tool because
+// a misconfigured deployment looks like it's working (showing fake incidents)
+// instead of surfacing the connectivity problem. Now: on error, throw, and
+// the caller is responsible for showing an "API unreachable" state.
 async function fetchAPI<T>(path: string): Promise<T> {
-  try {
-    const resp = await fetch(`${API_BASE}${path}`);
-    if (!resp.ok) throw new Error(`API ${resp.status}`);
-    return await resp.json() as T;
-  } catch {
-    if (path.includes("/incidents")) return mockIncidents as unknown as T;
-    if (path.includes("/metrics-summary")) return { active: 0, resolved_24h: 1, failed: 0, total: 1 } as unknown as T;
-    if (path.includes("/settings")) return { llm_provider: "custom", llm_fast_model: "openai/gpt-oss-120b:free", llm_frontier_model: "openai/gpt-oss-120b:free", github_token_set: true, write_namespaces: ["sim"] } as unknown as T;
-    return {} as T;
-  }
+  const resp = await fetch(`${API_BASE}${path}`);
+  if (!resp.ok) throw new Error(`API ${resp.status} on ${path}`);
+  return await resp.json() as T;
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -180,6 +182,9 @@ export default function Page() {
   const [view, setView] = useState("dashboard");
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [loading, setLoading] = useState(true);
+  // v3.8.4: Track API errors explicitly so we can surface them instead of
+  // silently showing mock data. Empty string = no error.
+  const [apiError, setApiError] = useState<string>("");
   const [selectedIncident, setSelectedIncident] = useState<Incident | null>(null);
   const [showDetailPage, setShowDetailPage] = useState(false);
   const [paused, setPaused] = useState(false);
@@ -191,9 +196,19 @@ export default function Page() {
   const eventSourceRef = useRef<EventSource | null>(null);
 
   const loadData = useCallback(async () => {
-    const [inc] = await Promise.all([fetchAPI<Incident[]>("/incidents?limit=50")]);
-    setIncidents(inc || []);
-    setLoading(false);
+    try {
+      const inc = await fetchAPI<Incident[]>("/incidents?limit=50");
+      setIncidents(inc || []);
+      setApiError("");
+    } catch (e) {
+      // v3.8.4: Surface the error instead of falling back to mock data.
+      // The previous behavior was to silently show mockIncidents, which
+      // made a misconfigured deployment look like it was working.
+      setApiError(e instanceof Error ? e.message : String(e));
+      setIncidents([]);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => {
@@ -335,6 +350,19 @@ export default function Page() {
         </header>
 
         <div className="p-6">
+          {/* v3.8.4: API error banner — surfaces connectivity problems
+              instead of silently showing empty/mock data. */}
+          {apiError && (
+            <div className="mb-4 rounded-lg border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-300">
+              <div className="font-semibold mb-1">API unreachable</div>
+              <div className="text-red-400/80 font-mono text-xs">{apiError}</div>
+              <div className="mt-2 text-red-300/70">
+                Sentinel could not reach its own API. Check that the pod is running
+                ({`kubectl -n sentinel get pods`}), the Service exists, and your
+                port-forward / ingress is healthy. Retrying every 5s.
+              </div>
+            </div>
+          )}
           {view === "dashboard" && <DashboardView incidents={incidents} loading={loading} onSelect={openIncident} />}
           {view === "incidents" && <IncidentsView incidents={filteredIncidents} loading={loading} onSelect={openIncident} />}
           {view === "logs" && <LogsView logs={filteredLogs} filter={logFilter} setFilter={setLogFilter} />}

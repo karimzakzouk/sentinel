@@ -18,6 +18,7 @@ import (
         "net/http"
         "regexp"
         "strings"
+        "sync"
         "time"
 )
 
@@ -31,6 +32,12 @@ type Router struct {
         // v3.4.0: retry config
         maxRetries    int
         retryBaseDelay time.Duration
+        // v3.8.4: mu guards baseURL / apiKey / fastModel / frontierModel /
+        // maxRetries / retryBaseDelay. These fields can be mutated at runtime
+        // via Update (called from the runtimecfg apply callback when the user
+        // changes LLM settings in the web UI). Without this lock, an in-flight
+        // request could see a torn string pointer during an Update.
+        mu sync.RWMutex
 }
 
 // New creates a Router with default retry settings (3 retries, 500ms base delay).
@@ -52,36 +59,63 @@ func New(baseURL, apiKey, fastModel, frontierModel string) *Router {
 // v3.4.0: maxRetries = 0 disables retry. baseDelay is the initial backoff
 // (doubles each retry, with jitter).
 func (r *Router) SetRetryConfig(maxRetries int, baseDelay time.Duration) {
+        r.mu.Lock()
+        defer r.mu.Unlock()
         r.maxRetries = maxRetries
         r.retryBaseDelay = baseDelay
 }
 
 // Update reconfigures the router (called when settings change at runtime).
+// v3.8.4: Now thread-safe — takes the write lock so in-flight requests
+// using the read methods below see a consistent snapshot.
 func (r *Router) Update(baseURL, apiKey, fastModel, frontierModel string) {
+        r.mu.Lock()
+        defer r.mu.Unlock()
         r.baseURL = strings.TrimRight(baseURL, "/")
         r.apiKey = apiKey
         r.fastModel = fastModel
         r.frontierModel = frontierModel
 }
 
+// snapshot returns the current config under the read lock. Callers should
+// use the returned values instead of touching the fields directly so that
+// a concurrent Update can't tear a string mid-request.
+func (r *Router) snapshot() (baseURL, apiKey, fastModel, frontierModel string, maxRetries int, retryBaseDelay time.Duration) {
+        r.mu.RLock()
+        defer r.mu.RUnlock()
+        return r.baseURL, r.apiKey, r.fastModel, r.frontierModel, r.maxRetries, r.retryBaseDelay
+}
+
+// Snapshot is the exported version of snapshot, for use by main.go when
+// applying runtime config changes (we need to read the current base URL
+// to decide whether to override it). v3.8.4.
+func (r *Router) Snapshot() (baseURL, apiKey, fastModel, frontierModel string) {
+        b, k, f, fr, _, _ := r.snapshot()
+        return b, k, f, fr
+}
+
 // FastJSON calls the fast model and parses JSON output.
 func (r *Router) FastJSON(ctx context.Context, system, user string, maxTokens int) (map[string]any, error) {
-        return r.completeJSON(ctx, r.fastModel, system, user, maxTokens)
+        _, _, fastModel, _, _, _ := r.snapshot()
+        return r.completeJSON(ctx, fastModel, system, user, maxTokens)
 }
 
 // FrontierJSON calls the frontier model and parses JSON output.
 func (r *Router) FrontierJSON(ctx context.Context, system, user string, maxTokens int) (map[string]any, error) {
-        return r.completeJSON(ctx, r.frontierModel, system, user, maxTokens)
+        _, _, _, frontierModel, _, _ := r.snapshot()
+        return r.completeJSON(ctx, frontierModel, system, user, maxTokens)
 }
 
 // FastText calls the fast model and returns raw text.
 func (r *Router) FastText(ctx context.Context, system, user string, maxTokens int) (string, error) {
-        return r.complete(ctx, r.fastModel, system, user, maxTokens)
+        _, _, fastModel, _, _, _ := r.snapshot()
+        return r.complete(ctx, fastModel, system, user, maxTokens)
 }
 
 // FrontierText calls the frontier model and returns raw text.
 func (r *Router) FrontierText(ctx context.Context, system, user string, maxTokens int) (string, error) {
-        return r.complete(ctx, r.frontierModel, system, user, maxTokens)
+        _, _, _, frontierModel, _, _ := r.snapshot()
+        return r.complete(ctx, frontierModel, system, user, maxTokens)
 }
 
 type chatRequest struct {
@@ -187,6 +221,14 @@ func (r *Router) do(ctx context.Context, req chatRequest) (*chatResponse, error)
                 return nil, fmt.Errorf("marshal request: %w", err)
         }
 
+        // v3.8.4: Snapshot the string fields under the read lock. Strings in Go
+        // are a (ptr, len) pair and concurrent read+write can tear — a concurrent
+        // Update() changing the API key mid-request could cause the Authorization
+        // header to contain a torn pointer (garbage bytes). The integer fields
+        // (maxRetries, retryBaseDelay) are word-sized and atomically read on
+        // 64-bit platforms, so we don't bother locking them.
+        baseURL, apiKey, _, _, _, _ := r.snapshot()
+
         // v3.4.0: Track total duration across all retries for metrics.
         callStart := time.Now()
         if recordLLMMetrics != nil {
@@ -206,12 +248,12 @@ func (r *Router) do(ctx context.Context, req chatRequest) (*chatResponse, error)
                 }
 
                 // Re-create the request body reader each attempt (body is consumed by Do).
-                httpReq, err := http.NewRequestWithContext(ctx, "POST", r.baseURL+"/chat/completions", bytes.NewReader(body))
+                httpReq, err := http.NewRequestWithContext(ctx, "POST", baseURL+"/chat/completions", bytes.NewReader(body))
                 if err != nil {
                         return nil, fmt.Errorf("build request: %w", err)
                 }
                 httpReq.Header.Set("Content-Type", "application/json")
-                httpReq.Header.Set("Authorization", "Bearer "+r.apiKey)
+                httpReq.Header.Set("Authorization", "Bearer "+apiKey)
 
                 resp, err := r.http.Do(httpReq)
                 if err != nil {

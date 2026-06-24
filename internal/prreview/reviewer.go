@@ -86,11 +86,19 @@ func (r *Reviewer) SetSimilarityThreshold(t float32) {
 // VerifySignature verifies the GitHub webhook HMAC-SHA256 signature.
 // Returns true if the signature matches, false otherwise.
 // GitHub sends: X-Hub-Signature-256: sha256=<hex-hmac>
+//
+// v3.8.4: When webhookSecret is empty, returns false (refuses to verify)
+// instead of true (skip verification). The previous behavior allowed
+// forged webhooks to drive Sentinel into fetching arbitrary diff_url
+// values with the GitHub PAT attached — a forced-PR-comment vector.
+// Operators who want webhook review must set sentinel.githubWebhookSecret.
+// The handler returns 401 in this case so the misconfiguration is loud.
 func (r *Reviewer) VerifySignature(payload []byte, signature string) bool {
         if r.webhookSecret == "" {
-                // No secret configured — skip verification (dev mode only)
-                log.Printf("[prreview] WARNING: no webhook secret configured — signature verification skipped")
-                return true
+                // No secret configured — refuse to verify. The webhook is
+                // unauthenticated and must not be trusted.
+                log.Printf("[prreview] SECURITY: no webhook secret configured — refusing to verify signature. Set sentinel.githubWebhookSecret to enable PR review.")
+                return false
         }
 
         // Strip "sha256=" prefix

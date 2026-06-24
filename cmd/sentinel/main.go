@@ -90,6 +90,55 @@ func main() {
         router := llm.New(cfg.ResolvedBaseURL(), cfg.LLMAPIKey, cfg.LLMFastModel, cfg.LLMFrontierModel)
         router.SetRetryConfig(cfg.LLMMaxRetries, time.Duration(cfg.LLMRetryBaseDelayMs)*time.Millisecond)
 
+        // v3.8.4: Wire the runtime config apply callback. When the user
+        // saves settings via POST /settings, runtimecfg.Manager invokes
+        // this callback, which propagates the new LLM provider / API key /
+        // models into the live router. This is what makes the web UI's
+        // Settings page actually take effect — previously settings were
+        // saved to disk but only read back at startup.
+        rtCfg.SetApplyCallback(func(rc *runtimecfg.RuntimeConfig) {
+                // Resolve base URL: use override from runtime config if set,
+                // otherwise derive from provider, otherwise keep current.
+                baseURL := rc.LLMBaseURL
+                if baseURL == "" && rc.LLMProvider != "" {
+                        // Save the current provider override and re-derive.
+                        // We can't call cfg.ResolvedBaseURL() because cfg is
+                        // the startup config, not the runtime one. Fall back
+                        // to keeping the current base URL if provider changed
+                        // but no base URL is set — operators who change
+                        // provider should also set base URL.
+                        if rc.LLMProvider != cfg.LLMProvider {
+                                logging.Warn("LLM provider changed via runtime config but no base URL set — keeping current base URL. Set llm_base_url in settings.", "old_provider", cfg.LLMProvider, "new_provider", rc.LLMProvider)
+                        }
+                }
+                apiKey := rc.LLMAPIKey
+                if apiKey == "" {
+                        apiKey = cfg.LLMAPIKey // fall back to startup value
+                }
+                fastModel := rc.LLMFastModel
+                if fastModel == "" {
+                        fastModel = cfg.LLMFastModel
+                }
+                frontierModel := rc.LLMFrontierModel
+                if frontierModel == "" {
+                        frontierModel = cfg.LLMFrontierModel
+                }
+                if baseURL != "" {
+                        router.Update(baseURL, apiKey, fastModel, frontierModel)
+                } else {
+                        // Update without changing base URL — pass empty so
+                        // Update keeps... no, Update sets it to empty. We
+                        // need a different code path. Snapshot the current
+                        // base URL and pass it back.
+                        curBase, curKey, _, _ := router.Snapshot()
+                        _ = curKey
+                        router.Update(curBase, apiKey, fastModel, frontierModel)
+                }
+                logging.Info("LLM router reconfigured from runtime settings",
+                        "fast_model", fastModel, "frontier_model", frontierModel,
+                        "api_key_set", apiKey != "", "base_url_changed", baseURL != "")
+        })
+
         // v3.4.0: Wire LLM metrics (avoids circular import: llm → metrics → ... → llm)
         llm.SetMetricsRecorder(metrics.RecordLLMCall)
         llm.SetInFlightHooks(metrics.LLMCallStart, metrics.LLMCallEnd)
@@ -395,6 +444,27 @@ func main() {
         go func() {
                 logging.Info("CRD watcher started")
                 w.Run(ctx)
+        }()
+
+        // v3.8.4: Background reaper for leaked sandbox namespaces. The in-process
+        // defer cleanup doesn't survive pod restarts — if Sentinel is killed
+        // mid-verification, the sentinel-sandbox-* namespace leaks forever.
+        // This goroutine runs every 5 minutes and deletes any sandbox namespace
+        // older than 30 minutes (a sandbox run takes <5 min, so 30 min is a safe
+        // cutoff that won't interrupt active runs).
+        go func() {
+                ticker := time.NewTicker(5 * time.Minute)
+                defer ticker.Stop()
+                // Run once at startup to clean up leaks from a previous run.
+                sandbox.ReapStaleSandboxNamespaces(ctx, 30*time.Minute)
+                for {
+                        select {
+                        case <-ctx.Done():
+                                return
+                        case <-ticker.C:
+                                sandbox.ReapStaleSandboxNamespaces(ctx, 30*time.Minute)
+                        }
+                }
         }()
 
         // v3.5.0: Cross-service incident correlation.
