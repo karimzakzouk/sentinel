@@ -79,6 +79,14 @@ func (p *Pipeline) SetPrometheusURL(url string) {
         p.evidenceGatherer.SetPrometheusURL(url)
 }
 
+// SetAllowedRepos propagates the GitHub repo allowlist to the Investigator.
+// v3.8.4: The Investigator checks this list before cloning any repo
+// referenced by the sentinel.io/repo pod annotation. See
+// Config.IsRepoAllowed for the matching config-level helper.
+func (p *Pipeline) SetAllowedRepos(repos []string) {
+        p.investigator.SetAllowedRepos(repos)
+}
+
 // Run executes the full pipeline on the given state. Handles rewinds.
 // v3.6.0: Speed optimization — skip evidence gathering when the top hypothesis
 // already has high confidence (>= 0.7). Evidence gathering adds ~90s of LLM +

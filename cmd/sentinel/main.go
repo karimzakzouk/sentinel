@@ -112,9 +112,13 @@ func main() {
         if cfg.PrometheusURL != "" {
                 pipeline.SetPrometheusURL(cfg.PrometheusURL)
         }
+        // v3.8.4: Wire the GitHub repo allowlist into the investigator.
+        // When non-empty, the investigator refuses to clone repos outside
+        // this list — primary defense against the pod-annotation SSRF.
+        pipeline.SetAllowedRepos(cfg.AllowedGitHubRepos)
 
         // 5. Safety policy (embedded, replaces OPA sidecar)
-        policy := safety.NewPolicy(cfg.ProductionNamespaces, cfg.ConfidenceAutonomous)
+        policy := safety.NewPolicy(cfg.ProductionNamespaces, cfg.ConfidenceAutonomous, cfg.ConfidenceHumanReview)
 
         // 6. Executors
         ghExec := executors.NewGitHub(cfg.GitHubToken)
@@ -257,7 +261,15 @@ func main() {
                         map[string]any{"verdict": string(decision.Verdict)})
 
                 if decision.Verdict != schemas.VerdictAllow {
-                        logging.WarnCtx(invCtx, "denied by safety", "verdict", decision.Verdict)
+                        // v3.8.4: Differentiate the two non-Allow verdicts in logs.
+                        if decision.Verdict == schemas.VerdictRequireHumanApproval {
+                                logging.WarnCtx(invCtx, "fix requires human approval",
+                                        "verdict", decision.Verdict,
+                                        "reason", decision.HumanReviewReason,
+                                        "hint", "use 'sentinelctl approve <incident-id>' to override")
+                        } else {
+                                logging.WarnCtx(invCtx, "denied by safety", "verdict", decision.Verdict)
+                        }
                         if err := k8sClient.PatchCRStatus(ctx, crName, crNamespace, string(incident.Status)); err != nil {
                                 logging.ErrorCtx(invCtx, "patch CR status (denied) failed", "error", err)
                         }

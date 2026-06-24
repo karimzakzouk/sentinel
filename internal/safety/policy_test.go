@@ -38,14 +38,18 @@ func TestDefaultPolicyDenyProdLowConfidence(t *testing.T) {
 		FixType:         schemas.FixCodeFix,
 		TargetService:   "api",
 		TargetNamespace: "prod",
-		Confidence:      0.50, // below 0.92 threshold
+		Confidence:      0.50, // below 0.70 human-review threshold
 	})
 	if d.Verdict != schemas.VerdictDeny {
-		t.Errorf("prod code_fix with low confidence should be denied, got %s", d.Verdict)
+		t.Errorf("prod code_fix with confidence < humanReview should be denied, got %s", d.Verdict)
 	}
 }
 
-func TestDefaultPolicyDenyHighRiskService(t *testing.T) {
+// v3.8.4: Previously this test expected high-risk services to be Denied.
+// The new verdict matrix sends high-risk services to RequireHumanApproval
+// instead — that's more useful (a human can approve a high-confidence fix
+// to a payment service rather than having to do it manually from scratch).
+func TestDefaultPolicyHumanReviewForHighRiskService(t *testing.T) {
 	p := DefaultPolicy()
 	d := p.Evaluate(Input{
 		FixType:         schemas.FixCodeFix,
@@ -53,8 +57,26 @@ func TestDefaultPolicyDenyHighRiskService(t *testing.T) {
 		TargetNamespace: "prod",
 		Confidence:      0.99, // even high confidence
 	})
-	if d.Verdict != schemas.VerdictDeny {
-		t.Errorf("high-risk service should always be denied, got %s", d.Verdict)
+	if d.Verdict != schemas.VerdictRequireHumanApproval {
+		t.Errorf("high-risk service in prod should require human approval, got %s", d.Verdict)
+	}
+	if d.HumanReviewReason != "high_risk_service" {
+		t.Errorf("HumanReviewReason = %q, want high_risk_service", d.HumanReviewReason)
+	}
+}
+
+// v3.8.4: High-risk service in non-prod is still allowed — the high-risk
+// label only matters in production.
+func TestDefaultPolicyAllowHighRiskServiceInNonProd(t *testing.T) {
+	p := DefaultPolicy()
+	d := p.Evaluate(Input{
+		FixType:         schemas.FixCodeFix,
+		TargetService:   "payment-api",
+		TargetNamespace: "sim",
+		Confidence:      0.80,
+	})
+	if d.Verdict != schemas.VerdictAllow {
+		t.Errorf("high-risk service in non-prod should be allowed, got %s", d.Verdict)
 	}
 }
 
@@ -90,8 +112,58 @@ func TestDefaultPolicyAllowRollbackWithoutSchemaMigration(t *testing.T) {
 	}
 }
 
+// v3.8.4: New test — prod fix with confidence between humanReview (0.70)
+// and autonomous (0.92) should go to RequireHumanApproval.
+func TestDefaultPolicyHumanReviewForMediumConfidenceInProd(t *testing.T) {
+	p := DefaultPolicy()
+	d := p.Evaluate(Input{
+		FixType:         schemas.FixCodeFix,
+		TargetService:   "api",
+		TargetNamespace: "prod",
+		Confidence:      0.80, // between 0.70 and 0.92
+	})
+	if d.Verdict != schemas.VerdictRequireHumanApproval {
+		t.Errorf("prod fix with confidence in [humanReview, autonomous) should require human approval, got %s", d.Verdict)
+	}
+	if d.HumanReviewReason != "low_confidence_in_prod" {
+		t.Errorf("HumanReviewReason = %q, want low_confidence_in_prod", d.HumanReviewReason)
+	}
+}
+
+// v3.8.4: New test — blast radius exceeded in prod goes to human review.
+func TestDefaultPolicyHumanReviewForBlastRadiusExceeded(t *testing.T) {
+	p := DefaultPolicy()
+	d := p.Evaluate(Input{
+		FixType:         schemas.FixScale,
+		TargetService:   "api",
+		TargetNamespace: "prod",
+		Confidence:      0.95,
+		ReplicaChangePct: 50, // exceeds default MaxReplicaChangePct=20
+	})
+	if d.Verdict != schemas.VerdictRequireHumanApproval {
+		t.Errorf("prod scale fix exceeding blast radius should require human approval, got %s", d.Verdict)
+	}
+	if d.HumanReviewReason != "blast_radius_exceeded" {
+		t.Errorf("HumanReviewReason = %q, want blast_radius_exceeded", d.HumanReviewReason)
+	}
+}
+
+// v3.8.4: New test — unsafe fix type in prod is denied (not even human-reviewed).
+func TestDefaultPolicyDenyUnsafeFixTypeInProd(t *testing.T) {
+	p := DefaultPolicy()
+	d := p.Evaluate(Input{
+		FixType:         schemas.FixInfrastructure, // not in the safe-type list
+		TargetService:   "api",
+		TargetNamespace: "prod",
+		Confidence:      0.99,
+	})
+	if d.Verdict != schemas.VerdictDeny {
+		t.Errorf("unsafe fix type in prod should be denied, got %s", d.Verdict)
+	}
+}
+
 func TestCustomPolicy(t *testing.T) {
-	p := NewPolicy([]string{"staging", "prod"}, 0.85)
+	p := NewPolicy([]string{"staging", "prod"}, 0.85, 0.60)
 	if !p.ProductionNamespaces["staging"] {
 		t.Error("staging should be production")
 	}
@@ -102,7 +174,10 @@ func TestCustomPolicy(t *testing.T) {
 		t.Error("sim should NOT be production in custom policy")
 	}
 	if p.ConfidenceAutonomous != 0.85 {
-		t.Errorf("threshold = %v, want 0.85", p.ConfidenceAutonomous)
+		t.Errorf("ConfidenceAutonomous = %v, want 0.85", p.ConfidenceAutonomous)
+	}
+	if p.ConfidenceHumanReview != 0.60 {
+		t.Errorf("ConfidenceHumanReview = %v, want 0.60", p.ConfidenceHumanReview)
 	}
 }
 
@@ -114,7 +189,9 @@ func TestRulesEvaluated(t *testing.T) {
 		TargetNamespace: "prod",
 		Confidence:      0.95,
 	})
-	if len(d.RulesEvaluated) != 5 {
-		t.Errorf("expected 5 rules evaluated, got %d", len(d.RulesEvaluated))
+	// v3.8.4: Now 7 rules (was 5). Added safe_fix_type, confidence_autonomous,
+	// confidence_human_review; removed the old allow_fix composite rule.
+	if len(d.RulesEvaluated) != 7 {
+		t.Errorf("expected 7 rules evaluated, got %d", len(d.RulesEvaluated))
 	}
 }
