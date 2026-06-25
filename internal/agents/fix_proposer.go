@@ -99,43 +99,47 @@ func validateFilePath(path string) string {
         return clean
 }
 
-const fixProposerSystemPrompt = `You are Sentinel's Fix Proposer agent.
+const fixProposerSystemPrompt = `You are Sentinel's Fix Proposer agent. You write production code fixes for runtime errors.
 
-Given a confirmed root cause, propose ONE concrete fix. Pick the fix type:
+Given a confirmed root cause and the source code, propose ONE fix using search/replace blocks.
 
-  - restart       : the pod just needs a restart (transient state, CrashLoopBackOff without code bug)
-  - scale         : the deployment needs more replicas (CPU/mem saturation)
-  - code_fix      : a code change is required — provide search/replace blocks
-  - rollback      : revert to the previous deployment (NO schema migration involved)
-  - roll_forward  : the previous deploy had a schema migration — must fix forward, NOT rollback
-  - infrastructure: a Terraform-managed resource needs changing
+## Fix Quality Requirements
+- Fix the ROOT CAUSE, not just the symptom. If a dict access crashes, add a proper check — don't just wrap it in try/catch.
+- Use proper error handling for the framework in use. For web APIs (FastAPI, Flask, Express, etc.):
+  - Bad input (missing key, invalid type, out of range) → return appropriate HTTP error (400, 404, 422)
+  - Use the framework's error response mechanism (e.g. raise HTTPException in FastAPI, abort() in Flask)
+  - NEVER return error states with HTTP 200 — callers should know something went wrong from the status code
+- Minimal changes. Only modify what's broken. Don't refactor surrounding code.
+- The fix must be syntactically valid in the target language.
 
-For code_fix, use SEARCH/REPLACE blocks. Each block has:
-  - "search": the EXACT text from the file that needs to change (copy it character-for-character including whitespace and indentation)
-  - "replace": the new text that should replace it
+## Root Cause Description
+- Be precise. State WHAT is broken and WHERE. 
+- Do NOT speculate about infrastructure, databases, or configuration unless the error traceback explicitly references them.
+- If the error is "KeyError: 99" on line "name = users[user_id]", the root cause is "the users dict doesn't contain user_id 99" — not "the database doesn't have the user".
 
-Rules for search/replace:
-  - The "search" text MUST exactly match existing code in the file (including spaces, tabs, newlines)
-  - Keep "search" blocks small (2-10 lines) — just the code that needs to change
-  - Only include the lines that actually change — don't include surrounding context that stays the same
-  - You can have multiple search/replace blocks per file if multiple spots need changing
-  - If creating a NEW file (not modifying an existing one), use "new_content" with the full file instead
+## Search/Replace Format
+Each change has:
+- "search": EXACT text from the file (copy character-for-character, including indentation and newlines)
+- "replace": the new text that replaces it
 
-Respond with a JSON object of shape:
+Rules:
+- "search" MUST match the file exactly (whitespace, indentation, comments — everything)
+- Keep blocks small (2-10 lines) — only the code that needs to change
+- Multiple blocks per file are OK if multiple spots need fixing
+- For NEW files, use "new_content" with the full file instead of "changes"
+
+## Response Format
+Return ONLY a JSON object:
 {
-  "fix_type": "restart|scale|code_fix|rollback|roll_forward|infrastructure",
-  "description": "...",
-  "k8s_action": null | {"kind": "Deployment", "name": "...", "patch": {...}},
-  "files_to_change": [{"path": "app/main.py", "changes": [{"search": "exact code to find", "replace": "new code"}]}],
+  "fix_type": "code_fix",
+  "description": "Precise description of what's broken and how the fix works",
+  "files_to_change": [{"path": "app/main.py", "changes": [{"search": "exact code", "replace": "fixed code"}]}],
   "dockerfile_path": "Dockerfile",
-  "pr_title": "[Sentinel] ...",
-  "pr_body": "..."
+  "pr_title": "[Sentinel] Brief description",
+  "pr_body": "Short summary"
 }
 
-The "dockerfile_path" field is the path to the Dockerfile relative to the repo
-root. Default to "Dockerfile" (repo root).
-
-If fix_type is rollback, leave files_to_change empty.`
+No prose before or after the JSON. Start with { and end with }.`
 
 // FixProposer translates a root cause into a concrete FixProposal.
 type FixProposer struct {
@@ -200,78 +204,109 @@ func (a *FixProposer) Run(ctx context.Context, state *schemas.AgentState) error 
                 return nil
         }
 
-        // 2. Ask LLM for the fix
-        // v3.9.6: Increased from 6000 to 16000 — some models (nemotron-3-super)
-        // produce extensive reasoning before the JSON, causing truncation at 6000
-        // tokens. Search/replace blocks are small, but the model's "thinking"
-        // eats tokens. 16000 gives room for reasoning + complete JSON.
+        // 2. Ask LLM for the fix — with adaptive retry loop
+        // v3.9.9: If the first attempt returns 0 files or the syntax validation
+        // fails, retry up to 3 times with feedback about what went wrong.
+        // This is the "agentic loop" pattern from OpenClaw/Aider — let the LLM
+        // see its own mistakes and correct them.
         userMsg := a.buildUserMessage(state)
-        result, err := a.router.FrontierJSON(ctx, fixProposerSystemPrompt, userMsg, 16000)
-        if err != nil {
+        var result map[string]any
+        var files []schemas.FileChange
+        var fixType schemas.FixType
+        var dockerfilePath, prTitle, prBody string
+        var lastError string
+
+        maxRetries := 3
+        for attempt := 0; attempt <= maxRetries; attempt++ {
+                var retryHint string
+                if attempt > 0 {
+                        retryHint = fmt.Sprintf("\n\n## PREVIOUS ATTEMPT FAILED\n%s\n\nPlease try again. Fix the issue above and return a corrected response.", lastError)
+                        userMsg = a.buildUserMessage(state) + retryHint
+                }
+
+                log.Printf("[fix_proposer] attempt %d/%d", attempt+1, maxRetries+1)
+                var llmErr error
+                result, llmErr = a.router.FrontierJSON(ctx, fixProposerSystemPrompt, userMsg, 16000)
+                if llmErr != nil {
+                        lastError = fmt.Sprintf("LLM call failed: %v", llmErr)
+                        log.Printf("[fix_proposer] attempt %d LLM error: %v", attempt+1, llmErr)
+                        continue
+                }
+
+                // Debug logging
+                log.Printf("[fix_proposer] LLM response keys: %v", keysOfMap(result))
+
+                // Normalize
+                if rawList, ok := result["hypotheses"].([]any); ok && len(rawList) > 0 {
+                        if first, ok := rawList[0].(map[string]any); ok {
+                                result = first
+                        }
+                }
+
+                fixTypeStr, _ := result["fix_type"].(string)
+                if fixTypeStr == "" {
+                        fixTypeStr = "code_fix"
+                }
+                fixType = schemas.FixType(fixTypeStr)
+                if !isValidFixType(fixTypeStr) {
+                        fixType = schemas.FixCodeFix
+                }
+
+                rawFiles, _ := result["files_to_change"].([]any)
+                files = parseFilesToChange(rawFiles, state)
+
+                if len(files) == 0 {
+                        files = extractFilesFromAlternativeKeys(result, state)
+                }
+
+                dockerfilePath, _ = result["dockerfile_path"].(string)
+                if dockerfilePath == "" {
+                        dockerfilePath = "Dockerfile"
+                }
+                prTitle, _ = result["pr_title"].(string)
+                if prTitle == "" {
+                        prTitle = fmt.Sprintf("[Sentinel] %s for %s", fixType, state.Cluster.Service)
+                }
+                prBody, _ = result["pr_body"].(string)
+                if prBody == "" {
+                        prBody = buildPRBody(state, rc, string(fixType))
+                }
+
+                if len(files) > 0 {
+                        // Got files — check if they have valid search/replace blocks
+                        // with non-empty search text
+                        validBlocks := 0
+                        for _, f := range files {
+                                validBlocks += len(f.Changes)
+                                if f.NewContent != "" {
+                                        validBlocks++
+                                }
+                        }
+                        if validBlocks > 0 {
+                                log.Printf("[fix_proposer] attempt %d succeeded — %d file(s), %d block(s)", attempt+1, len(files), validBlocks)
+                                break
+                        }
+                        lastError = "files_to_change was parsed but contained no valid search/replace blocks (search or replace was empty)"
+                } else {
+                        lastError = fmt.Sprintf("LLM returned 0 files. Response keys: %v", keysOfMap(result))
+                        if rawFilesVal, ok := result["files_to_change"]; ok {
+                                lastError += fmt.Sprintf(" (files_to_change type=%T)", rawFilesVal)
+                        } else {
+                                lastError += " (files_to_change key missing)"
+                        }
+                }
+                log.Printf("[fix_proposer] attempt %d failed: %s", attempt+1, lastError)
+        }
+
+        if len(files) == 0 {
+                log.Printf("[fix_proposer] all %d attempts failed — no fix proposed", maxRetries+1)
                 state.Status = schemas.StatusFailed
-                s := fmt.Sprintf("fix_proposer_llm_failure: %v", err)
+                s := fmt.Sprintf("fix_proposer_no_files_after_%d_attempts: %s", maxRetries+1, lastError)
                 state.Error = &s
                 return nil
         }
 
-        // v3.8.7: Debug logging — log what the LLM actually returned so we
-        // can see exactly why files_to_change is empty.
-        log.Printf("[fix_proposer] LLM response keys: %v", keysOfMap(result))
-        if rawFilesVal, ok := result["files_to_change"]; ok {
-                log.Printf("[fix_proposer] files_to_change type=%T", rawFilesVal)
-                if arr, ok := rawFilesVal.([]any); ok {
-                        log.Printf("[fix_proposer] files_to_change array length=%d", len(arr))
-                        for i, f := range arr {
-                                log.Printf("[fix_proposer] files_to_change[%d] = %v", i, f)
-                        }
-                }
-        } else {
-                log.Printf("[fix_proposer] files_to_change key MISSING from LLM response")
-        }
-
-        // Normalize: LLMs sometimes return a list instead of an object
-        if rawList, ok := result["hypotheses"].([]any); ok && len(rawList) > 0 {
-                if first, ok := rawList[0].(map[string]any); ok {
-                        result = first
-                }
-        }
-
-        fixTypeStr, _ := result["fix_type"].(string)
-        if fixTypeStr == "" {
-                fixTypeStr = "code_fix"
-        }
-        fixType, err := schemas.FixType(fixTypeStr), error(nil)
-        if !isValidFixType(fixTypeStr) {
-                fixType = schemas.FixCodeFix
-        }
-        _ = err
-
-        // Parse files_to_change + fix file paths against fetched_code keys
-        rawFiles, _ := result["files_to_change"].([]any)
-        files := parseFilesToChange(rawFiles, state)
-
-        // v3.8.7: If files_to_change is empty, try alternative key names that
-        // LLMs sometimes use: "file_content", "fixed_content", "patch",
-        // "code", "solution". This is NOT a retry — it's parsing the SAME
-        // LLM response more thoroughly. Different models use different key
-        // names for the same thing.
-        if len(files) == 0 {
-                files = extractFilesFromAlternativeKeys(result, state)
-                if len(files) > 0 {
-                        log.Printf("[fix_proposer] extracted %d file(s) from alternative keys", len(files))
-                }
-        }
-
-        dockerfilePath, _ := result["dockerfile_path"].(string)
-        if dockerfilePath == "" {
-                dockerfilePath = "Dockerfile"
-        }
-
-        prTitle, _ := result["pr_title"].(string)
-        if prTitle == "" {
-                prTitle = fmt.Sprintf("[Sentinel] %s for %s", fixType, state.Cluster.Service)
-        }
-        prBody, _ := result["pr_body"].(string)
+        // Build the proposal from the successful attempt
         if prBody == "" {
                 prBody = buildPRBody(state, rc, string(fixType))
         }

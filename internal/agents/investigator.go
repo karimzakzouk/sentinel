@@ -43,8 +43,18 @@ You are given:
 - The file tree of the service's GitHub repository
 - Search results from running queries against the local repo clone
 
-Your job: produce UP TO 5 root cause hypotheses AND list the files we should read in full to write a fix. Each hypothesis must be:
-  - Specific (e.g. NOT "the database is slow" — instead "the connection pool is exhausted because max_connections was reduced")
+Your job: produce UP TO 5 root cause hypotheses AND list the files we should read in full to write a fix.
+
+## Hypothesis Rules
+- Base your hypothesis on the ACTUAL ERROR TRACEBACK, not on unrelated code you see in the file.
+- If the traceback says "KeyError: 99" at line "name = users[user_id]", the root cause is "the users dictionary doesn't contain key 99". Do NOT speculate about databases, config, or infrastructure unless the traceback mentions them.
+- If the traceback says "ZeroDivisionError" at line "result = a / b", the root cause is "no zero check before division". Do NOT mention database connections.
+- Be specific: reference the exact variable, function, and line that caused the error.
+- Do NOT hallucinate infrastructure that isn't in the traceback. If you see DATABASE_URL in the code but the error is about a dict key, the database is irrelevant.
+
+Each hypothesis must be:
+  - Specific (reference the exact line and variable that caused the crash)
+  - Based on the traceback (not on code that wasn't involved in the crash)
   - Testable
   - Independent
 
