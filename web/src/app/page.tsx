@@ -46,7 +46,7 @@ interface Incident {
     fix_proposal: {
       fix_type: string; description: string; repo: string;
       branch_name: string;
-      files_to_change: Array<{ path: string; new_content: string }>;
+      files_to_change: Array<{ path: string; new_content?: string; changes?: Array<{ search: string; replace: string }> }>;
       proposed_confidence: number;
     } | null;
     execution_result: {
@@ -831,7 +831,20 @@ function IncidentFullPage({ incident, onBack }: { incident: Incident; onBack: ()
                     <span className="text-[10px] font-mono text-zinc-400">{file.path}</span>
                   </div>
                   <pre className="p-3 text-[10px] font-mono leading-relaxed overflow-x-auto bg-zinc-950">
-                    <code className="text-emerald-400 whitespace-pre-wrap">+ {file.new_content.split("\n").join("\n+ ")}</code>
+                    {file.changes && file.changes.length > 0 ? (
+                      file.changes.map((ch, i) => (
+                        <div key={i}>
+                          <code className="text-red-400 whitespace-pre-wrap">- {ch.search.split("\n").join("\n- ")}</code>
+                          <br />
+                          <code className="text-emerald-400 whitespace-pre-wrap">+ {ch.replace.split("\n").join("\n+ ")}</code>
+                          {i < file.changes!.length - 1 && <hr className="border-zinc-800 my-2" />}
+                        </div>
+                      ))
+                    ) : file.new_content ? (
+                      <code className="text-emerald-400 whitespace-pre-wrap">+ {file.new_content.split("\n").join("\n+ ")}</code>
+                    ) : (
+                      <code className="text-zinc-500">No content</code>
+                    )}
                   </pre>
                 </div>
               ))}
