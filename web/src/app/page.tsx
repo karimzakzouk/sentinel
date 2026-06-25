@@ -761,15 +761,20 @@ function SettingsView({ paused, setPaused }: { paused: boolean; setPaused: (p: b
 
 function IncidentFullPage({ incident, onBack, pipelineEvents }: { incident: Incident; onBack: () => void; pipelineEvents: Array<{ incident_id: string; phase: string; status: string; message: string; timestamp: string }> }) {
   // v3.9.3: Auto-refresh the incident while it's in an active state.
-  // The parent component passes the latest incident from the incidents array
-  // (which is refreshed by SSE + polling). But we also poll directly here
-  // for immediate updates — 3-second interval while status is active.
   const [localIncident, setLocalIncident] = useState(incident);
   useEffect(() => {
     setLocalIncident(incident);
   }, [incident]);
 
+  // Use localIncident as the display incident
+  const displayInc = localIncident;
   const isActive = ["investigating", "approved", "executing"].includes(displayInc.status);
+  const displayRc = displayInc.state?.root_cause;
+  const displayFp = displayInc.state?.fix_proposal;
+  const displayEr = displayInc.state?.execution_result;
+  const displayTrace = displayInc.state?.agent_trace || [];
+  const displayHypotheses = displayInc.state?.hypotheses || [];
+
   useEffect(() => {
     if (!isActive) return;
     const interval = setInterval(async () => {
@@ -783,14 +788,6 @@ function IncidentFullPage({ incident, onBack, pipelineEvents }: { incident: Inci
     }, 3000);
     return () => clearInterval(interval);
   }, [isActive, displayInc.incident_id]);
-
-  // Use localIncident if it's newer, otherwise the passed-in incident
-  const displayInc = localIncident;
-  const displayRc = displayInc.state?.root_cause;
-  const displayFp = displayInc.state?.fix_proposal;
-  const displayEr = displayInc.state?.execution_result;
-  const displayTrace = displayInc.state?.agent_trace || [];
-  const displayHypotheses = displayInc.state?.hypotheses || [];
 
   const pipelineSteps = [
     { label: "Detection", icon: Zap, done: true, detail: displayInc.cluster.summary, time: fmtTime(displayInc.created_at) },
