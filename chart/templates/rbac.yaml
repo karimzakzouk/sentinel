@@ -104,6 +104,43 @@ subjects:
 {{- end }}
 
 {{/*
+v3.10.2: Role in the Sentinel namespace for Kaniko builds + sandbox pods.
+Kaniko needs to create ConfigMaps and Pods in the Sentinel namespace to
+build canary images. Without this, sandbox verification fails with
+"configmaps is forbidden".
+*/}}
+{{- if .Values.rbac.create }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Release.Name }}-kaniko
+  namespace: {{ .Release.Namespace }}
+  labels:
+    sentinel.io/managed: "true"
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps", "pods", "pods/log", "services", "secrets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Release.Name }}-kaniko
+  namespace: {{ .Release.Namespace }}
+  labels:
+    sentinel.io/managed: "true"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ .Release.Name }}-kaniko
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.serviceAccount.name | default .Release.Name }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
+
+{{/*
 v3.8.4: Per-namespace write Role + RoleBinding for each namespace in
 sentinel.rbac.writeNamespaces. This is the RBAC enforcement of the
 writeNamespaces value — previously it was only enforced in Go.

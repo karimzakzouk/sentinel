@@ -429,13 +429,12 @@ func parseFilesToChange(rawFiles []any, state *schemas.AgentState) []schemas.Fil
                                 search, _ := chMap["search"].(string)
                                 replace, _ := chMap["replace"].(string)
                                 if search != "" && replace != "" {
-                                        // v3.9.8: Normalize escape sequences. Some LLMs return \n as
-                                        // literal backslash-n (two chars) instead of actual newlines.
-                                        // This happens because the model double-escapes the JSON string.
-                                        // Convert literal \n → newline, \t → tab so the search text
-                                        // matches the actual file content.
+                                        // v3.9.8: Normalize escape sequences in SEARCH text only.
+                                        // v3.10.2: Do NOT normalize the REPLACE text — it's the
+                                        // LLM's intended output and should be used as-is.
+                                        // Normalizing replace corrupted fixes (e.g. turning
+                                        // \" into " which broke Python string literals).
                                         search = normalizeEscapes(search)
-                                        replace = normalizeEscapes(replace)
                                         changes = append(changes, schemas.SearchReplace{
                                                 Search:  search,
                                                 Replace: replace,
