@@ -5,7 +5,6 @@ import (
         "fmt"
         "log"
         "net/http"
-        "regexp"
         "strings"
         "time"
 
@@ -16,6 +15,7 @@ import (
         "k8s.io/apimachinery/pkg/util/intstr"
         "k8s.io/client-go/kubernetes"
 
+        "github.com/karimzakzouk/sentinel/v3/internal/agents"
         "github.com/karimzakzouk/sentinel/v3/internal/schemas"
 )
 
@@ -439,8 +439,24 @@ type level3Result struct {
         detail string
 }
 
-var errorTypeRe = regexp.MustCompile(`(KeyError|ImportError|ValueError|TypeError|ZeroDivisionError|AttributeError|RuntimeError|FileNotFoundError|ModuleNotFoundError|ConnectionError|TimeoutError|RecursionError|OverflowError):?\s*([^\n]+)?`)
-
+// verifyOriginalErrorFixed checks whether the original error from the incident
+// has been resolved by the fix deployed in the sandbox.
+//
+// v3.11.0: Replaced the Python-only `errorTypeRe` regex (which only matched
+// KeyError/ImportError/ValueError/TypeError/etc. — all Python builtins) with
+// agents.ParseError(), which is multi-language (Python, Go, Java, JS, Rust,
+// Ruby, C, signals). The previous implementation silently returned nil for
+// Go panics, Java NullPointerExceptions, JS TypeErrors, etc., causing
+// sandbox Level 3 to silently pass even when the original error was NOT
+// fixed — the PR would ship with a "sandbox-verified" label. The
+// `startupErrors` map had the same Python-only bug.
+//
+// The startup-error auto-pass logic now keys off the parsed language +
+// error type: Python startup errors (KeyError/ImportError/ModuleNotFoundError/
+// FileNotFoundError/SyntaxError) AND Go panic + Java ExceptionInInitializerError
+// + JS startup SyntaxError all auto-pass Level 1 (the canary pod started and
+// stayed Ready for sustainedWindow — that's sufficient evidence the startup
+// error is gone).
 func (s *SandboxRunner) verifyOriginalErrorFixed(ctx context.Context, ns, service string, inc *schemas.Incident) *level3Result {
         // Get the original pod logs from the anomaly explanation
         explanation := ""
@@ -451,24 +467,31 @@ func (s *SandboxRunner) verifyOriginalErrorFixed(ctx context.Context, ns, servic
                 return nil
         }
 
-        m := errorTypeRe.FindStringSubmatch(explanation)
-        if m == nil {
+        // v3.11.0: Use the multi-language parser instead of a Python-only regex.
+        parsed := agents.ParseError(explanation)
+        if parsed == nil {
                 return nil // No recognizable error — can't reproduce
         }
-        errorType := m[1]
-        errorDetail := ""
-        if len(m) > 2 {
-                errorDetail = m[2]
-        }
+        errorType := parsed.ErrorType
+        errorDetail := parsed.ErrorDetail
 
         // Startup errors are already verified by Level 1 (pod is Ready + sustained
-        // for 30s = no crash). v3.8.4: This auto-pass is now safe because Level 1
-        // requires sustained Ready — a pod that crashes after going Ready no longer
-        // passes Level 1, so reaching this branch means the canary is genuinely
-        // serving traffic without the startup error.
+        // for 30s = no crash). v3.11.0: This auto-pass is now multi-language.
+        // Previously only Python startup errors were recognized; a Go panic or
+        // Java ExceptionInInitializerError at startup would fall through to the
+        // runtime-error probe path and potentially pass Level 3 on Level 2 alone.
         startupErrors := map[string]bool{
+                // Python
                 "KeyError": true, "ImportError": true, "ModuleNotFoundError": true,
                 "FileNotFoundError": true, "SyntaxError": true,
+                // Go (panic at startup = init() or package-level crash)
+                "panic": true,
+                // Java
+                "ExceptionInInitializerError": true, "NoClassDefFoundError": true,
+                "NoSuchMethodError": true, "NoSuchFieldError": true,
+                "UnsupportedClassVersionError": true,
+                // JS
+                "ReferenceError": true, // undefined var at module load
         }
         if startupErrors[errorType] {
                 return &level3Result{
