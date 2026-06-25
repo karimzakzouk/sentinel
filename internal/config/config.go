@@ -205,7 +205,11 @@ func Load() *Config {
                 SandboxProbePaths: splitCSV(getenv("SENTINEL_SANDBOX_PROBE_PATHS", "/,/healthz,/readyz")),
 
                 // v3.6.0: Skip sandbox for non-prod (default true — faster PRs in sim/staging)
-                SkipSandboxNonProd: getenvBool("SENTINEL_SKIP_SANDBOX_NON_PROD", true),
+                // v3.10.0: Sandbox ON by default for ALL namespaces (was true=skip).
+                // The sandbox verifies the fix actually works before opening a PR.
+                // Operators who want fast mode (skip sandbox for non-prod) can set
+                // SENTINEL_SKIP_SANDBOX_NON_PROD=true.
+                SkipSandboxNonProd: getenvBool("SENTINEL_SKIP_SANDBOX_NON_PROD", false),
 
                 // v3.4.0: LLM retry (was no retry)
                 LLMMaxRetries:       getenvInt("SENTINEL_LLM_MAX_RETRIES", 3),

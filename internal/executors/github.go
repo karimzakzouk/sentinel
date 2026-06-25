@@ -261,64 +261,119 @@ func (e *GitHubExecutor) getFileContent(ctx context.Context, repo, path, ref str
 }
 
 // applySearchReplace fetches the current file content from the repo, applies
-// each search/replace block, validates the result is syntactically correct,
-// and returns the modified content.
+// each search/replace block using multiple matching strategies, validates
+// the result is syntactically correct, and returns the modified content.
 //
-// v3.9.0: search/replace approach — minimal, surgical diffs.
-// v3.9.7: syntax validation — after applying blocks, check the result is
-// valid code. If the LLM produced broken code (e.g. missing closing quote,
-// unclosed parenthesis), reject the fix instead of shipping a broken PR.
-// This is what Aider and SWE-agent do — validate before applying.
+// v3.10.0: Multi-strategy matching (following Aider's approach):
+//  1. Exact match — search text must match character-for-character
+//  2. Whitespace-insensitive match — strip leading/trailing whitespace per line
+//  3. Fuzzy match — Levenshtein distance >80% similarity
+//  4. If ALL strategies fail — return error with context for retry loop
+//
+// Also: reject useless partial fixes. If only an import block matched but the
+// actual fix block didn't, don't ship a PR with just an unused import.
 func (e *GitHubExecutor) applySearchReplace(ctx context.Context, repo, branch, path string, changes []schemas.SearchReplace) (string, error) {
-        // Fetch the current file content from the branch
         content, err := e.getFileContent(ctx, repo, path, branch)
         if err != nil {
                 return "", fmt.Errorf("fetch file %s: %w", path, err)
         }
 
-        // Save original content in case we need to revert (if syntax validation
-        // fails after applying blocks, we try removing the last block, then
-        // re-validate, etc.)
         originalContent := content
-
         applied := 0
+        failedBlocks := []int{}      // track which block indices failed
+        var matchErrors []string     // collect errors for retry feedback
+
         for i, ch := range changes {
-                // Count occurrences — if the search text appears more than once, we
-                // can't safely replace (ambiguous). Skip that block.
-                count := strings.Count(content, ch.Search)
-                if count == 0 {
-                        log.Printf("[github] search/replace block %d: search text not found in %s — skipping", i, path)
+                // Strategy 1: Exact match
+                matched, replacement := tryExactMatch(content, ch.Search, ch.Replace)
+                if matched {
+                        content = replacement
+                        applied++
+                        log.Printf("[github] block %d: matched (exact)", i)
                         continue
                 }
-                if count > 1 {
-                        log.Printf("[github] search/replace block %d: search text found %d times in %s — skipping (ambiguous)", i, count, path)
+
+                // Strategy 2: Whitespace-insensitive match
+                matched, replacement = tryWhitespaceInsensitiveMatch(content, ch.Search, ch.Replace)
+                if matched {
+                        content = replacement
+                        applied++
+                        log.Printf("[github] block %d: matched (whitespace-insensitive)", i)
                         continue
                 }
-                // Exactly one match — apply the replacement
-                content = strings.Replace(content, ch.Search, ch.Replace, 1)
-                applied++
-                log.Printf("[github] search/replace block %d: applied (%d chars → %d chars)", i, len(ch.Search), len(ch.Replace))
+
+                // Strategy 3: Fuzzy match (Levenshtein >80%)
+                matched, replacement = tryFuzzyMatch(content, ch.Search, ch.Replace)
+                if matched {
+                        content = replacement
+                        applied++
+                        log.Printf("[github] block %d: matched (fuzzy)", i)
+                        continue
+                }
+
+                // All strategies failed
+                failedBlocks = append(failedBlocks, i)
+                errMsg := fmt.Sprintf("block %d: search text not found (tried exact, whitespace-insensitive, fuzzy)", i)
+                matchErrors = append(matchErrors, errMsg)
+                log.Printf("[github] %s", errMsg)
+
+                // Log what the search text was looking for (first 100 chars)
+                preview := ch.Search
+                if len(preview) > 100 {
+                        preview = preview[:100] + "..."
+                }
+                log.Printf("[github] block %d search preview: %q", i, preview)
         }
 
         if applied == 0 {
-                return "", fmt.Errorf("no search/replace blocks matched (0/%d applied)", len(changes))
+                return "", fmt.Errorf("no search/replace blocks matched (0/%d applied): %s",
+                        len(changes), strings.Join(matchErrors, "; "))
         }
 
-        // v3.9.7: Syntax validation — check the resulting file is valid code.
-        // If the LLM produced broken code (missing quote, unclosed paren, etc.),
-        // reject the entire fix. This prevents shipping broken PRs.
+        // v3.10.0: Reject useless partial fixes.
+        // If some blocks failed, check whether the applied blocks are "meaningful"
+        // (i.e. they actually change code logic, not just add an import).
+        // If ALL applied blocks are just import changes and the actual fix blocks
+        // failed, reject the PR — shipping an unused import is worse than no PR.
+        if len(failedBlocks) > 0 {
+                hasMeaningfulChange := false
+                for i, ch := range changes {
+                        // Skip blocks that failed
+                        isFailed := false
+                        for _, fb := range failedBlocks {
+                                if fb == i {
+                                        isFailed = true
+                                        break
+                                }
+                        }
+                        if isFailed {
+                                continue
+                        }
+                        // Check if this block does more than just change imports
+                        // An import-only change typically has "import" in the search text
+                        // and doesn't contain function/class definitions
+                        if !isImportOnlyChange(ch.Search, ch.Replace) {
+                                hasMeaningfulChange = true
+                                break
+                        }
+                }
+                if !hasMeaningfulChange {
+                        return "", fmt.Errorf("only import-only blocks matched, all meaningful fix blocks failed — not shipping a useless partial fix")
+                }
+                log.Printf("[github] partial fix: %d/%d blocks applied, %d failed (but has meaningful changes)", applied, len(changes), len(failedBlocks))
+        }
+
+        // Syntax validation
         if syntaxErr := validateSyntax(path, content); syntaxErr != nil {
-                log.Printf("[github] SYNTAX VALIDATION FAILED after applying %d blocks to %s: %v", applied, path, syntaxErr)
-                // Try reverting to original and applying blocks one at a time,
-                // skipping any block that introduces a syntax error.
+                log.Printf("[github] SYNTAX VALIDATION FAILED: %v", syntaxErr)
+                // Try applying blocks one at a time, skipping syntax-breaking ones
                 content = originalContent
                 goodBlocks := 0
                 for i, ch := range changes {
-                        count := strings.Count(content, ch.Search)
-                        if count != 1 {
+                        matched, trial := tryAllStrategies(content, ch.Search, ch.Replace)
+                        if !matched {
                                 continue
                         }
-                        trial := strings.Replace(content, ch.Search, ch.Replace, 1)
                         if err := validateSyntax(path, trial); err != nil {
                                 log.Printf("[github] block %d produces syntax error — skipping: %v", i, err)
                                 continue
@@ -329,12 +384,237 @@ func (e *GitHubExecutor) applySearchReplace(ctx context.Context, repo, branch, p
                 if goodBlocks == 0 {
                         return "", fmt.Errorf("all search/replace blocks produce syntax errors — LLM generated broken code")
                 }
-                log.Printf("[github] recovered: applied %d/%d blocks (skipped %d with syntax errors)", goodBlocks, len(changes), applied-goodBlocks)
+                log.Printf("[github] recovered: applied %d/%d blocks after syntax recovery", goodBlocks, len(changes))
                 return content, nil
         }
 
         log.Printf("[github] applied %d/%d search/replace blocks to %s (syntax validated ✓)", applied, len(changes), path)
         return content, nil
+}
+
+// tryExactMatch tries to find ch.Search in content exactly once.
+// Returns (matched, newContent).
+func tryExactMatch(content, search, replace string) (bool, string) {
+        count := strings.Count(content, search)
+        if count != 1 {
+                return false, content
+        }
+        return true, strings.Replace(content, search, replace, 1)
+}
+
+// tryWhitespaceInsensitiveMatch strips leading/trailing whitespace from each
+// line of both the search text and the file content, then tries to match.
+// This handles the #1 LLM error: getting indentation wrong.
+//
+// v3.10.0: Following Aider's approach.
+func tryWhitespaceInsensitiveMatch(content, search, replace string) (bool, string) {
+        // Normalize: strip leading/trailing whitespace from each line
+        normalize := func(s string) string {
+                lines := strings.Split(s, "\n")
+                for i, line := range lines {
+                        lines[i] = strings.TrimSpace(line)
+                }
+                return strings.Join(lines, "\n")
+        }
+
+        normalizedSearch := normalize(search)
+        normalizedContent := normalize(content)
+
+        count := strings.Count(normalizedContent, normalizedSearch)
+        if count != 1 {
+                return false, content
+        }
+
+        // Found exactly one match in normalized space. Now we need to find the
+        // corresponding location in the original content and replace it.
+        // Strategy: find the starting line by matching the first non-empty
+        // normalized line, then verify the rest match.
+        searchLines := strings.Split(search, "\n")
+        contentLines := strings.Split(content, "\n")
+
+        for startLine := 0; startLine <= len(contentLines)-len(searchLines); startLine++ {
+                match := true
+                for j, searchLine := range searchLines {
+                        if strings.TrimSpace(contentLines[startLine+j]) != strings.TrimSpace(searchLine) {
+                                match = false
+                                break
+                        }
+                }
+                if match {
+                        // Found the match at startLine. Replace those lines with the
+                        // replacement text, preserving the original indentation of the
+                        // first line.
+                        originalIndent := getIndent(contentLines[startLine])
+                        replaceLines := strings.Split(replace, "\n")
+                        for k := range replaceLines {
+                                if k == 0 {
+                                        // First line: use original indent
+                                        replaceLines[k] = originalIndent + strings.TrimSpace(replaceLines[k])
+                                } else if strings.TrimSpace(replaceLines[k]) != "" {
+                                        // Other lines: preserve relative indentation from the replace text
+                                        // but offset by the original indent
+                                        replaceIndent := getIndent(replaceLines[k])
+                                        replaceLines[k] = originalIndent + replaceIndent + strings.TrimSpace(replaceLines[k])
+                                }
+                        }
+                        newLines := append([]string{}, contentLines[:startLine]...)
+                        newLines = append(newLines, replaceLines...)
+                        newLines = append(newLines, contentLines[startLine+len(searchLines):]...)
+                        return true, strings.Join(newLines, "\n")
+                }
+        }
+
+        return false, content
+}
+
+// tryFuzzyMatch uses a simple similarity score to find the closest match.
+// If the best match has >80% similarity (Levenshtein-based), use it.
+//
+// v3.10.0: Following Aider's approach. Disabled by default in Aider for
+// safety, but we enable it because free models produce more search text
+// errors than GPT-4. The 80% threshold is conservative enough to avoid
+// false matches.
+func tryFuzzyMatch(content, search, replace string) (bool, string) {
+        searchLines := strings.Split(search, "\n")
+        contentLines := strings.Split(content, "\n")
+
+        if len(searchLines) == 0 || len(searchLines) > len(contentLines) {
+                return false, content
+        }
+
+        bestScore := 0.0
+        bestStart := -1
+
+        // Slide a window over the content lines
+        for start := 0; start <= len(contentLines)-len(searchLines); start++ {
+                // Compare each line in the window with the search lines
+                totalSim := 0.0
+                for j := 0; j < len(searchLines); j++ {
+                        sim := lineSimilarity(strings.TrimSpace(contentLines[start+j]), strings.TrimSpace(searchLines[j]))
+                        totalSim += sim
+                }
+                avgSim := totalSim / float64(len(searchLines))
+                if avgSim > bestScore {
+                        bestScore = avgSim
+                        bestStart = start
+                }
+        }
+
+        // Only accept if >80% similar
+        if bestScore < 0.8 || bestStart == -1 {
+                return false, content
+        }
+
+        log.Printf("[github] fuzzy match: %d%% similarity at line %d", int(bestScore*100), bestStart+1)
+
+        // Replace the matched lines with the replacement text
+        originalIndent := getIndent(contentLines[bestStart])
+        replaceLines := strings.Split(replace, "\n")
+        for k := range replaceLines {
+                if k == 0 {
+                        replaceLines[k] = originalIndent + strings.TrimSpace(replaceLines[k])
+                } else if strings.TrimSpace(replaceLines[k]) != "" {
+                        replaceIndent := getIndent(replaceLines[k])
+                        replaceLines[k] = originalIndent + replaceIndent + strings.TrimSpace(replaceLines[k])
+                }
+        }
+        newLines := append([]string{}, contentLines[:bestStart]...)
+        newLines = append(newLines, replaceLines...)
+        newLines = append(newLines, contentLines[bestStart+len(searchLines):]...)
+        return true, strings.Join(newLines, "\n")
+}
+
+// tryAllStrategies tries exact, whitespace-insensitive, and fuzzy in order.
+// Used by the syntax-validation recovery path.
+func tryAllStrategies(content, search, replace string) (bool, string) {
+        if matched, result := tryExactMatch(content, search, replace); matched {
+                return true, result
+        }
+        if matched, result := tryWhitespaceInsensitiveMatch(content, search, replace); matched {
+                return true, result
+        }
+        if matched, result := tryFuzzyMatch(content, search, replace); matched {
+                return true, result
+        }
+        return false, content
+}
+
+// isImportOnlyChange returns true if the search/replace only changes an import
+// statement (e.g. "from fastapi import FastAPI" → "from fastapi import FastAPI, HTTPException").
+// These changes are useless on their own without the actual fix.
+func isImportOnlyChange(search, replace string) bool {
+        searchTrimmed := strings.TrimSpace(search)
+        replaceTrimmed := strings.TrimSpace(replace)
+        return (strings.Contains(searchTrimmed, "import ") || strings.Contains(searchTrimmed, "from ")) &&
+                (strings.Contains(replaceTrimmed, "import ") || strings.Contains(replaceTrimmed, "from "))
+}
+
+// getIndent returns the leading whitespace of a line.
+func getIndent(line string) string {
+        for i, c := range line {
+                if c != ' ' && c != '\t' {
+                        return line[:i]
+                }
+        }
+        return line
+}
+
+// lineSimilarity computes a similarity score between two strings [0.0, 1.0]
+// using a simple Levenshtein-distance-based ratio.
+func lineSimilarity(a, b string) float64 {
+        if a == b {
+                return 1.0
+        }
+        if len(a) == 0 || len(b) == 0 {
+                return 0.0
+        }
+        dist := levenshtein(a, b)
+        maxLen := len(a)
+        if len(b) > maxLen {
+                maxLen = len(b)
+        }
+        return 1.0 - float64(dist)/float64(maxLen)
+}
+
+// levenshtein computes the edit distance between two strings.
+func levenshtein(a, b string) int {
+        la := len(a)
+        lb := len(b)
+        if la == 0 {
+                return lb
+        }
+        if lb == 0 {
+                return la
+        }
+
+        // Use a single row for DP (memory optimization)
+        prev := make([]int, lb+1)
+        curr := make([]int, lb+1)
+        for j := 0; j <= lb; j++ {
+                prev[j] = j
+        }
+        for i := 1; i <= la; i++ {
+                curr[0] = i
+                for j := 1; j <= lb; j++ {
+                        cost := 1
+                        if a[i-1] == b[j-1] {
+                                cost = 0
+                        }
+                        curr[j] = min3(prev[j]+1, curr[j-1]+1, prev[j-1]+cost)
+                }
+                prev, curr = curr, prev
+        }
+        return prev[lb]
+}
+
+func min3(a, b, c int) int {
+        if b < a {
+                a = b
+        }
+        if c < a {
+                a = c
+        }
+        return a
 }
 
 // validateSyntax checks if the given file content is syntactically valid
