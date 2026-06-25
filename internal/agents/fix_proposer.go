@@ -394,6 +394,13 @@ func parseFilesToChange(rawFiles []any, state *schemas.AgentState) []schemas.Fil
                                 search, _ := chMap["search"].(string)
                                 replace, _ := chMap["replace"].(string)
                                 if search != "" && replace != "" {
+                                        // v3.9.8: Normalize escape sequences. Some LLMs return \n as
+                                        // literal backslash-n (two chars) instead of actual newlines.
+                                        // This happens because the model double-escapes the JSON string.
+                                        // Convert literal \n → newline, \t → tab so the search text
+                                        // matches the actual file content.
+                                        search = normalizeEscapes(search)
+                                        replace = normalizeEscapes(replace)
                                         changes = append(changes, schemas.SearchReplace{
                                                 Search:  search,
                                                 Replace: replace,
@@ -487,6 +494,27 @@ func keysOfMap(m map[string]any) []string {
                 keys = append(keys, k)
         }
         return keys
+}
+
+// normalizeEscapes converts literal escape sequences (backslash-n, backslash-t)
+// into actual control characters (newline, tab). Some LLMs double-escape JSON
+// strings, producing \n as two literal characters instead of a real newline.
+// This causes search/replace blocks to fail matching because the file has real
+// newlines but the search text has literal \n.
+//
+// v3.9.8: This was the root cause of the "search text not found" errors on
+// KeyError/TypeError investigations. The LLM returned:
+//   "search": "    name = users[user_id]\\n    return ..."
+// After JSON parsing, \\n becomes \n (literal backslash-n, 2 chars). But the
+// file has real newlines (1 char). normalizeEscapes fixes this.
+func normalizeEscapes(s string) string {
+        // Replace literal \n (backslash + n) with actual newline
+        s = strings.ReplaceAll(s, "\\n", "\n")
+        // Replace literal \t (backslash + t) with actual tab
+        s = strings.ReplaceAll(s, "\\t", "\t")
+        // Replace literal \r (backslash + r) with actual carriage return
+        s = strings.ReplaceAll(s, "\\r", "\r")
+        return s
 }
 
 // llmCodeFix is used for roll_forward cases where we still need an LLM-generated patch.
