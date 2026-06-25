@@ -201,8 +201,12 @@ func (a *FixProposer) Run(ctx context.Context, state *schemas.AgentState) error 
         }
 
         // 2. Ask LLM for the fix
+        // v3.9.6: Increased from 6000 to 16000 — some models (nemotron-3-super)
+        // produce extensive reasoning before the JSON, causing truncation at 6000
+        // tokens. Search/replace blocks are small, but the model's "thinking"
+        // eats tokens. 16000 gives room for reasoning + complete JSON.
         userMsg := a.buildUserMessage(state)
-        result, err := a.router.FrontierJSON(ctx, fixProposerSystemPrompt, userMsg, 6000)
+        result, err := a.router.FrontierJSON(ctx, fixProposerSystemPrompt, userMsg, 16000)
         if err != nil {
                 state.Status = schemas.StatusFailed
                 s := fmt.Sprintf("fix_proposer_llm_failure: %v", err)
@@ -488,7 +492,7 @@ func keysOfMap(m map[string]any) []string {
 // llmCodeFix is used for roll_forward cases where we still need an LLM-generated patch.
 func (a *FixProposer) llmCodeFix(ctx context.Context, state *schemas.AgentState, proposal *schemas.FixProposal) {
         userMsg := a.buildUserMessage(state)
-        result, err := a.router.FrontierJSON(ctx, fixProposerSystemPrompt, userMsg, 6000)
+        result, err := a.router.FrontierJSON(ctx, fixProposerSystemPrompt, userMsg, 16000)
         if err != nil {
                 proposal.Description = fmt.Sprintf("%s (LLM code generation failed — needs human)", proposal.Description)
                 return

@@ -182,7 +182,11 @@ func SetMetricsRecorder(fn func(model, status string, duration time.Duration)) {
 }
 
 func (r *Router) completeJSON(ctx context.Context, model, system, user string, maxTokens int) (map[string]any, error) {
-        prompt := user + "\n\nRespond with a single valid JSON object. No prose, no markdown fences."
+        // v3.9.6: Stronger instruction to prevent the model from producing
+        // extensive reasoning prose before the JSON. Some models (nemotron-3-super)
+        // "think out loud" for 20K characters, use all max_tokens on reasoning,
+        // and the actual JSON gets truncated.
+        prompt := user + "\n\nIMPORTANT: Output ONLY a valid JSON object. Do NOT include reasoning, explanation, or prose. Start your response with { and end with }. No text before or after the JSON."
         req := chatRequest{
                 Model: model,
                 Messages: []chatMessage{
@@ -434,6 +438,14 @@ func (r *Router) parseRetryAfter(value string) time.Duration {
 
 // extractJSON defensively parses JSON from LLM output.
 // Handles markdown fences, bare JSON, prose around JSON, and truncated JSON.
+//
+// v3.9.6: Handles the "reasoning prose before JSON" case. Some models
+// (nemotron-3-super) produce 20K chars of reasoning, then the JSON at the
+// end. If the JSON is truncated (max_tokens cutoff), we:
+//  1. Find all candidate JSON start positions (lines starting with `{`)
+//  2. Try to parse from each, starting from the LAST one (most likely to be
+//     the actual JSON, not a `{` mentioned in prose)
+//  3. If none parse, try repairTruncated on each candidate
 func extractJSON(text string) map[string]any {
         // Try 1: markdown-fenced JSON block
         if m := jsonBlockRe.FindStringSubmatch(text); len(m) >= 2 {
@@ -441,7 +453,7 @@ func extractJSON(text string) map[string]any {
                         return v
                 }
         }
-        // Try 2: bare JSON object
+        // Try 2: bare JSON object (greedy — matches first { to last })
         if m := bareJSONRe.FindStringSubmatch(text); len(m) >= 1 {
                 if v, ok := tryParse(m[0]); ok {
                         return v
@@ -451,13 +463,47 @@ func extractJSON(text string) map[string]any {
         if v, ok := tryParse(text); ok {
                 return v
         }
-        // Try 4: repair truncated JSON
+
+        // v3.9.6: Try 4 — find all lines that start with { and try parsing from
+        // each. This handles the case where the model produces prose like:
+        //   "We need to add a check...\n\n{ \"fix_type\": \"code_fix\", ..."
+        // The bareJSONRe above would match from the first { in the prose (if any),
+        // not the actual JSON. By trying each { on its own line, we find the real
+        // JSON start. Try in REVERSE order (last { first) because the JSON is
+        // usually at the end of the response.
+        lines := strings.Split(text, "\n")
+        jsonStarts := []int{}
+        for i, line := range lines {
+                trimmed := strings.TrimSpace(line)
+                if strings.HasPrefix(trimmed, "{") {
+                        jsonStarts = append(jsonStarts, i)
+                }
+        }
+        // Try from the last { to the end, then repair
+        for i := len(jsonStarts) - 1; i >= 0; i-- {
+                startLine := jsonStarts[i]
+                candidate := strings.Join(lines[startLine:], "\n")
+                // Try direct parse
+                if v, ok := tryParse(candidate); ok {
+                        return v
+                }
+                // Try repair truncated
+                if repaired := repairTruncated(candidate); repaired != "" {
+                        if v, ok := tryParse(repaired); ok {
+                                log.Printf("[llm] extractJSON recovered via prose-strip + repair (line %d)", startLine)
+                                return v
+                        }
+                }
+        }
+
+        // Try 5: original repairTruncated on the full text
         if repaired := repairTruncated(text); repaired != "" {
                 if v, ok := tryParse(repaired); ok {
                         return v
                 }
         }
-        // v3.8.8: Log the raw text when ALL parsing attempts fail.
+
+        // Log the raw text when ALL parsing attempts fail.
         preview := text
         if len(preview) > 500 {
                 preview = preview[:500] + "...(truncated)"
