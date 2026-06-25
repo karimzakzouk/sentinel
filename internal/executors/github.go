@@ -6,9 +6,11 @@ package executors
 import (
         "bytes"
         "context"
+        "encoding/base64"
         "encoding/json"
         "fmt"
         "io"
+        "log"
         "net/http"
         "strings"
         "time"
@@ -83,10 +85,28 @@ func (e *GitHubExecutor) PrepareBranch(ctx context.Context, inc *schemas.Inciden
                 if fc.Path == "" {
                         continue
                 }
-                if err := e.upsertFile(ctx, repo, branchName, fc.Path, fc.NewContent); err != nil {
-                        return BranchInfo{Success: false, Error: fmt.Sprintf("upsert_file %s: %v", fc.Path, err)}
+                // v3.9.0: If the FileChange has search/replace blocks, fetch the
+                // current file content, apply the blocks, then write the result.
+                // This produces minimal, surgical diffs instead of rewriting the
+                // entire file.
+                if len(fc.Changes) > 0 {
+                        newContent, err := e.applySearchReplace(ctx, repo, branchName, fc.Path, fc.Changes)
+                        if err != nil {
+                                return BranchInfo{Success: false, Error: fmt.Sprintf("search_replace %s: %v", fc.Path, err)}
+                        }
+                        if err := e.upsertFile(ctx, repo, branchName, fc.Path, newContent); err != nil {
+                                return BranchInfo{Success: false, Error: fmt.Sprintf("upsert_file %s: %v", fc.Path, err)}
+                        }
+                        filesChanged++
+                        continue
                 }
-                filesChanged++
+                // Legacy: full file replacement via NewContent
+                if fc.NewContent != "" {
+                        if err := e.upsertFile(ctx, repo, branchName, fc.Path, fc.NewContent); err != nil {
+                                return BranchInfo{Success: false, Error: fmt.Sprintf("upsert_file %s: %v", fc.Path, err)}
+                        }
+                        filesChanged++
+                }
         }
 
         return BranchInfo{
@@ -211,6 +231,74 @@ func (e *GitHubExecutor) getFileSHA(ctx context.Context, repo, path, ref string)
         return resp.SHA, nil
 }
 
+// getFileContent fetches the decoded content of a file from a GitHub repo.
+// v3.9.0: Used by applySearchReplace to get the current file before applying
+// search/replace blocks.
+func (e *GitHubExecutor) getFileContent(ctx context.Context, repo, path, ref string) (string, error) {
+        url := fmt.Sprintf("https://api.github.com/repos/%s/contents/%s?ref=%s", repo, path, ref)
+        var resp struct {
+                Content  string `json:"content"`
+                Encoding string `json:"encoding"`
+                Type     string `json:"type"`
+        }
+        if err := e.do(ctx, "GET", url, nil, &resp); err != nil {
+                return "", err
+        }
+        if resp.Type == "dir" {
+                return "", fmt.Errorf("path is a directory")
+        }
+        if resp.Encoding == "base64" {
+                decoded, err := base64Decode(resp.Content)
+                if err != nil {
+                        return "", fmt.Errorf("decode base64: %w", err)
+                }
+                return decoded, nil
+        }
+        return resp.Content, nil
+}
+
+// applySearchReplace fetches the current file content from the repo, applies
+// each search/replace block, and returns the modified content. If a search
+// block doesn't match, that block is skipped (the file stays intact for that
+// block — no corruption). If ZERO blocks match, returns an error so the
+// caller can fall back to whole-file replacement or fail gracefully.
+//
+// v3.9.0: This is the core of the search/replace approach. It produces
+// minimal, surgical diffs instead of rewriting the entire file.
+func (e *GitHubExecutor) applySearchReplace(ctx context.Context, repo, branch, path string, changes []schemas.SearchReplace) (string, error) {
+        // Fetch the current file content from the branch
+        content, err := e.getFileContent(ctx, repo, path, branch)
+        if err != nil {
+                return "", fmt.Errorf("fetch file %s: %w", path, err)
+        }
+
+        applied := 0
+        for i, ch := range changes {
+                // Count occurrences — if the search text appears more than once, we
+                // can't safely replace (ambiguous). Skip that block.
+                count := strings.Count(content, ch.Search)
+                if count == 0 {
+                        log.Printf("[github] search/replace block %d: search text not found in %s — skipping", i, path)
+                        continue
+                }
+                if count > 1 {
+                        log.Printf("[github] search/replace block %d: search text found %d times in %s — skipping (ambiguous)", i, count, path)
+                        continue
+                }
+                // Exactly one match — apply the replacement
+                content = strings.Replace(content, ch.Search, ch.Replace, 1)
+                applied++
+                log.Printf("[github] search/replace block %d: applied (%d chars → %d chars)", i, len(ch.Search), len(ch.Replace))
+        }
+
+        if applied == 0 {
+                return "", fmt.Errorf("no search/replace blocks matched (0/%d applied)", len(changes))
+        }
+
+        log.Printf("[github] applied %d/%d search/replace blocks to %s", applied, len(changes), path)
+        return content, nil
+}
+
 func (e *GitHubExecutor) createPR(ctx context.Context, repo, title, body, head, base string) (int, string, error) {
         url := fmt.Sprintf("https://api.github.com/repos/%s/pulls", repo)
         body_ := map[string]any{
@@ -311,4 +399,16 @@ func base64Encode(s string) string {
                 }
         }
         return out.String()
+}
+
+// base64Decode decodes a base64-encoded string (used for GitHub Contents API
+// file content). v3.9.0.
+func base64Decode(s string) (string, error) {
+        // GitHub returns base64 with newlines every 76 chars — strip them
+        s = strings.ReplaceAll(s, "\n", "")
+        decoded, err := base64.StdEncoding.DecodeString(s)
+        if err != nil {
+                return "", err
+        }
+        return string(decoded), nil
 }

@@ -105,36 +105,37 @@ Given a confirmed root cause, propose ONE concrete fix. Pick the fix type:
 
   - restart       : the pod just needs a restart (transient state, CrashLoopBackOff without code bug)
   - scale         : the deployment needs more replicas (CPU/mem saturation)
-  - code_fix      : a code change is required — provide the exact file + new content
+  - code_fix      : a code change is required — provide search/replace blocks
   - rollback      : revert to the previous deployment (NO schema migration involved)
   - roll_forward  : the previous deploy had a schema migration — must fix forward, NOT rollback
   - infrastructure: a Terraform-managed resource needs changing
 
-For code_fix:
-  - "path" is the file to create or modify (e.g. "app/main.py", "src/handler.py")
-  - "new_content" is the COMPLETE file contents (not a diff)
-  - You can modify existing files OR create new files if the fix requires it
-  - Prefer fixing the root cause in the existing code over creating workarounds
-  - Be conservative — only change what's necessary
+For code_fix, use SEARCH/REPLACE blocks. Each block has:
+  - "search": the EXACT text from the file that needs to change (copy it character-for-character including whitespace and indentation)
+  - "replace": the new text that should replace it
+
+Rules for search/replace:
+  - The "search" text MUST exactly match existing code in the file (including spaces, tabs, newlines)
+  - Keep "search" blocks small (2-10 lines) — just the code that needs to change
+  - Only include the lines that actually change — don't include surrounding context that stays the same
+  - You can have multiple search/replace blocks per file if multiple spots need changing
+  - If creating a NEW file (not modifying an existing one), use "new_content" with the full file instead
 
 Respond with a JSON object of shape:
 {
   "fix_type": "restart|scale|code_fix|rollback|roll_forward|infrastructure",
   "description": "...",
   "k8s_action": null | {"kind": "Deployment", "name": "...", "patch": {...}},
-  "files_to_change": [{"path": "app/main.py", "new_content": "complete file contents"}],
+  "files_to_change": [{"path": "app/main.py", "changes": [{"search": "exact code to find", "replace": "new code"}]}],
   "dockerfile_path": "Dockerfile",
   "pr_title": "[Sentinel] ...",
   "pr_body": "..."
 }
 
 The "dockerfile_path" field is the path to the Dockerfile relative to the repo
-root. Default to "Dockerfile" (repo root). If the repo is a monorepo with
-multiple Dockerfiles, set this to the path of the Dockerfile that builds the
-affected service's image.
+root. Default to "Dockerfile" (repo root).
 
-If fix_type is rollback, leave files_to_change empty — the execution layer
-will trigger a kubectl rollout undo. If roll_forward, treat it like code_fix.`
+If fix_type is rollback, leave files_to_change empty.`
 
 // FixProposer translates a root cause into a concrete FixProposal.
 type FixProposer struct {
@@ -341,8 +342,12 @@ func (a *FixProposer) buildUserMessage(state *schemas.AgentState) string {
 }
 
 // parseFilesToChange extracts FileChange entries from the LLM's raw
-// files_to_change array, fixing container paths and validating security.
-// Extracted so the retry path can reuse the same logic.
+// files_to_change array. Supports BOTH:
+//   - "changes": [{search, replace}] — search/replace blocks (v3.9.0, preferred)
+//   - "new_content": "full file" — whole-file replacement (legacy fallback)
+//
+// v3.9.0: If the LLM returns "changes", we use search/replace. If it returns
+// "new_content", we use whole-file. If it returns both, changes wins.
 func parseFilesToChange(rawFiles []any, state *schemas.AgentState) []schemas.FileChange {
         files := []schemas.FileChange{}
         for _, rf := range rawFiles {
@@ -351,7 +356,6 @@ func parseFilesToChange(rawFiles []any, state *schemas.AgentState) []schemas.Fil
                         continue
                 }
                 path, _ := fcMap["path"].(string)
-                content, _ := fcMap["new_content"].(string)
                 if path == "" {
                         continue
                 }
@@ -374,7 +378,36 @@ func parseFilesToChange(rawFiles []any, state *schemas.AgentState) []schemas.Fil
                         continue
                 }
                 path = validated
-                files = append(files, schemas.FileChange{Path: path, NewContent: content})
+
+                // v3.9.0: Try search/replace blocks first
+                var changes []schemas.SearchReplace
+                if rawChanges, ok := fcMap["changes"].([]any); ok && len(rawChanges) > 0 {
+                        for _, rc := range rawChanges {
+                                chMap, ok := rc.(map[string]any)
+                                if !ok {
+                                        continue
+                                }
+                                search, _ := chMap["search"].(string)
+                                replace, _ := chMap["replace"].(string)
+                                if search != "" && replace != "" {
+                                        changes = append(changes, schemas.SearchReplace{
+                                                Search:  search,
+                                                Replace: replace,
+                                        })
+                                }
+                        }
+                }
+
+                // Also check for "new_content" (legacy whole-file fallback)
+                content, _ := fcMap["new_content"].(string)
+
+                if len(changes) > 0 {
+                        log.Printf("[fix_proposer] parsed %d search/replace block(s) for %s", len(changes), path)
+                        files = append(files, schemas.FileChange{Path: path, Changes: changes})
+                } else if content != "" {
+                        log.Printf("[fix_proposer] parsed whole-file replacement for %s (%d chars)", path, len(content))
+                        files = append(files, schemas.FileChange{Path: path, NewContent: content})
+                }
         }
         return files
 }

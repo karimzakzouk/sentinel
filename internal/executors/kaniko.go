@@ -392,6 +392,12 @@ func lastN(s string, n int) string {
 
 // BuildForIncident is a convenience wrapper that extracts all params from a
 // FixProposal + branch info and calls Build.
+//
+// v3.9.0: If a FileChange uses search/replace (Changes) instead of
+// NewContent, the fixed file is already on the branch (PrepareBranch applied
+// the search/replace). In that case, we don't need to overlay it via ConfigMap
+// — Kaniko clones the branch which already has the fix. We only overlay files
+// that have explicit NewContent (legacy whole-file replacement).
 func (k *KanikoBuilder) BuildForIncident(ctx context.Context, inc *schemas.Incident, branchInfo BranchInfo, prodImage string) (string, error) {
         fp := inc.State.FixProposal
         imageName := strings.SplitN(prodImage, ":", 2)[0]
@@ -403,7 +409,17 @@ func (k *KanikoBuilder) BuildForIncident(ctx context.Context, inc *schemas.Incid
 
         fixedFiles := map[string]string{}
         for _, fc := range fp.FilesToChange {
-                if fc.Path != "" {
+                if fc.Path == "" {
+                        continue
+                }
+                // v3.9.0: If this is a search/replace change, the file is already
+                // fixed on the branch. Skip the ConfigMap overlay — Kaniko will
+                // clone the branch and get the fixed file directly.
+                if len(fc.Changes) > 0 && fc.NewContent == "" {
+                        log.Printf("[kaniko] file %s uses search/replace — already on branch, skipping overlay", fc.Path)
+                        continue
+                }
+                if fc.NewContent != "" {
                         fixedFiles[fc.Path] = fc.NewContent
                 }
         }
