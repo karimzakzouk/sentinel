@@ -305,7 +305,12 @@ export default function Page() {
 
   // If showing incident detail page, render it full-screen
   if (showDetailPage && selectedIncident) {
-    return <IncidentFullPage incident={selectedIncident} onBack={closeIncident} />;
+    // v3.9.3: Find the latest version of this incident from the incidents array
+    // (which auto-refreshes via SSE + polling). This ensures the detail page
+    // always shows the most recent state without manual refresh.
+    const latestIncident = incidents.find(i => i.incident_id === selectedIncident.incident_id) || selectedIncident;
+    const incidentPipelineEvents = pipelineEvents.filter(e => e.incident_id === selectedIncident.incident_id);
+    return <IncidentFullPage incident={latestIncident} onBack={closeIncident} pipelineEvents={incidentPipelineEvents} />;
   }
 
   return (
@@ -754,20 +759,45 @@ function SettingsView({ paused, setPaused }: { paused: boolean; setPaused: (p: b
 
 // ─── Full-Page Incident Detail ──────────────────────────────────────────────
 
-function IncidentFullPage({ incident, onBack }: { incident: Incident; onBack: () => void }) {
-  const inc = incident;
-  const rc = inc.state?.root_cause;
-  const fp = inc.state?.fix_proposal;
-  const er = inc.state?.execution_result;
-  const trace = inc.state?.agent_trace || [];
-  const hypotheses = inc.state?.hypotheses || [];
+function IncidentFullPage({ incident, onBack, pipelineEvents }: { incident: Incident; onBack: () => void; pipelineEvents: Array<{ incident_id: string; phase: string; status: string; message: string; timestamp: string }> }) {
+  // v3.9.3: Auto-refresh the incident while it's in an active state.
+  // The parent component passes the latest incident from the incidents array
+  // (which is refreshed by SSE + polling). But we also poll directly here
+  // for immediate updates — 3-second interval while status is active.
+  const [localIncident, setLocalIncident] = useState(incident);
+  useEffect(() => {
+    setLocalIncident(incident);
+  }, [incident]);
+
+  const isActive = ["investigating", "approved", "executing"].includes(displayInc.status);
+  useEffect(() => {
+    if (!isActive) return;
+    const interval = setInterval(async () => {
+      try {
+        const resp = await fetch(`${API_BASE}/incidents/${displayInc.incident_id}`);
+        if (resp.ok) {
+          const data = await resp.json();
+          setLocalIncident(data);
+        }
+      } catch {}
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [isActive, displayInc.incident_id]);
+
+  // Use localIncident if it's newer, otherwise the passed-in incident
+  const displayInc = localIncident;
+  const displayRc = displayInc.state?.root_cause;
+  const displayFp = displayInc.state?.fix_proposal;
+  const displayEr = displayInc.state?.execution_result;
+  const displayTrace = displayInc.state?.agent_trace || [];
+  const displayHypotheses = displayInc.state?.hypotheses || [];
 
   const pipelineSteps = [
-    { label: "Detection", icon: Zap, done: true, detail: inc.cluster.summary, time: fmtTime(inc.created_at) },
-    { label: "Investigation", icon: Search, done: hypotheses.length > 0, detail: hypotheses.length > 0 ? `${hypotheses.length} hypotheses formed` : "—", time: hypotheses.length > 0 ? fmtTime(inc.created_at) : "" },
-    { label: "Analysis", icon: Cpu, done: !!rc, detail: rc ? `${Math.round(rc.confidence * 100)}% confidence` : "—", time: rc ? fmtTime(inc.updated_at) : "" },
-    { label: "Fix Proposed", icon: Code2, done: !!fp, detail: fp?.fix_type || "—", time: fp ? fmtTime(inc.updated_at) : "" },
-    { label: "Execution", icon: GitPullRequest, done: !!er, detail: er?.pr_url ? `PR #${er.pr_number}` : "—", time: er ? fmtTime(inc.updated_at) : "" },
+    { label: "Detection", icon: Zap, done: true, detail: displayInc.cluster.summary, time: fmtTime(displayInc.created_at) },
+    { label: "Investigation", icon: Search, done: displayHypotheses.length > 0, detail: displayHypotheses.length > 0 ? `${displayHypotheses.length} hypotheses formed` : isActive ? "investigating..." : "—", time: displayHypotheses.length > 0 ? fmtTime(displayInc.created_at) : "" },
+    { label: "Analysis", icon: Cpu, done: !!displayRc, detail: displayRc ? `${Math.round(displayRc.confidence * 100)}% confidence` : "—", time: displayRc ? fmtTime(displayInc.updated_at) : "" },
+    { label: "Fix Proposed", icon: Code2, done: !!displayFp, detail: displayFp?.fix_type || "—", time: displayFp ? fmtTime(displayInc.updated_at) : "" },
+    { label: "Execution", icon: GitPullRequest, done: !!displayEr, detail: displayEr?.pr_url ? `PR #${displayEr.pr_number}` : "—", time: displayEr ? fmtTime(displayInc.updated_at) : "" },
   ];
 
   return (
@@ -778,18 +808,18 @@ function IncidentFullPage({ incident, onBack }: { incident: Incident; onBack: ()
             <ChevronRight className="h-3.5 w-3.5 rotate-180" /> Back
           </button>
           <Separator orientation="vertical" className="h-4 bg-zinc-800" />
-          <span className="font-mono text-sm font-bold">{inc.incident_id.slice(0, 8)}</span>
-          <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium ${statusColor(inc.status)}`}>{inc.status}</span>
-          {inc.cluster.severity === "critical" && (
+          <span className="font-mono text-sm font-bold">{displayInc.incident_id.slice(0, 8)}</span>
+          <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium ${statusColor(displayInc.status)}`}>{displayInc.status}</span>
+          {displayInc.cluster.severity === "critical" && (
             <span className="inline-flex items-center rounded-full border border-red-500/20 bg-red-500/10 px-2 py-0.5 text-[10px] font-medium text-red-400">CRITICAL</span>
           )}
         </div>
         <div className="flex items-center gap-3 text-xs text-zinc-500">
-          <span className="font-medium text-zinc-300">{inc.cluster.service}</span>
+          <span className="font-medium text-zinc-300">{displayInc.cluster.service}</span>
           <span>·</span>
-          <span className="font-mono">{inc.cluster.namespace}</span>
+          <span className="font-mono">{displayInc.cluster.namespace}</span>
           <span>·</span>
-          <span>{timeAgo(inc.created_at)}</span>
+          <span>{timeAgo(displayInc.created_at)}</span>
         </div>
       </header>
 
@@ -818,43 +848,80 @@ function IncidentFullPage({ incident, onBack }: { incident: Incident; onBack: ()
               );
             })}
           </div>
-          {er?.sandbox_verified !== undefined && (
+          {displayEr?.sandbox_verified !== undefined && (
             <div className="flex items-center gap-2 ml-2">
               <div className={`flex h-7 w-7 items-center justify-center rounded-lg border ${
-                er.sandbox_verified ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" : "bg-amber-500/10 text-amber-400 border-amber-500/20"
+                displayEr.sandbox_verified ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" : "bg-amber-500/10 text-amber-400 border-amber-500/20"
               }`}>
                 <Shield className="h-3.5 w-3.5" />
               </div>
-              <span className={`text-xs ${er.sandbox_verified ? "text-emerald-400" : "text-amber-400"}`}>
-                {er.sandbox_verified ? "Sandbox Verified" : "Needs Review"}
+              <span className={`text-xs ${displayEr.sandbox_verified ? "text-emerald-400" : "text-amber-400"}`}>
+                {displayEr.sandbox_verified ? "Sandbox Verified" : "Needs Review"}
               </span>
-              <span className="text-xs text-zinc-600 font-mono">{er.sandbox_summary}</span>
+              <span className="text-xs text-zinc-600 font-mono">{displayEr.sandbox_summary}</span>
             </div>
           )}
         </div>
 
         <Separator className="bg-zinc-800" />
 
+        {/* v3.9.3: Live Pipeline Events — shows real-time updates INSIDE the incident detail */}
+        {pipelineEvents.length > 0 && (
+          <div className="rounded-lg border border-zinc-800 bg-zinc-900/30 overflow-hidden">
+            <div className="flex items-center gap-2 px-4 py-2.5 border-b border-zinc-800 bg-zinc-900/50">
+              <div className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+              <h3 className="text-[10px] uppercase tracking-wider text-zinc-400 font-medium">Live Activity</h3>
+              <span className="text-[10px] text-zinc-600 font-mono ml-auto">{pipelineEvents.length} events</span>
+            </div>
+            <div className="max-h-48 overflow-y-auto">
+              {pipelineEvents.slice().reverse().map((evt, i) => {
+                const phaseColors: Record<string, string> = {
+                  detection: "text-cyan-400", investigation: "text-violet-400",
+                  safety: "text-amber-400", execution: "text-blue-400",
+                  resolved: "text-emerald-400", pr_opened: "text-emerald-400",
+                };
+                const phaseIcons: Record<string, string> = {
+                  detection: "🔍", investigation: "🧠", safety: "🛡️",
+                  execution: "⚡", resolved: "✅", pr_opened: "🔗",
+                };
+                return (
+                  <div key={i} className="flex items-start gap-3 px-4 py-2 border-b border-zinc-800/30 hover:bg-zinc-800/20">
+                    <span className="text-xs mt-0.5">{phaseIcons[evt.phase] || "•"}</span>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className={`text-[10px] font-mono font-semibold uppercase ${phaseColors[evt.phase] || "text-zinc-400"}`}>{evt.phase}</span>
+                        <span className={`text-[10px] font-mono ${evt.status === "complete" ? "text-emerald-400" : "text-amber-400 animate-pulse"}`}>{evt.status}</span>
+                        <span className="text-[10px] text-zinc-600 ml-auto font-mono">{new Date(evt.timestamp).toLocaleTimeString("en-US", { hour12: false })}</span>
+                      </div>
+                      <p className="text-xs text-zinc-300 mt-0.5">{evt.message}</p>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {/* Two column: Root cause + Hypotheses */}
         <div className="grid lg:grid-cols-2 gap-6">
-          {rc && (
+          {displayRc && (
             <div className="space-y-2">
               <h3 className="text-[10px] uppercase tracking-wider text-zinc-500 font-medium">Root Cause</h3>
               <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4">
-                <p className="text-sm text-zinc-300 leading-relaxed">{rc.statement}</p>
+                <p className="text-sm text-zinc-300 leading-relaxed">{displayRc.statement}</p>
                 <div className="flex items-center gap-4 mt-3">
                   <div className="flex items-center gap-1.5">
                     <span className="text-[10px] text-zinc-500">Confidence</span>
                     <div className="w-24 h-1.5 rounded-full bg-zinc-800 overflow-hidden">
-                      <div className={`h-full ${rc.confidence >= 0.7 ? "bg-emerald-500" : rc.confidence >= 0.4 ? "bg-amber-500" : "bg-red-500"}`} style={{ width: `${rc.confidence * 100}%` }} />
+                      <div className={`h-full ${displayRc.confidence >= 0.7 ? "bg-emerald-500" : displayRc.confidence >= 0.4 ? "bg-amber-500" : "bg-red-500"}`} style={{ width: `${displayRc.confidence * 100}%` }} />
                     </div>
-                    <span className={`font-mono text-xs ${confColor(rc.confidence)}`}>{Math.round(rc.confidence * 100)}%</span>
+                    <span className={`font-mono text-xs ${confColor(displayRc.confidence)}`}>{Math.round(displayRc.confidence * 100)}%</span>
                   </div>
-                  <span className="text-[10px] text-zinc-500">Category: <span className="font-mono text-zinc-400">{rc.category}</span></span>
+                  <span className="text-[10px] text-zinc-500">Category: <span className="font-mono text-zinc-400">{displayRc.category}</span></span>
                 </div>
-                {rc.source_files?.length > 0 && (
+                {displayRc.source_files?.length > 0 && (
                   <div className="mt-3 flex flex-wrap gap-1">
-                    {rc.source_files.map((f) => (
+                    {displayRc.source_files.map((f) => (
                       <code key={f} className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-cyan-400 font-mono">{f}</code>
                     ))}
                   </div>
@@ -863,11 +930,11 @@ function IncidentFullPage({ incident, onBack }: { incident: Incident; onBack: ()
             </div>
           )}
 
-          {hypotheses.length > 0 && (
+          {displayHypotheses.length > 0 && (
             <div className="space-y-2">
-              <h3 className="text-[10px] uppercase tracking-wider text-zinc-500 font-medium">Hypotheses ({hypotheses.length})</h3>
+              <h3 className="text-[10px] uppercase tracking-wider text-zinc-500 font-medium">Hypotheses ({displayHypotheses.length})</h3>
               <div className="space-y-2">
-                {hypotheses.map((h) => (
+                {displayHypotheses.map((h) => (
                   <div key={h.h_id} className={`rounded-lg border p-3 ${h.falsified ? "border-red-500/20 bg-red-500/5" : h.confidence >= 0.5 ? "border-cyan-500/20 bg-zinc-900/40" : "border-zinc-800 bg-zinc-900/20"}`}>
                     <div className="flex items-start gap-2">
                       <span className={`font-mono text-xs font-bold ${h.falsified ? "text-red-400" : h.confidence >= 0.5 ? "text-cyan-400" : "text-zinc-500"}`}>{h.h_id}</span>
@@ -887,19 +954,19 @@ function IncidentFullPage({ incident, onBack }: { incident: Incident; onBack: ()
         </div>
 
         {/* Fix Proposal with Code Diff */}
-        {fp && (
+        {displayFp && (
           <div className="space-y-2">
             <h3 className="text-[10px] uppercase tracking-wider text-zinc-500 font-medium">Fix Proposal</h3>
             <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4 space-y-3">
               <div className="flex items-center gap-2 flex-wrap">
-                <Badge variant="outline" className="text-[10px] border-cyan-500/30 text-cyan-400 bg-cyan-500/5">{fp.fix_type}</Badge>
-                <span className="text-[10px] text-zinc-500 font-mono">{fp.repo}</span>
+                <Badge variant="outline" className="text-[10px] border-cyan-500/30 text-cyan-400 bg-cyan-500/5">{displayFp.fix_type}</Badge>
+                <span className="text-[10px] text-zinc-500 font-mono">{displayFp.repo}</span>
                 <span className="text-[10px] text-zinc-600">→</span>
-                <span className="text-[10px] text-zinc-400 font-mono">{fp.branch_name}</span>
-                <span className="ml-auto text-[10px] text-zinc-500">Confidence: <span className={confColor(fp.proposed_confidence)}>{Math.round(fp.proposed_confidence * 100)}%</span></span>
+                <span className="text-[10px] text-zinc-400 font-mono">{displayFp.branch_name}</span>
+                <span className="ml-auto text-[10px] text-zinc-500">Confidence: <span className={confColor(displayFp.proposed_confidence)}>{Math.round(displayFp.proposed_confidence * 100)}%</span></span>
               </div>
-              <p className="text-xs text-zinc-300 leading-relaxed">{fp.description}</p>
-              {fp.files_to_change.map((file) => (
+              <p className="text-xs text-zinc-300 leading-relaxed">{displayFp.description}</p>
+              {displayFp.files_to_change.map((file) => (
                 <div key={file.path} className="rounded-md border border-zinc-800 overflow-hidden">
                   <div className="flex items-center gap-2 bg-zinc-900 px-3 py-2 border-b border-zinc-800">
                     <Code2 className="h-3 w-3 text-zinc-500" />
@@ -929,28 +996,28 @@ function IncidentFullPage({ incident, onBack }: { incident: Incident; onBack: ()
 
         {/* Execution + Agent Trace */}
         <div className="grid lg:grid-cols-2 gap-6">
-          {er && (
+          {displayEr && (
             <div className="space-y-2">
               <h3 className="text-[10px] uppercase tracking-wider text-zinc-500 font-medium">Execution</h3>
               <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4 space-y-2">
                 <div className="flex items-center gap-2">
                   <GitPullRequest className="h-3.5 w-3.5 text-violet-400" />
-                  <a href={er.pr_url} target="_blank" rel="noopener noreferrer" className="text-xs text-violet-400 hover:text-violet-300 font-mono">PR #{er.pr_number}</a>
+                  <a href={displayEr.pr_url} target="_blank" rel="noopener noreferrer" className="text-xs text-violet-400 hover:text-violet-300 font-mono">PR #{displayEr.pr_number}</a>
                   <ExternalLink className="h-2.5 w-2.5 text-violet-400/50" />
                 </div>
                 <div className="flex items-center gap-2">
-                  {er.sandbox_verified ? <><CheckCircle2 className="h-3 w-3 text-emerald-400" /><span className="text-[10px] text-emerald-400">Sandbox Verified</span></> : <><AlertTriangle className="h-3 w-3 text-amber-400" /><span className="text-[10px] text-amber-400">Needs Review</span></>}
-                  <span className="text-[10px] text-zinc-500 font-mono">{er.sandbox_summary}</span>
+                  {displayEr.sandbox_verified ? <><CheckCircle2 className="h-3 w-3 text-emerald-400" /><span className="text-[10px] text-emerald-400">Sandbox Verified</span></> : <><AlertTriangle className="h-3 w-3 text-amber-400" /><span className="text-[10px] text-amber-400">Needs Review</span></>}
+                  <span className="text-[10px] text-zinc-500 font-mono">{displayEr.sandbox_summary}</span>
                 </div>
               </div>
             </div>
           )}
 
-          {trace.length > 0 && (
+          {displayTrace.length > 0 && (
             <div className="space-y-2">
               <h3 className="text-[10px] uppercase tracking-wider text-zinc-500 font-medium">Agent Trace</h3>
               <div className="space-y-1">
-                {trace.map((t, i) => {
+                {displayTrace.map((t, i) => {
                   const agent = String(t.agent || "unknown");
                   const skipped = t.skipped as boolean;
                   return (
@@ -970,17 +1037,17 @@ function IncidentFullPage({ incident, onBack }: { incident: Incident; onBack: ()
         </div>
 
         {/* Error + Beta Prior */}
-        {inc.state?.error && (
+        {displayInc.state?.error && (
           <div className="rounded-lg border border-red-500/20 bg-red-500/5 p-4">
             <div className="flex items-center gap-2"><AlertTriangle className="h-3.5 w-3.5 text-red-400" /><span className="text-xs text-red-400 font-medium">Investigation Error</span></div>
-            <p className="text-xs text-zinc-400 mt-1 font-mono">{inc.state.error}</p>
+            <p className="text-xs text-zinc-400 mt-1 font-mono">{displayInc.state.error}</p>
           </div>
         )}
         <div className="flex items-center gap-4 rounded-lg border border-zinc-800 bg-zinc-900/30 px-4 py-2.5">
           <Cpu className="h-3.5 w-3.5 text-zinc-500" />
           <span className="text-xs text-zinc-500">Beta Prior</span>
-          <span className="font-mono text-xs text-zinc-300">α={inc.beta_alpha} β={inc.beta_beta}</span>
-          <span className="text-xs text-zinc-500">(success rate: {Math.round(inc.beta_alpha / (inc.beta_alpha + inc.beta_beta) * 100)}%)</span>
+          <span className="font-mono text-xs text-zinc-300">α={displayInc.beta_alpha} β={displayInc.beta_beta}</span>
+          <span className="text-xs text-zinc-500">(success rate: {Math.round(displayInc.beta_alpha / (displayInc.beta_alpha + displayInc.beta_beta) * 100)}%)</span>
         </div>
       </div>
     </div>
