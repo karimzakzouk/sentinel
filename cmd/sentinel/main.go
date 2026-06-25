@@ -255,6 +255,13 @@ func main() {
                         "type": "started", "incident_id": incident.IncidentID.String(),
                         "service": cluster.Service, "namespace": cluster.Namespace,
                 })
+                // v3.9.2: Live pipeline trace — broadcast each phase as it happens
+                broadcaster.BroadcastEvent("pipeline", map[string]any{
+                        "incident_id": incident.IncidentID.String(),
+                        "phase": "detection", "status": "complete",
+                        "message": fmt.Sprintf("Error detected in %s/%s: %s", cluster.Service, cluster.Namespace, cluster.Summary),
+                        "timestamp": time.Now().UTC().Format(time.RFC3339),
+                })
 
                 // v3.4.0: Attach incident_id to context so all subsequent log lines
                 // from this handler can be correlated in Datadog/Loki.
@@ -264,6 +271,13 @@ func main() {
                         map[string]any{"cluster_summary": cluster.Summary})
 
                 // === REASONING PHASE ===
+                broadcaster.BroadcastEvent("pipeline", map[string]any{
+                        "incident_id": incident.IncidentID.String(),
+                        "phase": "investigation", "status": "running",
+                        "message": "Investigation started — fetching pod logs + cloning repo",
+                        "timestamp": time.Now().UTC().Format(time.RFC3339),
+                })
+
                 investigationCtx, cancel := context.WithTimeout(ctx, time.Duration(cfg.InvestigationTimeout)*time.Second)
                 defer cancel()
 
@@ -284,6 +298,19 @@ func main() {
                 if err := store.UpsertIncident(ctx, &incident); err != nil {
                         logging.ErrorCtx(invCtx, "save incident (post-pipeline) failed", "error", err)
                 }
+
+                // v3.9.2: Broadcast investigation complete
+                invMsg := "Investigation complete"
+                if incident.State.RootCause != nil {
+                        invMsg = fmt.Sprintf("Root cause: %s (confidence: %.0f%%)", incident.State.RootCause.Statement, incident.State.RootCause.Confidence*100)
+                }
+                broadcaster.BroadcastEvent("pipeline", map[string]any{
+                        "incident_id": incident.IncidentID.String(),
+                        "phase": "investigation", "status": "complete",
+                        "message": invMsg,
+                        "timestamp": time.Now().UTC().Format(time.RFC3339),
+                })
+
                 _ = store.AppendEvent(ctx, incident.IncidentID, "reasoning", "investigation_completed", nil,
                         map[string]any{"status": string(incident.Status)})
 
@@ -297,6 +324,14 @@ func main() {
 
                 // === SAFETY PHASE (embedded policy, no OPA) ===
                 fp := incident.State.FixProposal
+
+                broadcaster.BroadcastEvent("pipeline", map[string]any{
+                        "incident_id": incident.IncidentID.String(),
+                        "phase": "safety", "status": "running",
+                        "message": fmt.Sprintf("Evaluating safety policy for %s fix...", fp.FixType),
+                        "timestamp": time.Now().UTC().Format(time.RFC3339),
+                })
+
                 decision := policy.Evaluate(safety.Input{
                         FixType:           fp.FixType,
                         TargetService:     fp.TargetService,
@@ -337,6 +372,13 @@ func main() {
 
                 // === EXECUTION PHASE ===
                 // RBAC check
+                broadcaster.BroadcastEvent("pipeline", map[string]any{
+                        "incident_id": incident.IncidentID.String(),
+                        "phase": "execution", "status": "running",
+                        "message": "Approved — preparing fix branch + opening PR",
+                        "timestamp": time.Now().UTC().Format(time.RFC3339),
+                })
+
                 if !cfg.CanWriteTo(fp.TargetNamespace) {
                         logging.WarnCtx(invCtx, "execution denied — namespace not in allowlist", "namespace", fp.TargetNamespace)
                         incident.Status = schemas.StatusEscalated
@@ -393,11 +435,24 @@ func main() {
                         logging.ErrorCtx(invCtx, "save incident (resolved) failed", "error", err)
                 }
 
+                // v3.9.2: Broadcast final resolution
+                prURL := ""
+                if incident.State.ExecutionResult != nil && incident.State.ExecutionResult.PRURL != nil {
+                        prURL = *incident.State.ExecutionResult.PRURL
+                }
+                broadcaster.BroadcastEvent("pipeline", map[string]any{
+                        "incident_id": incident.IncidentID.String(),
+                        "phase": "resolved", "status": "complete",
+                        "message": fmt.Sprintf("Incident resolved — PR opened: %s", prURL),
+                        "pr_url": prURL,
+                        "success": success,
+                        "timestamp": time.Now().UTC().Format(time.RFC3339),
+                })
+
                 // v3.2: Mark resolved in tracker (triggers 30-min cooldown)
                 tracker.MarkResolved(incident.Cluster.Service, incident.Cluster.Namespace, success)
 
                 // v3.2: Send Slack alert with PR URL if available
-                prURL := ""
                 if incident.State.ExecutionResult != nil && incident.State.ExecutionResult.PRURL != nil {
                         prURL = *incident.State.ExecutionResult.PRURL
                 }

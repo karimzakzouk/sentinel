@@ -193,6 +193,7 @@ export default function Page() {
   const [logFilter, setLogFilter] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [sseConnected, setSseConnected] = useState(false);
+  const [pipelineEvents, setPipelineEvents] = useState<Array<{ incident_id: string; phase: string; status: string; message: string; timestamp: string }>>([]);
   const eventSourceRef = useRef<EventSource | null>(null);
 
   const loadData = useCallback(async () => {
@@ -229,9 +230,33 @@ export default function Page() {
       es.addEventListener("incident", (e) => {
         try {
           const data = JSON.parse((e as MessageEvent).data);
-          if (data.type === "new" || data.type === "resolved") {
+          if (data.type === "new" || data.type === "resolved" || data.type === "started") {
             loadData(); // refresh incidents
           }
+        } catch {}
+      });
+      // v3.9.2: Live pipeline trace — each phase broadcasts in real-time
+      es.addEventListener("pipeline", (e) => {
+        try {
+          const data = JSON.parse((e as MessageEvent).data);
+          setPipelineEvents(prev => [...prev.slice(-100), data]);
+          // Also refresh incidents when a phase completes
+          if (data.status === "complete") {
+            loadData();
+          }
+        } catch {}
+      });
+      es.addEventListener("pr_opened", (e) => {
+        try {
+          const data = JSON.parse((e as MessageEvent).data);
+          setPipelineEvents(prev => [...prev.slice(-100), {
+            incident_id: "",
+            phase: "pr_opened",
+            status: "complete",
+            message: `PR opened: ${data.pr_url}`,
+            timestamp: new Date().toISOString(),
+          }]);
+          loadData();
         } catch {}
       });
       es.addEventListener("log", (e) => {
@@ -363,7 +388,7 @@ export default function Page() {
               </div>
             </div>
           )}
-          {view === "dashboard" && <DashboardView incidents={incidents} loading={loading} onSelect={openIncident} />}
+          {view === "dashboard" && <DashboardView incidents={incidents} loading={loading} onSelect={openIncident} pipelineEvents={pipelineEvents} sseConnected={sseConnected} />}
           {view === "incidents" && <IncidentsView incidents={filteredIncidents} loading={loading} onSelect={openIncident} />}
           {view === "logs" && <LogsView logs={filteredLogs} filter={logFilter} setFilter={setLogFilter} />}
           {view === "memory" && <MemoryView incidents={incidents} />}
@@ -376,8 +401,10 @@ export default function Page() {
 
 // ─── Dashboard View ─────────────────────────────────────────────────────────
 
-function DashboardView({ incidents, loading, onSelect }: {
+function DashboardView({ incidents, loading, onSelect, pipelineEvents, sseConnected }: {
   incidents: Incident[]; loading: boolean; onSelect: (inc: Incident) => void;
+  pipelineEvents: Array<{ incident_id: string; phase: string; status: string; message: string; timestamp: string }>;
+  sseConnected: boolean;
 }) {
   const resolved = incidents.filter(i => i.status === "resolved").length;
   const failed = incidents.filter(i => i.status === "failed").length;
@@ -444,6 +471,54 @@ function DashboardView({ incidents, loading, onSelect }: {
           </Card>
         </div>
       </div>
+
+      {/* v3.9.2: Live Pipeline Activity Feed */}
+      {pipelineEvents.length > 0 && (
+        <Card className="border-zinc-800 bg-zinc-900/30">
+          <CardHeader className="flex flex-row items-center justify-between pb-3">
+            <CardTitle className="text-sm font-medium text-zinc-300 flex items-center gap-2">
+              {sseConnected && <div className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />}
+              Live Pipeline Activity
+            </CardTitle>
+            <Badge variant="outline" className="text-[10px] border-zinc-700 text-zinc-500 font-mono">{pipelineEvents.length} events</Badge>
+          </CardHeader>
+          <CardContent className="p-0">
+            <div className="max-h-64 overflow-y-auto">
+              {pipelineEvents.slice().reverse().map((evt, i) => {
+                const phaseColors: Record<string, string> = {
+                  detection: "text-cyan-400",
+                  investigation: "text-violet-400",
+                  safety: "text-amber-400",
+                  execution: "text-blue-400",
+                  resolved: "text-emerald-400",
+                  pr_opened: "text-emerald-400",
+                };
+                const phaseIcons: Record<string, string> = {
+                  detection: "🔍",
+                  investigation: "🧠",
+                  safety: "🛡️",
+                  execution: "⚡",
+                  resolved: "✅",
+                  pr_opened: "🔗",
+                };
+                return (
+                  <div key={i} className="flex items-start gap-3 px-4 py-2 border-b border-zinc-800/50 hover:bg-zinc-800/20">
+                    <span className="text-xs mt-0.5">{phaseIcons[evt.phase] || "•"}</span>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className={`text-[10px] font-mono font-semibold uppercase ${phaseColors[evt.phase] || "text-zinc-400"}`}>{evt.phase}</span>
+                        <span className={`text-[10px] font-mono ${evt.status === "complete" ? "text-emerald-400" : "text-amber-400 animate-pulse"}`}>{evt.status}</span>
+                        <span className="text-[10px] text-zinc-600 ml-auto font-mono">{new Date(evt.timestamp).toLocaleTimeString("en-US", { hour12: false })}</span>
+                      </div>
+                      <p className="text-xs text-zinc-300 mt-0.5 truncate">{evt.message}</p>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }
