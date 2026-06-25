@@ -12,6 +12,9 @@ import (
         "io"
         "log"
         "net/http"
+        "os"
+        "os/exec"
+        "path/filepath"
         "strings"
         "time"
 
@@ -258,19 +261,25 @@ func (e *GitHubExecutor) getFileContent(ctx context.Context, repo, path, ref str
 }
 
 // applySearchReplace fetches the current file content from the repo, applies
-// each search/replace block, and returns the modified content. If a search
-// block doesn't match, that block is skipped (the file stays intact for that
-// block — no corruption). If ZERO blocks match, returns an error so the
-// caller can fall back to whole-file replacement or fail gracefully.
+// each search/replace block, validates the result is syntactically correct,
+// and returns the modified content.
 //
-// v3.9.0: This is the core of the search/replace approach. It produces
-// minimal, surgical diffs instead of rewriting the entire file.
+// v3.9.0: search/replace approach — minimal, surgical diffs.
+// v3.9.7: syntax validation — after applying blocks, check the result is
+// valid code. If the LLM produced broken code (e.g. missing closing quote,
+// unclosed parenthesis), reject the fix instead of shipping a broken PR.
+// This is what Aider and SWE-agent do — validate before applying.
 func (e *GitHubExecutor) applySearchReplace(ctx context.Context, repo, branch, path string, changes []schemas.SearchReplace) (string, error) {
         // Fetch the current file content from the branch
         content, err := e.getFileContent(ctx, repo, path, branch)
         if err != nil {
                 return "", fmt.Errorf("fetch file %s: %w", path, err)
         }
+
+        // Save original content in case we need to revert (if syntax validation
+        // fails after applying blocks, we try removing the last block, then
+        // re-validate, etc.)
+        originalContent := content
 
         applied := 0
         for i, ch := range changes {
@@ -295,8 +304,154 @@ func (e *GitHubExecutor) applySearchReplace(ctx context.Context, repo, branch, p
                 return "", fmt.Errorf("no search/replace blocks matched (0/%d applied)", len(changes))
         }
 
-        log.Printf("[github] applied %d/%d search/replace blocks to %s", applied, len(changes), path)
+        // v3.9.7: Syntax validation — check the resulting file is valid code.
+        // If the LLM produced broken code (missing quote, unclosed paren, etc.),
+        // reject the entire fix. This prevents shipping broken PRs.
+        if syntaxErr := validateSyntax(path, content); syntaxErr != nil {
+                log.Printf("[github] SYNTAX VALIDATION FAILED after applying %d blocks to %s: %v", applied, path, syntaxErr)
+                // Try reverting to original and applying blocks one at a time,
+                // skipping any block that introduces a syntax error.
+                content = originalContent
+                goodBlocks := 0
+                for i, ch := range changes {
+                        count := strings.Count(content, ch.Search)
+                        if count != 1 {
+                                continue
+                        }
+                        trial := strings.Replace(content, ch.Search, ch.Replace, 1)
+                        if err := validateSyntax(path, trial); err != nil {
+                                log.Printf("[github] block %d produces syntax error — skipping: %v", i, err)
+                                continue
+                        }
+                        content = trial
+                        goodBlocks++
+                }
+                if goodBlocks == 0 {
+                        return "", fmt.Errorf("all search/replace blocks produce syntax errors — LLM generated broken code")
+                }
+                log.Printf("[github] recovered: applied %d/%d blocks (skipped %d with syntax errors)", goodBlocks, len(changes), applied-goodBlocks)
+                return content, nil
+        }
+
+        log.Printf("[github] applied %d/%d search/replace blocks to %s (syntax validated ✓)", applied, len(changes), path)
         return content, nil
+}
+
+// validateSyntax checks if the given file content is syntactically valid
+// for the file's language. Currently supports:
+//   - Python (.py): uses `python3 -c "import ast; ast.parse(code)"`
+//   - Go (.go): uses `gofmt -e` (checks for parse errors)
+//   - JavaScript/TypeScript (.js/.ts): uses `node --check`
+//   - JSON (.json): uses json.Unmarshal
+//   - YAML (.yaml/.yml): uses yaml.Unmarshal
+//
+// For unknown file types, validation is skipped (returns nil).
+//
+// v3.9.7: This is the quality gate that prevents broken PRs. The LLM
+// sometimes generates code with missing closing quotes, unclosed parens,
+// or broken indentation. This catches those before writing to GitHub.
+func validateSyntax(path, content string) error {
+        ext := strings.ToLower(filepath.Ext(path))
+        switch ext {
+        case ".py":
+                return validatePython(content)
+        case ".go":
+                return validateGo(content)
+        case ".js", ".ts", ".jsx", ".tsx":
+                return validateJS(content)
+        case ".json":
+                return validateJSON(content)
+        case ".yaml", ".yml":
+                return validateYAML(content)
+        default:
+                // Unknown file type — skip validation
+                return nil
+        }
+}
+
+// validatePython runs `python3 -c "import ast; ast.parse(code)"` on the content.
+func validatePython(content string) error {
+        tmpFile, err := os.CreateTemp("", "sentinel-validate-*.py")
+        if err != nil {
+                return nil // Can't create temp file — skip validation
+        }
+        defer func() { _ = os.Remove(tmpFile.Name()) }()
+        if _, err := tmpFile.WriteString(content); err != nil {
+                return nil
+        }
+        if err := tmpFile.Close(); err != nil {
+                return nil
+        }
+
+        cmd := exec.Command("python3", "-c", `import ast, sys; ast.parse(open(sys.argv[1]).read())`, tmpFile.Name())
+        output, err := cmd.CombinedOutput()
+        if err != nil {
+                return fmt.Errorf("python syntax error: %s", strings.TrimSpace(string(output)))
+        }
+        return nil
+}
+
+// validateGo runs `gofmt -e` on the content. gofmt reports syntax errors
+// with -e flag.
+func validateGo(content string) error {
+        tmpFile, err := os.CreateTemp("", "sentinel-validate-*.go")
+        if err != nil {
+                return nil
+        }
+        defer func() { _ = os.Remove(tmpFile.Name()) }()
+        if _, err := tmpFile.WriteString(content); err != nil {
+                return nil
+        }
+        _ = tmpFile.Close()
+
+        cmd := exec.Command("gofmt", "-e", tmpFile.Name())
+        output, err := cmd.CombinedOutput()
+        if err != nil {
+                return fmt.Errorf("go syntax error: %s", strings.TrimSpace(string(output)))
+        }
+        return nil
+}
+
+// validateJS runs `node --check` on the content.
+func validateJS(content string) error {
+        tmpFile, err := os.CreateTemp("", "sentinel-validate-*.js")
+        if err != nil {
+                return nil
+        }
+        defer func() { _ = os.Remove(tmpFile.Name()) }()
+        if _, err := tmpFile.WriteString(content); err != nil {
+                return nil
+        }
+        _ = tmpFile.Close()
+
+        cmd := exec.Command("node", "--check", tmpFile.Name())
+        output, err := cmd.CombinedOutput()
+        if err != nil {
+                return fmt.Errorf("js syntax error: %s", strings.TrimSpace(string(output)))
+        }
+        return nil
+}
+
+// validateJSON checks if content is valid JSON.
+func validateJSON(content string) error {
+        var v any
+        if err := json.Unmarshal([]byte(content), &v); err != nil {
+                return fmt.Errorf("json syntax error: %w", err)
+        }
+        return nil
+}
+
+// validateYAML checks if content is valid YAML.
+func validateYAML(content string) error {
+        // We don't import a YAML library here to keep deps minimal.
+        // Use python3 as a fallback if available.
+        cmd := exec.Command("python3", "-c", `import yaml, sys; yaml.safe_load(open(sys.argv[1]))`, "-")
+        cmd.Stdin = strings.NewReader(content)
+        output, err := cmd.CombinedOutput()
+        if err != nil {
+                return fmt.Errorf("yaml syntax error: %s", strings.TrimSpace(string(output)))
+        }
+        return nil
 }
 
 func (e *GitHubExecutor) createPR(ctx context.Context, repo, title, body, head, base string) (int, string, error) {
