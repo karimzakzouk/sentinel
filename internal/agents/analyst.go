@@ -38,11 +38,27 @@ var categoryKeywordMap = []struct {
 // Does NOT use the LLM — pure math (Bayes + Beta priors).
 type Analyst struct {
         router *llm.Router // kept for future LLM-assisted analysis; not used in v3.0
+        // v3.11.0: LLM prior weight in the Bayesian blend. Was hardcoded 0.4 (audit #9).
+        // Set via SetLLMPriorWeight from main.go using cfg.LLMPriorWeight.
+        llmPriorWeight float64
 }
 
 // NewAnalyst creates an Analyst.
 func NewAnalyst(router *llm.Router) *Analyst {
-        return &Analyst{router: router}
+        return &Analyst{
+                router:         router,
+                llmPriorWeight: 0.4, // v3.11.0: default; override via SetLLMPriorWeight
+        }
+}
+
+// SetLLMPriorWeight sets the weight given to the LLM's confidence vs the
+// Bayesian posterior. v3.11.0: Replaces the hardcoded 0.4 (audit #9).
+// Range [0, 1]: 0 = pure Bayesian (ignore LLM), 1 = pure LLM (ignore Bayes).
+// Default 0.4 (slight Bayesian lean — Bayes is more robust with few samples).
+func (a *Analyst) SetLLMPriorWeight(w float64) {
+        if w > 0 && w < 1 {
+                a.llmPriorWeight = w
+        }
 }
 
 // BetaStore is the interface for Beta prior lookups + updates.
@@ -165,8 +181,12 @@ func (a *Analyst) Run(ctx context.Context, state *schemas.AgentState, betaStore 
         posteriorMean := postAlpha / (postAlpha + postBeta)
 
         // Combine LLM prior with Bayesian posterior (weighted average)
-        llmPriorWeight := 0.4
-        finalConfidence := llmPriorWeight*survivor.Confidence + (1-llmPriorWeight)*posteriorMean
+        // v3.11.0: Use a.llmPriorWeight instead of hardcoded 0.4 (audit #9).
+        w := a.llmPriorWeight
+        if w <= 0 || w >= 1 {
+                w = 0.4 // safety net — should never fire
+        }
+        finalConfidence := w*survivor.Confidence + (1-w)*posteriorMean
 
         // 4. Detect schema migration
         hasSchemaMigration := detectSchemaMigration(survivor.Statement, state)

@@ -178,9 +178,17 @@ func main() {
         // v3.11.0: Wire gitHost + defaultBranch into the pipeline (CRITICAL audit #2 + #6).
         pipeline.SetGitHost(cfg.GitHost)
         pipeline.SetDefaultBranch(cfg.DefaultBranch)
+        // v3.11.0: Wire LLMPriorWeight + MaxPipelineIterations (audit #9).
+        // Were hardcoded 0.4 + 5 in analyst.go + schemas/types.go.
+        pipeline.SetLLMPriorWeight(cfg.LLMPriorWeight)
+        pipeline.SetMaxIterations(cfg.MaxPipelineIterations)
 
         // 5. Safety policy (embedded, replaces OPA sidecar)
-        policy := safety.NewPolicy(cfg.ProductionNamespaces, cfg.ConfidenceAutonomous, cfg.ConfidenceHumanReview)
+        // v3.11.0: Wire cfg.HighRiskServices (obs-1). Was: the demo's
+        // payment-api/billing-api/auth-service leaked into every install because
+        // NewPolicy couldn't override HighRiskServices.
+        policy := safety.NewPolicy(cfg.ProductionNamespaces, cfg.ConfidenceAutonomous, cfg.ConfidenceHumanReview).
+                WithHighRiskServices(cfg.HighRiskServices)
 
         // 6. Executors
         // v3.11.0: Wire cfg.GitHost + cfg.GitHubAPIURL + cfg.DefaultBranch into
@@ -212,7 +220,17 @@ func main() {
         // v3.2: Slack alerts (graceful degradation if no webhook)
         alertSender := agents.NewAlertSender(cfg.SlackWebhook)
         // v3.2: Outcome watcher (monitors service post-fix)
+        // v3.11.0: Wire configurable Phase 1 durations (audit #9). Was hardcoded
+        // 10min watch / 30s interval in feedback/outcome.go NewOutcomeWatcher.
         outcomeWatcher := feedback.NewOutcomeWatcher(k8sClient.Clientset(), store)
+        if cfg.OutcomeWatchDurationMin > 0 || cfg.OutcomeCheckIntervalSec > 0 {
+                outcomeWatcher.SetDurations(
+                        time.Duration(cfg.OutcomeWatchDurationMin)*time.Minute,
+                        time.Duration(cfg.OutcomeCheckIntervalSec)*time.Second,
+                        0, // Phase 2 long watch — keep default 24h
+                        0, // Phase 2 long interval — keep default 5min
+                )
+        }
         // v3.2: Load existing vectors from SQLite into HNSW index on startup (delay 2s for DB to be ready)
         go func() {
                 time.Sleep(2 * time.Second)
@@ -222,9 +240,15 @@ func main() {
                 }
         }()
 
-        // v3.8.2: Concurrency limiter — max 3 concurrent investigations to prevent
+        // v3.8.2: Concurrency limiter — max N concurrent investigations to prevent
         // LLM API quota exhaustion during incident storms (Claude's review).
-        invSem := make(chan struct{}, 3)
+        // v3.11.0: Configurable via cfg.MaxConcurrentInvestigations (audit #15).
+        // Was hardcoded to 3.
+        maxConcurrent := cfg.MaxConcurrentInvestigations
+        if maxConcurrent <= 0 {
+                maxConcurrent = 3
+        }
+        invSem := make(chan struct{}, maxConcurrent)
 
         // 7. The full investigation handler — runs the agent pipeline + execution
         handler := func(ctx context.Context, cluster schemas.AnomalyCluster, crName, crNamespace string) {
@@ -659,7 +683,12 @@ func main() {
                 })
         }
 
-        detector := detection.New(k8sClient.Clientset(), detectionHandler, cfg.SlackWebhook)
+        detector := detection.NewWithConfig(
+                k8sClient.Clientset(), detectionHandler, cfg.SlackWebhook,
+                time.Duration(cfg.DetectionCooldownSec)*time.Second, // v3.11.0: was hardcoded 5*time.Minute (audit #9)
+                cfg.DetectionTailLines,                              // v3.11.0: was hardcoded 100 (audit #9)
+                cfg.SkipNamespaces,                                  // v3.11.0: was hardcoded kube-system/kube-public/kube-node-lease (audit #11)
+        )
         go func() {
                 logging.Info("detection layer started (live log streaming + pod status)")
                 detector.Run(ctx)

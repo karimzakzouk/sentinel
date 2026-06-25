@@ -103,10 +103,46 @@ type Detector struct {
         // log spam when the watch fires repeatedly for the same pod.
         discoveredPods map[string]time.Time
         discoveredMu   sync.Mutex
+
+        // v3.11.0: Configurable cooldown + tail lines (audit #9). Were hardcoded
+        // 5*time.Minute + 100 in shouldTrigger + streamPodLogs.
+        cooldown   time.Duration
+        tailLines  int64
+        // v3.11.0: Configurable namespace skip list (audit #11). Was hardcoded
+        // kube-system/kube-public/kube-node-lease.
+        skipNamespaces map[string]bool
 }
 
 // New creates a Detector.
 func New(clientset *kubernetes.Clientset, handler IncidentHandler, alertURL string) *Detector {
+        return NewWithConfig(clientset, handler, alertURL, 5*time.Minute, 100, nil)
+}
+
+// NewWithConfig creates a Detector with configurable cooldown, tail lines,
+// and namespace skip list. v3.11.0: Replaces the hardcoded values in
+// shouldTrigger + streamPodLogs + watchPodsInNamespace (audit #9 + #11).
+// Pass cooldown=0 / tailLines=0 to keep defaults (5min / 100).
+// Pass nil skipNamespaces to keep the default skip list.
+func NewWithConfig(clientset *kubernetes.Clientset, handler IncidentHandler, alertURL string, cooldown time.Duration, tailLines int64, skipNamespaces []string) *Detector {
+        if cooldown <= 0 {
+                cooldown = 5 * time.Minute
+        }
+        if tailLines <= 0 {
+                tailLines = 100
+        }
+        skip := map[string]bool{}
+        if len(skipNamespaces) > 0 {
+                for _, ns := range skipNamespaces {
+                        skip[ns] = true
+                }
+        } else {
+                // Default skip list — common system namespaces that don't have user code.
+                for _, ns := range []string{
+                        "kube-system", "kube-public", "kube-node-lease",
+                } {
+                        skip[ns] = true
+                }
+        }
         return &Detector{
                 clientset:      clientset,
                 handler:        handler,
@@ -114,6 +150,9 @@ func New(clientset *kubernetes.Clientset, handler IncidentHandler, alertURL stri
                 recentSeen:     make(map[ErrorFingerprint]time.Time),
                 streams:        make(map[string]context.CancelFunc),
                 discoveredPods: make(map[string]time.Time),
+                cooldown:       cooldown,
+                tailLines:      tailLines,
+                skipNamespaces: skip,
         }
 }
 
@@ -165,7 +204,10 @@ func (d *Detector) watchNamespaces(ctx context.Context) {
 }
 
 func (d *Detector) watchPodsInNamespace(ctx context.Context, namespace string) {
-        if namespace == "kube-system" || namespace == "kube-public" || namespace == "kube-node-lease" {
+        // v3.11.0: Use configurable skip list (audit #11). Was hardcoded to
+        // kube-system/kube-public/kube-node-lease, missing common system
+        // namespaces like calico-system, cert-manager, ingress-nginx, monitoring.
+        if d.skipNamespaces[namespace] {
                 return
         }
 
@@ -414,7 +456,7 @@ func (d *Detector) streamPodLogs(ctx context.Context, pod *corev1.Pod, repo stri
         opts := &corev1.PodLogOptions{
                 Follow:    true,
                 Container: containerName,
-                TailLines: ptr(int64(100)),
+                TailLines: ptr(d.tailLines), // v3.11.0: was hardcoded int64(100) (audit #9)
         }
 
         for {
@@ -569,7 +611,7 @@ func (d *Detector) shouldTrigger(namespace, service, errorType string) bool {
         defer d.mu.Unlock()
 
         if lastSeen, exists := d.recentSeen[fp]; exists {
-                if time.Since(lastSeen) < 5*time.Minute {
+                if time.Since(lastSeen) < d.cooldown { // v3.11.0: was hardcoded 5*time.Minute (audit #9)
                         return false
                 }
         }

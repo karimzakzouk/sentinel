@@ -34,6 +34,11 @@ type Pipeline struct {
         analystTimeoutSec            int
         fixProposerTimeoutSec        int
         confidenceLoopBackThreshold  float64
+
+        // v3.11.0: Max pipeline iterations (audit #9). Was hardcoded 5 in
+        // schemas.NewAgentState. The pipeline Run() overrides state.MaxIterations
+        // with this value at the start of each Run (if > 0).
+        maxIterations int
 }
 
 // NewPipeline creates a Pipeline with optional vector store for memory loop.
@@ -104,6 +109,26 @@ func (p *Pipeline) SetDefaultBranch(branch string) {
         p.fixProposer.SetDefaultBranch(branch)
 }
 
+// SetLLMPriorWeight propagates the LLM prior weight to the Analyst.
+// v3.11.0: Replaces the hardcoded 0.4 in analyst.go (audit #9).
+func (p *Pipeline) SetLLMPriorWeight(w float64) {
+        p.analyst.SetLLMPriorWeight(w)
+}
+
+// SetMaxIterations sets the max pipeline iterations. v3.11.0: Replaces
+// the hardcoded 5 in schemas/types.go NewAgentState (audit #9). The
+// pipeline's Run loop uses state.MaxIterations, so we set it on the state
+// before each Run via this setter (stored on the pipeline).
+// NOTE: This is a soft setter — the state's MaxIterations is set in
+// schemas.NewAgentState. To override, call SetMaxIterations BEFORE the
+// pipeline runs and the pipeline will rewrite state.MaxIterations at
+// the start of Run.
+func (p *Pipeline) SetMaxIterations(n int) {
+        if n > 0 {
+                p.maxIterations = n
+        }
+}
+
 // Run executes the full pipeline on the given state. Handles rewinds.
 // v3.6.0: Speed optimization — skip evidence gathering when the top hypothesis
 // already has high confidence (>= 0.7). Evidence gathering adds ~90s of LLM +
@@ -111,6 +136,12 @@ func (p *Pipeline) SetDefaultBranch(branch string) {
 // traceback, it's unnecessary.
 func (p *Pipeline) Run(ctx context.Context, state *schemas.AgentState) error {
         defer recoverPanic("pipeline")
+
+        // v3.11.0: Override state.MaxIterations with the pipeline's configured
+        // value (audit #9). Was hardcoded 5 in schemas.NewAgentState.
+        if p.maxIterations > 0 {
+                state.MaxIterations = p.maxIterations
+        }
 
         for state.Iterations < state.MaxIterations {
                 state.Iterations++
