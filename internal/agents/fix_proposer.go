@@ -549,6 +549,10 @@ func normalizeEscapes(s string) string {
         s = strings.ReplaceAll(s, "\\t", "\t")
         // Replace literal \r (backslash + r) with actual carriage return
         s = strings.ReplaceAll(s, "\\r", "\r")
+        // v3.10.1: Replace literal \" (backslash + quote) with just quote.
+        // Some LLMs double-escape quotes in JSON: \\\" in JSON → \" (backslash+quote)
+        // after parsing. The file has regular quotes, so these don't match.
+        s = strings.ReplaceAll(s, "\\\"", "\"")
         return s
 }
 

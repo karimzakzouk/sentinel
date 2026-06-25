@@ -482,12 +482,20 @@ func tryFuzzyMatch(content, search, replace string) (bool, string) {
                 return false, content
         }
 
+        // v3.10.1: Log the search text for debugging
+        for i, sl := range searchLines {
+                preview := strings.TrimSpace(sl)
+                if len(preview) > 80 {
+                        preview = preview[:80] + "..."
+                }
+                log.Printf("[github] fuzzy: search line %d: %q", i, preview)
+        }
+
         bestScore := 0.0
         bestStart := -1
 
         // Slide a window over the content lines
         for start := 0; start <= len(contentLines)-len(searchLines); start++ {
-                // Compare each line in the window with the search lines
                 totalSim := 0.0
                 for j := 0; j < len(searchLines); j++ {
                         sim := lineSimilarity(strings.TrimSpace(contentLines[start+j]), strings.TrimSpace(searchLines[j]))
@@ -500,12 +508,30 @@ func tryFuzzyMatch(content, search, replace string) (bool, string) {
                 }
         }
 
-        // Only accept if >80% similar
-        if bestScore < 0.8 || bestStart == -1 {
+        // v3.10.1: Log the best match details
+        if bestStart >= 0 {
+                for j := 0; j < len(searchLines); j++ {
+                        fileLine := strings.TrimSpace(contentLines[bestStart+j])
+                        searchLine := strings.TrimSpace(searchLines[j])
+                        sim := lineSimilarity(fileLine, searchLine)
+                        if sim < 1.0 {
+                                filePreview := fileLine
+                                if len(filePreview) > 80 { filePreview = filePreview[:80] + "..." }
+                                searchPreview := searchLine
+                                if len(searchPreview) > 80 { searchPreview = searchPreview[:80] + "..." }
+                                log.Printf("[github] fuzzy: line %d diff (%.0f%%): file=%q search=%q", j, sim*100, filePreview, searchPreview)
+                        }
+                }
+        }
+
+        log.Printf("[github] fuzzy: best score=%.1f%% at line %d (threshold=70%%)", bestScore*100, bestStart+1)
+
+        // v3.10.1: Lowered threshold from 80% to 70% — free models drop more chars
+        if bestScore < 0.7 || bestStart == -1 {
                 return false, content
         }
 
-        log.Printf("[github] fuzzy match: %d%% similarity at line %d", int(bestScore*100), bestStart+1)
+        log.Printf("[github] fuzzy match: %.1f%% similarity at line %d", bestScore*100, bestStart+1)
 
         // Replace the matched lines with the replacement text
         originalIndent := getIndent(contentLines[bestStart])
