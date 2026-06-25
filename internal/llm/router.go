@@ -435,37 +435,26 @@ func (r *Router) parseRetryAfter(value string) time.Duration {
 // extractJSON defensively parses JSON from LLM output.
 // Handles markdown fences, bare JSON, prose around JSON, and truncated JSON.
 func extractJSON(text string) map[string]any {
-        // v3.8.8: Some models (gpt-oss-20b:free) return JSON with broken escaping
-        // — e.g. \"\"\"\"demo-app instead of \"\"\"demo-app. This happens when the
-        // model double-escapes quotes inside string values. Try unescaping the
-        // whole text first as a preprocessing step.
-        unescaped := unescapeDoubleEscapedQuotes(text)
-
-        // Try the original text AND the unescaped version for each strategy.
-        for _, t := range []string{text, unescaped} {
-                // Try 1: markdown-fenced JSON block
-                if m := jsonBlockRe.FindStringSubmatch(t); len(m) >= 2 {
-                        if v, ok := tryParse(m[1]); ok {
-                                return v
-                        }
-                }
-                // Try 2: bare JSON object
-                if m := bareJSONRe.FindStringSubmatch(t); len(m) >= 1 {
-                        if v, ok := tryParse(m[0]); ok {
-                                return v
-                        }
-                }
-                // Try 3: the whole text
-                if v, ok := tryParse(t); ok {
+        // Try 1: markdown-fenced JSON block
+        if m := jsonBlockRe.FindStringSubmatch(text); len(m) >= 2 {
+                if v, ok := tryParse(m[1]); ok {
                         return v
                 }
         }
-        // Try 4: repair truncated JSON (on both versions)
-        for _, t := range []string{text, unescaped} {
-                if repaired := repairTruncated(t); repaired != "" {
-                        if v, ok := tryParse(repaired); ok {
-                                return v
-                        }
+        // Try 2: bare JSON object
+        if m := bareJSONRe.FindStringSubmatch(text); len(m) >= 1 {
+                if v, ok := tryParse(m[0]); ok {
+                        return v
+                }
+        }
+        // Try 3: the whole text
+        if v, ok := tryParse(text); ok {
+                return v
+        }
+        // Try 4: repair truncated JSON
+        if repaired := repairTruncated(text); repaired != "" {
+                if v, ok := tryParse(repaired); ok {
+                        return v
                 }
         }
         // v3.8.8: Log the raw text when ALL parsing attempts fail.
@@ -475,29 +464,6 @@ func extractJSON(text string) map[string]any {
         }
         log.Printf("[llm] extractJSON FAILED — raw response (len=%d): %s", len(text), preview)
         return map[string]any{}
-}
-
-// unescapeDoubleEscapedQuotes fixes a common model quirk where the model
-// outputs quotes with literal backslash-quote sequences inside JSON string
-// values. For example, the model returns:
-//
-//      "new_content" : \"\"\"\"demo-app\"
-//
-// The \" sequences are literal backslash+quote (2 chars each), not JSON
-// escape sequences. This breaks json.Unmarshal because the parser sees a
-// bare backslash. We fix it by removing the backslashes before quotes that
-// appear inside string values, converting \" to ".
-//
-// We only do this when the standard parse fails — it's a fallback, not the
-// primary path. This is conservative: we don't touch the text if it already
-// parses as valid JSON.
-//
-// v3.8.8.
-func unescapeDoubleEscapedQuotes(s string) string {
-        // Replace \" (literal backslash + quote) with just " (quote).
-        // This is aggressive but necessary — the model's output is fundamentally
-        // broken JSON and we need to recover what we can.
-        return strings.ReplaceAll(s, `\"`, `"`)
 }
 
 var (
