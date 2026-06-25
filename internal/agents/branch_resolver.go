@@ -43,27 +43,47 @@ func (a *Investigator) resolveBranch(ctx context.Context, state *schemas.AgentSt
                 return branch
         }
 
-        // 3. Fallback: main with warning
-        log.Printf("[investigator] WARNING: no sentinel.io/branch annotation — cloning main (may not match deployed code)")
-        return "main"
+        // 3. Fallback: configured default branch with warning.
+        // v3.11.0: Was hardcoded "main" (CRITICAL audit #6). Now uses the
+        // Investigator's configured defaultBranch (set from cfg.DefaultBranch).
+        db := a.defaultBranch
+        if db == "" {
+                db = "main" // safety net — should never fire
+        }
+        log.Printf("[investigator] WARNING: no sentinel.io/branch annotation — cloning %s (may not match deployed code)", db)
+        return db
 }
 
 // discoverRepo extracts the GitHub repo from the cluster's annotations.
-func discoverRepo(state *schemas.AgentState) string {
+// v3.11.0: Now accepts a gitHost parameter so normalizeRepo can strip the
+// configured host prefix (was hardcoded to "github.com"). CRITICAL audit #2.
+func discoverRepo(state *schemas.AgentState, gitHost string) string {
         if repo, ok := state.Cluster.Annotations["sentinel.io/repo"]; ok {
-                return normalizeRepo(repo)
+                return normalizeRepo(repo, gitHost)
         }
         for _, anomaly := range state.Cluster.Anomalies {
                 if repo, ok := anomaly.Annotations["sentinel.io/repo"]; ok {
-                        return normalizeRepo(repo)
+                        return normalizeRepo(repo, gitHost)
                 }
         }
         return ""
 }
 
-// normalizeRepo strips "github.com/" prefix if present.
-func normalizeRepo(repo string) string {
+// normalizeRepo strips the configured git host prefix (https://<host>/ and
+// <host>/) and a trailing ".git". v3.11.0: Was hardcoded to "github.com" —
+// a GitHub Enterprise repo string like "gh.mycorp.internal/acme/api" would
+// not be normalized, producing a malformed clone URL.
+func normalizeRepo(repo string, gitHost string) string {
         repo = strings.TrimSpace(repo)
+        if gitHost == "" {
+                gitHost = "github.com"
+        }
+        repo = strings.TrimPrefix(repo, "https://"+gitHost+"/")
+        repo = strings.TrimPrefix(repo, gitHost+"/")
+        // Also strip the legacy github.com prefix in case the annotation was
+        // set before the operator configured a custom gitHost. This is a
+        // backwards-compat safety net — new annotations should use the
+        // configured host.
         repo = strings.TrimPrefix(repo, "https://github.com/")
         repo = strings.TrimPrefix(repo, "github.com/")
         return strings.TrimSuffix(repo, ".git")

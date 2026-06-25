@@ -28,13 +28,40 @@ import (
 )
 
 // Cloner clones a GitHub repo to a local temp dir using go-git (pure Go, no CGO).
+//
+// v3.11.0: Now supports GitHub Enterprise / GitLab / Bitbucket via
+// cfg.GitHost (CRITICAL audit #2). Was hardcoded to github.com in 2 sites.
 type Cloner struct {
         githubToken string
+        gitHost     string // v3.11.0: default "github.com"; override via WithGitHost
+        defaultBranch string // v3.11.0: default "main"; override via WithDefaultBranch
 }
 
 // NewCloner creates a Cloner.
 func NewCloner(githubToken string) *Cloner {
-        return &Cloner{githubToken: githubToken}
+        return &Cloner{
+                githubToken:   githubToken,
+                gitHost:       "github.com", // v3.11.0: default
+                defaultBranch: "main",       // v3.11.0: default
+        }
+}
+
+// WithGitHost sets the git host for clone URLs. v3.11.0: Replaces the
+// hardcoded "github.com" (CRITICAL audit #2).
+func (c *Cloner) WithGitHost(host string) *Cloner {
+        if host != "" {
+                c.gitHost = host
+        }
+        return c
+}
+
+// WithDefaultBranch sets the default branch fallback. v3.11.0: Replaces the
+// hardcoded "main" (CRITICAL audit #6).
+func (c *Cloner) WithDefaultBranch(branch string) *Cloner {
+        if branch != "" {
+                c.defaultBranch = branch
+        }
+        return c
 }
 
 // Clone clones a repo to a temp dir. Returns the local path.
@@ -48,7 +75,7 @@ func NewCloner(githubToken string) *Cloner {
 // read-only in the distroless image (readOnlyRootFilesystem: true).
 func (c *Cloner) Clone(ctx context.Context, repo, ref string) (string, error) {
         if ref == "" {
-                ref = "main"
+                ref = c.defaultBranch // v3.11.0: was hardcoded "main" (audit #6)
         }
 
         // Use /data/repos/ (the mounted PVC) instead of /tmp (read-only in distroless)
@@ -74,9 +101,10 @@ func (c *Cloner) Clone(ctx context.Context, repo, ref string) (string, error) {
         }
 
         // Build the clone URL with token auth (if private)
-        cloneURL := fmt.Sprintf("https://github.com/%s.git", repo)
+        // v3.11.0: Use c.gitHost instead of hardcoded "github.com" (CRITICAL audit #2).
+        cloneURL := fmt.Sprintf("https://%s/%s.git", c.gitHost, repo)
         if c.githubToken != "" {
-                cloneURL = fmt.Sprintf("https://x-access-token:%s@github.com/%s.git", c.githubToken, repo)
+                cloneURL = fmt.Sprintf("https://x-access-token:%s@%s/%s.git", c.githubToken, c.gitHost, repo)
         }
 
         cloneCtx, cancel := context.WithTimeout(ctx, 60*time.Second)

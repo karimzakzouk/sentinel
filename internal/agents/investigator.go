@@ -92,11 +92,36 @@ type Investigator struct {
         // not recommended for production). Set via SetAllowedRepos from main.go
         // using config.AllowedGitHubRepos.
         allowedRepos []string
+
+        // v3.11.0: Default branch fallback (CRITICAL audit #6). Was hardcoded
+        // "main" in branch_resolver.go:48. Set via SetDefaultBranch from main.go.
+        defaultBranch string
+        // v3.11.0: Git host (CRITICAL audit #2). Was hardcoded "github.com" in
+        // cloner.go + branch_resolver.normalizeRepo. Set via SetGitHost from main.go.
+        gitHost string
 }
 
 // SetAllowedRepos sets the GitHub repo allowlist. See Config.IsRepoAllowed.
 func (a *Investigator) SetAllowedRepos(repos []string) {
         a.allowedRepos = repos
+}
+
+// SetDefaultBranch sets the default branch fallback. v3.11.0: Replaces the
+// hardcoded "main" in branch_resolver.go (CRITICAL audit #6). Per-repo
+// override via sentinel.io/branch annotation takes precedence.
+func (a *Investigator) SetDefaultBranch(branch string) {
+        if branch != "" {
+                a.defaultBranch = branch
+        }
+}
+
+// SetGitHost propagates the git host to the cloner. v3.11.0: Replaces the
+// hardcoded "github.com" in cloner.go (CRITICAL audit #2).
+func (a *Investigator) SetGitHost(host string) {
+        if host != "" {
+                a.gitHost = host
+                a.cloner.WithGitHost(host)
+        }
 }
 
 // isRepoAllowed matches Config.IsRepoAllowed but local to the Investigator
@@ -139,11 +164,13 @@ type VectorMetadata struct {
 // NewInvestigator creates an Investigator with optional vector store for memory loop.
 func NewInvestigator(router *llm.Router, k8sClient *k8s.Client, gitHubToken string, vectorStore VectorStore) *Investigator {
         return &Investigator{
-                router:      router,
-                k8s:         k8sClient,
-                gitHubToken: gitHubToken,
-                cloner:      repo.NewCloner(gitHubToken),
-                vectorStore: vectorStore,
+                router:        router,
+                k8s:           k8sClient,
+                gitHubToken:   gitHubToken,
+                cloner:        repo.NewCloner(gitHubToken),
+                vectorStore:   vectorStore,
+                defaultBranch: "main",       // v3.11.0: default; override via SetDefaultBranch
+                gitHost:       "github.com", // v3.11.0: default; override via SetGitHost
         }
 }
 
@@ -204,7 +231,7 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
         }
 
         // 1. Discover the GitHub repo from cluster annotations
-        repoName := discoverRepo(state)
+        repoName := discoverRepo(state, a.gitHost)
         if repoName == "" {
                 log.Printf("[investigator] no repo discovered — skipping code fetch")
                 return a.runWithoutRepo(ctx, state, podLogs)

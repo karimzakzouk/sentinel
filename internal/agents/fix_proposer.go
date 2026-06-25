@@ -146,11 +146,37 @@ type FixProposer struct {
         router      *llm.Router
         k8s         *k8s.Client
         gitHubToken string
+        // v3.11.0: gitHost for normalizeRepo (CRITICAL audit #2). Was hardcoded
+        // "github.com" in branch_resolver.normalizeRepo. Set via SetGitHost.
+        gitHost       string
+        defaultBranch string // v3.11.0: default branch fallback (CRITICAL audit #6)
 }
 
 // NewFixProposer creates a FixProposer.
 func NewFixProposer(router *llm.Router, k8sClient *k8s.Client, gitHubToken string) *FixProposer {
-        return &FixProposer{router: router, k8s: k8sClient, gitHubToken: gitHubToken}
+        return &FixProposer{
+                router:        router,
+                k8s:           k8sClient,
+                gitHubToken:   gitHubToken,
+                gitHost:       "github.com", // v3.11.0: default
+                defaultBranch: "main",       // v3.11.0: default
+        }
+}
+
+// SetGitHost sets the git host for repo normalization. v3.11.0: Replaces
+// the hardcoded "github.com" in normalizeRepo (CRITICAL audit #2).
+func (a *FixProposer) SetGitHost(host string) {
+        if host != "" {
+                a.gitHost = host
+        }
+}
+
+// SetDefaultBranch sets the default branch fallback. v3.11.0: Replaces the
+// hardcoded "main" in resolveBaseBranch (CRITICAL audit #6).
+func (a *FixProposer) SetDefaultBranch(branch string) {
+        if branch != "" {
+                a.defaultBranch = branch
+        }
 }
 
 // Run executes the fix proposer agent.
@@ -174,7 +200,7 @@ func (a *FixProposer) Run(ctx context.Context, state *schemas.AgentState) error 
                         TargetService:     state.Cluster.Service,
                         TargetNamespace:   state.Cluster.Namespace,
                         Description:       fmt.Sprintf("Restart fallback: no source code available to generate a code fix. Root cause: %s", rc.Statement),
-                        Repo:              strPtr(discoverRepo(state)),
+                        Repo:              strPtr(discoverRepo(state, a.gitHost)),
                         PRTitle:           strPtr(fmt.Sprintf("[Sentinel] Restart %s (no source available for code fix)", state.Cluster.Service)),
                         PRBody:            strPtr(buildPRBody(state, rc, "restart")),
                         RequiresSandbox:   false,
@@ -192,7 +218,7 @@ func (a *FixProposer) Run(ctx context.Context, state *schemas.AgentState) error 
                         TargetService:   state.Cluster.Service,
                         TargetNamespace: state.Cluster.Namespace,
                         Description:     fmt.Sprintf("Roll-forward fix for %s (schema migration blocks autonomous rollback)", rc.Category),
-                        Repo:            strPtr(discoverRepo(state)),
+                        Repo:            strPtr(discoverRepo(state, a.gitHost)),
                         PRTitle:         strPtr(fmt.Sprintf("[Sentinel] Roll-forward fix for %s in %s", rc.Category, state.Cluster.Service)),
                         PRBody:          strPtr(buildPRBody(state, rc, "roll_forward")),
                         RequiresSandbox: true,
@@ -317,7 +343,7 @@ func (a *FixProposer) Run(ctx context.Context, state *schemas.AgentState) error 
                 TargetService:     state.Cluster.Service,
                 TargetNamespace:   state.Cluster.Namespace,
                 Description:       getStr(result, "description"),
-                Repo:              strPtr(discoverRepo(state)),
+                Repo:              strPtr(discoverRepo(state, a.gitHost)),
                 K8sAction:         getMap(result, "k8s_action"),
                 FilesToChange:     files,
                 DockerfilePath:    strPtr(dockerfilePath),
@@ -589,7 +615,7 @@ func (a *FixProposer) finalizeProposal(state *schemas.AgentState, proposal *sche
         // hardcoding "main". If the service is deployed from "release-1.2", the
         // PR should target "release-1.2", not "main". Falls back to "main" if no
         // annotation is set (same as the investigator's clone behavior).
-        proposal.BaseBranch = strPtr(resolveBaseBranch(state))
+        proposal.BaseBranch = strPtr(a.resolveBaseBranch(state)) // v3.11.0: was free function returning "main"
 
         state.FixProposal = proposal
         state.Status = schemas.StatusFixProposed
@@ -602,10 +628,12 @@ func (a *FixProposer) finalizeProposal(state *schemas.AgentState, proposal *sche
 }
 
 // resolveBaseBranch determines which branch the PR should target.
-// Priority: sentinel.io/branch annotation > "main" fallback.
+// Priority: sentinel.io/branch annotation > configured default branch.
 // This mirrors the investigator's resolveBranch logic but WITHOUT the
 // git-commit case (PRs target branches, not commits).
-func resolveBaseBranch(state *schemas.AgentState) string {
+// v3.11.0: Was a free function returning hardcoded "main". Now a method
+// so it can use the FixProposer's configurable defaultBranch (CRITICAL audit #6).
+func (a *FixProposer) resolveBaseBranch(state *schemas.AgentState) string {
         if branch, ok := state.Cluster.Annotations["sentinel.io/branch"]; ok && branch != "" {
                 return branch
         }
@@ -614,7 +642,11 @@ func resolveBaseBranch(state *schemas.AgentState) string {
                         return branch
                 }
         }
-        return "main"
+        db := a.defaultBranch
+        if db == "" {
+                db = "main" // safety net
+        }
+        return db
 }
 
 func buildPRBody(state *schemas.AgentState, rc *schemas.RootCause, fixType string) string {

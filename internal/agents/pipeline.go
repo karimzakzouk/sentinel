@@ -87,6 +87,23 @@ func (p *Pipeline) SetAllowedRepos(repos []string) {
         p.investigator.SetAllowedRepos(repos)
 }
 
+// SetGitHost propagates the git host to the Investigator + FixProposer.
+// v3.11.0: Replaces hardcoded "github.com" in cloner.go + branch_resolver.go
+// (CRITICAL audit #2). Enables GitHub Enterprise / GitLab / Bitbucket.
+func (p *Pipeline) SetGitHost(host string) {
+        p.investigator.SetGitHost(host)
+        p.fixProposer.SetGitHost(host)
+}
+
+// SetDefaultBranch propagates the default branch fallback to the
+// Investigator + FixProposer. v3.11.0: Replaces hardcoded "main" in
+// cloner.go + branch_resolver.go + fix_proposer.go (CRITICAL audit #6).
+func (p *Pipeline) SetDefaultBranch(branch string) {
+        p.investigator.SetDefaultBranch(branch)
+        p.investigator.cloner.WithDefaultBranch(branch)
+        p.fixProposer.SetDefaultBranch(branch)
+}
+
 // Run executes the full pipeline on the given state. Handles rewinds.
 // v3.6.0: Speed optimization — skip evidence gathering when the top hypothesis
 // already has high confidence (>= 0.7). Evidence gathering adds ~90s of LLM +

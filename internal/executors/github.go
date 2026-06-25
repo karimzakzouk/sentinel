@@ -21,19 +21,59 @@ import (
 
 // GitHubExecutor opens Pull Requests via the GitHub REST API.
 // Replaces the Python PyGithub-based executor with direct net/http calls.
+//
+// v3.11.0: Now supports GitHub Enterprise / GitLab / Bitbucket via
+// cfg.GitHost + cfg.GitHubAPIURL (CRITICAL audit #2). Was hardcoded to
+// https://api.github.com in 8 sites within this file.
 type GitHubExecutor struct {
-        token string
-        http  *http.Client
+        token        string
+        http         *http.Client
+        apiURL       string // v3.11.0: base API URL (default "https://api.github.com")
+        gitHost      string // v3.11.0: git host for clone URLs (default "github.com")
+        defaultBranch string // v3.11.0: default branch fallback (default "main")
 }
 
 // NewGitHub creates a GitHubExecutor.
 func NewGitHub(token string) *GitHubExecutor {
         return &GitHubExecutor{
-                token: token,
-                http: &http.Client{
-                        Timeout: 30 * time.Second,
-                },
+                token:         token,
+                http:          &http.Client{Timeout: 30 * time.Second},
+                apiURL:        "https://api.github.com", // v3.11.0: default; override via WithAPIURL
+                gitHost:       "github.com",             // v3.11.0: default; override via WithGitHost
+                defaultBranch: "main",                   // v3.11.0: default; override via WithDefaultBranch
         }
+}
+
+// WithAPIURL sets the GitHub API base URL. v3.11.0: Replaces the hardcoded
+// "https://api.github.com" in 8 sites within this file (CRITICAL audit #2).
+// For GitHub Enterprise: "https://gh.mycorp.internal/api/v3".
+// For GitLab (GitHub-compat API): "https://gitlab.com/api/v4".
+func (e *GitHubExecutor) WithAPIURL(url string) *GitHubExecutor {
+        if url != "" {
+                e.apiURL = strings.TrimRight(url, "/")
+        }
+        return e
+}
+
+// WithGitHost sets the git host for clone URLs. v3.11.0: Replaces the
+// hardcoded "github.com" (CRITICAL audit #2). For GitHub Enterprise:
+// "gh.mycorp.internal". For GitLab: "gitlab.com".
+func (e *GitHubExecutor) WithGitHost(host string) *GitHubExecutor {
+        if host != "" {
+                e.gitHost = host
+        }
+        return e
+}
+
+// WithDefaultBranch sets the default branch fallback. v3.11.0: Replaces the
+// hardcoded "main" in PrepareBranch (CRITICAL audit #6). For repos whose
+// default branch is master/develop/trunk, set this accordingly. Per-repo
+// override via sentinel.io/branch annotation takes precedence.
+func (e *GitHubExecutor) WithDefaultBranch(branch string) *GitHubExecutor {
+        if branch != "" {
+                e.defaultBranch = branch
+        }
+        return e
 }
 
 // BranchInfo is the result of PrepareBranch.
@@ -59,7 +99,7 @@ func (e *GitHubExecutor) PrepareBranch(ctx context.Context, inc *schemas.Inciden
         repo := *fp.Repo
 
         // 1. Get the base branch's latest commit SHA
-        baseBranch := "main"
+        baseBranch := e.defaultBranch // v3.11.0: was hardcoded "main" (audit #6)
         if fp.BaseBranch != nil && *fp.BaseBranch != "" {
                 baseBranch = *fp.BaseBranch
         }
@@ -180,7 +220,7 @@ func (e *GitHubExecutor) OpenPR(ctx context.Context, inc *schemas.Incident, bran
 // --- GitHub API helpers ---
 
 func (e *GitHubExecutor) getBranchSHA(ctx context.Context, repo, branch string) (string, error) {
-        url := fmt.Sprintf("https://api.github.com/repos/%s/branches/%s", repo, branch)
+        url := fmt.Sprintf("%s/repos/%s/branches/%s", e.apiURL, repo, branch)
         var resp struct {
                 Commit struct {
                         SHA string `json:"sha"`
@@ -193,7 +233,7 @@ func (e *GitHubExecutor) getBranchSHA(ctx context.Context, repo, branch string) 
 }
 
 func (e *GitHubExecutor) createBranch(ctx context.Context, repo, branch, sha string) error {
-        url := fmt.Sprintf("https://api.github.com/repos/%s/git/refs", repo)
+        url := fmt.Sprintf("%s/repos/%s/git/refs", e.apiURL, repo)
         body := map[string]any{
                 "ref": fmt.Sprintf("refs/heads/%s", branch),
                 "sha": sha,
@@ -205,7 +245,7 @@ func (e *GitHubExecutor) upsertFile(ctx context.Context, repo, branch, path, con
         // Try to get existing file's SHA (for update). Ignore error — file may not exist yet.
         existingSHA, _ := e.getFileSHA(ctx, repo, path, branch)
 
-        url := fmt.Sprintf("https://api.github.com/repos/%s/contents/%s", repo, path)
+        url := fmt.Sprintf("%s/repos/%s/contents/%s", e.apiURL, repo, path)
         body := map[string]any{
                 "message": fmt.Sprintf("[Sentinel] Update %s", path),
                 "content": base64Encode(content),
@@ -218,7 +258,7 @@ func (e *GitHubExecutor) upsertFile(ctx context.Context, repo, branch, path, con
 }
 
 func (e *GitHubExecutor) getFileSHA(ctx context.Context, repo, path, ref string) (string, error) {
-        url := fmt.Sprintf("https://api.github.com/repos/%s/contents/%s?ref=%s", repo, path, ref)
+        url := fmt.Sprintf("%s/repos/%s/contents/%s?ref=%s", e.apiURL, repo, path, ref)
         var resp struct {
                 SHA  string `json:"sha"`
                 Type string `json:"type"`
@@ -236,7 +276,7 @@ func (e *GitHubExecutor) getFileSHA(ctx context.Context, repo, path, ref string)
 // v3.9.0: Used by applySearchReplace to get the current file before applying
 // search/replace blocks.
 func (e *GitHubExecutor) getFileContent(ctx context.Context, repo, path, ref string) (string, error) {
-        url := fmt.Sprintf("https://api.github.com/repos/%s/contents/%s?ref=%s", repo, path, ref)
+        url := fmt.Sprintf("%s/repos/%s/contents/%s?ref=%s", e.apiURL, repo, path, ref)
         var resp struct {
                 Content  string `json:"content"`
                 Encoding string `json:"encoding"`
@@ -680,7 +720,7 @@ func validateSyntax(path, content string) error {
 // AND swallowed os.CreateTemp errors. See syntax_validate.go for details.
 
 func (e *GitHubExecutor) createPR(ctx context.Context, repo, title, body, head, base string) (int, string, error) {
-        url := fmt.Sprintf("https://api.github.com/repos/%s/pulls", repo)
+        url := fmt.Sprintf("%s/repos/%s/pulls", e.apiURL, repo)
         body_ := map[string]any{
                 "title": title,
                 "body":  body,
@@ -698,7 +738,7 @@ func (e *GitHubExecutor) createPR(ctx context.Context, repo, title, body, head, 
 }
 
 func (e *GitHubExecutor) addLabels(ctx context.Context, repo string, prNumber int, labels []string) error {
-        url := fmt.Sprintf("https://api.github.com/repos/%s/issues/%d/labels", repo, prNumber)
+        url := fmt.Sprintf("%s/repos/%s/issues/%d/labels", e.apiURL, repo, prNumber)
         body := map[string]any{"labels": labels}
         return e.do(ctx, "POST", url, body, nil)
 }

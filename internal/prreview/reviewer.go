@@ -40,6 +40,7 @@ type Reviewer struct {
         vectorStore    VectorStore
         similarityThreshold float32 // default 0.75
         httpClient     *http.Client
+        apiURL         string // v3.11.0: base API URL (default "https://api.github.com")
 }
 
 // Warning represents a chunk of the PR diff that resembles a past incident.
@@ -74,7 +75,18 @@ func New(githubToken, webhookSecret string, vs VectorStore) *Reviewer {
                 vectorStore:         vs,
                 similarityThreshold: 0.75,
                 httpClient:          &http.Client{Timeout: 30 * time.Second},
+                apiURL:              "https://api.github.com", // v3.11.0: default; override via WithAPIURL
         }
+}
+
+// WithAPIURL sets the GitHub API base URL. v3.11.0: Replaces the hardcoded
+// "https://api.github.com" (CRITICAL audit #2). For GitHub Enterprise:
+// "https://gh.mycorp.internal/api/v3".
+func (r *Reviewer) WithAPIURL(url string) *Reviewer {
+        if url != "" {
+                r.apiURL = strings.TrimRight(url, "/")
+        }
+        return r
 }
 
 // SetSimilarityThreshold configures the threshold above which a review
@@ -369,7 +381,7 @@ func (r *Reviewer) postReviewComment(ctx context.Context, repo string, prNumber 
                 return err
         }
 
-        url := fmt.Sprintf("https://api.github.com/repos/%s/%s/pulls/%d/reviews", owner, repoName, prNumber)
+        url := fmt.Sprintf("%s/repos/%s/%s/pulls/%d/reviews", r.apiURL, owner, repoName, prNumber)
         req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(payload))
         if err != nil {
                 return err

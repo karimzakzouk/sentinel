@@ -175,12 +175,21 @@ func main() {
         // When non-empty, the investigator refuses to clone repos outside
         // this list — primary defense against the pod-annotation SSRF.
         pipeline.SetAllowedRepos(cfg.AllowedGitHubRepos)
+        // v3.11.0: Wire gitHost + defaultBranch into the pipeline (CRITICAL audit #2 + #6).
+        pipeline.SetGitHost(cfg.GitHost)
+        pipeline.SetDefaultBranch(cfg.DefaultBranch)
 
         // 5. Safety policy (embedded, replaces OPA sidecar)
         policy := safety.NewPolicy(cfg.ProductionNamespaces, cfg.ConfidenceAutonomous, cfg.ConfidenceHumanReview)
 
         // 6. Executors
-        ghExec := executors.NewGitHub(cfg.GitHubToken)
+        // v3.11.0: Wire cfg.GitHost + cfg.GitHubAPIURL + cfg.DefaultBranch into
+        // the GitHub executor (CRITICAL audit #2 + #6). Was hardcoded to
+        // github.com + https://api.github.com + "main" in 14+ sites.
+        ghExec := executors.NewGitHub(cfg.GitHubToken).
+                WithAPIURL(cfg.GitHubAPIURL).
+                WithGitHost(cfg.GitHost).
+                WithDefaultBranch(cfg.DefaultBranch)
         k8sExec := executors.NewK8s(k8sClient.Clientset())
         // v3.11.0: Wire cfg.Namespace into the sandbox (audit #8).
         // Was: hardcoded "sentinel" in the NetworkPolicy ingress allow-list.
@@ -707,14 +716,17 @@ func main() {
         // v3.5.0: Wire predictive PR review (GitHub webhook receiver).
         // v3.8.0: If GitHub App credentials are configured, use the app for
         // verified bot identity + auto-webhook registration.
-        prReviewer := prreview.New(cfg.GitHubToken, cfg.GitHubWebhookSecret, &prReviewVectorAdapter{vs: vectorStore})
+        // v3.11.0: Wire cfg.GitHubAPIURL for GitHub Enterprise support (audit #2).
+        prReviewer := prreview.New(cfg.GitHubToken, cfg.GitHubWebhookSecret, &prReviewVectorAdapter{vs: vectorStore}).
+                WithAPIURL(cfg.GitHubAPIURL)
         apiServer.SetWebhookHandler(http.HandlerFunc(prReviewer.HandleWebhook))
 
         // v3.8.0: GitHub App — verified bot identity + auto-webhook registration
+        // v3.11.0: Use NewWithAPIURL for GitHub Enterprise support (audit #2).
         var ghApp *githubapp.App
         rtConfig := rtCfg.Get()
         if rtConfig.GitHubAppID != "" && rtConfig.GitHubAppPrivateKey != "" && rtConfig.GitHubAppInstallID != "" {
-                app, err := githubapp.New(rtConfig.GitHubAppID, rtConfig.GitHubAppPrivateKey, rtConfig.GitHubAppInstallID)
+                app, err := githubapp.NewWithAPIURL(rtConfig.GitHubAppID, rtConfig.GitHubAppPrivateKey, rtConfig.GitHubAppInstallID, cfg.GitHubAPIURL)
                 if err != nil {
                         logging.Error("GitHub App init failed", "error", err)
                 } else {
@@ -722,6 +734,7 @@ func main() {
                         logging.Info("GitHub App configured",
                                 "app_id", rtConfig.GitHubAppID,
                                 "install_id", rtConfig.GitHubAppInstallID,
+                                "api_url", cfg.GitHubAPIURL,
                         )
                 }
         }
