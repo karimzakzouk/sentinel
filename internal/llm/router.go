@@ -41,6 +41,11 @@ type Router struct {
 }
 
 // New creates a Router with default retry settings (3 retries, 500ms base delay).
+// v3.8.8: HTTP timeout increased from 120s to 300s. Free-tier LLM models
+// (gpt-oss-120b:free, etc.) can take 2-3 minutes to generate a full file's
+// worth of content. 120s was too short — the fix proposer LLM call was
+// timing out before the model finished responding, causing every
+// investigation to fail with "context deadline exceeded".
 func New(baseURL, apiKey, fastModel, frontierModel string) *Router {
         return &Router{
                 baseURL:        strings.TrimRight(baseURL, "/"),
@@ -48,7 +53,7 @@ func New(baseURL, apiKey, fastModel, frontierModel string) *Router {
                 fastModel:      fastModel,
                 frontierModel:  frontierModel,
                 http: &http.Client{
-                        Timeout: 120 * time.Second,
+                        Timeout: 300 * time.Second,
                 },
                 maxRetries:     3,
                 retryBaseDelay: 500 * time.Millisecond,
@@ -430,34 +435,76 @@ func (r *Router) parseRetryAfter(value string) time.Duration {
 // extractJSON defensively parses JSON from LLM output.
 // Handles markdown fences, bare JSON, prose around JSON, and truncated JSON.
 func extractJSON(text string) map[string]any {
-        // Try 1: markdown-fenced JSON block
-        if m := jsonBlockRe.FindStringSubmatch(text); len(m) >= 2 {
-                if v, ok := tryParse(m[1]); ok {
+        // v3.8.8: Some models (gpt-oss-20b:free) return JSON with broken escaping
+        // — e.g. \"\"\"\"demo-app instead of \"\"\"demo-app. This happens when the
+        // model double-escapes quotes inside string values. Try unescaping the
+        // whole text first as a preprocessing step.
+        unescaped := unescapeDoubleEscapedQuotes(text)
+
+        // Try the original text AND the unescaped version for each strategy.
+        for _, t := range []string{text, unescaped} {
+                // Try 1: markdown-fenced JSON block
+                if m := jsonBlockRe.FindStringSubmatch(t); len(m) >= 2 {
+                        if v, ok := tryParse(m[1]); ok {
+                                return v
+                        }
+                }
+                // Try 2: bare JSON object
+                if m := bareJSONRe.FindStringSubmatch(t); len(m) >= 1 {
+                        if v, ok := tryParse(m[0]); ok {
+                                return v
+                        }
+                }
+                // Try 3: the whole text
+                if v, ok := tryParse(t); ok {
                         return v
                 }
         }
-        // Try 2: bare JSON object
-        if m := bareJSONRe.FindStringSubmatch(text); len(m) >= 1 {
-                if v, ok := tryParse(m[0]); ok {
-                        return v
+        // Try 4: repair truncated JSON (on both versions)
+        for _, t := range []string{text, unescaped} {
+                if repaired := repairTruncated(t); repaired != "" {
+                        if v, ok := tryParse(repaired); ok {
+                                return v
+                        }
                 }
         }
-        // Try 3: the whole text
-        if v, ok := tryParse(text); ok {
-                return v
+        // v3.8.8: Log the raw text when ALL parsing attempts fail.
+        preview := text
+        if len(preview) > 500 {
+                preview = preview[:500] + "...(truncated)"
         }
-        // Try 4: repair truncated JSON
-        if repaired := repairTruncated(text); repaired != "" {
-                if v, ok := tryParse(repaired); ok {
-                        return v
-                }
-        }
-        // Last resort: empty dict so callers don't crash
+        log.Printf("[llm] extractJSON FAILED — raw response (len=%d): %s", len(text), preview)
         return map[string]any{}
 }
 
+// unescapeDoubleEscapedQuotes fixes a common model quirk where the model
+// outputs quotes with literal backslash-quote sequences inside JSON string
+// values. For example, the model returns:
+//
+//      "new_content" : \"\"\"\"demo-app\"
+//
+// The \" sequences are literal backslash+quote (2 chars each), not JSON
+// escape sequences. This breaks json.Unmarshal because the parser sees a
+// bare backslash. We fix it by removing the backslashes before quotes that
+// appear inside string values, converting \" to ".
+//
+// We only do this when the standard parse fails — it's a fallback, not the
+// primary path. This is conservative: we don't touch the text if it already
+// parses as valid JSON.
+//
+// v3.8.8.
+func unescapeDoubleEscapedQuotes(s string) string {
+        // Replace \" (literal backslash + quote) with just " (quote).
+        // This is aggressive but necessary — the model's output is fundamentally
+        // broken JSON and we need to recover what we can.
+        return strings.ReplaceAll(s, `\"`, `"`)
+}
+
 var (
-        jsonBlockRe = regexp.MustCompile(`(?s)` + "```(?:json)?\\s*(\\{.*?\\}|\\[.*?\\])\\s*```")
+        // v3.8.8: Broader fence regex. The old one only matched ```json or bare ```.
+        // Some models (gpt-oss-20b:free) return ```jsoncjson or ```jsonc or other
+        // language tags. Match any word characters after the opening fence.
+        jsonBlockRe = regexp.MustCompile("(?s)" + "```(?:[a-zA-Z]+)?\\s*(\\{.*?\\}|\\[.*?\\])\\s*```")
         bareJSONRe  = regexp.MustCompile(`(?s)(\{.*\}|\[.*\])`)
 )
 
