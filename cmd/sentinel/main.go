@@ -182,9 +182,19 @@ func main() {
         // 6. Executors
         ghExec := executors.NewGitHub(cfg.GitHubToken)
         k8sExec := executors.NewK8s(k8sClient.Clientset())
+        // v3.11.0: Wire cfg.Namespace into the sandbox (audit #8).
+        // Was: hardcoded "sentinel" in the NetworkPolicy ingress allow-list.
         sandbox := executors.NewSandbox(k8sClient.Clientset(), cfg.SandboxNamespacePrefix, cfg.EnableTrafficMirroring).
-                WithProbePaths(cfg.SandboxProbePaths)
-        kaniko := executors.NewKaniko(k8sClient.Clientset(), cfg.Namespace).WithDockerHubUsername(cfg.DockerHubUsername)
+                WithProbePaths(cfg.SandboxProbePaths).
+                WithSentinelNamespace(cfg.Namespace)
+        // v3.11.0: Wire configurable Kaniko settings (audit #7, #14, #2).
+        // Was: hardcoded docker.io + alpine/git:2.43.0 + gcr.io/kaniko-project/executor:v1.24.0 + github.com.
+        kaniko := executors.NewKaniko(k8sClient.Clientset(), cfg.Namespace).
+                WithDockerHubUsername(cfg.DockerHubUsername).
+                WithRegistry(cfg.KanikoRegistry).
+                WithInitImage(cfg.KanikoInitImage).
+                WithExecutorImage(cfg.KanikoExecutorImage).
+                WithGitHost(cfg.GitHost)
 
         ready := false
 
@@ -673,7 +683,12 @@ func main() {
                                 Severity:  schemas.SeverityWarning,
                                 Summary:   fmt.Sprintf("Manual investigation: %s", reason),
                         }
-                        go handler(ctx, cluster, "manual", "sentinel")
+                        // v3.11.0: Use cfg.Namespace instead of hardcoded "sentinel" (audit #8).
+                        // Was: go handler(ctx, cluster, "manual", "sentinel")
+                        // which broke when the Helm release wasn't named "sentinel" — the
+                        // SentinelIncident CR would be created in a nonexistent namespace
+                        // and RBAC would deny it.
+                        go handler(ctx, cluster, "manual", cfg.Namespace)
                         return cluster.ClusterID.String(), nil
                 },
                 func() bool { return ready },
@@ -724,7 +739,8 @@ func main() {
                                 Severity:  schemas.SeverityWarning,
                                 Summary:   fmt.Sprintf("Slack-triggered: %s", reason),
                         }
-                        go handler(ctx, cluster, "slack", "sentinel")
+                        // v3.11.0: Use cfg.Namespace instead of hardcoded "sentinel" (audit #8).
+                        go handler(ctx, cluster, "slack", cfg.Namespace)
                         return cluster.ClusterID.String(), nil
                 },
                 func(ctx context.Context, limit int) ([]map[string]any, error) {

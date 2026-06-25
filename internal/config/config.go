@@ -53,6 +53,62 @@ type Config struct {
         DockerHubUsername string
         DockerHubToken    string
 
+        // v3.11.0: Registry-aware Kaniko support (CRITICAL audit #7).
+        // Previously docker.io was hardcoded in 4 places (kaniko.go:106,255,
+        // secrets.yaml:28, values.yaml:12), so ECR/GCR/ACR/Harbor/Quay users
+        // got an invalid destination image:
+        //   "docker.io/123456789.dkr.ecr.us-east-1.amazonaws.com/myapp:sentinel-..."
+        // Now the registry is configurable. The Kaniko --destination and
+        // --cache-repo use this value, and the chart's dockerconfigjson
+        // Secret is templated against it.
+        // Default: docker.io (backwards-compatible).
+        KanikoRegistry string
+
+        // v3.11.0: GitHub Enterprise / GitLab / Bitbucket support (CRITICAL audit #2).
+        // Previously github.com was hardcoded in 14+ sites across 6 files.
+        // Now the git host + API URL are configurable.
+        // Default: github.com + https://api.github.com (backwards-compatible).
+        GitHost      string // e.g. "github.com", "gh.mycorp.internal", "gitlab.com"
+        GitHubAPIURL string // e.g. "https://api.github.com", "https://gh.mycorp.internal/api/v3"
+
+        // v3.11.0: Default branch (CRITICAL audit #6).
+        // Previously "main" was hardcoded in 4 sites (github.go:64, cloner.go:51,
+        // branch_resolver.go:48, fix_proposer.go:617), breaking repos whose
+        // default branch is master/develop/trunk/release-X.Y.
+        // Default: main (backwards-compatible). Per-repo override via
+        // sentinel.io/branch annotation takes precedence.
+        DefaultBranch string
+
+        // v3.11.0: Configurable high-risk services (audit obs-1).
+        // Previously the safety policy hardcoded payment-api/billing-api/auth-service
+        // as high-risk and NewPolicy() could not override them. Now configurable.
+        // Default: empty (no services are high-risk by default — demo values
+        // should not leak into production installs).
+        HighRiskServices []string
+
+        // v3.11.0: Configurable namespace skip list (audit #11).
+        // Previously hardcoded to kube-system/kube-public/kube-node-lease, missing
+        // common system namespaces like calico-system, cert-manager, ingress-nginx,
+        // monitoring, etc. Sentinel would waste API QPS watching those.
+        // Default: kube-system, kube-public, kube-node-lease, calico-system,
+        // cert-manager, ingress-nginx, monitoring, prometheus, grafana, loki,
+        // metallb-system, longhorn-system, cattle-system, fleet-system,
+        // gatekeeper-system, external-secrets, vault, argo-events, argo-rollouts,
+        // tekton-pipelines, istio-system, knative-serving, kubernetes-dashboard.
+        SkipNamespaces []string
+
+        // v3.11.0: Configurable Kaniko images (audit #14).
+        // Previously hardcoded as unexported consts in kaniko.go.
+        // Default: the previous pinned values (alpine/git:2.43.0,
+        // gcr.io/kaniko-project/executor:v1.24.0).
+        KanikoInitImage     string
+        KanikoExecutorImage string
+
+        // v3.11.0: Configurable max concurrent investigations (audit #15).
+        // Previously hardcoded to 3 in main.go:208.
+        // Default: 3 (backwards-compatible).
+        MaxConcurrentInvestigations int
+
         // RBAC
         ProductionNamespaces []string // namespaces treated as production
         WriteNamespaces      []string // namespaces Sentinel can apply fixes to
@@ -165,6 +221,22 @@ func Load() *Config {
                 APIToken:               getenv("SENTINEL_API_TOKEN", ""),
                 DockerHubUsername:      getenv("SENTINEL_DOCKER_HUB_USERNAME", ""),
                 DockerHubToken:         getenv("SENTINEL_DOCKER_HUB_TOKEN", ""),
+                // v3.11.0: Registry-aware Kaniko (CRITICAL audit #7)
+                KanikoRegistry:         getenv("SENTINEL_KANIKO_REGISTRY", "docker.io"),
+                // v3.11.0: GitHub Enterprise / GitLab / Bitbucket (CRITICAL audit #2)
+                GitHost:                getenv("SENTINEL_GIT_HOST", "github.com"),
+                GitHubAPIURL:           getenv("SENTINEL_GITHUB_API_URL", "https://api.github.com"),
+                // v3.11.0: Default branch (CRITICAL audit #6)
+                DefaultBranch:          getenv("SENTINEL_DEFAULT_BRANCH", "main"),
+                // v3.11.0: Configurable high-risk services (audit obs-1)
+                HighRiskServices:       splitCSV(getenv("SENTINEL_HIGH_RISK_SERVICES", "")),
+                // v3.11.0: Configurable namespace skip list (audit #11)
+                SkipNamespaces:         splitCSV(getenv("SENTINEL_SKIP_NAMESPACES", "kube-system,kube-public,kube-node-lease,calico-system,calico-apiserver,cert-manager,ingress-nginx,monitoring,prometheus,grafana,loki,metallb-system,longhorn-system,cattle-system,fleet-system,gatekeeper-system,external-secrets,vault,argo-events,argo-rollouts,tekton-pipelines,istio-system,knative-serving,kubernetes-dashboard")),
+                // v3.11.0: Configurable Kaniko images (audit #14)
+                KanikoInitImage:        getenv("SENTINEL_KANIKO_INIT_IMAGE", "alpine/git:2.43.0"),
+                KanikoExecutorImage:    getenv("SENTINEL_KANIKO_EXECUTOR_IMAGE", "gcr.io/kaniko-project/executor:v1.24.0"),
+                // v3.11.0: Configurable max concurrent investigations (audit #15)
+                MaxConcurrentInvestigations: getenvInt("SENTINEL_MAX_CONCURRENT_INVESTIGATIONS", 3),
                 ProductionNamespaces:   splitCSV(getenv("SENTINEL_PRODUCTION_NAMESPACES", "prod,production,payments")),
                 WriteNamespaces:        splitCSV(getenv("SENTINEL_WRITE_NAMESPACES", "")),
                 ConfidenceAutonomous:   getenvFloat("SENTINEL_CONFIDENCE_THRESHOLD_AUTONOMOUS", 0.92),

@@ -41,6 +41,56 @@ sentinel:
   dockerHubUsername: ""
   dockerHubToken: ""
 
+  # v3.11.0: Registry for Kaniko canary image pushes (CRITICAL audit #7).
+  # Default: docker.io (backwards-compatible). Set to your private registry
+  # for ECR/GCR/ACR/Harbor/Quay support:
+  #   ECR:     "123456789.dkr.ecr.us-east-1.amazonaws.com"
+  #   GCR:     "gcr.io/myproject"
+  #   ACR:     "myname.azurecr.io"
+  #   Harbor:  "harbor.mycorp.internal"
+  #   Quay:    "quay.io/myorg"
+  # NOTE: The canary image's registry is derived from the prod image's
+  # registry (so the prod namespace's pull secrets work). This value is
+  # used for the Kaniko --cache-repo and the dockerconfigjson Secret auth URL.
+  kanikoRegistry: "docker.io"
+
+  # v3.11.0: GitHub Enterprise / GitLab / Bitbucket support (CRITICAL audit #2).
+  # Default: github.com + https://api.github.com (backwards-compatible).
+  # For GitHub Enterprise:
+  #   gitHost: "gh.mycorp.internal"
+  #   githubApiUrl: "https://gh.mycorp.internal/api/v3"
+  # For GitLab (uses GitHub-compat API):
+  #   gitHost: "gitlab.com"
+  #   githubApiUrl: "https://gitlab.com/api/v4"
+  gitHost: "github.com"
+  githubApiUrl: "https://api.github.com"
+
+  # v3.11.0: Default branch (CRITICAL audit #6).
+  # Default: main. Override for repos whose default branch is master/develop/trunk.
+  # Per-repo override via sentinel.io/branch annotation takes precedence.
+  defaultBranch: "main"
+
+  # v3.11.0: Configurable high-risk services (audit obs-1).
+  # Default: empty (no services are high-risk). The previous defaults
+  # (payment-api, billing-api, auth-service) leaked from the demo app into
+  # every install. Set to your own high-risk services, e.g.:
+  #   highRiskServices: "payment-api,billing-api,auth-service"
+  highRiskServices: ""
+
+  # v3.11.0: Configurable namespace skip list (audit #11).
+  # Default includes common system namespaces. Add your own or override.
+  skipNamespaces: "kube-system,kube-public,kube-node-lease,calico-system,calico-apiserver,cert-manager,ingress-nginx,monitoring,prometheus,grafana,loki,metallb-system,longhorn-system,cattle-system,fleet-system,gatekeeper-system,external-secrets,vault,argo-events,argo-rollouts,tekton-pipelines,istio-system,knative-serving,kubernetes-dashboard"
+
+  # v3.11.0: Configurable Kaniko images (audit #14).
+  # Default: tag-pinned upstream values. Override to use a mirror or digest.
+  kanikoInitImage: "alpine/git:2.43.0"
+  kanikoExecutorImage: "gcr.io/kaniko-project/executor:v1.24.0"
+
+  # v3.11.0: Max concurrent investigations (audit #15).
+  # Default: 3. Each investigation can pin ~5min of LLM + K8s API + image-build
+  # resources. Lower for memory-constrained dev clusters, raise for high-QPS prod.
+  maxConcurrentInvestigations: 3
+
   # RBAC — namespaces where Sentinel can WRITE (apply fixes)
   rbac:
     writeNamespaces: []

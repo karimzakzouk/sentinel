@@ -22,13 +22,23 @@ import (
 //  1. Clones the repo at the fix branch (init container)
 //  2. Overlays the fixed files from the ConfigMap
 //  3. Builds the Docker image via Kaniko
-//  4. Pushes to Docker Hub
+//  4. Pushes to the configured registry (docker.io by default, ECR/GCR/ACR/Harbor supported)
 //  5. Exits
 type KanikoBuilder struct {
         clientset         *kubernetes.Clientset
         namespace         string
         dockerSecretName  string
         dockerHubUsername string // v3.3.1: used for --cache-repo (was incorrectly using secret name)
+        // v3.11.0: Registry-aware support (CRITICAL audit #7). Default "docker.io".
+        // ECR users set "123456789.dkr.ecr.us-east-1.amazonaws.com", GCR users set
+        // "gcr.io/myproject", Harbor users set "harbor.mycorp.internal", etc.
+        registry string
+        // v3.11.0: Configurable Kaniko images (audit #14).
+        initImage     string
+        executorImage string
+        // v3.11.0: Configurable git host (CRITICAL audit #2). Default "github.com".
+        // The Kaniko init container's git clone uses this host.
+        gitHost string
 }
 
 // NewKaniko creates a KanikoBuilder.
@@ -37,6 +47,10 @@ func NewKaniko(clientset *kubernetes.Clientset, namespace string) *KanikoBuilder
                 clientset:        clientset,
                 namespace:        namespace,
                 dockerSecretName: "kaniko-docker-hub-creds",
+                registry:         "docker.io", // v3.11.0: was hardcoded in Build()
+                initImage:        kanikoInitImageDefault,
+                executorImage:    kanikoExecutorImageDefault,
+                gitHost:          "github.com", // v3.11.0: was hardcoded in init script
         }
 }
 
@@ -46,6 +60,49 @@ func NewKaniko(clientset *kubernetes.Clientset, namespace string) *KanikoBuilder
 // instead of "docker.io/<username>/sentinel-build-cache".
 func (k *KanikoBuilder) WithDockerHubUsername(username string) *KanikoBuilder {
         k.dockerHubUsername = username
+        return k
+}
+
+// WithRegistry sets the container registry Kaniko pushes to. v3.11.0:
+// Replaces the hardcoded "docker.io" in Build() and buildPodSpec().
+// For ECR use "<account>.dkr.ecr.<region>.amazonaws.com",
+// for GCR use "gcr.io/<project>",
+// for ACR use "<name>.azurecr.io",
+// for Harbor use "<host>",
+// for Quay use "quay.io/<org>".
+func (k *KanikoBuilder) WithRegistry(registry string) *KanikoBuilder {
+        if registry != "" {
+                k.registry = registry
+        }
+        return k
+}
+
+// WithInitImage sets the Kaniko init container image (clone-and-patch).
+// v3.11.0: Replaces the hardcoded const kanikoInitImage.
+func (k *KanikoBuilder) WithInitImage(image string) *KanikoBuilder {
+        if image != "" {
+                k.initImage = image
+        }
+        return k
+}
+
+// WithExecutorImage sets the Kaniko executor image.
+// v3.11.0: Replaces the hardcoded const kanikoExecutorImage.
+func (k *KanikoBuilder) WithExecutorImage(image string) *KanikoBuilder {
+        if image != "" {
+                k.executorImage = image
+        }
+        return k
+}
+
+// WithGitHost sets the git host used in the Kaniko init container's clone URL.
+// v3.11.0: Replaces the hardcoded "https://github.com/" in the init script.
+// For GitHub Enterprise use "gh.mycorp.internal",
+// for GitLab use "gitlab.com", etc.
+func (k *KanikoBuilder) WithGitHost(host string) *KanikoBuilder {
+        if host != "" {
+                k.gitHost = host
+        }
         return k
 }
 
@@ -103,7 +160,23 @@ func (k *KanikoBuilder) Build(ctx context.Context, repo, branch string, fixedFil
         buildID := strings.ReplaceAll(imageTag, "sentinel-", "")[:8]
         configmapName := fmt.Sprintf("kaniko-fixed-files-%s", buildID)
         podName := fmt.Sprintf("kaniko-build-%s", buildID)
-        fullImage := fmt.Sprintf("docker.io/%s:%s", imageName, imageTag)
+        // v3.11.0: Use the configured registry (CRITICAL audit #7). Was:
+        //   fullImage := fmt.Sprintf("docker.io/%s:%s", imageName, imageTag)
+        // which broke for ECR/GCR/ACR/Harbor users — the prodImage's registry
+        // was stripped and the canary was force-pushed to docker.io.
+        //
+        // imageName from BuildForIncident retains the prod image's registry
+        // (e.g. "1234.dkr.ecr.us-east-1.amazonaws.com/myapp"). If imageName
+        // already contains a "/", we use it as-is — the canary goes to the
+        // same registry as the prod image (so the prod namespace's image
+        // pull secrets work for the canary too). Only when imageName is a
+        // bare name (no "/") do we prepend k.registry.
+        var fullImage string
+        if strings.Contains(imageName, "/") {
+                fullImage = fmt.Sprintf("%s:%s", imageName, imageTag)
+        } else {
+                fullImage = fmt.Sprintf("%s/%s:%s", k.registry, imageName, imageTag)
+        }
 
         log.Printf("[kaniko] starting build: %s (repo=%s, branch=%s)", fullImage, repo, branch)
 
@@ -194,18 +267,22 @@ func (k *KanikoBuilder) createConfigMap(ctx context.Context, name string, files 
         return nil
 }
 
-// kanikoInitImage is the image used for the clone-and-patch init container.
-// v3.8.4: Tag-pinned to alpine/git:2.43.0 (we avoid `:latest` so a malicious
+// kanikoInitImageDefault is the default image used for the clone-and-patch
+// init container. v3.11.0: Now overridable via WithInitImage() +
+// cfg.KanikoInitImage env var (was an unexported const).
+// Tag-pinned to alpine/git:2.43.0 (we avoid `:latest` so a malicious
 // upstream rebuild can't change behavior under us). For maximum supply-chain
-// hardening, operators should re-pin to a digest via the Sentinel config
-// (TODO: expose as a Helm value). alpine/git bundles git + busybox shell —
-// enough for our pure-shell init script. We don't need jq because we use the
-// path-sidecar approach (see createConfigMap) which is pure shell.
-const kanikoInitImage = "alpine/git:2.43.0"
+// hardening, operators should re-pin to a digest via the Sentinel config.
+// alpine/git bundles git + busybox shell — enough for our pure-shell init
+// script. We don't need jq because we use the path-sidecar approach (see
+// createConfigMap) which is pure shell.
+const kanikoInitImageDefault = "alpine/git:2.43.0"
 
-// kanikoExecutorImage is the Kaniko executor image. Tag-pinned to a stable
-// upstream release; operators should re-pin to a digest for prod.
-const kanikoExecutorImage = "gcr.io/kaniko-project/executor:v1.24.0"
+// kanikoExecutorImageDefault is the default Kaniko executor image.
+// v3.11.0: Now overridable via WithExecutorImage() + cfg.KanikoExecutorImage.
+// Tag-pinned to a stable upstream release; operators should re-pin to a
+// digest for prod.
+const kanikoExecutorImageDefault = "gcr.io/kaniko-project/executor:v1.24.0"
 
 // buildPodSpec builds the Kaniko build pod.
 //
@@ -218,11 +295,19 @@ func (k *KanikoBuilder) buildPodSpec(podName, repo, branch, configmapName, fullI
         // The init container script is fully static — no string interpolation of
         // repo / branch / paths. All variable inputs come from env vars and the
         // path-sidecar files mounted from the ConfigMap.
+        // v3.11.0: The git host is templated from k.gitHost (was hardcoded
+        // "https://github.com/"). This is safe because k.gitHost comes from
+        // cfg.GitHost, which is set by the operator at deploy time — NOT from
+        // pod annotations (which would be an injection vector).
         initScript := `set -ex
 
 # Repo and branch arrive as env vars — they cannot inject shell
 # metacharacters even if a malicious value slipped past validation.
-git clone --depth 1 --branch "$SENTINEL_BRANCH" "https://github.com/$SENTINEL_REPO.git" /workspace/repo
+# v3.11.0: The git host is templated at pod-creation time from the
+# operator-set cfg.GitHost (default "github.com"). It is NOT an env var
+# because that would re-introduce the injection surface — the host is
+# trusted config, repo/branch are not.
+git clone --depth 1 --branch "$SENTINEL_BRANCH" "https://` + k.gitHost + `/$SENTINEL_REPO.git" /workspace/repo
 cd /workspace/repo
 
 # Iterate over every path-sidecar file. Each file-N.path contains the
@@ -246,13 +331,13 @@ ls -la /workspace/repo/`
                 "--force",
                 "--cache=true", // v3.3.0: enable layer caching for faster builds
         }
-        // v3.3.1: Only set --cache-repo if we have a valid Docker Hub username.
-        // Previously this used k.dockerSecretName ("kaniko-docker-hub-creds") as
-        // the username, producing an invalid path "docker.io/kaniko-docker-hub-creds/..."
-        // which silently disabled layer caching. Now we use the real username.
+        // v3.11.0: Use the configured registry for --cache-repo (CRITICAL audit #7).
+        // Was: "--cache-repo=docker.io/"+k.dockerHubUsername+"/sentinel-build-cache"
+        // which broke for ECR/GCR/ACR/Harbor users — the cache push went to
+        // docker.io even when --destination was a different registry.
         if k.dockerHubUsername != "" {
                 kanikoArgs = append(kanikoArgs,
-                        "--cache-repo=docker.io/"+k.dockerHubUsername+"/sentinel-build-cache",
+                        "--cache-repo="+k.registry+"/"+k.dockerHubUsername+"/sentinel-build-cache",
                         "--cache-ttl=168h", // cache layers for 7 days
                 )
         } else {
@@ -291,7 +376,7 @@ ls -la /workspace/repo/`
                         InitContainers: []corev1.Container{
                                 {
                                         Name:       "clone-and-patch",
-                                        Image:      kanikoInitImage,
+                                        Image:      k.initImage, // v3.11.0: configurable via WithInitImage
                                         WorkingDir: "/workspace",
                                         Command:    []string{"/bin/sh", "-c"},
                                         Args:       []string{initScript},
@@ -316,7 +401,7 @@ ls -la /workspace/repo/`
                         Containers: []corev1.Container{
                                 {
                                         Name:       "kaniko",
-                                        Image:      kanikoExecutorImage,
+                                        Image:      k.executorImage, // v3.11.0: configurable via WithExecutorImage
                                         Args:       kanikoArgs,
                                         WorkingDir: "/workspace",
                                         SecurityContext: &corev1.SecurityContext{

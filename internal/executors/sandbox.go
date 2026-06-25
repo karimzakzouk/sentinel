@@ -56,22 +56,29 @@ type SandboxResult struct {
 //     sandbox canary.
 //   - createNamespace now also creates a default-deny NetworkPolicy on the
 //     sandbox namespace so the canary can't reach arbitrary services.
+//
+// v3.11.0: sentinelNamespace field replaces the hardcoded "sentinel" literal
+// in the sandbox NetworkPolicy ingress rule (audit #8). When the Helm release
+// isn't named "sentinel", probes from the actual Sentinel namespace were
+// denied → Level 2 verification always failed on connection errors.
 type SandboxRunner struct {
         clientset        *kubernetes.Clientset
         sandboxPrefix    string
         enableMirroring  bool
         probePaths       []string // v3.4.0: configurable probe paths for Level 2 + 3
         sustainedWindow  time.Duration // v3.8.4: how long Ready must be sustained for Level 1
+        sentinelNamespace string // v3.11.0: for the sandbox NetworkPolicy ingress allow-list
 }
 
 // NewSandbox creates a SandboxRunner.
 func NewSandbox(clientset *kubernetes.Clientset, sandboxPrefix string, enableMirroring bool) *SandboxRunner {
         return &SandboxRunner{
-                clientset:       clientset,
-                sandboxPrefix:   sandboxPrefix,
-                enableMirroring: enableMirroring,
-                probePaths:      []string{"/", "/healthz", "/readyz"}, // sensible defaults
-                sustainedWindow: 30 * time.Second, // v3.8.4: was 0 (instant — missed crash-after-ready)
+                clientset:        clientset,
+                sandboxPrefix:    sandboxPrefix,
+                enableMirroring:  enableMirroring,
+                probePaths:       []string{"/", "/healthz", "/readyz"}, // sensible defaults
+                sustainedWindow:  30 * time.Second, // v3.8.4: was 0 (instant — missed crash-after-ready)
+                sentinelNamespace: "sentinel", // v3.11.0: default; override via WithSentinelNamespace
         }
 }
 
@@ -91,6 +98,19 @@ func (s *SandboxRunner) WithProbePaths(paths []string) *SandboxRunner {
 // reintroduces the crash-after-ready false positive).
 func (s *SandboxRunner) WithSustainedReady(d time.Duration) *SandboxRunner {
         s.sustainedWindow = d
+        return s
+}
+
+// WithSentinelNamespace sets the namespace Sentinel itself runs in, used by
+// the sandbox NetworkPolicy ingress allow-list. v3.11.0: Replaces the
+// hardcoded "sentinel" literal (audit #8). When Sentinel is installed via
+// `helm install sre-bot sentinel/sentinel`, the sandbox NetworkPolicy was
+// denying probes from the sre-bot namespace → Level 2 verification always
+// failed on connection errors.
+func (s *SandboxRunner) WithSentinelNamespace(ns string) *SandboxRunner {
+        if ns != "" {
+                s.sentinelNamespace = ns
+        }
         return s
 }
 
@@ -201,7 +221,8 @@ func (s *SandboxRunner) createSandboxNetworkPolicy(ctx context.Context, ns strin
                 From: []networkingv1.NetworkPolicyPeer{
                         {
                                 NamespaceSelector: &metav1.LabelSelector{
-                                        MatchLabels: map[string]string{"kubernetes.io/metadata.name": "sentinel"},
+                                        // v3.11.0: Use s.sentinelNamespace instead of hardcoded "sentinel" (audit #8).
+                                        MatchLabels: map[string]string{"kubernetes.io/metadata.name": s.sentinelNamespace},
                                 },
                         },
                         {
@@ -306,12 +327,38 @@ func (s *SandboxRunner) deployCanary(ctx context.Context, inc *schemas.Incident,
                 log.Printf("[sandbox] WARNING: CopyConfigMapsAndSecrets had errors: %v (canary may start with missing env vars)", err)
         }
 
-        // Create a Service so Level 2 verification can reach the canary
+        // Create a Service so Level 2 verification can reach the canary.
+        // v3.11.0: Derive the port from (1) prod Service, (2) prod Deployment's
+        // container ports, (3) fallback to 8000. Previously hardcoded 8000, which
+        // broke for any app on 8080/3000/5000/etc. when the prod Service had no
+        // ports declared (CRITICAL audit #3).
         sandboxPorts := []corev1.ServicePort{
                 {Port: 80, TargetPort: intstr.FromInt(8000), Protocol: corev1.ProtocolTCP, Name: "http"},
         }
-        if prodSvc, err := s.clientset.CoreV1().Services(fp.TargetNamespace).Get(ctx, fp.TargetService, metav1.GetOptions{}); err == nil && prodSvc.Spec.Ports != nil {
+        if prodSvc, err := s.clientset.CoreV1().Services(fp.TargetNamespace).Get(ctx, fp.TargetService, metav1.GetOptions{}); err == nil && len(prodSvc.Spec.Ports) > 0 {
                 sandboxPorts = prodSvc.Spec.Ports
+        } else if prodDeploy != nil && len(prodDeploy.Spec.Template.Spec.Containers) > 0 {
+                // v3.11.0: No prod Service (or Service has no ports) — derive from
+                // the prod Deployment's container ports. This handles apps that
+                // expose a non-8000 port (e.g. 8080, 3000, 5000) without a Service.
+                prodContainerPorts := prodDeploy.Spec.Template.Spec.Containers[0].Ports
+                if len(prodContainerPorts) > 0 {
+                        derived := make([]corev1.ServicePort, 0, len(prodContainerPorts))
+                        for i, cp := range prodContainerPorts {
+                                name := cp.Name
+                                if name == "" {
+                                        name = fmt.Sprintf("port-%d", i)
+                                }
+                                derived = append(derived, corev1.ServicePort{
+                                        Port:       cp.ContainerPort,
+                                        TargetPort: intstr.FromInt(int(cp.ContainerPort)),
+                                        Protocol:   cp.Protocol,
+                                        Name:       name,
+                                })
+                        }
+                        sandboxPorts = derived
+                        log.Printf("[sandbox] no prod Service ports — derived %d port(s) from prod Deployment container spec", len(derived))
+                }
         }
         sandboxSvc := &corev1.Service{
                 ObjectMeta: metav1.ObjectMeta{Name: fp.TargetService, Namespace: ns, Labels: labels},

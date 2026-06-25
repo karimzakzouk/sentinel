@@ -62,6 +62,33 @@ spec:
                   name: {{ .Release.Name }}-secrets
                   key: dockerHubToken
                   optional: true
+            # v3.11.0: Registry-aware Kaniko (CRITICAL audit #7)
+            - name: SENTINEL_KANIKO_REGISTRY
+              value: {{ .Values.sentinel.kanikoRegistry | default "docker.io" | quote }}
+            # v3.11.0: GitHub Enterprise / GitLab / Bitbucket (CRITICAL audit #2)
+            - name: SENTINEL_GIT_HOST
+              value: {{ .Values.sentinel.gitHost | default "github.com" | quote }}
+            - name: SENTINEL_GITHUB_API_URL
+              value: {{ .Values.sentinel.githubApiUrl | default "https://api.github.com" | quote }}
+            # v3.11.0: Default branch (CRITICAL audit #6)
+            - name: SENTINEL_DEFAULT_BRANCH
+              value: {{ .Values.sentinel.defaultBranch | default "main" | quote }}
+            # v3.11.0: Configurable high-risk services (audit obs-1)
+            {{- if .Values.sentinel.highRiskServices }}
+            - name: SENTINEL_HIGH_RISK_SERVICES
+              value: {{ .Values.sentinel.highRiskServices | quote }}
+            {{- end }}
+            # v3.11.0: Configurable namespace skip list (audit #11)
+            - name: SENTINEL_SKIP_NAMESPACES
+              value: {{ .Values.sentinel.skipNamespaces | quote }}
+            # v3.11.0: Configurable Kaniko images (audit #14)
+            - name: SENTINEL_KANIKO_INIT_IMAGE
+              value: {{ .Values.sentinel.kanikoInitImage | default "alpine/git:2.43.0" | quote }}
+            - name: SENTINEL_KANIKO_EXECUTOR_IMAGE
+              value: {{ .Values.sentinel.kanikoExecutorImage | default "gcr.io/kaniko-project/executor:v1.24.0" | quote }}
+            # v3.11.0: Max concurrent investigations (audit #15)
+            - name: SENTINEL_MAX_CONCURRENT_INVESTIGATIONS
+              value: {{ .Values.sentinel.maxConcurrentInvestigations | default 3 | quote }}
             - name: SENTINEL_PRODUCTION_NAMESPACES
               value: {{ .Values.sentinel.productionNamespaces | quote }}
             - name: SENTINEL_WRITE_NAMESPACES
