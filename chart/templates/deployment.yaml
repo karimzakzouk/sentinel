@@ -165,6 +165,16 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /data
+            # v3.11.0: /tmp emptyDir — readOnlyRootFilesystem:true makes the
+            # rootfs read-only. Without this mount, any feature that writes
+            # to /tmp (os.CreateTemp, http cache, etc.) silently fails. The
+            # syntax validators were the original victim — they wrote to
+            # /tmp via os.CreateTemp and the failure was swallowed with
+            # `return nil`, so broken code flowed through to GitHub PRs.
+            # Now the validators are pure-Go (no /tmp writes), but we mount
+            # /tmp anyway as defense-in-depth for future features.
+            - name: tmp
+              mountPath: /tmp
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -176,6 +186,9 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: {{ .Release.Name }}-data
+        # v3.11.0: Writable /tmp for the read-only-rootfs pod.
+        - name: tmp
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim

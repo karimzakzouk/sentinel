@@ -12,8 +12,6 @@ import (
         "io"
         "log"
         "net/http"
-        "os"
-        "os/exec"
         "path/filepath"
         "strings"
         "time"
@@ -675,90 +673,11 @@ func validateSyntax(path, content string) error {
         }
 }
 
-// validatePython runs `python3 -c "import ast; ast.parse(code)"` on the content.
-func validatePython(content string) error {
-        tmpFile, err := os.CreateTemp("", "sentinel-validate-*.py")
-        if err != nil {
-                return nil // Can't create temp file — skip validation
-        }
-        defer func() { _ = os.Remove(tmpFile.Name()) }()
-        if _, err := tmpFile.WriteString(content); err != nil {
-                return nil
-        }
-        if err := tmpFile.Close(); err != nil {
-                return nil
-        }
-
-        cmd := exec.Command("python3", "-c", `import ast, sys; ast.parse(open(sys.argv[1]).read())`, tmpFile.Name())
-        output, err := cmd.CombinedOutput()
-        if err != nil {
-                return fmt.Errorf("python syntax error: %s", strings.TrimSpace(string(output)))
-        }
-        return nil
-}
-
-// validateGo runs `gofmt -e` on the content. gofmt reports syntax errors
-// with -e flag.
-func validateGo(content string) error {
-        tmpFile, err := os.CreateTemp("", "sentinel-validate-*.go")
-        if err != nil {
-                return nil
-        }
-        defer func() { _ = os.Remove(tmpFile.Name()) }()
-        if _, err := tmpFile.WriteString(content); err != nil {
-                return nil
-        }
-        _ = tmpFile.Close()
-
-        cmd := exec.Command("gofmt", "-e", tmpFile.Name())
-        output, err := cmd.CombinedOutput()
-        if err != nil {
-                return fmt.Errorf("go syntax error: %s", strings.TrimSpace(string(output)))
-        }
-        return nil
-}
-
-// validateJS runs `node --check` on the content.
-func validateJS(content string) error {
-        tmpFile, err := os.CreateTemp("", "sentinel-validate-*.js")
-        if err != nil {
-                return nil
-        }
-        defer func() { _ = os.Remove(tmpFile.Name()) }()
-        if _, err := tmpFile.WriteString(content); err != nil {
-                return nil
-        }
-        _ = tmpFile.Close()
-
-        cmd := exec.Command("node", "--check", tmpFile.Name())
-        output, err := cmd.CombinedOutput()
-        if err != nil {
-                return fmt.Errorf("js syntax error: %s", strings.TrimSpace(string(output)))
-        }
-        return nil
-}
-
-// validateJSON checks if content is valid JSON.
-func validateJSON(content string) error {
-        var v any
-        if err := json.Unmarshal([]byte(content), &v); err != nil {
-                return fmt.Errorf("json syntax error: %w", err)
-        }
-        return nil
-}
-
-// validateYAML checks if content is valid YAML.
-func validateYAML(content string) error {
-        // We don't import a YAML library here to keep deps minimal.
-        // Use python3 as a fallback if available.
-        cmd := exec.Command("python3", "-c", `import yaml, sys; yaml.safe_load(open(sys.argv[1]))`, "-")
-        cmd.Stdin = strings.NewReader(content)
-        output, err := cmd.CombinedOutput()
-        if err != nil {
-                return fmt.Errorf("yaml syntax error: %s", strings.TrimSpace(string(output)))
-        }
-        return nil
-}
+// validateSyntax, validatePython, validateGo, validateJS, validateJSON,
+// validateYAML are implemented in syntax_validate.go (pure-Go, no exec).
+// v3.11.0: Replaced the previous exec.Command("python3"/"gofmt"/"node")
+// implementation, which silently returned nil in distroless (no binaries)
+// AND swallowed os.CreateTemp errors. See syntax_validate.go for details.
 
 func (e *GitHubExecutor) createPR(ctx context.Context, repo, title, body, head, base string) (int, string, error) {
         url := fmt.Sprintf("https://api.github.com/repos/%s/pulls", repo)
