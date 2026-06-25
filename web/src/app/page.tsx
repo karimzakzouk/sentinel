@@ -229,7 +229,8 @@ export default function Page() {
       es.addEventListener("connected", () => setSseConnected(true));
       es.addEventListener("incident", (e) => {
         try {
-          const data = JSON.parse((e as MessageEvent).data);
+          const raw = JSON.parse((e as MessageEvent).data);
+          const data = raw.Data || raw;
           if (data.type === "new" || data.type === "resolved" || data.type === "started") {
             loadData(); // refresh incidents
           }
@@ -238,7 +239,9 @@ export default function Page() {
       // v3.9.2: Live pipeline trace — each phase broadcasts in real-time
       es.addEventListener("pipeline", (e) => {
         try {
-          const data = JSON.parse((e as MessageEvent).data);
+          const raw = JSON.parse((e as MessageEvent).data);
+          // SSE wraps event as {Type, Data} — extract the actual data
+          const data = raw.Data || raw;
           setPipelineEvents(prev => [...prev.slice(-100), data]);
           // Also refresh incidents when a phase completes
           if (data.status === "complete") {
@@ -248,12 +251,13 @@ export default function Page() {
       });
       es.addEventListener("pr_opened", (e) => {
         try {
-          const data = JSON.parse((e as MessageEvent).data);
+          const raw = JSON.parse((e as MessageEvent).data);
+          const data = raw.Data || raw;
           setPipelineEvents(prev => [...prev.slice(-100), {
-            incident_id: "",
+            incident_id: data.incident_id || "",
             phase: "pr_opened",
             status: "complete",
-            message: `PR opened: ${data.pr_url}`,
+            message: `PR opened: ${data.pr_url || ""}`,
             timestamp: new Date().toISOString(),
           }]);
           loadData();
