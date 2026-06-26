@@ -36,11 +36,44 @@ import (
 // Reviewer scores PR diffs against the HNSW incident memory.
 type Reviewer struct {
         githubToken    string
-        webhookSecret  string // HMAC secret for verifying webhook signatures
+        githubApp      GitHubAppTokenProvider // v3.13.0: optional — when set, takes precedence over githubToken
+        webhookSecret  string                 // HMAC secret for verifying webhook signatures
         vectorStore    VectorStore
         similarityThreshold float32 // default 0.75
         httpClient     *http.Client
         apiURL         string // v3.11.0: base API URL (default "https://api.github.com")
+}
+
+// GitHubAppTokenProvider is implemented by githubapp.App. v3.13.0: when set,
+// the Reviewer uses the App's installation token for API calls (verified bot
+// identity) instead of the PAT. The PAT is used as a fallback if the App
+// token call fails.
+type GitHubAppTokenProvider interface {
+        GetInstallToken(ctx context.Context) (string, error)
+}
+
+// WithGitHubApp wires a GitHub App for verified-bot-identity PR comments.
+// v3.13.0: audit finding #2 — the App was initialized in main.go but never
+// passed to the Reviewer, so PR comments were always posted as the PAT user.
+// When set, the Reviewer calls GetInstallToken() before each API call and
+// uses the installation token (which makes comments appear as the verified
+// "Sentinel" bot). Falls back to the PAT on error.
+func (r *Reviewer) WithGitHubApp(app GitHubAppTokenProvider) *Reviewer {
+        r.githubApp = app
+        return r
+}
+
+// authToken returns the token to use for GitHub API calls. v3.13.0.
+// Prefers the GitHub App installation token (verified bot identity) when
+// configured, falls back to the PAT.
+func (r *Reviewer) authToken(ctx context.Context) string {
+        if r.githubApp != nil {
+                if token, err := r.githubApp.GetInstallToken(ctx); err == nil && token != "" {
+                        return token
+                }
+                // Fall back to PAT on error — better to post as PAT than not at all.
+        }
+        return r.githubToken
 }
 
 // Warning represents a chunk of the PR diff that resembles a past incident.
@@ -267,7 +300,7 @@ func (r *Reviewer) fetchPRDiff(ctx context.Context, diffURL string) (string, err
                 return "", err
         }
         req.Header.Set("Accept", "application/vnd.github.v3.diff")
-        req.Header.Set("Authorization", "Bearer "+r.githubToken)
+        req.Header.Set("Authorization", "Bearer "+r.authToken(ctx))
 
         resp, err := r.httpClient.Do(req)
         if err != nil {
@@ -387,7 +420,7 @@ func (r *Reviewer) postReviewComment(ctx context.Context, repo string, prNumber 
                 return err
         }
         req.Header.Set("Accept", "application/vnd.github+json")
-        req.Header.Set("Authorization", "Bearer "+r.githubToken)
+        req.Header.Set("Authorization", "Bearer "+r.authToken(ctx))
         req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
         req.Header.Set("Content-Type", "application/json")
 

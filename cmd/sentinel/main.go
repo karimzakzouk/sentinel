@@ -122,9 +122,9 @@ func main() {
         // v3.4.0: retry config (was no retry — single HTTP call, killed by free-tier rate limits)
         router := llm.NewWithProvider(cfg.LLMProvider, cfg.ResolvedBaseURL(), cfg.LLMAPIKey, cfg.LLMFastModel, cfg.LLMFrontierModel)
         router.SetRetryConfig(cfg.LLMMaxRetries, time.Duration(cfg.LLMRetryBaseDelayMs)*time.Millisecond)
-	if cfg.LLMProvider == "bedrock" {
-		router.SetBedrockRegion(func() string { r := os.Getenv("AWS_REGION"); if r == "" { return "us-east-1" }; return r }())
-	}
+        if cfg.LLMProvider == "bedrock" {
+                router.SetBedrockRegion(func() string { r := os.Getenv("AWS_REGION"); if r == "" { return "us-east-1" }; return r }())
+        }
 
         // v3.8.4: Wire the runtime config apply callback. When the user
         // saves settings via POST /settings, runtimecfg.Manager invokes
@@ -775,12 +775,15 @@ func main() {
         // v3.8.0: If GitHub App credentials are configured, use the app for
         // verified bot identity + auto-webhook registration.
         // v3.11.0: Wire cfg.GitHubAPIURL for GitHub Enterprise support (audit #2).
+        // v3.13.0: Actually wire the App into prReviewer (was dead code — audit #2).
         prReviewer := prreview.New(cfg.GitHubToken, cfg.GitHubWebhookSecret, &prReviewVectorAdapter{vs: vectorStore}).
                 WithAPIURL(cfg.GitHubAPIURL)
         apiServer.SetWebhookHandler(http.HandlerFunc(prReviewer.HandleWebhook))
 
         // v3.8.0: GitHub App — verified bot identity + auto-webhook registration
         // v3.11.0: Use NewWithAPIURL for GitHub Enterprise support (audit #2).
+        // v3.13.0: Wire the App into prReviewer via WithGitHubApp() so PR comments
+        // appear as the verified "Sentinel" bot instead of the PAT user.
         var ghApp *githubapp.App
         rtConfig := rtCfg.Get()
         if rtConfig.GitHubAppID != "" && rtConfig.GitHubAppPrivateKey != "" && rtConfig.GitHubAppInstallID != "" {
@@ -789,14 +792,15 @@ func main() {
                         logging.Error("GitHub App init failed", "error", err)
                 } else {
                         ghApp = app
-                        logging.Info("GitHub App configured",
+                        prReviewer.WithGitHubApp(ghApp) // v3.13.0: wire it — was dead code before
+                        logging.Info("GitHub App configured (verified bot identity enabled)",
                                 "app_id", rtConfig.GitHubAppID,
                                 "install_id", rtConfig.GitHubAppInstallID,
                                 "api_url", cfg.GitHubAPIURL,
                         )
                 }
         }
-        _ = ghApp // Used by the PR reviewer when posting comments
+        _ = ghApp // Used by prReviewer.WithGitHubApp() above
 
         // v3.5.0: Wire interactive Slack bot (two-way commands).
         // Accepts: pause, resume, investigate, list, status, help.

@@ -342,6 +342,7 @@ func (s *Server) handleInvestigate(w http.ResponseWriter, r *http.Request) {
                 Namespace string `json:"namespace"`
                 Reason    string `json:"reason"`
         }
+        r.Body = http.MaxBytesReader(nil, r.Body, maxRequestBodyBytes) // v3.13.0: OOM defense
         if err := json.NewDecoder(r.Body).Decode(&spec); err != nil {
                 writeJSON(w, 400, map[string]string{"error": "invalid JSON"})
                 return
@@ -378,6 +379,7 @@ func (s *Server) handlePause(w http.ResponseWriter, r *http.Request) {
                 Reason      string `json:"reason"`
         }
         if r.Body != nil {
+                r.Body = http.MaxBytesReader(nil, r.Body, maxRequestBodyBytes) // v3.13.0: OOM defense
                 _ = json.NewDecoder(r.Body).Decode(&req)
         }
         if req.DurationMin <= 0 {
@@ -477,7 +479,16 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
         _ = json.NewEncoder(w).Encode(v)
 }
 
+// maxRequestBodyBytes limits the size of request bodies to prevent OOM DoS.
+// v3.13.0: audit finding #3 — POST handlers used io.ReadAll(r.Body) with no
+// limit. An attacker could POST a 10GB body and OOM the 256Mi pod.
+// 1MB is generous for all legitimate API requests (settings JSON, investigate
+// trigger JSON, pause JSON are all <2KB in practice).
+const maxRequestBodyBytes = 1 << 20 // 1MB
+
 func readBody(r *http.Request) (string, error) {
+        // v3.13.0: Wrap r.Body in MaxBytesReader to cap the read at 1MB.
+        r.Body = http.MaxBytesReader(nil, r.Body, maxRequestBodyBytes)
         data, err := io.ReadAll(r.Body)
         return string(data), err
 }

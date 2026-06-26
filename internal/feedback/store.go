@@ -536,37 +536,18 @@ func (s *Store) StoreIncidentVector(ctx context.Context, inc *schemas.Incident, 
 }
 
 // computeEmbedding produces a bag-of-words vector from text.
-// v3.3.0: Fixed to use 1536 dimensions + float32 to match HNSW index.
-// This prevents the "embedding dimension mismatch: 256 != 1536" panic.
+// v3.13.0: CRITICAL FIX — now calls hashEmbedding() (the same tokenizer used
+// by the runtime VectorStore) instead of strings.Fields(). Previously,
+// computeEmbedding used strings.Fields+ToLower (which keeps punctuation in
+// words: "KeyError:" → "keyerror:") while hashEmbedding used splitWords
+// (which strips punctuation: "KeyError:" → "KeyError", no lowercasing).
+// Same text produced DIFFERENT vectors. After pod restart, LoadFromDB
+// loaded the computeEmbedding vectors into HNSW, but runtime queries used
+// hashEmbedding — cosine similarity was near-zero for all stored incidents.
+// The entire memory loop (applyKnownFix, similar-incident retrieval) was
+// silently broken across restarts. Now both use the same tokenizer.
 func computeEmbedding(text string) []float32 {
-        words := strings.Fields(strings.ToLower(text))
-        if len(words) == 0 {
-                return make([]float32, 1536)
-        }
-
-        const dim = 1536
-        vec := make([]float32, dim)
-        for _, w := range words {
-                h := simpleHash32(w) % uint32(dim)
-                vec[h]++
-        }
-
-        // L2 normalize
-        var sum float32
-        for _, v := range vec {
-                sum += v * v
-        }
-        if sum > 0 {
-                norm := float32(1.0)
-                x := sum
-                for i := 0; i < 20; i++ {
-                        norm = (norm + x/norm) * 0.5
-                }
-                for i := range vec {
-                        vec[i] /= norm
-                }
-        }
-        return vec
+        return hashEmbedding(text, 1536)
 }
 
 func simpleHash32(s string) uint32 {
