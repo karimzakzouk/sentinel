@@ -657,12 +657,16 @@ func (s *SandboxRunner) verifyOriginalErrorFixed(ctx context.Context, ns, servic
                                 }
                         }
 
-                        // v3.8.4: Check 2 — ANY 4xx/5xx response fails Level 3.
-                        // Previously only 5xx + error-string match failed; a 404 with
-                        // no error string in the body passed silently. Now: any non-2xx/3xx
-                        // response is treated as evidence the error is still present.
-                        if resp.StatusCode >= 400 {
-                                log.Printf("[sandbox] Level 3: probe %s returned %d (any 4xx/5xx fails Level 3)", url, resp.StatusCode)
+                        // v3.14.5: Check 2 — only 5xx responses fail Level 3.
+                        // A 4xx (400 Bad Request, 404 Not Found) means the app handled
+                        // the bad input gracefully instead of crashing. That's the fix
+                        // WORKING. The original v3.8.4 code failed on ANY 4xx/5xx,
+                        // which rejected correct fixes that return 400 for bad input.
+                        // Only 5xx (server error) means the app crashed — that's a real
+                        // failure. The error-type-in-body check (Check 1) above already
+                        // catches if the original error string appears in the response.
+                        if resp.StatusCode >= 500 {
+                                log.Printf("[sandbox] Level 3: probe %s returned %d (5xx = server error, fix not working)", url, resp.StatusCode)
                                 continue
                         }
 
