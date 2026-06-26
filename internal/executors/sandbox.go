@@ -785,20 +785,24 @@ func patchPodSpec(spec corev1.PodSpec, canaryImage string) corev1.PodSpec {
                 if sc.SeccompProfile == nil {
                         sc.SeccompProfile = &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}
                 }
-                // Force non-root at the container level too (defense in depth
-                // with the pod-level setting below).
-                sc.RunAsNonRoot = boolPtr(true)
-                sc.RunAsUser = int64Ptr(65532)
+                // v3.16.0: Don't force RunAsNonRoot/RunAsUser. The prod image
+                // may run as root (e.g. Go binaries that bind to port 80).
+                // Forcing non-root breaks canaries for root-running prod images.
+                // The namespace PodSecurity label is "baseline" which allows
+                // root but blocks privileged. This is the right tradeoff.
+                // Previous v3.8.4 code forced RunAsNonRoot=true + RunAsUser=65532,
+                // which conflicted with the baseline namespace label and caused
+                // canary pods to fail with "container has runAsNonRoot and image
+                // will run as root".
         }
 
-        // v3.8.4: Force a safe pod-level security context.
+        // v3.16.0: Don't force pod-level RunAsNonRoot either. Same reasoning
+        // as above — respect the prod image's user. The namespace's PodSecurity
+        // "baseline" label provides the security boundary.
         if spec.SecurityContext == nil {
                 spec.SecurityContext = &corev1.PodSecurityContext{}
         }
         psc := spec.SecurityContext
-        psc.RunAsNonRoot = boolPtr(true)
-        psc.RunAsUser = int64Ptr(65532)
-        psc.FSGroup = int64Ptr(65532)
         if psc.SeccompProfile == nil {
                 psc.SeccompProfile = &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}
         }
@@ -830,6 +834,5 @@ func patchPodSpec(spec corev1.PodSpec, canaryImage string) corev1.PodSpec {
 func boolPtr(b bool) *bool { return &b }
 
 // int64Ptr returns a pointer to i. Helper for *int64 fields in corev1.
-func int64Ptr(i int64) *int64 { return &i }
 
 func int32Ptr(i int32) *int32 { return &i }

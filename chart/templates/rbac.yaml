@@ -50,12 +50,12 @@ rules:
   - apiGroups: ["apps"]
     resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
     verbs: ["get", "list", "watch"]
-  # v3.14.3: Sandbox write permissions cluster-wide. The sandbox creates
-  # dynamic namespaces (sentinel-sandbox-*) and needs to create Deployments,
-  # Services, ConfigMaps, Pods, Secrets, NetworkPolicies, and RBAC in them.
-  # Per-namespace Roles don't work because the SA can't create Roles in
-  # namespaces it just created. Cluster-wide is the only option that works
-  # "out of the box" without pre-configuration.
+  # v3.16.0: Sandbox write permissions — gated behind sandbox.enabled.
+  # When sandbox is disabled, these permissions are NOT granted, restoring
+  # the least-privilege posture. The sandbox creates dynamic namespaces
+  # (sentinel-sandbox-*) and needs cluster-wide create on deployments,
+  # services, configmaps, pods, secrets, roles, rolebindings.
+  {{- if .Values.sentinel.sandbox.enabled }}
   - apiGroups: ["apps"]
     resources: ["deployments", "statefulsets"]
     verbs: ["create", "update", "patch", "delete"]
@@ -68,6 +68,7 @@ rules:
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: ["roles", "rolebindings"]
     verbs: ["create", "update", "patch", "delete", "get", "list", "watch"]
+  {{- end }}
   # v3.8.4: Opt-in secrets read. The sandbox runner copies prod secrets into
   # the sandbox namespace so the canary can access the same env vars as prod.
   # v3.14.3: secrets read is now ALWAYS granted when sandbox is enabled —

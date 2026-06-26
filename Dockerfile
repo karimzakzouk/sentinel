@@ -75,7 +75,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     -trimpath \
     -o /sentinelctl ./cmd/sentinelctl
 
-# ── Stage 3: Runtime (distroless, ~28MB) ──────────────────────────────────
+# ── Stage 3: Runtime (distroless, 43MB) ──────────────────────────────────
 FROM gcr.io/distroless/static-debian12:nonroot
 
 # CA certs for HTTPS calls to GitHub / LLM / Docker Hub

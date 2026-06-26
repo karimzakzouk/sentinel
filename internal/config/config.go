@@ -325,7 +325,7 @@ func Load() *Config {
                 // v3.4.0: Sandbox probe paths (was hardcoded /pay?amount=...)
                 SandboxProbePaths: splitCSV(getenv("SENTINEL_SANDBOX_PROBE_PATHS", "/,/healthz,/readyz")),
 
-                // v3.6.0: Skip sandbox for non-prod (default true — faster PRs in sim/staging)
+                // v3.6.0: Skip sandbox for non-prod (default false — sandbox runs for all)
                 // v3.10.0: Sandbox ON by default for ALL namespaces (was true=skip).
                 // The sandbox verifies the fix actually works before opening a PR.
                 // Operators who want fast mode (skip sandbox for non-prod) can set

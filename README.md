@@ -7,7 +7,7 @@
 Detect. Diagnose. Fix. Verify. — autonomously.
 
 [![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go)](https://go.dev)
-[![Image Size](https://img.shields.io/badge/image-~28MB-success)](https://hub.docker.com/r/karimzakzouk/sentinel-v3)
+[![Image Size](https://img.shields.io/badge/image-43MB-success)](https://hub.docker.com/r/karimzakzouk/sentinel-v3)
 [![Pods](https://img.shields.io/badge/pods-1-blue)]()
 [![Arch](https://img.shields.io/badge/arch-amd64%20%7C%20arm64-success)]()
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
@@ -20,7 +20,7 @@ Detect. Diagnose. Fix. Verify. — autonomously.
 
 Sentinel is an autonomous AI Site Reliability Engineer that plugs into any Kubernetes cluster, watches for incidents in real-time, diagnoses them with an LLM, writes fixes, tests them in a sandbox, and opens Pull Requests — all on its own.
 
-**One binary. One pod. ~28MB image. ~50MB RAM. Zero external dependencies.**
+**One binary. One pod. 43MB image. ~50MB RAM. Zero external dependencies.**
 
 ## Why Sentinel
 
@@ -40,7 +40,7 @@ All in ~4 minutes. While you sleep. No human intervention required.
 helm repo add sentinel https://karimzakzouk.github.io/sentinel/
 helm repo update
 
-helm install sentinel sentinel/sentinel --version 3.15.0 \
+helm install sentinel sentinel/sentinel --version 3.16.0 \
   --namespace sentinel --create-namespace \
   --set sentinel.githubToken=YOUR_GITHUB_TOKEN \
   --set sentinel.llm.apiKey=YOUR_LLM_API_KEY \
@@ -48,7 +48,7 @@ helm install sentinel sentinel/sentinel --version 3.15.0 \
   --set 'sentinel.rbac.writeNamespaces={sim}'
 ```
 
-That's it. One pod. ~28MB image. ~50MB RAM. Ready in <1 second.
+That's it. One pod. 43MB image. ~50MB RAM. Ready in <1 second.
 
 ```bash
 kubectl -n sentinel get pods
@@ -184,7 +184,7 @@ sentinel/
 │   ├── metrics/               # v3.4: Prometheus metrics (counters/histograms/gauges)
 │   └── api/                   # HTTP API + webhook receivers
 ├── chart/                     # Single-pod Helm chart
-├── Dockerfile                 # Distroless static, ~28MB
+├── Dockerfile                 # Distroless static, 43MB
 ├── go.mod
 └── README.md
 ```
@@ -193,12 +193,12 @@ sentinel/
 
 | Metric | Sentinel v3 | Typical AIOps tool |
 |--------|-------------|-------------------|
-| Image size | **~28MB** | 1–5GB |
+| Image size | **43MB** | 1–5GB |
 | Pods | **1** | 5–20 |
 | RAM at idle | **~50MB** | 2–8GB |
 | Disk | **~5GB** | 50–200GB |
 | Cold start | **<1s** | 30–120s |
-| Dependencies | **6 Go modules** | 50+ packages |
+| Dependencies | **7 direct Go dependencies** | 50+ packages |
 | External services | **0** (SQLite embedded) | Postgres, Redis, Kafka, ES |
 | Detection latency | **~0s** (live streaming) | 30–60s (polling) |
 | Manual intervention | **0** (fully autonomous) | Required (acknowledge, triage, assign) |
@@ -214,7 +214,7 @@ Sentinel uses the OpenAI-compatible API. Any provider works:
 | OpenAI | `openai` | GPT-4o, o1, etc. |
 | Google Gemini | `gemini` | Gemini 2.0 Flash / Pro |
 | z.ai GLM | `zai` | GLM-4.5, GLM-4-Flash |
-| OpenRouter | `custom` | Set `llm.baseUrl=https://openrouter.ai/api/v1` |
+| OpenRouter | `openrouter` | Native GoAI provider, no baseUrl needed |=https://openrouter.ai/api/v1` |
 | Ollama (local) | `ollama` | Run LLMs locally — no API key needed |
 | vLLM | `vllm` | Self-hosted inference |
 | LiteLLM proxy | `litellm` | Proxy for Anthropic, Bedrock, etc. |
@@ -327,22 +327,28 @@ The default `embeddingModel` is now empty (was `text-embedding-3-small`). When e
 | `sentinel.llm.embeddingModel` | `SENTINEL_LLM_EMBEDDING_MODEL` | (empty) | Embedding model name. Empty = hash fallback. |
 | `sentinel.llm.embeddingDim` | `SENTINEL_LLM_EMBEDDING_DIM` | `1536` | Embedding dimension (must match the real model's dim) |
 
-#### LLM Router Limitations
+#### LLM Provider Support (v3.12.0+)
 
-The LLM router is **OpenAI-compatible only**. It speaks `POST /chat/completions` with `Authorization: Bearer`. The following providers are NOT supported natively and require a proxy:
+Sentinel uses [GoAI](https://github.com/zendev-sh/goai) for 25+ native LLM providers. No proxy needed — each provider speaks its own native API:
 
-- **Anthropic Claude** — uses `/v1/messages` with `x-api-key` auth
-- **AWS Bedrock** — uses per-model URL paths with SigV4 auth
-- **Azure OpenAI** — uses per-deployment URL paths with `api-version` query param
-
-To use these providers, stand up a [LiteLLM](https://github.com/BerriAI/litellm) or OneAPI proxy, then:
-
-```bash
---set sentinel.llm.provider=litellm \
---set sentinel.llm.baseUrl=http://litellm:4000/v1
-```
-
-Sentinel logs an ERROR-level startup warning if the configured provider is unsupported.
+| Provider | `llm.provider` | Auth | Notes |
+|----------|----------------|------|-------|
+| OpenAI | `openai` | Bearer | GPT-4o, o1, etc. |
+| Anthropic | `anthropic` | x-api-key | Claude (native /v1/messages) |
+| AWS Bedrock | `bedrock` | SigV4 | Claude/Llama on AWS |
+| Azure OpenAI | `azure` | api-key | Per-deployment URLs |
+| Google Gemini | `google` | API key | Native Gemini API |
+| Google Vertex | `vertex` | API key | Vertex AI |
+| OpenRouter | `openrouter` | Bearer | Access 100+ models |
+| z.ai GLM | `zai` | Bearer | Free tier available |
+| Groq | `groq` | Bearer | Fast inference |
+| Mistral | `mistral` | Bearer | |
+| Cohere | `cohere` | Bearer | |
+| xAI | `xai` | Bearer | Grok |
+| DeepSeek | `deepseek` | Bearer | |
+| Ollama | `ollama` | None | Local LLMs |
+| vLLM | `vllm` | Bearer | Self-hosted |
+| Any OpenAI-compatible | `custom` | Bearer | Set `llm.baseUrl` |
 
 ### Additional Configuration (v3.13.0)
 
@@ -414,6 +420,23 @@ helm lint chart/
 ```
 
 ## What's New
+
+### v3.16.0 — Production Hardening
+
+- **3-layer fix verification** — stronger prompts (replacement completeness), trigger endpoint testing (Layer C), sandbox failure feedback loop (Layer B: generate → verify → feed error back → retry)
+- **Sandbox config model** — `sandbox.enabled` + `sandbox.required` + `sandbox.maxRetries` (Fast / Lenient / Strict modes)
+- **Operator-controlled RBAC** — sandbox write permissions gated behind `sandbox.enabled` in Helm chart
+- **Security hardening** — MaxBytesReader on all webhook handlers, PodSecurity baseline, no forced RunAsNonRoot on canaries
+- **Speed** — sustained-Ready window 30s → 10s, no retry on infrastructure errors, current-file-state fetch on retry
+- **Bug fixes** — patch CR status error, uvicorn false positive, Layer C trigger endpoint, /healthz version
+- **Dead code cleanup** — removed IsUnsupportedNativeProvider, HandleInstallationEvent, hand-rolled base64Encode, stale router.go retry functions
+
+### v3.12.0 — GoAI: 25+ Native LLM Providers
+
+- Replaced hand-rolled OpenAI-only HTTP router with GoAI (github.com/zendev-sh/goai)
+- 25+ providers natively: Anthropic (/v1/messages), Bedrock (SigV4), Azure, Google, Vertex, OpenRouter, Groq, Mistral, Cohere, xAI, DeepSeek, Cerebras, Fireworks, Together, Perplexity, Ollama, vLLM, + any OpenAI-compatible
+- Pure Go, stdlib-only, +6MB binary size, no Python, no sidecar
+- Native ARM64 CI runners (no QEMU) — release time halved
 
 ### v3.11.0 — Codebase Audit Fixes
 

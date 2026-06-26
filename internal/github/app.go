@@ -24,6 +24,7 @@ import (
         "encoding/pem"
         "fmt"
         "io"
+        "log"
         "net/http"
         "strings"
         "sync"
@@ -286,9 +287,9 @@ func (a *App) HandleInstallationEvent(ctx context.Context, payload []byte, webho
                 owner := event.Installation.Account.Login
                 repoName := repo.Name
                 if err := a.RegisterWebhook(ctx, owner, repoName, webhookURL, secret); err != nil {
-                        fmt.Printf("[github-app] failed to register webhook on %s/%s: %v\n", owner, repoName, err)
+                        log.Printf("[github-app]  failed to register webhook on %s/%s: %v", owner, repoName, err)
                 } else {
-                        fmt.Printf("[github-app] webhook registered on %s/%s\n", owner, repoName)
+                        log.Printf("[github-app]  webhook registered on %s/%s", owner, repoName)
                 }
         }
 

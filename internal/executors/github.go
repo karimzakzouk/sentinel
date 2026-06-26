@@ -248,7 +248,7 @@ func (e *GitHubExecutor) upsertFile(ctx context.Context, repo, branch, path, con
         url := fmt.Sprintf("%s/repos/%s/contents/%s", e.apiURL, repo, path)
         body := map[string]any{
                 "message": fmt.Sprintf("[Sentinel] Update %s", path),
-                "content": base64Encode(content),
+                "content": base64.StdEncoding.EncodeToString([]byte(content)),
                 "branch":  branch,
         }
         if existingSHA != "" {
@@ -793,37 +793,6 @@ func (e *GitHubExecutor) do(ctx context.Context, method, url string, body any, o
         return nil
 }
 
-func base64Encode(s string) string {
-        const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-        bytes := []byte(s)
-        var out strings.Builder
-        for i := 0; i < len(bytes); i += 3 {
-                b1 := bytes[i]
-                var b2, b3 byte
-                hasB2, hasB3 := false, false
-                if i+1 < len(bytes) {
-                        b2 = bytes[i+1]
-                        hasB2 = true
-                }
-                if i+2 < len(bytes) {
-                        b3 = bytes[i+2]
-                        hasB3 = true
-                }
-                out.WriteByte(chars[b1>>2])
-                out.WriteByte(chars[((b1&0x03)<<4)|(b2>>4)])
-                if hasB2 {
-                        out.WriteByte(chars[((b2&0x0f)<<2)|(b3>>6)])
-                } else {
-                        out.WriteByte('=')
-                }
-                if hasB3 {
-                        out.WriteByte(chars[b3&0x3f])
-                } else {
-                        out.WriteByte('=')
-                }
-        }
-        return out.String()
-}
 
 // base64Decode decodes a base64-encoded string (used for GitHub Contents API
 // file content). v3.9.0.

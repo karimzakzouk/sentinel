@@ -76,7 +76,7 @@ jobs:
       - name: Version sync check (v3.8.4)
         run: |
           # VERSION is the single source of truth. Chart.yaml, values.yaml,
-          # and the README helm-install examples must all agree with it.
+          # my-values.yaml, and the README helm-install examples must all agree.
           V=$(cat VERSION | tr -d '[:space:]')
           echo "VERSION file: $V"
           CHART_V=$(grep '^version:' chart/Chart.yaml | awk '{print $2}')
@@ -85,7 +85,10 @@ jobs:
           echo "Chart.yaml version:    $CHART_V"
           echo "Chart.yaml appVersion: $CHART_AV"
           echo "values.yaml image.tag: $VALUES_V"
-          if [[ "$V" != "$CHART_V" ]] || [[ "$V" != "$CHART_AV" ]] || [[ "$V" != "$VALUES_V" ]]; then
+          # v3.16.0: Also check my-values.yaml
+          MYVALUES_V=$(grep '  tag:' my-values.yaml | head -1 | sed 's/.*tag: "//;s/"//')
+          echo "my-values.yaml tag:     $MYVALUES_V"
+          if [[ "$V" != "$CHART_V" ]] || [[ "$V" != "$CHART_AV" ]] || [[ "$V" != "$VALUES_V" ]] || [[ "$V" != "$MYVALUES_V" ]]; then
             echo "FAIL: version drift detected. Run 'make release-bump' to sync."
             exit 1
           fi

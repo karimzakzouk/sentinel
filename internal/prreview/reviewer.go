@@ -164,6 +164,9 @@ func (r *Reviewer) HandleWebhook(w http.ResponseWriter, req *http.Request) {
                 return
         }
 
+        // v3.16.0: Limit body size BEFORE signature verification to prevent
+        // unauthenticated DoS (10GB POST would OOM the 256Mi pod).
+        req.Body = http.MaxBytesReader(w, req.Body, 1<<20) // 1MB
         payload, err := io.ReadAll(req.Body)
         if err != nil {
                 http.Error(w, "read body failed", http.StatusBadRequest)

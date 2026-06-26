@@ -121,6 +121,9 @@ func (b *Bot) HandleEvents(w http.ResponseWriter, r *http.Request) {
                 return
         }
 
+        // v3.16.0: Limit body size BEFORE signature verification to prevent
+        // unauthenticated DoS (10GB POST would OOM the 256Mi pod).
+        r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB
         body, err := io.ReadAll(r.Body)
         if err != nil {
                 http.Error(w, "read body failed", http.StatusBadRequest)

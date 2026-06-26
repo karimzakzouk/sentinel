@@ -63,7 +63,7 @@ func (r *Router) buildGoAIModel(modelName string) provider.LanguageModel {
 	case "bedrock":
 		return bedrock.Chat(modelName,
 			bedrock.WithAccessKey(pc.apiKey),
-			bedrock.WithRegion(r.bedrockRegion),
+			bedrock.WithRegion(func() string { r.mu.RLock(); defer r.mu.RUnlock(); return r.bedrockRegion }()),
 		)
 	case "azure":
 		opts := []azure.Option{azure.WithAPIKey(pc.apiKey)}
