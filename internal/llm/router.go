@@ -360,6 +360,32 @@ func (r *Router) do(ctx context.Context, req chatRequest) (*chatResponse, error)
                         return nil, fmt.Errorf("unmarshal response: %w", err)
                 }
                 if chatResp.Error != nil {
+                        // v3.11.0: Some providers return HTTP 200 but put an error in the
+                        // response body (e.g. OpenRouter/Nvidia returns 200 with
+                        // {"error":{"message":"ResourceExhausted: Worker local total
+                        // request limit reached (32/32)"}} when the upstream provider's
+                        // worker pool is full). This is a transient capacity issue, not a
+                        // client error — retry it.
+                        //
+                        // This is provider-agnostic: we check the error message for
+                        // transient-capacity patterns (rate, limit, exhaust, capacity,
+                        // overload, busy, throttle, queue, worker). No provider names
+                        // are hardcoded — any provider that returns a 200-with-error
+                        // matching these patterns gets retried.
+                        errMsg := strings.ToLower(chatResp.Error.Message)
+                        if isTransientCapacityError(errMsg) {
+                                lastErr = fmt.Errorf("LLM capacity error (200 body): %s", chatResp.Error.Message)
+                                if attempt < r.maxRetries {
+                                        log.Printf("[llm] attempt %d/%d got 200 with transient error: %s — retrying",
+                                                attempt+1, r.maxRetries+1, chatResp.Error.Message[:min(len(chatResp.Error.Message), 100)])
+                                        select {
+                                        case <-ctx.Done():
+                                                return nil, ctx.Err()
+                                        case <-time.After(r.backoffDelay(attempt + 1)):
+                                        }
+                                        continue
+                                }
+                        }
                         if recordLLMMetrics != nil {
                                 recordLLMMetrics(req.Model, "error", time.Since(callStart))
                         }
@@ -452,6 +478,43 @@ func (r *Router) parseRetryAfter(value string) time.Duration {
                 }
         }
         return 0
+}
+
+// isTransientCapacityError returns true if the error message looks like a
+// transient capacity/rate-limit issue that would benefit from a retry.
+// v3.11.0: Used to detect 200-with-error-body responses where the provider
+// returns HTTP 200 but puts a capacity error in the JSON body (e.g. OpenRouter
+// routing to an upstream provider whose worker pool is full).
+//
+// This is provider-agnostic — no provider names are checked. Only generic
+// transient-capacity keywords are matched. Anything else (auth errors, model
+// not found, invalid request) returns false and is NOT retried.
+func isTransientCapacityError(msg string) bool {
+        if msg == "" {
+                return false
+        }
+        patterns := []string{
+                "rate limit", "rate-limit", "ratelimit",
+                "too many requests",
+                "resource exhausted", "exhausted",
+                "capacity", "overload", "overloaded",
+                "busy", "throttle", "throttled",
+                "queue", "queued",
+                "worker", // "worker limit reached"
+                "temporarily", "temporary",
+                "retry", "try again",
+                "service unavailable", "unavailable",
+                "timeout", "timed out",
+                "503", "502", "504",
+                "pool", // "connection pool exhausted"
+                "concurrent", "concurrency",
+        }
+        for _, p := range patterns {
+                if strings.Contains(msg, p) {
+                        return true
+                }
+        }
+        return false
 }
 
 // extractJSON defensively parses JSON from LLM output.

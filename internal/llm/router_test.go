@@ -265,3 +265,60 @@ func pow2(n int) float64 {
         }
         return r
 }
+
+// TestIsTransientCapacityError verifies the provider-agnostic transient error
+// detection used to retry 200-with-error-body responses. v3.11.0.
+func TestIsTransientCapacityError(t *testing.T) {
+	// Cases that SHOULD be retried (transient capacity issues).
+	transient := []string{
+		// OpenRouter / Nvidia
+		"ResourceExhausted: Worker local total request limit reached (32/32)",
+		"Provider returned error: rate limited",
+		"Upstream error from Nvidia: ResourceExhausted",
+		// Generic rate limiting
+		"Rate limit exceeded",
+		"rate-limit: too many requests",
+		"ratelimit: 429",
+		"Too many requests, please retry",
+		// Capacity / overload
+		"Server is overloaded",
+		"Service temporarily unavailable",
+		"capacity exceeded, please retry",
+		"workers are busy",
+		"throttled by provider",
+		"request queued, retry later",
+		"connection pool exhausted",
+		"concurrency limit reached",
+		"temporarily unavailable",
+		// HTTP status codes in message
+		"upstream returned 503",
+		"gateway returned 502",
+		// Timeout
+		"request timed out",
+		"upstream timeout",
+	}
+	for _, msg := range transient {
+		if !isTransientCapacityError(strings.ToLower(msg)) {
+			t.Errorf("isTransientCapacityError(%q) = false, want true (should retry)", msg)
+		}
+	}
+
+	// Cases that should NOT be retried (client errors, permanent failures).
+	permanent := []string{
+		"invalid api key",
+		"model not found: gpt-5",
+		"invalid request: messages array is empty",
+		"unauthorized",
+		"forbidden",
+		"billing limit exceeded, please upgrade",
+		"content policy violation",
+		"token limit exceeded in input",
+		"invalid response_format",
+		"",
+	}
+	for _, msg := range permanent {
+		if isTransientCapacityError(strings.ToLower(msg)) {
+			t.Errorf("isTransientCapacityError(%q) = true, want false (should not retry)", msg)
+		}
+	}
+}
