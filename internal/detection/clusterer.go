@@ -64,7 +64,7 @@ func NewClusterer(handler IncidentHandler, tracker *ActiveTracker) *Clusterer {
                 handler: handler,
                 tracker: tracker,
                 pending: make(map[string]*pendingCluster),
-                window:  3 * time.Second, // v3.2.4: reduced from 5s to 3s for faster response
+                window:  500 * time.Millisecond, // v3.17.0: was 3s, reduced to 500ms (catches cascades, doesn't penalize single incidents)
         }
 }
 

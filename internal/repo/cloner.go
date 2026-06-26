@@ -16,6 +16,7 @@ import (
         "context"
         "fmt"
         "io/fs"
+        "log"
         "os"
         "path/filepath"
         "regexp"
@@ -24,6 +25,7 @@ import (
         "time"
 
         "github.com/go-git/go-git/v5"
+        "github.com/go-git/go-git/v5/config"
         "github.com/go-git/go-git/v5/plumbing"
 )
 
@@ -85,8 +87,51 @@ func (c *Cloner) Clone(ctx context.Context, repo, ref string) (string, error) {
                 cloneDir = os.TempDir()
         }
 
-        // Sanitize repo name for directory naming
+        // v3.17.0: Clone caching — if a clone of this repo+ref already exists,
+        // do a git fetch (only downloads new commits) instead of a full clone.
+        // Saves 2-5s on re-investigations of the same service.
         safeRepo := strings.ReplaceAll(repo, "/", "-")
+        // Look for an existing clone (without the random suffix)
+        pattern := fmt.Sprintf("sentinel-repo-%s-%s-*", safeRepo, ref)
+        matches, _ := filepath.Glob(filepath.Join(cloneDir, pattern))
+        if len(matches) > 0 {
+                // Found an existing clone — try to fetch updates
+                existingDir := matches[0]
+                log.Printf("[cloner] found existing clone at %s, fetching updates", existingDir)
+
+                // Build the fetch URL with token auth
+                fetchURL := fmt.Sprintf("https://%s/%s.git", c.gitHost, repo)
+                if c.githubToken != "" {
+                        fetchURL = fmt.Sprintf("https://x-access-token:%s@%s/%s.git", c.githubToken, c.gitHost, repo)
+                }
+
+                fetchCtx, fetchCancel := context.WithTimeout(ctx, 30*time.Second)
+                defer fetchCancel()
+
+                // Open the existing repo and fetch
+                existingRepo, err := git.PlainOpen(existingDir)
+                if err == nil {
+                        err = existingRepo.FetchContext(fetchCtx, &git.FetchOptions{
+                                RemoteURL:    fetchURL,
+                                RefSpecs:     []config.RefSpec{config.RefSpec("+refs/heads/*:refs/heads/*")},
+                                Depth: 1,
+                                Force:        true,
+                        })
+                        if err != nil && err != git.NoErrAlreadyUpToDate {
+                                log.Printf("[cloner] fetch failed (%v), falling back to full clone", err)
+                        } else {
+                                log.Printf("[cloner] fetch succeeded, reusing existing clone at %s", existingDir)
+                                return existingDir, nil
+                        }
+                } else {
+                        log.Printf("[cloner] open existing clone failed (%v), falling back to full clone", err)
+                }
+                // If fetch failed, fall through to full clone below
+                // Clean up the old clone to avoid confusion
+                _ = os.RemoveAll(existingDir)
+        }
+
+        // Sanitize repo name for directory naming
         dirName := fmt.Sprintf("sentinel-repo-%s-%s", safeRepo, ref)
         if len(dirName) > 60 {
                 // Truncate long names + add a short random suffix

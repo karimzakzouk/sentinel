@@ -29,6 +29,10 @@ type RuntimeConfig struct {
         LLMMaxRetries               int     `json:"llm_max_retries,omitempty"`
         LLMRetryBaseDelayMs         int     `json:"llm_retry_base_delay_ms,omitempty"`
         SkipSandboxNonProd          *bool   `json:"skip_sandbox_non_prod,omitempty"`
+        // v3.17.0: Sandbox config — editable from the web UI Settings page.
+        SandboxEnabled              *bool   `json:"sandbox_enabled,omitempty"`
+        SandboxRequired             *bool   `json:"sandbox_required,omitempty"`
+        SandboxMaxRetries           int     `json:"sandbox_max_retries,omitempty"`
 
         PrometheusURL string `json:"prometheus_url,omitempty"`
         LokiURL       string `json:"loki_url,omitempty"`
