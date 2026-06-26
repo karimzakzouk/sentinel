@@ -9,6 +9,7 @@ import (
         "io"
         "log"
         "net/http"
+        "strconv"
         "strings"
         "sync"
         "time"
@@ -405,6 +406,14 @@ func (s *Server) handleResume(w http.ResponseWriter, r *http.Request) {
         writeJSON(w, 200, map[string]string{"status": "resumed"})
 }
 
+// maxSSESubscribers caps the number of concurrent SSE connections to prevent
+// memory exhaustion DoS. v3.13.0: audit finding #10 — SSE is unauthenticated
+// and had no cap. Each subscriber pins a goroutine + 16-entry buffered channel
+// + map entry (~10KB). 10K connections = ~100MB = OOM on the 256Mi pod.
+// 100 subscribers is generous for a single-pod dashboard (one operator = 1-3
+// browser tabs = 3-9 connections).
+const maxSSESubscribers = 100
+
 func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
         w.Header().Set("Content-Type", "text/event-stream")
         w.Header().Set("Cache-Control", "no-cache")
@@ -417,8 +426,14 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
                 return
         }
 
-        ch := make(chan ServerEvent, 16)
+        // v3.13.0: Cap concurrent SSE subscribers to prevent OOM DoS.
         s.eventSubsMu.Lock()
+        if len(s.eventSubs) >= maxSSESubscribers {
+                s.eventSubsMu.Unlock()
+                http.Error(w, "too many SSE subscribers (max "+strconv.Itoa(maxSSESubscribers)+")", http.StatusServiceUnavailable)
+                return
+        }
+        ch := make(chan ServerEvent, 16)
         s.eventSubs[ch] = true
         s.eventSubsMu.Unlock()
         defer func() {

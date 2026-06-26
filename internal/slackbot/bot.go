@@ -27,6 +27,7 @@ import (
         "io"
         "log"
         "net/http"
+        "net/url"
         "strconv"
         "strings"
         "sync"
@@ -459,22 +460,22 @@ func (b *Bot) helpText() string {
 }
 
 // parseFormBody parses a URL-encoded form body into a map.
+// v3.13.0: Replaced hand-rolled parser (only handled 5 percent-encoded chars)
+// with stdlib url.ParseQuery. The old parser mis-parsed @mentions (%40),
+// paths (%2F), = (%3D), & (%26), and any other encoded char — corrupting
+// Slack commands that contained them.
 func parseFormBody(body string) (map[string]string, error) {
         result := map[string]string{}
         if body == "" {
                 return result, nil
         }
-        // Simple parser — doesn't handle arrays, but sufficient for Slack commands
-        for _, pair := range strings.Split(body, "&") {
-                kv := strings.SplitN(pair, "=", 2)
-                if len(kv) == 2 {
-                        // URL-decode the value
-                        val := strings.ReplaceAll(kv[1], "+", " ")
-                        val = strings.ReplaceAll(val, "%21", "!")
-                        val = strings.ReplaceAll(val, "%27", "'")
-                        val = strings.ReplaceAll(val, "%28", "(")
-                        val = strings.ReplaceAll(val, "%29", ")")
-                        result[kv[0]] = val
+        values, err := url.ParseQuery(body)
+        if err != nil {
+                return result, err
+        }
+        for key, vals := range values {
+                if len(vals) > 0 {
+                        result[key] = vals[0] // take first value (Slack commands are single-valued)
                 }
         }
         return result, nil

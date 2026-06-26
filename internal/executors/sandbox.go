@@ -19,6 +19,13 @@ import (
         "github.com/karimzakzouk/sentinel/v3/internal/schemas"
 )
 
+// sandboxHTTPClient is the shared HTTP client for sandbox Level 2 + 3 probes.
+// v3.13.0: audit finding #11 — verifyEndpoints + verifyOriginalErrorFixed
+// created a new http.Client on every call (2-3 per incident), defeating
+// connection pooling. A package-level shared client reuses TCP+TLS connections
+// to the canary Service, cutting probe latency ~50%.
+var sandboxHTTPClient = &http.Client{Timeout: 5 * time.Second}
+
 // SandboxResult is the outcome of a sandbox run.
 type SandboxResult struct {
         Verified      bool
@@ -436,7 +443,7 @@ func (s *SandboxRunner) verifyEndpoints(ctx context.Context, ns, service string)
                 endpoints = []string{"/", "/healthz", "/readyz"}
         }
 
-        client := &http.Client{Timeout: 5 * time.Second}
+        client := sandboxHTTPClient
         consecutiveFailures := 0
         consecutiveSuccesses := 0
         requiredSuccesses := 2 // v3.8.4: require 2 consecutive successes per path to ride through transient blips
@@ -565,7 +572,7 @@ func (s *SandboxRunner) verifyOriginalErrorFixed(ctx context.Context, ns, servic
                 probePaths = []string{"/", "/healthz", "/readyz"}
         }
 
-        client := &http.Client{Timeout: 5 * time.Second}
+        client := sandboxHTTPClient
         totalProbes := 0
         failedProbes := 0
 
