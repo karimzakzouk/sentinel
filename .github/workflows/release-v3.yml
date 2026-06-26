@@ -1,10 +1,12 @@
 name: Release v3
 
-# v3 CI — optimized for speed:
-#   - amd64 only (arm64 deferred to v3.1 if anyone asks)
-#   - Go cross-compile (no QEMU emulation)
-#   - BuildKit cache for go mod + go build
-#   - Build time: ~3 min cold, ~1 min cached
+# v3.12.0: Multi-arch build using native ARM64 runners (no QEMU).
+#   - amd64 on ubuntu-latest (x86_64 runner)
+#   - arm64 on ubuntu-24.04-arm (free native ARM64 runner for public repos)
+#   - Both arches build in parallel, then merged into a multi-arch manifest.
+#   - Build time: ~4 min (was ~10-15 min with QEMU emulation).
+#
+# v3.12.0: Also fixes stale release notes (was "What's New in v3.5.0").
 
 on:
   push:
@@ -59,10 +61,21 @@ jobs:
           helm template test chart/ > /tmp/rendered.yaml
           test $(grep -c "kind:" /tmp/rendered.yaml) -ge 6
 
-  build-and-push:
-    name: Build + Push Image + Chart
+  # v3.12.0: Build each arch natively in parallel (no QEMU).
+  # Each job pushes a single-arch image with an arch suffix (e.g. :3.12.0-amd64).
+  # The merge job below combines them into a multi-arch manifest.
+  build:
+    name: Build ${{ matrix.arch }}
     needs: test
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
 
@@ -86,15 +99,11 @@ jobs:
       - name: Get version
         id: version
         run: |
-          # v3.8.4: Single source of truth is the VERSION file. The git tag
-          # must match it — if it doesn't, fail the release loudly instead
-          # of silently shipping a mis-versioned image.
           FILE_VERSION=$(cat VERSION | tr -d '[:space:]')
           if [[ "${GITHUB_REF}" == refs/tags/v3* ]]; then
             TAG_VERSION=${GITHUB_REF_NAME#v}
             if [[ "${TAG_VERSION}" != "${FILE_VERSION}" ]]; then
               echo "ERROR: git tag version (${TAG_VERSION}) does not match VERSION file (${FILE_VERSION})"
-              echo "The VERSION file is the single source of truth. Edit it, then re-tag."
               exit 1
             fi
             echo "version=${TAG_VERSION}" >> $GITHUB_OUTPUT
@@ -104,7 +113,7 @@ jobs:
             echo "is_tag=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Build and push (amd64 only, with BuildKit cache)
+      - name: Build and push (${{ matrix.arch }} only)
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -113,13 +122,73 @@ jobs:
           build-args: |
             VERSION=${{ steps.version.outputs.version }}
           tags: |
-            ${{ env.DH_REGISTRY }}/${{ env.DH_OWNER }}/sentinel-v3:${{ steps.version.outputs.version }}
-            ${{ env.DH_REGISTRY }}/${{ env.DH_OWNER }}/sentinel-v3:latest
-            ${{ env.GHCR_REGISTRY }}/${{ env.GHCR_OWNER }}/sentinel/sentinel-v3:${{ steps.version.outputs.version }}
-            ${{ env.GHCR_REGISTRY }}/${{ env.GHCR_OWNER }}/sentinel/sentinel-v3:latest
-          platforms: linux/amd64,linux/arm64
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+            ${{ env.DH_REGISTRY }}/${{ env.DH_OWNER }}/sentinel-v3:${{ steps.version.outputs.version }}-${{ matrix.arch }}
+            ${{ env.GHCR_REGISTRY }}/${{ env.GHCR_OWNER }}/sentinel/sentinel-v3:${{ steps.version.outputs.version }}-${{ matrix.arch }}
+          platforms: linux/${{ matrix.arch }}
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,scope=${{ matrix.arch }},mode=max
+
+  # v3.12.0: Merge the two single-arch images into a multi-arch manifest.
+  # Also packages the Helm chart + creates the GitHub Release + publishes gh-pages.
+  merge:
+    name: Merge + Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.DH_REGISTRY }}
+          username: ${{ env.DH_OWNER }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.GHCR_REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Get version
+        id: version
+        run: |
+          FILE_VERSION=$(cat VERSION | tr -d '[:space:]')
+          if [[ "${GITHUB_REF}" == refs/tags/v3* ]]; then
+            TAG_VERSION=${GITHUB_REF_NAME#v}
+            echo "version=${TAG_VERSION}" >> $GITHUB_OUTPUT
+            echo "is_tag=true" >> $GITHUB_OUTPUT
+          else
+            echo "version=${FILE_VERSION}-dev" >> $GITHUB_OUTPUT
+            echo "is_tag=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create multi-arch manifests
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          
+          # Docker Hub
+          docker manifest create ${{ env.DH_REGISTRY }}/${{ env.DH_OWNER }}/sentinel-v3:${VERSION} \
+            ${{ env.DH_REGISTRY }}/${{ env.DH_OWNER }}/sentinel-v3:${VERSION}-amd64 \
+            ${{ env.DH_REGISTRY }}/${{ env.DH_OWNER }}/sentinel-v3:${VERSION}-arm64
+          docker manifest push ${{ env.DH_REGISTRY }}/${{ env.DH_OWNER }}/sentinel-v3:${VERSION}
+          
+          docker manifest create ${{ env.DH_REGISTRY }}/${{ env.DH_OWNER }}/sentinel-v3:latest \
+            ${{ env.DH_REGISTRY }}/${{ env.DH_OWNER }}/sentinel-v3:${VERSION}-amd64 \
+            ${{ env.DH_REGISTRY }}/${{ env.DH_OWNER }}/sentinel-v3:${VERSION}-arm64
+          docker manifest push ${{ env.DH_REGISTRY }}/${{ env.DH_OWNER }}/sentinel-v3:latest
+          
+          # GHCR
+          docker manifest create ${{ env.GHCR_REGISTRY }}/${{ env.GHCR_OWNER }}/sentinel/sentinel-v3:${VERSION} \
+            ${{ env.GHCR_REGISTRY }}/${{ env.GHCR_OWNER }}/sentinel/sentinel-v3:${VERSION}-amd64 \
+            ${{ env.GHCR_REGISTRY }}/${{ env.GHCR_OWNER }}/sentinel/sentinel-v3:${VERSION}-arm64
+          docker manifest push ${{ env.GHCR_REGISTRY }}/${{ env.GHCR_OWNER }}/sentinel/sentinel-v3:${VERSION}
+          
+          docker manifest create ${{ env.GHCR_REGISTRY }}/${{ env.GHCR_OWNER }}/sentinel/sentinel-v3:latest \
+            ${{ env.GHCR_REGISTRY }}/${{ env.GHCR_OWNER }}/sentinel/sentinel-v3:${VERSION}-amd64 \
+            ${{ env.GHCR_REGISTRY }}/${{ env.GHCR_OWNER }}/sentinel/sentinel-v3:${VERSION}-arm64
+          docker manifest push ${{ env.GHCR_REGISTRY }}/${{ env.GHCR_OWNER }}/sentinel/sentinel-v3:latest
 
       - name: Set up Helm
         uses: azure/setup-helm@v4
@@ -138,7 +207,7 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: Sentinel ${{ github.ref_name }}
           body: |
-            ## Install (v3 — single Go binary, ~28MB)
+            ## Install (v3 — single Go binary, ~43MB)
 
             ```bash
             helm repo add sentinel https://karimzakzouk.github.io/sentinel/
@@ -149,14 +218,27 @@ jobs:
               --set sentinel.llm.apiKey=YOUR_LLM_API_KEY
             ```
 
-            ## What's New in v3.5.0
+            ## What's New
 
-            - **24-hour feedback loop** — Phase 2 re-occurrence watcher corrects Beta priors when errors reappear in production
-            - **Predictive PR review** — GitHub webhook scores PR diffs against incident memory, posts warnings on risky changes
-            - **Interactive Slack bot** — Two-way commands: pause, resume, investigate, list incidents, status
-            - **Cross-service correlation** — Detects cascading failures (3+ services in 60s), identifies likely cause
-            - **Shared library support** — Redirects investigation to library repo when error is in vendor/node_modules
-            - **Production readiness** — LLM retry/backoff, structured logging (slog), Prometheus metrics, golangci-lint, govulncheck, configurable timeouts
+            ### v3.12.0 — GoAI Integration: 25+ Native LLM Providers
+
+            - **25+ LLM providers natively** — Anthropic, Bedrock, Azure, OpenAI, Google, Vertex, OpenRouter, Groq, Mistral, Cohere, xAI, DeepSeek, Cerebras, Fireworks, Together, Perplexity, Ollama, vLLM. No proxy needed.
+            - **Native ARM64 CI** — builds on free GitHub ARM64 runners (no QEMU). Release time halved.
+            - **200-with-error-body retry** — handles providers that return HTTP 200 with an error in the JSON body.
+
+            ### v3.11.0 — Codebase Audit Fixes (16 issues)
+
+            - Pure-Go syntax validators (was broken in distroless)
+            - Multi-language sandbox Level 3 (was Python-only)
+            - GitHub Enterprise / GitLab / Bitbucket support
+            - Registry-aware Kaniko (ECR/GCR/ACR/Harbor/Quay)
+            - Configurable default branch, namespace skip list, high-risk services
+            - 6 dead config fields wired
+            - Language-agnostic prompts
+
+            ### v3.8.2 — UI + GitHub App + Slack Bot
+
+            - Professional Web UI, CLI (sentinelctl), GitHub App, Settings persistence, SSE real-time updates, 24-hour feedback loop, Predictive PR review, Interactive Slack bot, Cross-service correlation, Shared library support, Concurrency limiter, Arm64 support, Production hardening.
           files: /tmp/sentinel-${{ steps.version.outputs.version }}.tgz
           generate_release_notes: true
 
