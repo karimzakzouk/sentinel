@@ -139,62 +139,70 @@ func (w *Watcher) handleItem(ctx context.Context, item *unstructured.Unstructure
 
         log.Printf("[watcher] new SentinelIncident %s/%s (service=%s, reason=%s)", namespace, name, service, reason)
 
-        // Discover sentinel.io/* annotations from the affected workload
-        annotations, _ := w.k8s.LookupWorkloadAnnotations(ctx, service, svcNs)
-        if repoFromSpec != "" {
-                if annotations == nil {
-                        annotations = map[string]string{}
-                }
-                annotations["sentinel.io/repo"] = repoFromSpec
-        }
-        if len(annotations) > 0 {
-                log.Printf("[watcher] discovered annotations: %v", annotations)
-        } else {
-                log.Printf("[watcher] no annotations found on workload %s/%s — set sentinel.io/repo + sentinel.io/branch annotations on the Deployment", svcNs, service)
-        }
-
-        // Fetch REAL pod logs from the crashing pods
-        podLogs, _ := w.k8s.FetchCrashingPodLogs(ctx, service, svcNs)
-        if podLogs != "" {
-                log.Printf("[watcher] fetched %d chars of pod logs for %s", len(podLogs), service)
-        }
-
-        // Build the synthetic anomaly cluster
-        explanation := fmt.Sprintf("SentinelIncident CR: %s", reason)
-        if podLogs != "" {
-                explanation += fmt.Sprintf("\n\n## Pod Logs (last 4KB)\n%s", podLogs)
-        }
-
-        cluster := schemas.AnomalyCluster{
-                ClusterID: uuid.New(),
-                Service:   service,
-                Namespace: svcNs,
-                Anomalies: []schemas.Anomaly{
-                        {
-                                AnomalyID:   uuid.New(),
-                                SignalID:    uuid.New(),
-                                Service:     service,
-                                Namespace:   svcNs,
-                                Detector:    "crd_watcher",
-                                Score:       0.8,
-                                Dimensions:  map[string]float64{"manual": 1.0},
-                                Explanation: explanation,
-                                Annotations: annotations,
-                        },
-                },
-                Summary:     fmt.Sprintf("SentinelIncident: %s", reason),
-                Severity:    schemas.SeverityWarning,
-                Annotations: annotations,
-        }
-
-        // Patch CR status to "investigating" so we don't re-trigger
+        // Patch CR status to "investigating" so we don't re-trigger.
+        // This is the only synchronous K8s API call in the watch loop — fast.
         if err := w.k8s.PatchCRStatus(ctx, name, namespace, "investigating"); err != nil {
                 log.Printf("[watcher] could not patch CR status: %v", err)
         }
 
-        // Call the handler (the reasoning pipeline)
+        // v3.13.0: Move the slow lookups (annotations + pod logs) into the handler
+        // goroutine so the watch loop isn't blocked for ~10s per CR. Previously,
+        // LookupWorkloadAnnotations (5 sequential K8s API calls) + FetchCrashingPodLogs
+        // (3 retries × 2s = up to 6s) ran synchronously before spawning the handler.
+        // Under a burst of CRs (cascade), the watch fell behind and missed events.
+        // Also pass ctx (not context.Background()) so in-flight handlers stop on SIGTERM.
         if w.handler != nil {
-                go w.handler(context.Background(), cluster, name, namespace)
+                go func() {
+                        // Discover sentinel.io/* annotations from the affected workload
+                        annotations, _ := w.k8s.LookupWorkloadAnnotations(ctx, service, svcNs)
+                        if repoFromSpec != "" {
+                                if annotations == nil {
+                                        annotations = map[string]string{}
+                                }
+                                annotations["sentinel.io/repo"] = repoFromSpec
+                        }
+                        if len(annotations) > 0 {
+                                log.Printf("[watcher] discovered annotations: %v", annotations)
+                        } else {
+                                log.Printf("[watcher] no annotations found on workload %s/%s — set sentinel.io/repo + sentinel.io/branch annotations on the Deployment", svcNs, service)
+                        }
+
+                        // Fetch REAL pod logs from the crashing pods
+                        podLogs, _ := w.k8s.FetchCrashingPodLogs(ctx, service, svcNs)
+                        if podLogs != "" {
+                                log.Printf("[watcher] fetched %d chars of pod logs for %s", len(podLogs), service)
+                        }
+
+                        // Build the synthetic anomaly cluster
+                        explanation := fmt.Sprintf("SentinelIncident CR: %s", reason)
+                        if podLogs != "" {
+                                explanation += fmt.Sprintf("\n\n## Pod Logs (last 4KB)\n%s", podLogs)
+                        }
+
+                        cluster := schemas.AnomalyCluster{
+                                ClusterID: uuid.New(),
+                                Service:   service,
+                                Namespace: svcNs,
+                                Anomalies: []schemas.Anomaly{
+                                        {
+                                                AnomalyID:   uuid.New(),
+                                                SignalID:    uuid.New(),
+                                                Service:     service,
+                                                Namespace:   svcNs,
+                                                Detector:    "crd_watcher",
+                                                Score:       0.8,
+                                                Dimensions:  map[string]float64{"manual": 1.0},
+                                                Explanation: explanation,
+                                                Annotations: annotations,
+                                        },
+                                },
+                                Summary:     fmt.Sprintf("SentinelIncident: %s", reason),
+                                Severity:    schemas.SeverityWarning,
+                                Annotations: annotations,
+                        }
+
+                        w.handler(ctx, cluster, name, namespace)
+                }()
         }
 }
 

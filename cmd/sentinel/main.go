@@ -855,7 +855,12 @@ func main() {
 
         go func() {
                 if err := apiServer.Start(); err != nil && err != http.ErrServerClosed {
-                        logging.Error("API server failed", "error", err)
+                        // v3.13.0: audit finding #20 — API bind failure should be fatal.
+                        // Previously, the error was just logged and Sentinel continued running
+                        // with no API — kubelet readiness probe fails, pod gets restarted,
+                        // but the watcher + detector keep running against a dead API.
+                        logging.Error("API server failed — exiting", "error", err)
+                        log.Fatalf("API server failed: %v", err)
                 }
         }()
 
