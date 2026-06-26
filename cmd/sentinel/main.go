@@ -120,8 +120,11 @@ func main() {
 
         // 3. LLM router
         // v3.4.0: retry config (was no retry — single HTTP call, killed by free-tier rate limits)
-        router := llm.New(cfg.ResolvedBaseURL(), cfg.LLMAPIKey, cfg.LLMFastModel, cfg.LLMFrontierModel)
+        router := llm.NewWithProvider(cfg.LLMProvider, cfg.ResolvedBaseURL(), cfg.LLMAPIKey, cfg.LLMFastModel, cfg.LLMFrontierModel)
         router.SetRetryConfig(cfg.LLMMaxRetries, time.Duration(cfg.LLMRetryBaseDelayMs)*time.Millisecond)
+	if cfg.LLMProvider == "bedrock" {
+		router.SetBedrockRegion(func() string { r := os.Getenv("AWS_REGION"); if r == "" { return "us-east-1" }; return r }())
+	}
 
         // v3.8.4: Wire the runtime config apply callback. When the user
         // saves settings via POST /settings, runtimecfg.Manager invokes

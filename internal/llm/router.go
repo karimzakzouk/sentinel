@@ -26,29 +26,36 @@
 package llm
 
 import (
-        "bytes"
         "context"
         "encoding/json"
         "fmt"
-        "io"
         "log"
         "math"
-        "net/http"
         "regexp"
         "strings"
         "sync"
         "time"
+
+        goai "github.com/zendev-sh/goai"
 )
 
 // Router picks fast vs frontier model and centralizes the API client.
+//
+// v3.12.0: Now backed by GoAI (github.com/zendev-sh/goai) for 25+ native
+// LLM providers. The provider field determines which GoAI provider package
+// is used (anthropic → native /v1/messages, bedrock → SigV4, azure →
+// native Azure, etc.). For OpenAI-compatible providers (zai, custom,
+// litellm, ollama, vllm), the openai provider package is used with a
+// custom base URL.
 type Router struct {
-        baseURL      string
-        apiKey       string
-        fastModel    string
-        frontierModel string
-        http         *http.Client
+        providerType   string // v3.12.0: "openai", "anthropic", "bedrock", "azure", etc.
+        baseURL        string
+        apiKey         string
+        fastModel      string
+        frontierModel  string
+        bedrockRegion  string // v3.12.0: AWS region for Bedrock
         // v3.4.0: retry config
-        maxRetries    int
+        maxRetries     int
         retryBaseDelay time.Duration
         // v3.8.4: mu guards baseURL / apiKey / fastModel / frontierModel /
         // maxRetries / retryBaseDelay. These fields can be mutated at runtime
@@ -59,22 +66,42 @@ type Router struct {
 }
 
 // New creates a Router with default retry settings (3 retries, 500ms base delay).
-// v3.8.8: HTTP timeout increased from 120s to 300s. Free-tier LLM models
-// (gpt-oss-120b:free, etc.) can take 2-3 minutes to generate a full file's
-// worth of content. 120s was too short — the fix proposer LLM call was
-// timing out before the model finished responding, causing every
-// investigation to fail with "context deadline exceeded".
+// v3.12.0: Defaults to provider="custom" (OpenAI-compatible with custom base URL).
+// Use NewWithProvider() to specify a native provider like "anthropic" or "bedrock".
 func New(baseURL, apiKey, fastModel, frontierModel string) *Router {
+        return NewWithProvider("custom", baseURL, apiKey, fastModel, frontierModel)
+}
+
+// NewWithProvider creates a Router configured for a specific LLM provider.
+// v3.12.0: The provider string maps to GoAI's provider packages:
+//   "openai", "anthropic", "bedrock", "azure", "google", "vertex",
+//   "zai", "openrouter", "groq", "mistral", "cohere", "xai",
+//   "deepseek", "cerebras", "fireworks", "together", "perplexity",
+//   "ollama", "vllm", "custom", "litellm"
+//
+// For native providers (anthropic, bedrock, azure, google, vertex), GoAI
+// handles the provider-specific auth + request format. For OpenAI-compatible
+// providers (zai, custom, litellm, ollama, vllm), the openai provider
+// package is used with a custom base URL.
+func NewWithProvider(providerType, baseURL, apiKey, fastModel, frontierModel string) *Router {
         return &Router{
+                providerType:   providerType,
                 baseURL:        strings.TrimRight(baseURL, "/"),
                 apiKey:         apiKey,
                 fastModel:      fastModel,
                 frontierModel:  frontierModel,
-                http: &http.Client{
-                        Timeout: 300 * time.Second,
-                },
                 maxRetries:     3,
                 retryBaseDelay: 500 * time.Millisecond,
+        }
+}
+
+// SetBedrockRegion sets the AWS region for Bedrock provider calls. v3.12.0.
+// Required when providerType="bedrock". Default: "us-east-1".
+func (r *Router) SetBedrockRegion(region string) {
+        r.mu.Lock()
+        defer r.mu.Unlock()
+        if region != "" {
+                r.bedrockRegion = region
         }
 }
 
@@ -91,6 +118,7 @@ func (r *Router) SetRetryConfig(maxRetries int, baseDelay time.Duration) {
 // Update reconfigures the router (called when settings change at runtime).
 // v3.8.4: Now thread-safe — takes the write lock so in-flight requests
 // using the read methods below see a consistent snapshot.
+// v3.12.0: Also updates the providerType (so runtime config can switch providers).
 func (r *Router) Update(baseURL, apiKey, fastModel, frontierModel string) {
         r.mu.Lock()
         defer r.mu.Unlock()
@@ -100,6 +128,14 @@ func (r *Router) Update(baseURL, apiKey, fastModel, frontierModel string) {
         r.frontierModel = frontierModel
 }
 
+// UpdateProvider reconfigures the provider type. v3.12.0.
+// Called when the user changes the LLM provider in the web UI.
+func (r *Router) UpdateProvider(providerType string) {
+        r.mu.Lock()
+        defer r.mu.Unlock()
+        r.providerType = providerType
+}
+
 // snapshot returns the current config under the read lock. Callers should
 // use the returned values instead of touching the fields directly so that
 // a concurrent Update can't tear a string mid-request.
@@ -107,6 +143,18 @@ func (r *Router) snapshot() (baseURL, apiKey, fastModel, frontierModel string, m
         r.mu.RLock()
         defer r.mu.RUnlock()
         return r.baseURL, r.apiKey, r.fastModel, r.frontierModel, r.maxRetries, r.retryBaseDelay
+}
+
+// providerSnapshot returns the provider config under the read lock. v3.12.0.
+// Used by buildGoAIModel to create a GoAI LanguageModel per-call.
+func (r *Router) providerSnapshot() providerConfig {
+        r.mu.RLock()
+        defer r.mu.RUnlock()
+        return providerConfig{
+                providerType: r.providerType,
+                baseURL:      r.baseURL,
+                apiKey:       r.apiKey,
+        }
 }
 
 // Snapshot is the exported version of snapshot, for use by main.go when
@@ -141,51 +189,51 @@ func (r *Router) FrontierText(ctx context.Context, system, user string, maxToken
         return r.complete(ctx, frontierModel, system, user, maxTokens)
 }
 
-type chatRequest struct {
-        Model          string         `json:"model"`
-        Messages       []chatMessage  `json:"messages"`
-        Temperature    float64        `json:"temperature"`
-        MaxTokens      int            `json:"max_tokens,omitempty"`
-        ResponseFormat *responseFormat `json:"response_format,omitempty"`
-}
+// v3.12.0: The old chatRequest/chatMessage/responseFormat/chatResponse types
+// and the do() function were removed — GoAI handles HTTP transport + request/
+// response format internally. The extractJSON, backoffDelay, parseRetryAfter,
+// and isTransientCapacityError helpers are kept (used by tests + completeJSON).
 
-type chatMessage struct {
-        Role    string `json:"role"`
-        Content string `json:"content"`
-}
-
-type responseFormat struct {
-        Type string `json:"type"`
-}
-
-type chatResponse struct {
-        Choices []struct {
-                Message chatMessage `json:"message"`
-        } `json:"choices"`
-        Error *struct {
-                Message string `json:"message"`
-                Type    string `json:"type"`
-        } `json:"error,omitempty"`
-}
-
+// complete calls the LLM model and returns the raw text response.
+// v3.12.0: Now backed by GoAI (goai.GenerateText). GoAI handles:
+//   - Provider-specific auth (Bearer, x-api-key, SigV4, Azure AD)
+//   - Provider-specific request format (/chat/completions, /v1/messages, etc.)
+//   - Retries with exponential backoff (via WithMaxRetries)
+//   - Timeout (via WithTimeout)
 func (r *Router) complete(ctx context.Context, model, system, user string, maxTokens int) (string, error) {
-        req := chatRequest{
-                Model: model,
-                Messages: []chatMessage{
-                        {Role: "system", Content: system},
-                        {Role: "user", Content: user},
-                },
-                Temperature: 0.2,
-                MaxTokens:   maxTokens,
+        _, _, _, _, maxRetries, _ := r.snapshot()
+
+        if recordLLMMetrics != nil {
+                LLMCallStart()
+                defer LLMCallEnd()
         }
-        body, err := r.do(ctx, req)
+        callStart := time.Now()
+
+        goaiModel := r.buildGoAIModel(model)
+        result, err := goai.GenerateText(ctx, goaiModel,
+                goai.WithSystem(system),
+                goai.WithPrompt(user),
+                goai.WithMaxOutputTokens(maxTokens),
+                goai.WithTemperature(0.2),
+                goai.WithMaxRetries(maxRetries),
+                goai.WithTimeout(300*time.Second),
+                // v3.12.0: Force Chat Completions API (not Responses API). GoAI's openai
+                // provider defaults to /responses which many OpenAI-compatible providers
+                // (OpenRouter, z.ai, Ollama, vLLM) don't support. /chat/completions is
+                // the universal standard. Native providers (Anthropic, Bedrock, etc.)
+                // ignore this option — they have their own DoGenerate implementations.
+                goai.WithProviderOptions(map[string]any{"useResponsesAPI": false}),
+        )
         if err != nil {
-                return "", err
+                if recordLLMMetrics != nil {
+                        recordLLMMetrics(model, "error", time.Since(callStart))
+                }
+                return "", fmt.Errorf("LLM call failed: %w", err)
         }
-        if len(body.Choices) == 0 {
-                return "", fmt.Errorf("LLM returned no choices")
+        if recordLLMMetrics != nil {
+                recordLLMMetrics(model, "success", time.Since(callStart))
         }
-        return body.Choices[0].Message.Content, nil
+        return result.Text, nil
 }
 
 // recordLLMMetrics is set by main.go via SetMetricsRecorder. This avoids a
@@ -197,210 +245,6 @@ var recordLLMMetrics func(model, status string, duration time.Duration)
 // creating a dependency cycle.
 func SetMetricsRecorder(fn func(model, status string, duration time.Duration)) {
         recordLLMMetrics = fn
-}
-
-func (r *Router) completeJSON(ctx context.Context, model, system, user string, maxTokens int) (map[string]any, error) {
-        // v3.9.6: Stronger instruction to prevent the model from producing
-        // extensive reasoning prose before the JSON. Some models (nemotron-3-super)
-        // "think out loud" for 20K characters, use all max_tokens on reasoning,
-        // and the actual JSON gets truncated.
-        prompt := user + "\n\nIMPORTANT: Output ONLY a valid JSON object. Do NOT include reasoning, explanation, or prose. Start your response with { and end with }. No text before or after the JSON."
-        req := chatRequest{
-                Model: model,
-                Messages: []chatMessage{
-                        {Role: "system", Content: system},
-                        {Role: "user", Content: prompt},
-                },
-                Temperature: 0.1,
-                MaxTokens:   maxTokens,
-                // Try JSON mode first; if the provider rejects it we retry without.
-                ResponseFormat: &responseFormat{Type: "json_object"},
-        }
-        body, err := r.do(ctx, req)
-        if err != nil {
-                // Retry without response_format (some providers don't support it)
-                req.ResponseFormat = nil
-                body, err = r.do(ctx, req)
-                if err != nil {
-                        return nil, err
-                }
-        }
-        if len(body.Choices) == 0 {
-                return map[string]any{}, nil
-        }
-        return extractJSON(body.Choices[0].Message.Content), nil
-}
-
-// do executes the HTTP call with retry on 429/5xx.
-// v3.4.0: Retries up to r.maxRetries times with exponential backoff + jitter.
-// 429 (rate limit) and 5xx (server error) are retried. 4xx (bad request,
-// auth error) are NOT retried — they won't succeed on retry.
-//
-// Retry delays: 500ms, 1s, 2s, 4s ... (doubled each time, ±25% jitter).
-// Respects ctx cancellation between retries.
-//
-// v3.4.0: Records metrics (call count + duration) via the recorder set by
-// SetMetricsRecorder. The status is "success", "rate_limited", "error", or
-// "client_error" (4xx non-429).
-func (r *Router) do(ctx context.Context, req chatRequest) (*chatResponse, error) {
-        body, err := json.Marshal(req)
-        if err != nil {
-                return nil, fmt.Errorf("marshal request: %w", err)
-        }
-
-        // v3.8.4: Snapshot the string fields under the read lock. Strings in Go
-        // are a (ptr, len) pair and concurrent read+write can tear — a concurrent
-        // Update() changing the API key mid-request could cause the Authorization
-        // header to contain a torn pointer (garbage bytes). The integer fields
-        // (maxRetries, retryBaseDelay) are word-sized and atomically read on
-        // 64-bit platforms, so we don't bother locking them.
-        baseURL, apiKey, _, _, _, _ := r.snapshot()
-
-        // v3.4.0: Track total duration across all retries for metrics.
-        callStart := time.Now()
-        if recordLLMMetrics != nil {
-                LLMCallStart()
-                defer LLMCallEnd()
-        }
-
-        var lastErr error
-        for attempt := 0; attempt <= r.maxRetries; attempt++ {
-                if attempt > 0 {
-                        delay := r.backoffDelay(attempt)
-                        select {
-                        case <-ctx.Done():
-                                return nil, ctx.Err()
-                        case <-time.After(delay):
-                        }
-                }
-
-                // Re-create the request body reader each attempt (body is consumed by Do).
-                httpReq, err := http.NewRequestWithContext(ctx, "POST", baseURL+"/chat/completions", bytes.NewReader(body))
-                if err != nil {
-                        return nil, fmt.Errorf("build request: %w", err)
-                }
-                httpReq.Header.Set("Content-Type", "application/json")
-                httpReq.Header.Set("Authorization", "Bearer "+apiKey)
-
-                resp, err := r.http.Do(httpReq)
-                if err != nil {
-                        lastErr = fmt.Errorf("LLM call failed: %w", err)
-                        // Network errors are retried (could be transient DNS/TLS/connection)
-                        if attempt < r.maxRetries {
-                                log.Printf("[llm] attempt %d/%d failed (network): %v — retrying", attempt+1, r.maxRetries+1, err)
-                                continue
-                        }
-                        if recordLLMMetrics != nil {
-                                recordLLMMetrics(req.Model, "error", time.Since(callStart))
-                        }
-                        return nil, lastErr
-                }
-
-                respBody, readErr := io.ReadAll(resp.Body)
-                resp.Body.Close()
-                if readErr != nil {
-                        lastErr = fmt.Errorf("read response: %w", readErr)
-                        if attempt < r.maxRetries {
-                                log.Printf("[llm] attempt %d/%d failed (read): %v — retrying", attempt+1, r.maxRetries+1, readErr)
-                                continue
-                        }
-                        if recordLLMMetrics != nil {
-                                recordLLMMetrics(req.Model, "error", time.Since(callStart))
-                        }
-                        return nil, lastErr
-                }
-
-                // v3.4.0: Retry on 429 (rate limit) and 5xx (server error).
-                // Do NOT retry on 4xx (bad request, auth) — won't succeed.
-                if resp.StatusCode == 429 || resp.StatusCode >= 500 {
-                        lastErr = fmt.Errorf("LLM API returned %d: %s", resp.StatusCode, string(respBody[:min(len(respBody), 500)]))
-                        if attempt < r.maxRetries {
-                                // Honor Retry-After header if present (common for 429s).
-                                retryAfter := r.parseRetryAfter(resp.Header.Get("Retry-After"))
-                                if retryAfter > 0 {
-                                        delay := retryAfter
-                                        if delay > 30*time.Second {
-                                                delay = 30 * time.Second // cap at 30s
-                                        }
-                                        log.Printf("[llm] attempt %d/%d got %d (Retry-After: %v) — retrying", attempt+1, r.maxRetries+1, resp.StatusCode, delay)
-                                        select {
-                                        case <-ctx.Done():
-                                                return nil, ctx.Err()
-                                        case <-time.After(delay):
-                                        }
-                                } else {
-                                        log.Printf("[llm] attempt %d/%d got %d — retrying", attempt+1, r.maxRetries+1, resp.StatusCode)
-                                }
-                                continue
-                        }
-                        // Exhausted retries on 429/5xx
-                        status := "error"
-                        if resp.StatusCode == 429 {
-                                status = "rate_limited"
-                        }
-                        if recordLLMMetrics != nil {
-                                recordLLMMetrics(req.Model, status, time.Since(callStart))
-                        }
-                        return nil, lastErr
-                }
-
-                if resp.StatusCode >= 400 {
-                        // 4xx (non-429) — don't retry, return immediately.
-                        if recordLLMMetrics != nil {
-                                recordLLMMetrics(req.Model, "client_error", time.Since(callStart))
-                        }
-                        return nil, fmt.Errorf("LLM API returned %d: %s", resp.StatusCode, string(respBody[:min(len(respBody), 500)]))
-                }
-
-                var chatResp chatResponse
-                if err := json.Unmarshal(respBody, &chatResp); err != nil {
-                        if recordLLMMetrics != nil {
-                                recordLLMMetrics(req.Model, "error", time.Since(callStart))
-                        }
-                        return nil, fmt.Errorf("unmarshal response: %w", err)
-                }
-                if chatResp.Error != nil {
-                        // v3.11.0: Some providers return HTTP 200 but put an error in the
-                        // response body (e.g. OpenRouter/Nvidia returns 200 with
-                        // {"error":{"message":"ResourceExhausted: Worker local total
-                        // request limit reached (32/32)"}} when the upstream provider's
-                        // worker pool is full). This is a transient capacity issue, not a
-                        // client error — retry it.
-                        //
-                        // This is provider-agnostic: we check the error message for
-                        // transient-capacity patterns (rate, limit, exhaust, capacity,
-                        // overload, busy, throttle, queue, worker). No provider names
-                        // are hardcoded — any provider that returns a 200-with-error
-                        // matching these patterns gets retried.
-                        errMsg := strings.ToLower(chatResp.Error.Message)
-                        if isTransientCapacityError(errMsg) {
-                                lastErr = fmt.Errorf("LLM capacity error (200 body): %s", chatResp.Error.Message)
-                                if attempt < r.maxRetries {
-                                        log.Printf("[llm] attempt %d/%d got 200 with transient error: %s — retrying",
-                                                attempt+1, r.maxRetries+1, chatResp.Error.Message[:min(len(chatResp.Error.Message), 100)])
-                                        select {
-                                        case <-ctx.Done():
-                                                return nil, ctx.Err()
-                                        case <-time.After(r.backoffDelay(attempt + 1)):
-                                        }
-                                        continue
-                                }
-                        }
-                        if recordLLMMetrics != nil {
-                                recordLLMMetrics(req.Model, "error", time.Since(callStart))
-                        }
-                        return nil, fmt.Errorf("LLM error (%s): %s", chatResp.Error.Type, chatResp.Error.Message)
-                }
-                if recordLLMMetrics != nil {
-                        recordLLMMetrics(req.Model, "success", time.Since(callStart))
-                }
-                return &chatResp, nil
-        }
-
-        if recordLLMMetrics != nil {
-                recordLLMMetrics(req.Model, "error", time.Since(callStart))
-        }
-        return nil, lastErr
 }
 
 // LLMCallStart / LLMCallEnd are thin wrappers for the in-flight gauge.
@@ -428,6 +272,27 @@ func LLMCallEnd() {
 func SetInFlightHooks(start, end func()) {
         llmCallStartHook = start
         llmCallEndHook = end
+}
+
+// completeJSON calls the LLM model and parses the response as JSON.
+// v3.12.0: Now backed by GoAI. The JSON instruction prompt is preserved
+// (appends "Output ONLY a valid JSON object" to prevent reasoning prose).
+// The extractJSON() function handles markdown fences + prose stripping.
+func (r *Router) completeJSON(ctx context.Context, model, system, user string, maxTokens int) (map[string]any, error) {
+        // v3.9.6: Stronger instruction to prevent the model from producing
+        // extensive reasoning prose before the JSON. Some models (nemotron-3-super)
+        // "think out loud" for 20K characters, use all max_tokens on reasoning,
+        // and the actual JSON gets truncated.
+        prompt := user + "\n\nIMPORTANT: Output ONLY a valid JSON object. Do NOT include reasoning, explanation, or prose. Start your response with { and end with }. No text before or after the JSON."
+
+        text, err := r.complete(ctx, model, system, prompt, maxTokens)
+        if err != nil {
+                return nil, err
+        }
+        if text == "" {
+                return map[string]any{}, nil
+        }
+        return extractJSON(text), nil
 }
 
 // backoffDelay computes the retry delay for the given attempt (1-indexed).
@@ -669,9 +534,3 @@ func repairTruncated(text string) string {
         return s
 }
 
-func min(a, b int) int {
-        if a < b {
-                return a
-        }
-        return b
-}
