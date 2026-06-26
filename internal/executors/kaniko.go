@@ -345,13 +345,14 @@ ls -la /workspace/repo/`
         }
         kanikoArgs = append(kanikoArgs, "--snapshotMode=redo")
 
-        // v3.8.4: Pod runs with an explicit non-root security context. The Kaniko
-        // image is distroless and runs as root by default; we force non-root and
-        // drop all capabilities. Kaniko builds a container image, it does not
-        // need any Linux capabilities.
-        runAsNonRoot := true
-        runAsUser := int64(65532)
-        fsGroup := int64(65532)
+        // v3.13.0: Kaniko MUST run as root (UID 0). Previous v3.8.4 code forced
+        // RunAsNonRoot=true + RunAsUser=65532, which broke image builds with:
+        //   "chown /: operation not permitted"
+        // Kaniko needs root to extract base image layers (chown files to match
+        // layer ownership), create tar archives with correct permissions, and push
+        // to the registry. The non-root hardening is correct for the sandbox CANARY
+        // pod (patchPodSpec in sandbox.go) but NOT for the Kaniko build pod.
+        // We keep the seccomp profile + capability drops (those don't break Kaniko).
         allowPrivilegeEscalation := false
         seccompProfile := &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}
 
@@ -368,9 +369,7 @@ ls -la /workspace/repo/`
                 Spec: corev1.PodSpec{
                         RestartPolicy: corev1.RestartPolicyNever,
                         SecurityContext: &corev1.PodSecurityContext{
-                                RunAsNonRoot: &runAsNonRoot,
-                                RunAsUser:    &runAsUser,
-                                FSGroup:      &fsGroup,
+                                // v3.13.0: No RunAsNonRoot/RunAsUser — Kaniko needs root.
                                 SeccompProfile: seccompProfile,
                         },
                         InitContainers: []corev1.Container{
@@ -385,8 +384,6 @@ ls -la /workspace/repo/`
                                                 {Name: "SENTINEL_BRANCH", Value: branch},
                                         },
                                         SecurityContext: &corev1.SecurityContext{
-                                                RunAsNonRoot:           &runAsNonRoot,
-                                                RunAsUser:              &runAsUser,
                                                 AllowPrivilegeEscalation: &allowPrivilegeEscalation,
                                                 ReadOnlyRootFilesystem:  newBool(true),
                                                 Capabilities:            &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
@@ -405,8 +402,6 @@ ls -la /workspace/repo/`
                                         Args:       kanikoArgs,
                                         WorkingDir: "/workspace",
                                         SecurityContext: &corev1.SecurityContext{
-                                                RunAsNonRoot:           &runAsNonRoot,
-                                                RunAsUser:              &runAsUser,
                                                 AllowPrivilegeEscalation: &allowPrivilegeEscalation,
                                                 Capabilities:            &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
                                                 SeccompProfile:          seccompProfile,
