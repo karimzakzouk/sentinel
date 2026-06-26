@@ -30,15 +30,21 @@ type Policy struct {
         MaxReplicaChangePct   int
 }
 
-// DefaultPolicy returns the default policy (matches the Rego defaults).
+// DefaultPolicy returns the default policy.
+//
+// v3.11.0: Removed demo-specific values (audit #5 + obs-1).
+//   - ProductionNamespaces: was {prod, production, payments}. The demo's
+//     "payments" namespace leaked into every install. Now {prod, production}.
+//     NewPolicy() overrides this from cfg.ProductionNamespaces anyway.
+//   - HighRiskServices: was {payment-api, billing-api, auth-service}. These
+//     leaked permanently because NewPolicy couldn't override them. Now empty
+//     (operators set their own via WithHighRiskServices / cfg.HighRiskServices).
 func DefaultPolicy() *Policy {
         return &Policy{
                 ProductionNamespaces: map[string]bool{
-                        "prod": true, "production": true, "payments": true,
+                        "prod": true, "production": true,
                 },
-                HighRiskServices: map[string]bool{
-                        "payment-api": true, "billing-api": true, "auth-service": true,
-                },
+                HighRiskServices:     map[string]bool{},
                 ConfidenceAutonomous:  0.92,
                 ConfidenceHumanReview: 0.70,
                 MaxReplicaChangePct:   20,

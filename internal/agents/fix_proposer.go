@@ -104,18 +104,19 @@ const fixProposerSystemPrompt = `You are Sentinel's Fix Proposer agent. You writ
 Given a confirmed root cause and the source code, propose ONE fix using search/replace blocks.
 
 ## Fix Quality Requirements
-- Fix the ROOT CAUSE, not just the symptom. If a dict access crashes, add a proper check — don't just wrap it in try/catch.
-- Use proper error handling for the framework in use. For web APIs (FastAPI, Flask, Express, etc.):
+- Fix the ROOT CAUSE, not just the symptom. If a collection access crashes (dict/key lookup, array index, map get), add a proper check — don't just wrap it in try/catch.
+- Use proper error handling for the framework + language in use. For web APIs (FastAPI/Flask in Python, Express/Koa in JS/TS, net/http or chi/gin in Go, Spring in Java, Actix in Rust, etc.):
   - Bad input (missing key, invalid type, out of range) → return appropriate HTTP error (400, 404, 422)
-  - Use the framework's error response mechanism (e.g. raise HTTPException in FastAPI, abort() in Flask)
+  - Use the framework's error response mechanism (e.g. raise HTTPException in FastAPI, abort() in Flask, c.JSON(status, err) in gin, ResponseEntity.status(status).body(err) in Spring)
   - NEVER return error states with HTTP 200 — callers should know something went wrong from the status code
+- For non-web code (CLIs, workers, daemons), use the language's idiomatic error pattern (Python: raise ValueError; Go: fmt.Errorf + return; JS: throw new Error; Java: throw new IllegalArgumentException; Rust: Result::Err).
 - Minimal changes. Only modify what's broken. Don't refactor surrounding code.
-- The fix must be syntactically valid in the target language.
+- The fix must be syntactically valid in the target language (the detected language is included in the context).
 
 ## Root Cause Description
-- Be precise. State WHAT is broken and WHERE. 
+- Be precise. State WHAT is broken and WHERE.
 - Do NOT speculate about infrastructure, databases, or configuration unless the error traceback explicitly references them.
-- If the error is "KeyError: 99" on line "name = users[user_id]", the root cause is "the users dict doesn't contain user_id 99" — not "the database doesn't have the user".
+- If the error is a missing-key access (e.g. "KeyError: 99", "NullPointerException", "panic: index out of range") at "users[user_id]", the root cause is "the collection doesn't contain user_id 99" — not "the database doesn't have the user".
 
 ## Search/Replace Format
 Each change has:
@@ -133,7 +134,7 @@ Return ONLY a JSON object:
 {
   "fix_type": "code_fix",
   "description": "Precise description of what's broken and how the fix works",
-  "files_to_change": [{"path": "app/main.py", "changes": [{"search": "exact code", "replace": "fixed code"}]}],
+  "files_to_change": [{"path": "src/handler.<ext>", "changes": [{"search": "exact code", "replace": "fixed code"}]}],
   "dockerfile_path": "Dockerfile",
   "pr_title": "[Sentinel] Brief description",
   "pr_body": "Short summary"
@@ -362,6 +363,14 @@ func (a *FixProposer) buildUserMessage(state *schemas.AgentState) string {
         parts = append(parts, fmt.Sprintf("# Service: %s", state.Cluster.Service))
         parts = append(parts, fmt.Sprintf("# Namespace: %s", state.Cluster.Namespace))
         parts = append(parts, "")
+        // v3.11.0: Inject the detected programming language (audit #12).
+        // The FixProposer doesn't have direct access to podLogs, but the
+        // anomaly explanations contain the original error logs. We concatenate
+        // them and run the parser to detect the language.
+        if lang := a.detectLanguageHint(state); lang != "" {
+                parts = append(parts, fmt.Sprintf("## Detected Language: %s", lang))
+                parts = append(parts, "")
+        }
         parts = append(parts, "## Confirmed Root Cause")
         parts = append(parts, fmt.Sprintf("- statement: %s", state.RootCause.Statement))
         parts = append(parts, fmt.Sprintf("- category: %s", state.RootCause.Category))
@@ -404,6 +413,44 @@ func (a *FixProposer) buildUserMessage(state *schemas.AgentState) string {
         parts = append(parts, "IMPORTANT: Use the EXACT file path from '### <path>' above in your files_to_change.")
         parts = append(parts, "Do NOT use container paths (like /app/app/main.py) — use the repo path (like app/main.py).")
         return strings.Join(parts, "\n")
+}
+
+// detectLanguageHint concatenates the anomaly explanations (which contain the
+// original pod logs) and runs ParseError to detect the language. v3.11.0: audit #12.
+// Returns "" if no language can be detected.
+func (a *FixProposer) detectLanguageHint(state *schemas.AgentState) string {
+        var logs string
+        for _, anomaly := range state.Cluster.Anomalies {
+                logs += anomaly.Explanation + "\n"
+        }
+        if logs == "" {
+                return ""
+        }
+        parsed := ParseError(logs)
+        if parsed == nil {
+                return ""
+        }
+        if parsed.Language == "" || parsed.Language == "unknown" {
+                return ""
+        }
+        switch parsed.Language {
+        case "python":
+                return "Python (idiomatic errors: KeyError, ValueError, TypeError, ImportError, ZeroDivisionError, AttributeError)"
+        case "go":
+                return "Go (idiomatic errors: panic, runtime error: index out of range, nil pointer dereference, goroutine stack)"
+        case "java":
+                return "Java (idiomatic errors: NullPointerException, ArrayIndexOutOfBoundsException, ClassNotFoundException, IllegalArgumentException)"
+        case "javascript":
+                return "JavaScript/TypeScript (idiomatic errors: TypeError, ReferenceError, SyntaxError, UnhandledPromiseRejection)"
+        case "rust":
+                return "Rust (idiomatic errors: panic, panicked at, unwrap on None/Err, thread 'main' panicked)"
+        case "ruby":
+                return "Ruby (idiomatic errors: NoMethodError, NameError, ArgumentError, TypeError)"
+        case "c":
+                return "C/C++ (idiomatic errors: SIGSEGV, SIGABRT, Segmentation fault, assertion failed)"
+        default:
+                return parsed.Language
+        }
 }
 
 // parseFilesToChange extracts FileChange entries from the LLM's raw

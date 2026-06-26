@@ -19,18 +19,19 @@ You are given:
 - An anomaly cluster describing what's wrong with a service
 - Pod logs from the crashing container (may be empty if logs weren't available)
 - The file tree of the service's GitHub repository
+- The detected programming language (if recognizable from the error)
 
 Your job is to decide what to SEARCH for in the source code to investigate the incident. You'll emit search queries (regex patterns) that will be run against the local clone of the repo.
 
 Think about:
-- Error messages or stack traces in the logs → search for the error type (e.g. "KeyError", "DB_PASSWORD", "connection refused")
+- Error messages or stack traces in the logs → search for the error type (e.g. "KeyError", "NullPointerException", "panic", "TypeError", "SIGSEGV")
 - Variable names or config keys mentioned in errors → search for those exact strings
-- Function or class names in stack traces → search for "def functionName" or "class ClassName"
+- Function or class names in stack traces → search for the function/class name as a bare identifier (the local search is language-agnostic regex — do NOT prefix with "def", "func", "function", or "class"; just use the bare name)
 - Import errors → search for the module name
 
 Respond with a JSON object of shape:
 {
-  "search_queries": ["DB_PASSWORD", "KeyError", "def main", "import os"]
+  "search_queries": ["DB_PASSWORD", "KeyError", "main", "import os"]
 }
 
 Emit 3-8 search queries. Be specific — exact strings from the error are better than generic terms.`
@@ -42,13 +43,14 @@ You are given:
 - Pod logs from the crashing container
 - The file tree of the service's GitHub repository
 - Search results from running queries against the local repo clone
+- The detected programming language (if recognizable from the error)
 
 Your job: produce UP TO 5 root cause hypotheses AND list the files we should read in full to write a fix.
 
 ## Hypothesis Rules
 - Base your hypothesis on the ACTUAL ERROR TRACEBACK, not on unrelated code you see in the file.
-- If the traceback says "KeyError: 99" at line "name = users[user_id]", the root cause is "the users dictionary doesn't contain key 99". Do NOT speculate about databases, config, or infrastructure unless the traceback mentions them.
-- If the traceback says "ZeroDivisionError" at line "result = a / b", the root cause is "no zero check before division". Do NOT mention database connections.
+- If the error is a missing-key access (e.g. Python "KeyError: 99" at "name = users[user_id]", Java "NullPointerException" at "users.get(user_id)", Go "panic: runtime error: index out of range" at "users[user_id]"), the root cause is "the collection doesn't contain key 99". Do NOT speculate about databases, config, or infrastructure unless the traceback mentions them.
+- If the error is a division by zero (e.g. Python "ZeroDivisionError", Java "ArithmeticException", Go "panic: runtime error: integer divide by zero"), the root cause is "no zero check before division". Do NOT mention database connections.
 - Be specific: reference the exact variable, function, and line that caused the error.
 - Do NOT hallucinate infrastructure that isn't in the traceback. If you see DATABASE_URL in the code but the error is about a dict key, the database is irrelevant.
 
@@ -65,13 +67,13 @@ Respond with a JSON object of shape:
       "statement": "...",
       "supporting_evidence": ["..."],
       "confidence": 0.0-1.0,
-      "source_files": ["src/foo.py"]
+      "source_files": ["src/handler.<ext>"]
     }
   ],
-  "files_to_read": ["app/main.py", "app/config.py"]
+  "files_to_read": ["app/main.<ext>", "app/config.<ext>"]
 }
 
-List 1-5 files in files_to_read — the files most likely to contain the bug. These will be read in full and passed to the Fix Proposer.
+List 1-5 files in files_to_read — the files most likely to contain the bug. These will be read in full and passed to the Fix Proposer. Use the file extensions that actually appear in the file tree (e.g. .py, .go, .js, .ts, .java, .rs, .rb).
 
 Do NOT make up evidence — only cite things that appear in the context.`
 
@@ -567,6 +569,13 @@ func (a *Investigator) buildRound1Message(state *schemas.AgentState, podLogs str
         parts = append(parts, "## Anomaly Cluster Summary")
         parts = append(parts, state.Cluster.Summary)
         parts = append(parts, "")
+        // v3.11.0: Inject the detected programming language so the LLM doesn't
+        // anchor on Python-only examples (audit #12). The parser already
+        // detects Python/Go/Java/JS/Rust/Ruby/C from the error logs.
+        if lang := detectLanguageHint(podLogs); lang != "" {
+                parts = append(parts, fmt.Sprintf("## Detected Language: %s", lang))
+                parts = append(parts, "")
+        }
         parts = append(parts, "## Pod Logs")
         if podLogs != "" {
                 // Cap logs to 4KB for the LLM
@@ -593,6 +602,11 @@ func (a *Investigator) buildRound2Message(state *schemas.AgentState, podLogs str
         parts = append(parts, fmt.Sprintf("# Service: %s", state.Cluster.Service))
         parts = append(parts, fmt.Sprintf("# Namespace: %s", state.Cluster.Namespace))
         parts = append(parts, "")
+        // v3.11.0: Inject the detected programming language (audit #12).
+        if lang := detectLanguageHint(podLogs); lang != "" {
+                parts = append(parts, fmt.Sprintf("## Detected Language: %s", lang))
+                parts = append(parts, "")
+        }
         parts = append(parts, "## Pod Logs")
         if podLogs != "" {
                 if len(podLogs) > 4096 {
@@ -618,6 +632,42 @@ func (a *Investigator) buildRound2Message(state *schemas.AgentState, podLogs str
         parts = append(parts, "## Your Task")
         parts = append(parts, "Produce up to 5 root cause hypotheses AND list 1-5 files to read in full. Be specific.")
         return strings.Join(parts, "\n")
+}
+
+// detectLanguageHint parses the pod logs for the error type + language and
+// returns a human-readable language hint for the LLM prompt. v3.11.0: audit #12.
+// Returns "" if no language can be detected.
+func detectLanguageHint(podLogs string) string {
+        if podLogs == "" {
+                return ""
+        }
+        parsed := ParseError(podLogs)
+        if parsed == nil {
+                return ""
+        }
+        if parsed.Language == "" || parsed.Language == "unknown" {
+                return ""
+        }
+        // Map the parser's language codes to human-readable names with a
+        // language-specific hint about the dominant error pattern.
+        switch parsed.Language {
+        case "python":
+                return "Python (idiomatic errors: KeyError, ValueError, TypeError, ImportError, ZeroDivisionError, AttributeError)"
+        case "go":
+                return "Go (idiomatic errors: panic, runtime error: index out of range, nil pointer dereference, goroutine stack)"
+        case "java":
+                return "Java (idiomatic errors: NullPointerException, ArrayIndexOutOfBoundsException, ClassNotFoundException, IllegalArgumentException)"
+        case "javascript":
+                return "JavaScript/TypeScript (idiomatic errors: TypeError, ReferenceError, SyntaxError, UnhandledPromiseRejection)"
+        case "rust":
+                return "Rust (idiomatic errors: panic, panicked at, unwrap on None/Err, thread 'main' panicked)"
+        case "ruby":
+                return "Ruby (idiomatic errors: NoMethodError, NameError, ArgumentError, TypeError)"
+        case "c":
+                return "C/C++ (idiomatic errors: SIGSEGV, SIGABRT, Segmentation fault, assertion failed)"
+        default:
+                return parsed.Language
+        }
 }
 
 func toStringSlice(in []any) []string {

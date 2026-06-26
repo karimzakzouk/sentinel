@@ -25,8 +25,16 @@ func TestLoadDefaults(t *testing.T) {
                 t.Errorf("ConfidenceAutonomous = %v, want 0.92", c.ConfidenceAutonomous)
         }
         // v3.4.0: new defaults
-        if c.LLMEmbeddingModel != "text-embedding-3-small" {
-                t.Errorf("LLMEmbeddingModel = %q, want text-embedding-3-small", c.LLMEmbeddingModel)
+        // v3.11.0: LLMEmbeddingModel default changed from "text-embedding-3-small"
+        // to "" (audit #13). The previous default was OpenAI-specific but the
+        // default provider is "zai", so every default install silently fell back
+        // to hash embeddings. Empty default is honest about what's happening.
+        if c.LLMEmbeddingModel != "" {
+                t.Errorf("LLMEmbeddingModel = %q, want \"\" (empty — hash fallback by default)", c.LLMEmbeddingModel)
+        }
+        // v3.11.0: LLMEmbeddingDim default is 1536 (audit #13).
+        if c.LLMEmbeddingDim != 1536 {
+                t.Errorf("LLMEmbeddingDim = %d, want 1536", c.LLMEmbeddingDim)
         }
         if c.InvestigatorTimeoutSec != 120 {
                 t.Errorf("InvestigatorTimeoutSec = %d, want 120", c.InvestigatorTimeoutSec)
@@ -114,6 +122,51 @@ func TestSplitCSV(t *testing.T) {
                         if got[i] != c.want[i] {
                                 t.Errorf("splitCSV(%q)[%d] = %q, want %q", c.in, i, got[i], c.want[i])
                         }
+                }
+        }
+}
+
+// v3.11.0: Test that the default ProductionNamespaces no longer includes
+// "payments" (audit #5). The demo's "payments" namespace leaked into every
+// install — operators with a namespace literally named "payments" got
+// stricter governance than intended.
+func TestDefaultProductionNamespacesExcludesPayments(t *testing.T) {
+        os.Unsetenv("SENTINEL_PRODUCTION_NAMESPACES")
+        c := Load()
+        for _, ns := range c.ProductionNamespaces {
+                if ns == "payments" {
+                        t.Errorf("default ProductionNamespaces should NOT include 'payments' (audit #5), got %v", c.ProductionNamespaces)
+                }
+        }
+        // Should still include prod + production
+        hasProd, hasProduction := false, false
+        for _, ns := range c.ProductionNamespaces {
+                if ns == "prod" {
+                        hasProd = true
+                }
+                if ns == "production" {
+                        hasProduction = true
+                }
+        }
+        if !hasProd || !hasProduction {
+                t.Errorf("default ProductionNamespaces should include prod+production, got %v", c.ProductionNamespaces)
+        }
+}
+
+// v3.11.0: Test the unsupported-native-provider detection (audit #16).
+func TestIsUnsupportedNativeProvider(t *testing.T) {
+        unsupported := []string{"anthropic", "bedrock", "azure", "azureopenai", "ANTHROPIC", "Bedrock"}
+        for _, p := range unsupported {
+                c := &Config{LLMProvider: p}
+                if !c.IsUnsupportedNativeProvider() {
+                        t.Errorf("provider %q should be unsupported", p)
+                }
+        }
+        supported := []string{"openai", "zai", "gemini", "ollama", "vllm", "litellm", "custom", ""}
+        for _, p := range supported {
+                c := &Config{LLMProvider: p}
+                if c.IsUnsupportedNativeProvider() {
+                        t.Errorf("provider %q should be supported (not unsupported)", p)
                 }
         }
 }

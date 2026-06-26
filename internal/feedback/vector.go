@@ -20,6 +20,9 @@ type VectorStore struct {
         baseURL    string
         apiKey     string
         model      string
+        // v3.11.0: Configurable embedding dimension for the hash fallback (audit #13).
+        // Was hardcoded 1536 in hashEmbedding() call sites. Default 1536.
+        embeddingDim int
         httpClient *http.Client
         metadata   map[uint64]*VectorMetadata
         nextID     uint64
@@ -47,14 +50,30 @@ type VectorMetadata struct {
 }
 
 // NewVectorStore creates a new vector store.
+// v3.11.0: When model is empty, the store uses hash fallback permanently
+// (audit #13). Previously, an empty model still triggered an API call to
+// /embeddings with model="", which would fail and silently fall back —
+// wasting a network round-trip per embedding. Now we short-circuit to hash
+// fallback when model is empty.
 func NewVectorStore(baseURL, apiKey, model string) *VectorStore {
+        return NewVectorStoreWithDim(baseURL, apiKey, model, 1536)
+}
+
+// NewVectorStoreWithDim creates a new vector store with a configurable
+// embedding dimension for the hash fallback. v3.11.0: audit #13.
+// Pass dim=0 to keep the default (1536).
+func NewVectorStoreWithDim(baseURL, apiKey, model string, dim int) *VectorStore {
+        if dim <= 0 {
+                dim = 1536
+        }
         return &VectorStore{
-                index:      hnsw.NewGraph[uint64](),
-                baseURL:    baseURL,
-                apiKey:     apiKey,
-                model:      model,
-                httpClient: &http.Client{Timeout: 30 * time.Second},
-                metadata:   make(map[uint64]*VectorMetadata),
+                index:        hnsw.NewGraph[uint64](),
+                baseURL:      baseURL,
+                apiKey:       apiKey,
+                model:        model,
+                embeddingDim: dim,
+                httpClient:   &http.Client{Timeout: 30 * time.Second},
+                metadata:     make(map[uint64]*VectorMetadata),
         }
 }
 
@@ -72,16 +91,30 @@ func NewVectorStore(baseURL, apiKey, model string) *VectorStore {
 //   - Network error / non-200 / parse error: transient fallback (flag set
 //     with a recovery timestamp; cleared on next successful call).
 func (v *VectorStore) GenerateEmbedding(ctx context.Context, text string) ([]float32, error) {
-        // Permanent fallback: no API configured.
-        if v.apiKey == "" || v.baseURL == "" {
+        // v3.11.0: Short-circuit to permanent hash fallback when no model is
+        // configured (audit #13). Previously, an empty model still triggered
+        // an API call to /embeddings with model="", which would fail with a
+        // 400/422 from the provider and silently fall back — wasting a network
+        // round-trip per embedding AND flooding the provider's error logs.
+        // With the new empty default for cfg.LLMEmbeddingModel, this path is
+        // the common case for default installs.
+        if v.apiKey == "" || v.baseURL == "" || v.model == "" {
                 v.mu.Lock()
                 if !v.usingHashFallback {
-                        log.Printf("[vector] no embedding API configured — using permanent hash fallback. Similar-incident retrieval will be disabled.")
+                        reason := "no embedding API configured"
+                        if v.apiKey == "" {
+                                reason = "no API key"
+                        } else if v.baseURL == "" {
+                                reason = "no base URL"
+                        } else if v.model == "" {
+                                reason = "no embedding model configured (set SENTINEL_LLM_EMBEDDING_MODEL)"
+                        }
+                        log.Printf("[vector] %s — using permanent hash fallback. Similar-incident retrieval will be disabled.", reason)
                         v.usingHashFallback = true
                         v.hashFallbackPermanent = true
                 }
                 v.mu.Unlock()
-                return hashEmbedding(text, 1536), nil
+                return hashEmbedding(text, v.embeddingDim), nil
         }
 
         reqBody := map[string]any{"model": v.model, "input": text}
@@ -90,7 +123,7 @@ func (v *VectorStore) GenerateEmbedding(ctx context.Context, text string) ([]flo
         req, err := http.NewRequestWithContext(ctx, "POST", v.baseURL+"/embeddings", bytes.NewReader(bodyBytes))
         if err != nil {
                 v.markTransientHashFallback()
-                return hashEmbedding(text, 1536), nil
+                return hashEmbedding(text, v.embeddingDim), nil
         }
         req.Header.Set("Content-Type", "application/json")
         req.Header.Set("Authorization", "Bearer "+v.apiKey)
@@ -99,14 +132,14 @@ func (v *VectorStore) GenerateEmbedding(ctx context.Context, text string) ([]flo
         if err != nil {
                 log.Printf("[vector] embeddings API failed, using transient hash fallback: %v", err)
                 v.markTransientHashFallback()
-                return hashEmbedding(text, 1536), nil
+                return hashEmbedding(text, v.embeddingDim), nil
         }
         defer resp.Body.Close()
 
         if resp.StatusCode != 200 {
                 log.Printf("[vector] embeddings API returned HTTP %d — using transient hash fallback", resp.StatusCode)
                 v.markTransientHashFallback()
-                return hashEmbedding(text, 1536), nil
+                return hashEmbedding(text, v.embeddingDim), nil
         }
 
         var result struct {
@@ -117,7 +150,7 @@ func (v *VectorStore) GenerateEmbedding(ctx context.Context, text string) ([]flo
         if err := json.NewDecoder(resp.Body).Decode(&result); err != nil || len(result.Data) == 0 {
                 log.Printf("[vector] embeddings API returned unparseable body — using transient hash fallback: %v", err)
                 v.markTransientHashFallback()
-                return hashEmbedding(text, 1536), nil
+                return hashEmbedding(text, v.embeddingDim), nil
         }
 
         // Success — clear the transient hash fallback flag.

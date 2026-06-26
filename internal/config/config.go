@@ -21,7 +21,25 @@ type Config struct {
         LLMAPIKey       string
         LLMFastModel    string
         LLMFrontierModel string
-        LLMEmbeddingModel string // v3.4.0: configurable embedding model (was hardcoded "text-embedding-3-small")
+        // v3.4.0: configurable embedding model. v3.11.0: default changed from
+        // "text-embedding-3-small" to "" (empty) — the previous default was
+        // OpenAI-specific but the default LLM provider is "zai", so every
+        // default install was calling a non-existent OpenAI embeddings endpoint
+        // and silently falling back to hash embeddings (audit #13). With empty
+        // default, the vector store uses hash fallback explicitly, which is
+        // honest about what's happening. Operators who want real embeddings
+        // must set both SENTINEL_LLM_EMBEDDING_MODEL and ensure their
+        // LLMBaseURL/provider supports the /embeddings endpoint.
+        LLMEmbeddingModel string
+        // v3.11.0: Configurable embedding dimension for the hash fallback
+        // (audit #13). Was hardcoded 1536 in feedback/vector.go hashEmbedding().
+        // If an operator configures a real embedding model with a different dim
+        // (e.g. 1024 for bge-large, 3072 for text-embedding-3-large), the hash
+        // fallback's 1536-dim vectors were incompatible with real embeddings
+        // stored previously — silently corrupting the HNSW index. Now the dim
+        // is configurable and defaults to 1536 (backwards-compatible with
+        // existing indexes built with the previous hash fallback).
+        LLMEmbeddingDim int
 
         // Kubernetes
         Namespace   string // the namespace Sentinel runs in
@@ -212,7 +230,14 @@ func Load() *Config {
                 LLMAPIKey:              getenv("SENTINEL_LLM_API_KEY", ""),
                 LLMFastModel:           getenv("SENTINEL_LLM_FAST_MODEL", "glm-4-flash"),
                 LLMFrontierModel:       getenv("SENTINEL_LLM_FRONTIER_MODEL", "glm-4.5"),
-                LLMEmbeddingModel:      getenv("SENTINEL_LLM_EMBEDDING_MODEL", "text-embedding-3-small"),
+                // v3.11.0: Default LLMEmbeddingModel changed from "text-embedding-3-small"
+                // to "" (audit #13). The previous default was OpenAI-specific but the
+                // default provider is "zai", so every default install silently fell back
+                // to hash embeddings. Empty default is honest about what's happening.
+                LLMEmbeddingModel:      getenv("SENTINEL_LLM_EMBEDDING_MODEL", ""),
+                // v3.11.0: Configurable hash-fallback dim (audit #13). Default 1536
+                // preserves backwards compat with existing indexes.
+                LLMEmbeddingDim:        getenvInt("SENTINEL_LLM_EMBEDDING_DIM", 1536),
                 Namespace:              getenv("SENTINEL_NAMESPACE", "sentinel"),
                 ReleaseName:            getenv("SENTINEL_RELEASE_NAME", "sentinel"),
                 GitHubToken:            getenv("SENTINEL_GITHUB_TOKEN", ""),
@@ -237,7 +262,13 @@ func Load() *Config {
                 KanikoExecutorImage:    getenv("SENTINEL_KANIKO_EXECUTOR_IMAGE", "gcr.io/kaniko-project/executor:v1.24.0"),
                 // v3.11.0: Configurable max concurrent investigations (audit #15)
                 MaxConcurrentInvestigations: getenvInt("SENTINEL_MAX_CONCURRENT_INVESTIGATIONS", 3),
-                ProductionNamespaces:   splitCSV(getenv("SENTINEL_PRODUCTION_NAMESPACES", "prod,production,payments")),
+                // v3.11.0: Removed "payments" from default (audit #5). The demo's
+                // "payments" namespace leaked into every install, causing non-demo
+                // services in a namespace literally named "payments" to be treated
+                // as production (stricter governance). Operators who actually use a
+                // "payments" namespace should set SENTINEL_PRODUCTION_NAMESPACES
+                // explicitly.
+                ProductionNamespaces:   splitCSV(getenv("SENTINEL_PRODUCTION_NAMESPACES", "prod,production")),
                 WriteNamespaces:        splitCSV(getenv("SENTINEL_WRITE_NAMESPACES", "")),
                 ConfidenceAutonomous:   getenvFloat("SENTINEL_CONFIDENCE_THRESHOLD_AUTONOMOUS", 0.92),
                 ConfidenceHumanReview:  getenvFloat("SENTINEL_CONFIDENCE_THRESHOLD_HUMAN_REVIEW", 0.70),
@@ -326,6 +357,25 @@ func (c *Config) ResolvedBaseURL() string {
         default:
                 return "https://api.z.ai/api/paas/v4"
         }
+}
+
+// IsUnsupportedNativeProvider returns true if the configured LLM provider is
+// one that the OpenAI-compatible router cannot talk to natively (audit #16).
+// v3.11.0: When true, main.go logs a startup warning directing the operator
+// to stand up a LiteLLM/OneAPI proxy.
+//
+// Supported providers (no warning): openai, zai, gemini (via OpenAI-compat
+// bridge), ollama, vllm, litellm, custom (assumed OpenAI-compatible).
+//
+// Unsupported native providers (warning): anthropic, bedrock, azure.
+// These use non-OpenAI API shapes (/v1/messages, SigV4 auth, per-deployment
+// URLs) and require a proxy.
+func (c *Config) IsUnsupportedNativeProvider() bool {
+        switch strings.ToLower(c.LLMProvider) {
+        case "anthropic", "bedrock", "azure", "azureopenai":
+                return true
+        }
+        return false
 }
 
 // CanWriteTo returns true if Sentinel is allowed to apply fixes in this namespace.

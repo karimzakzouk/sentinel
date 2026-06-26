@@ -5,6 +5,24 @@
 // v3.4.0: Added retry with exponential backoff for 429 (rate limit) and 5xx
 // (transient server errors). Free-tier models (gpt-oss-120b:free, glm-4-flash)
 // rate-limit aggressively — without retry, a single 429 kills the investigation.
+//
+// v3.11.0: Known limitation (audit #16) — this router ONLY speaks the
+// OpenAI-compatible API surface (POST /chat/completions, Authorization: Bearer,
+// response_format: json_object). It does NOT support:
+//   - Native Anthropic Claude API (uses /v1/messages with x-api-key auth)
+//   - Native Google Gemini API (uses :generateContent with API-key-in-query)
+//   - AWS Bedrock (per-model URL paths with SigV4 auth)
+//   - Azure OpenAI (per-deployment URL paths with api-version query param)
+//
+// To use these providers, stand up a LiteLLM (https://github.com/BerriAI/litellm)
+// or OneAPI proxy in front — they expose an OpenAI-compatible endpoint that
+// this router can talk to. Configure SENTINEL_LLM_PROVIDER=litellm (or "custom")
+// and SENTINEL_LLM_BASE_URL=http://<proxy>:4000/v1.
+//
+// When the configured provider is one of the unsupported native providers
+// (anthropic, bedrock, azure), the router logs a startup warning directing
+// the operator to the proxy workaround. This is a deliberate design choice
+// (keeping the router minimal — no per-provider SDK deps) rather than a bug.
 package llm
 
 import (

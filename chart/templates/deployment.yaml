@@ -47,8 +47,12 @@ spec:
             - name: SENTINEL_LLM_FRONTIER_MODEL
               value: {{ .Values.sentinel.llm.frontierModel | quote }}
             # v3.4.0: configurable embedding model
+            # v3.11.0: default is now "" (empty) — hash fallback by default (audit #13)
             - name: SENTINEL_LLM_EMBEDDING_MODEL
               value: {{ .Values.sentinel.llm.embeddingModel | quote }}
+            # v3.11.0: Embedding dim for hash fallback (audit #13)
+            - name: SENTINEL_LLM_EMBEDDING_DIM
+              value: {{ .Values.sentinel.llm.embeddingDim | default 1536 | quote }}
             - name: SENTINEL_GITHUB_TOKEN
               valueFrom:
                 secretKeyRef:

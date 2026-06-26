@@ -70,6 +70,29 @@ func main() {
                 "log_level", cfg.LogLevel,
         )
 
+        // v3.11.0: Warn if the configured LLM provider is one the OpenAI-compatible
+        // router cannot talk to natively (audit #16). The router only speaks
+        // POST /chat/completions with Bearer auth — native Anthropic/Bedrock/Azure
+        // APIs use different shapes and require a LiteLLM/OneAPI proxy.
+        if cfg.IsUnsupportedNativeProvider() {
+                logging.Error("LLM provider requires a proxy — the router is OpenAI-compatible only",
+                        "provider", cfg.LLMProvider,
+                        "reason", "native Anthropic/Bedrock/Azure APIs use non-OpenAI shapes (/v1/messages, SigV4, per-deployment URLs)",
+                        "workaround", "stand up a LiteLLM (https://github.com/BerriAI/litellm) or OneAPI proxy, then set SENTINEL_LLM_PROVIDER=litellm and SENTINEL_LLM_BASE_URL=http://<proxy>:4000/v1",
+                )
+        }
+
+        // v3.11.0: Warn if the embedding model is empty but the operator is using
+        // a provider that supports embeddings (audit #13). Empty default is fine
+        // (uses hash fallback) but if the operator set an LLM provider expecting
+        // embeddings to work, they should know.
+        if cfg.LLMEmbeddingModel == "" {
+                logging.Info("embedding model not configured — using hash fallback (similar-incident retrieval disabled). Set SENTINEL_LLM_EMBEDDING_MODEL to enable.",
+                        "provider", cfg.LLMProvider,
+                        "embedding_dim", cfg.LLMEmbeddingDim,
+                )
+        }
+
         // v3.8.0: Load runtime config (overrides env vars, editable from web UI)
         // v3.8.4: Path now configurable via SENTINEL_RUNTIME_CONFIG_PATH env var.
         // Was hardcoded to /data/runtime-config.json which doesn't exist when
@@ -155,7 +178,10 @@ func main() {
 
         // 3.5 Vector store (HNSW + LLM embeddings) — created before pipeline for memory loop
         // v3.4.0: embedding model now configurable (was hardcoded "text-embedding-3-small")
-        vectorStore := feedback.NewVectorStore(cfg.ResolvedBaseURL(), cfg.LLMAPIKey, cfg.LLMEmbeddingModel)
+        // v3.11.0: default LLMEmbeddingModel is now "" (empty) — when empty, the
+        // vector store uses permanent hash fallback (audit #13). Also wire the
+        // configurable hash-fallback dim (cfg.LLMLLMEmbeddingDim, default 1536).
+        vectorStore := feedback.NewVectorStoreWithDim(cfg.ResolvedBaseURL(), cfg.LLMAPIKey, cfg.LLMEmbeddingModel, cfg.LLMEmbeddingDim)
 
         // 4. Agent pipeline (with vector store for memory loop)
         pipeline := agents.NewPipeline(router, k8sClient, cfg.GitHubToken, store, &vectorStoreAdapter{vs: vectorStore})

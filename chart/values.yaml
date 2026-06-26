@@ -35,7 +35,22 @@ sentinel:
     apiKey: ""
     fastModel: "glm-4-flash"
     frontierModel: "glm-4.5"
-    embeddingModel: "text-embedding-3-small"  # v3.4.0: configurable embedding model
+    # v3.4.0: configurable embedding model.
+    # v3.11.0: default changed from "text-embedding-3-small" to "" (audit #13).
+    # The previous default was OpenAI-specific but the default provider is "zai",
+    # so every default install silently fell back to hash embeddings. Empty
+    # default is honest — the vector store uses hash fallback explicitly.
+    # Set to a real model name only if your provider supports /embeddings:
+    #   OpenAI: "text-embedding-3-small" (dim 1536) or "text-embedding-3-large" (dim 3072)
+    #   z.ai:   "embedding-3" (dim 2048)
+    #   BGE:    "bge-large-en" (dim 1024)
+    embeddingModel: ""
+    # v3.11.0: Embedding dimension for the hash fallback (audit #13).
+    # Must match the real model's dim if you set embeddingModel above,
+    # otherwise hash-fallback vectors will be incompatible with real
+    # embeddings stored previously (silently corrupting the HNSW index).
+    # Default 1536 (matches text-embedding-3-small for backwards compat).
+    embeddingDim: 1536
 
   # Docker Hub creds for Kaniko sandbox image builder
   dockerHubUsername: ""
@@ -106,7 +121,10 @@ sentinel:
     readSecrets: false
 
   # Namespaces treated as production (stricter governance)
-  productionNamespaces: "prod,production,payments"
+  # v3.11.0: Removed "payments" from default (audit #5). The demo's "payments"
+  # namespace leaked into every install. Operators who actually use a "payments"
+  # namespace should set this explicitly.
+  productionNamespaces: "prod,production"
 
   # Confidence thresholds
   confidenceThresholdAutonomous: 0.92
