@@ -284,7 +284,17 @@ func (c *Client) GetProdImage(ctx context.Context, service, namespace string) (s
 }
 
 // PatchCRStatus patches the status.phase of a SentinelIncident CR.
+// v3.15.0: If the CR name is not a real CR (e.g. "auto-detected", "manual",
+// "slack" from non-CRD trigger paths), the patch is silently skipped instead
+// of returning a "not found" error. This eliminates the noisy error log at
+// the end of every auto-detected investigation.
 func (c *Client) PatchCRStatus(ctx context.Context, name, namespace, phase string) error {
+        // v3.15.0: Skip patching for fake CR names from auto/manual/slack triggers.
+        // Only real CRD-watcher triggers pass a valid CR name.
+        if name == "" || name == "auto-detected" || name == "manual" || name == "slack" {
+                return nil
+        }
+
         gvr := schema.GroupVersionResource{
                 Group:    "sentinel.io",
                 Version:  "v1alpha1",

@@ -247,9 +247,22 @@ func parseFileLine(line, fullLogs string) *ParsedError {
 // pattern is now restricted to known code extensions to avoid false matches
 // on IP:port pairs like "127.0.0.1:5432".
 func extractFileAndLine(logs string) (string, string) {
-        // Try Python format: File "path", line N
-        if m := pythonFileRe.FindStringSubmatch(logs); len(m) >= 3 {
-                return stripContainerPath(m[1]), m[2]
+        // v3.15.0: For Python, prefer non-site-packages frames. The previous code
+        // used FindStringSubmatch (first match) which always returned the first
+        // frame — for web apps (FastAPI/Flask + uvicorn), that's always
+        // site-packages/uvicorn/... This caused a false "shared library bug"
+        // detection on every Python web-app investigation.
+        // Now: scan ALL Python File "..." matches and prefer the first one
+        // that's NOT in site-packages (i.e. the user's actual code).
+        pythonMatches := pythonFileRe.FindAllStringSubmatch(logs, -1)
+        for _, m := range pythonMatches {
+                if len(m) >= 3 && !strings.Contains(m[1], "site-packages/") && !strings.Contains(m[1], "dist-packages/") {
+                        return stripContainerPath(m[1]), m[2]
+                }
+        }
+        // Fall back to first Python match if all are site-packages
+        if len(pythonMatches) > 0 && len(pythonMatches[0]) >= 3 {
+                return stripContainerPath(pythonMatches[0][1]), pythonMatches[0][2]
         }
         // Try Java format: at Class.method(File.java:N)
         if m := javaFileRe.FindStringSubmatch(logs); len(m) >= 3 {
@@ -475,19 +488,38 @@ func ExtractSearchQueriesUniversal(logs string) []string {
 // triggered the error.
 var httpReqRe = regexp.MustCompile(`(?i)(?:GET|POST|PUT|DELETE|PATCH)\s+(/[^\s"]+)`)
 
+// httpReqWithStatusRe extracts HTTP request lines WITH their status code.
+// v3.15.0: Used to prefer failing requests (4xx/5xx) over successful ones.
+// Matches formats like:
+//   GET /path HTTP/1.1" 500
+//   GET /path 500
+//   "GET /path HTTP/1.1" 200
+var httpReqWithStatusRe = regexp.MustCompile(`(?i)(?:GET|POST|PUT|DELETE|PATCH)\s+(/[^\s"]+).*?(\d{3})`)
+
 // ExtractTriggerEndpoint pulls the HTTP request path that triggered the error
 // from the pod logs. Returns "" if no HTTP request is found (non-web service).
-// v3.14.0: Layer C — the sandbox uses this to test the exact endpoint that
-// caused the incident, not just generic health endpoints.
+// v3.15.0: Fixed — now prefers requests with 4xx/5xx status codes (the actual
+// failing request) over 2xx requests (health checks, successful calls).
+// Previously returned the FIRST request, which was often a health check.
 //
-// Example: logs containing 'GET /items?index=10 HTTP/1.1" 500' → "/items?index=10"
-//
-// For non-web services (no HTTP path in logs), returns "" — the sandbox
-// falls back to Level 1 (pod Ready) + Level 3 (error type gone from logs).
+// Example: logs containing 'GET /health 200 ... GET /items?index=10 500'
+// now correctly returns "/items?index=10" (the 500), not "/health" (the 200).
 func ExtractTriggerEndpoint(logs string) string {
-	m := httpReqRe.FindStringSubmatch(logs)
-	if len(m) >= 2 {
-		return m[1]
-	}
-	return ""
+        // v3.15.0: First, try to find a request with a 4xx/5xx status code.
+        matches := httpReqWithStatusRe.FindAllStringSubmatch(logs, -1)
+        for _, m := range matches {
+                if len(m) >= 3 {
+                        status := m[2]
+                        if len(status) == 3 && (status[0] == '4' || status[0] == '5') {
+                                return m[1]
+                        }
+                }
+        }
+
+        // Fall back to any HTTP request (no status code visible or all 2xx)
+        m := httpReqRe.FindStringSubmatch(logs)
+        if len(m) >= 2 {
+                return m[1]
+        }
+        return ""
 }

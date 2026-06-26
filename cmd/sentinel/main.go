@@ -70,17 +70,10 @@ func main() {
                 "log_level", cfg.LogLevel,
         )
 
-        // v3.11.0: Warn if the configured LLM provider is one the OpenAI-compatible
-        // router cannot talk to natively (audit #16). The router only speaks
-        // POST /chat/completions with Bearer auth — native Anthropic/Bedrock/Azure
-        // APIs use different shapes and require a LiteLLM/OneAPI proxy.
-        if cfg.IsUnsupportedNativeProvider() {
-                logging.Error("LLM provider requires a proxy — the router is OpenAI-compatible only",
-                        "provider", cfg.LLMProvider,
-                        "reason", "native Anthropic/Bedrock/Azure APIs use non-OpenAI shapes (/v1/messages, SigV4, per-deployment URLs)",
-                        "workaround", "stand up a LiteLLM (https://github.com/BerriAI/litellm) or OneAPI proxy, then set SENTINEL_LLM_PROVIDER=litellm and SENTINEL_LLM_BASE_URL=http://<proxy>:4000/v1",
-                )
-        }
+	// v3.12.0: GoAI now supports Anthropic, Bedrock, Azure, and 20+ other
+	// providers natively. The old "unsupported native provider" warning
+	// (v3.11.0 audit #16) is no longer needed — removed.
+
 
         // v3.11.0: Warn if the embedding model is empty but the operator is using
         // a provider that supports embeddings (audit #13). Empty default is fine

@@ -17,6 +17,7 @@ import (
         "github.com/google/uuid"
 
         "github.com/karimzakzouk/sentinel/v3/internal/metrics"
+        "github.com/karimzakzouk/sentinel/v3/internal/version"
 )
 
 // ServerEvent is pushed to SSE clients.
@@ -212,7 +213,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
-        writeJSON(w, 200, map[string]string{"status": "ok", "service": "core", "version": "3.8.1"})
+        writeJSON(w, 200, map[string]string{"status": "ok", "service": "core", "version": version.Version})
 }
 
 func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {

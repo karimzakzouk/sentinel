@@ -89,7 +89,7 @@ func NewSandbox(clientset *kubernetes.Clientset, sandboxPrefix string, enableMir
                 sandboxPrefix:    sandboxPrefix,
                 enableMirroring:  enableMirroring,
                 probePaths:       []string{"/", "/healthz", "/readyz"}, // sensible defaults
-                sustainedWindow:  30 * time.Second, // v3.8.4: was 0 (instant — missed crash-after-ready)
+                sustainedWindow:  10 * time.Second, // v3.15.0: was 30s, reduced to 10s (catches immediate crashes + first-request crashes)
                 sentinelNamespace: "sentinel", // v3.11.0: default; override via WithSentinelNamespace
         }
 }

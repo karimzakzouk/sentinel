@@ -154,19 +154,3 @@ func TestDefaultProductionNamespacesExcludesPayments(t *testing.T) {
 }
 
 // v3.11.0: Test the unsupported-native-provider detection (audit #16).
-func TestIsUnsupportedNativeProvider(t *testing.T) {
-        unsupported := []string{"anthropic", "bedrock", "azure", "azureopenai", "ANTHROPIC", "Bedrock"}
-        for _, p := range unsupported {
-                c := &Config{LLMProvider: p}
-                if !c.IsUnsupportedNativeProvider() {
-                        t.Errorf("provider %q should be unsupported", p)
-                }
-        }
-        supported := []string{"openai", "zai", "gemini", "ollama", "vllm", "litellm", "custom", ""}
-        for _, p := range supported {
-                c := &Config{LLMProvider: p}
-                if c.IsUnsupportedNativeProvider() {
-                        t.Errorf("provider %q should be supported (not unsupported)", p)
-                }
-        }
-}

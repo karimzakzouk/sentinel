@@ -178,7 +178,7 @@ type Config struct {
         SandboxProbePaths []string
 
         // v3.6.0: Skip sandbox verification for non-production namespaces.
-        // Default true — sim/staging don't need canary verification, just open the PR.
+        // Default false — sandbox runs for all namespaces.
         // v3.14.0: superseded by SandboxEnabled — but kept for backwards compat.
         // When SandboxEnabled=false, sandbox is skipped entirely (for all namespaces).
         // When SandboxEnabled=true + SkipSandboxNonProd=true, sandbox is skipped
@@ -380,25 +380,6 @@ func (c *Config) ResolvedBaseURL() string {
         default:
                 return "https://api.z.ai/api/paas/v4"
         }
-}
-
-// IsUnsupportedNativeProvider returns true if the configured LLM provider is
-// one that the OpenAI-compatible router cannot talk to natively (audit #16).
-// v3.11.0: When true, main.go logs a startup warning directing the operator
-// to stand up a LiteLLM/OneAPI proxy.
-//
-// Supported providers (no warning): openai, zai, gemini (via OpenAI-compat
-// bridge), ollama, vllm, litellm, custom (assumed OpenAI-compatible).
-//
-// Unsupported native providers (warning): anthropic, bedrock, azure.
-// These use non-OpenAI API shapes (/v1/messages, SigV4 auth, per-deployment
-// URLs) and require a proxy.
-func (c *Config) IsUnsupportedNativeProvider() bool {
-        switch strings.ToLower(c.LLMProvider) {
-        case "anthropic", "bedrock", "azure", "azureopenai":
-                return true
-        }
-        return false
 }
 
 // CanWriteTo returns true if Sentinel is allowed to apply fixes in this namespace.
