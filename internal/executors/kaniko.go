@@ -193,7 +193,11 @@ func (k *KanikoBuilder) Build(ctx context.Context, repo, branch string, fixedFil
         }
 
         // 3. Wait for completion (5 min timeout)
-        success := k.waitForCompletion(ctx, podName, 5*time.Minute)
+        // v3.14.2: Increased from 5min to 10min. The build itself takes ~100s,
+        // but pushing the final image to Docker Hub takes 60-120s for a ~150MB
+        // image. 5min was not enough — the push was killed mid-way.
+        // With layer cache warm, the total drops to ~2-3min.
+        success := k.waitForCompletion(ctx, podName, 10*time.Minute)
         if !success {
                 // Get the logs for debugging
                 logs, _ := k.getPodLogs(ctx, podName)
