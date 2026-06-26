@@ -1059,6 +1059,15 @@ func executeCodeFix(
                                 break // success — no more retries needed
                         }
 
+                        // v3.14.2: Don't retry on infrastructure errors (RBAC, image pull,
+                        // namespace creation). The LLM can't fix these — only code issues
+                        // (Level 1/2/3 failures) should trigger the feedback retry loop.
+                        if sb.InfrastructureError {
+                                logging.Info("sandbox failed with infrastructure error — not retrying",
+                                        "fix_id", fp.FixID, "summary", sandboxSummary)
+                                break
+                        }
+
                         if sandboxAttempt < maxRetries {
                                 logging.Info("sandbox verification failed — will retry with feedback",
                                         "fix_id", fp.FixID, "attempt", sandboxAttempt+1, "summary", sandboxSummary)

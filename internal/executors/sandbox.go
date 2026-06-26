@@ -11,6 +11,7 @@ import (
         appsv1 "k8s.io/api/apps/v1"
         corev1 "k8s.io/api/core/v1"
         networkingv1 "k8s.io/api/networking/v1"
+        rbacv1 "k8s.io/api/rbac/v1"
         metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
         "k8s.io/apimachinery/pkg/util/intstr"
         "k8s.io/client-go/kubernetes"
@@ -34,6 +35,11 @@ type SandboxResult struct {
         MirrorApplied bool
         ErrorCount5xx int
         RequestCount  int
+        // v3.14.2: InfrastructureError is true when the failure is NOT a code issue
+        // (e.g. RBAC denied, image pull failure, namespace creation failed).
+        // When true, the retry loop should NOT feed the error back to the LLM —
+        // the LLM can't fix a permissions issue.
+        InfrastructureError bool
 }
 
 // SandboxRunner creates an isolated namespace, deploys the fix, and verifies it.
@@ -147,7 +153,12 @@ func (s *SandboxRunner) Run(ctx context.Context, inc *schemas.Incident) SandboxR
         // 2. Deploy the canary into the sandbox
         deployResult := s.deployCanary(ctx, inc, sandboxNS)
         if !deployResult.success {
-                return SandboxResult{Verified: false, Summary: fmt.Sprintf("deploy_failed: %s", deployResult.err), Namespace: sandboxNS}
+                return SandboxResult{
+                        Verified:            false,
+                        Summary:             fmt.Sprintf("deploy_failed: %s", deployResult.err),
+                        Namespace:           sandboxNS,
+                        InfrastructureError: true, // v3.14.2: don't retry — LLM can't fix RBAC/image-pull
+                }
         }
 
         // v3.14.0: Layer C — extract the HTTP endpoint that triggered the error
@@ -224,10 +235,12 @@ func (s *SandboxRunner) createNamespace(ctx context.Context, ns string) error {
                         Name: ns,
                         Labels: map[string]string{
                                 "sentinel.io/sandbox": "true",
-                                // v3.8.4: PodSecurity admission label. On clusters with the
-                                // PodSecurity admission plugin enabled (default on 1.23+),
-                                // this enforces restricted-level workloads in the sandbox.
-                                "pod-security.kubernetes.io/enforce": "restricted",
+                                // v3.14.2: Changed from "restricted" to "baseline". The restricted
+                                // PodSecurity standard blocks pods that don't set runAsNonRoot=true,
+                                // which conflicts with canary pods that inherit the prod image's
+                                // user (which might be root). "baseline" still blocks privileged
+                                // pods + hostPath but allows running as root.
+                                "pod-security.kubernetes.io/enforce": "baseline",
                                 "pod-security.kubernetes.io/audit":   "restricted",
                                 "pod-security.kubernetes.io/warn":    "restricted",
                         },
@@ -236,6 +249,87 @@ func (s *SandboxRunner) createNamespace(ctx context.Context, ns string) error {
         if err != nil && !strings.Contains(err.Error(), "already exists") {
                 return err
         }
+
+        // v3.14.2: Create a Role + RoleBinding in the sandbox namespace so
+        // Sentinel's ServiceAccount can create Deployments, Services, ConfigMaps,
+        // and Pods in the sandbox namespace. Without this, sandbox verification
+        // fails with "deployments.apps is forbidden: cannot create resource".
+        // The per-namespace Roles from the Helm chart only cover writeNamespaces
+        // (e.g. "sim"), not the dynamic sentinel-sandbox-* namespaces.
+        if err := s.createSandboxRBAC(ctx, ns); err != nil {
+                log.Printf("[sandbox] WARNING: failed to create RBAC in %s: %v (sandbox deployment may fail)", ns, err)
+        }
+
+        return nil
+}
+
+// createSandboxRBAC creates a Role + RoleBinding in the sandbox namespace
+// granting Sentinel's ServiceAccount full access to the resources needed
+// for canary verification (deployments, services, configmaps, pods, secrets).
+// v3.14.2.
+func (s *SandboxRunner) createSandboxRBAC(ctx context.Context, ns string) error {
+        // v3.14.2: The ServiceAccount name is the same one Sentinel runs as.
+        // It's set via the Helm chart's serviceAccount.name (default: release name).
+        // We use "sentinel" as the default — most installs use this.
+        saName := "sentinel"
+
+        // Role: allow create/update/patch/delete on sandbox resources
+        role := &rbacv1.Role{
+                ObjectMeta: metav1.ObjectMeta{
+                        Name:      "sentinel-sandbox",
+                        Namespace: ns,
+                        Labels:    map[string]string{"sentinel.io/managed": "true"},
+                },
+                Rules: []rbacv1.PolicyRule{
+                        {
+                                APIGroups: []string{"apps"},
+                                Resources: []string{"deployments", "statefulsets"},
+                                Verbs:     []string{"get", "list", "watch", "create", "update", "patch", "delete"},
+                        },
+                        {
+                                APIGroups: []string{""},
+                                Resources: []string{"pods", "pods/log", "configmaps", "services", "secrets"},
+                                Verbs:     []string{"get", "list", "watch", "create", "update", "patch", "delete"},
+                        },
+                        {
+                                APIGroups: []string{"networking.k8s.io"},
+                                Resources: []string{"networkpolicies"},
+                                Verbs:     []string{"get", "list", "watch", "create", "delete"},
+                        },
+                },
+        }
+
+        _, err := s.clientset.RbacV1().Roles(ns).Create(ctx, role, metav1.CreateOptions{})
+        if err != nil && !strings.Contains(err.Error(), "already exists") {
+                return fmt.Errorf("create role: %w", err)
+        }
+
+        // RoleBinding: bind the Role to Sentinel's ServiceAccount
+        binding := &rbacv1.RoleBinding{
+                ObjectMeta: metav1.ObjectMeta{
+                        Name:      "sentinel-sandbox",
+                        Namespace: ns,
+                        Labels:    map[string]string{"sentinel.io/managed": "true"},
+                },
+                RoleRef: rbacv1.RoleRef{
+                        APIGroup: "rbac.authorization.k8s.io",
+                        Kind:     "Role",
+                        Name:     "sentinel-sandbox",
+                },
+                Subjects: []rbacv1.Subject{
+                        {
+                                Kind:      "ServiceAccount",
+                                Name:       saName,
+                                Namespace:  s.sentinelNamespace,
+                        },
+                },
+        }
+
+        _, err = s.clientset.RbacV1().RoleBindings(ns).Create(ctx, binding, metav1.CreateOptions{})
+        if err != nil && !strings.Contains(err.Error(), "already exists") {
+                return fmt.Errorf("create rolebinding: %w", err)
+        }
+
         return nil
 }
 
