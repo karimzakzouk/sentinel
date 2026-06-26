@@ -345,14 +345,10 @@ ls -la /workspace/repo/`
         }
         kanikoArgs = append(kanikoArgs, "--snapshotMode=redo")
 
-        // v3.13.0: Kaniko MUST run as root (UID 0). Previous v3.8.4 code forced
-        // RunAsNonRoot=true + RunAsUser=65532, which broke image builds with:
-        //   "chown /: operation not permitted"
-        // Kaniko needs root to extract base image layers (chown files to match
-        // layer ownership), create tar archives with correct permissions, and push
-        // to the registry. The non-root hardening is correct for the sandbox CANARY
-        // pod (patchPodSpec in sandbox.go) but NOT for the Kaniko build pod.
-        // We keep the seccomp profile + capability drops (those don't break Kaniko).
+        // v3.14.0 fix: Kaniko needs root + CAP_CHOWN to build images.
+        // Previous fix removed RunAsNonRoot/RunAsUser but kept Capabilities:Drop ALL,
+        // which removes CAP_CHOWN → "chown /etc/gshadow: operation not permitted".
+        // Kaniko is a trusted build tool — don't drop capabilities.
         allowPrivilegeEscalation := false
         seccompProfile := &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}
 
@@ -386,8 +382,8 @@ ls -la /workspace/repo/`
                                         SecurityContext: &corev1.SecurityContext{
                                                 AllowPrivilegeEscalation: &allowPrivilegeEscalation,
                                                 ReadOnlyRootFilesystem:  newBool(true),
-                                                Capabilities:            &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
                                                 SeccompProfile:          seccompProfile,
+                                                // v3.14.0: No Capabilities drop — Kaniko needs CAP_CHOWN to extract layers
                                         },
                                         VolumeMounts: []corev1.VolumeMount{
                                                 {Name: "workspace", MountPath: "/workspace"},
@@ -403,8 +399,8 @@ ls -la /workspace/repo/`
                                         WorkingDir: "/workspace",
                                         SecurityContext: &corev1.SecurityContext{
                                                 AllowPrivilegeEscalation: &allowPrivilegeEscalation,
-                                                Capabilities:            &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
                                                 SeccompProfile:          seccompProfile,
+                                                // v3.14.0: No Capabilities drop — Kaniko needs CAP_CHOWN to extract layers
                                         },
                                         VolumeMounts: []corev1.VolumeMount{
                                                 {Name: "workspace", MountPath: "/workspace"},

@@ -940,32 +940,50 @@ func executeCodeFix(
                 return fmt.Errorf("no_files_in_fix_proposal (LLM response may have been truncated)")
         }
 
-        // Phase 2 + 3: Build canary + sandbox (only if Docker Hub creds available)
-        // v3.6.0: Skip sandbox for non-production namespaces when configured (default: true).
-        // v3.8.1: Re-wired — was accidentally dropped in server.go rewrite.
-        // v3.14.0: Layer B — sandbox failure feedback loop. When sandbox verification
-        // fails, the failure details are fed back to the fix proposer which generates
-        // a new fix. The loop retries up to maxSandboxRetries times. This is the same
-        // pattern used by Aider (lint → fix → retry), OpenHands (run → fail → retry),
-        // and SWE-agent (test → fail → retry).
+        // Phase 2 + 3: Build canary + sandbox verification
+        // v3.14.0: Operator-controlled sandbox behavior via 3 config knobs:
+        //   SandboxEnabled — should we run the sandbox at all? (default: true)
+        //   SandboxRequired — if sandbox fails, block the PR? (default: false = open with needs-review)
+        //   SandboxMaxRetries — how many times to retry on sandbox failure (default: 2)
+        //
+        // Fix B: Kaniko build failures do NOT trigger the retry loop. The LLM
+        // cannot fix a Kaniko permissions error. Only sandbox Level 1/2/3
+        // failures (runtime errors in the canary) trigger retries.
         sandboxVerified := false
-        sandboxSummary := "skipped (no Docker Hub credentials)"
+        sandboxSummary := "skipped (sandbox disabled)"
+        sandboxRan := false
 
-        const maxSandboxRetries = 2 // 3 total attempts (1 initial + 2 retries)
-
-        isNonProd := !cfg.IsProductionNamespace(fp.TargetNamespace)
-        if cfg.SkipSandboxNonProd && isNonProd && cfg.DockerHubToken != "" {
+        // v3.14.0: Check if sandbox should run at all
+        shouldRunSandbox := cfg.SandboxEnabled
+        if !shouldRunSandbox {
+                sandboxSummary = "skipped (sandbox disabled — fast mode)"
+                logging.Info("sandbox disabled (SENTINEL_SANDBOX_ENABLED=false) — opening PR without verification",
+                        "fix_id", fp.FixID)
+        } else if cfg.SkipSandboxNonProd && !cfg.IsProductionNamespace(fp.TargetNamespace) {
                 sandboxSummary = "skipped (non-production namespace — fast mode)"
                 logging.Info("skipping sandbox for non-production namespace (fast mode)",
                         "fix_id", fp.FixID, "namespace", fp.TargetNamespace)
-        } else if cfg.DockerHubToken != "" {
-                for sandboxAttempt := 0; sandboxAttempt <= maxSandboxRetries; sandboxAttempt++ {
+                shouldRunSandbox = false
+        } else if cfg.DockerHubToken == "" {
+                sandboxSummary = "skipped (no Docker Hub credentials)"
+                logging.Info("skipping sandbox — no Docker Hub credentials configured",
+                        "fix_id", fp.FixID)
+                shouldRunSandbox = false
+        }
+
+        if shouldRunSandbox {
+                sandboxRan = true
+                maxRetries := cfg.SandboxMaxRetries
+                if maxRetries < 0 {
+                        maxRetries = 0
+                }
+
+                for sandboxAttempt := 0; sandboxAttempt <= maxRetries; sandboxAttempt++ {
                         if sandboxAttempt > 0 {
                                 // v3.14.0: Layer B — feed the sandbox failure back to the fix proposer.
-                                // The fix proposer sees the error in its user message and generates a
-                                // new, corrected fix. The branch is updated with the new search/replace.
+                                // Only sandbox Level 1/2/3 failures trigger retries (not Kaniko failures).
                                 logging.Info("sandbox retry: feeding failure back to fix proposer",
-                                        "fix_id", fp.FixID, "attempt", sandboxAttempt+1, "max", maxSandboxRetries+1)
+                                        "fix_id", fp.FixID, "attempt", sandboxAttempt+1, "max", maxRetries+1)
 
                                 feedback := fmt.Sprintf("Sandbox verification failed: %s\n\nThe canary was built and deployed, but verification failed. Please generate a corrected fix.", sandboxSummary)
                                 incident.State.SandboxFeedback = &feedback
@@ -982,6 +1000,15 @@ func executeCodeFix(
                                         break
                                 }
 
+                                // Fix C: Fetch the CURRENT file content from the branch (which has
+                                // the previous fix applied) so the LLM generates search/replace blocks
+                                // against the current state, not the original.
+                                if stateFetchedCode := fetchCurrentBranchFiles(ctx, ghExec, branchInfo, incident); len(stateFetchedCode) > 0 {
+                                        incident.State.FetchedCode = stateFetchedCode
+                                        logging.Info("fetched current file state from branch for retry",
+                                                "fix_id", fp.FixID, "files", len(stateFetchedCode))
+                                }
+
                                 // Re-prepare the branch (updates files on the existing branch)
                                 logging.Info("re-preparing fix branch with corrected code", "fix_id", fp.FixID, "attempt", sandboxAttempt+1)
                                 branchInfo = ghExec.PrepareBranch(ctx, incident)
@@ -991,8 +1018,9 @@ func executeCodeFix(
                                 }
                         }
 
+                        // Phase 2: Build canary image
                         logging.Info("execution Phase 2: building canary image with Kaniko",
-                                "fix_id", fp.FixID, "attempt", sandboxAttempt+1, "max", maxSandboxRetries+1)
+                                "fix_id", fp.FixID, "attempt", sandboxAttempt+1, "max", maxRetries+1)
                         prodImage, err := k8sClient.GetProdImage(ctx, fp.TargetService, fp.TargetNamespace)
                         if err != nil || prodImage == "" {
                                 sandboxSummary = "skipped (could not find prod image)"
@@ -1001,14 +1029,20 @@ func executeCodeFix(
 
                         canaryImage, err := kaniko.BuildForIncident(ctx, incident, branchInfo, prodImage)
                         if err != nil {
+                                // Fix B: Kaniko build failure = infrastructure error, NOT a code issue.
+                                // The LLM cannot fix "chown /etc/gshadow: operation not permitted".
+                                // Break immediately — don't retry. Open the PR with needs-review
+                                // (the code fix might still be correct, we just couldn't verify it).
                                 sandboxSummary = fmt.Sprintf("kaniko_error: %v", err)
-                                logging.Error("kaniko build failed", "fix_id", fp.FixID, "error", err, "attempt", sandboxAttempt+1)
-                                continue // retry — the fix itself might have broken the build
+                                logging.Error("kaniko build failed — not retrying (infrastructure error, not a code issue)",
+                                        "fix_id", fp.FixID, "error", err, "attempt", sandboxAttempt+1)
+                                break
                         }
 
                         logging.Info("canary image built", "image", canaryImage)
                         fp.CanaryImage = &canaryImage
 
+                        // Phase 3: Sandbox verification
                         logging.Info("execution Phase 3: running sandbox verification", "fix_id", fp.FixID, "attempt", sandboxAttempt+1)
                         sandboxStart := time.Now()
                         sb := sandbox.Run(ctx, incident)
@@ -1025,11 +1059,18 @@ func executeCodeFix(
                                 break // success — no more retries needed
                         }
 
-                        if sandboxAttempt < maxSandboxRetries {
+                        if sandboxAttempt < maxRetries {
                                 logging.Info("sandbox verification failed — will retry with feedback",
                                         "fix_id", fp.FixID, "attempt", sandboxAttempt+1, "summary", sandboxSummary)
                         }
                 }
+        }
+
+        // v3.14.0: If sandbox is required and it failed, don't open the PR.
+        if sandboxRan && !sandboxVerified && cfg.SandboxRequired {
+                logging.Error("sandbox verification failed and sandbox is required — not opening PR",
+                        "fix_id", fp.FixID, "summary", sandboxSummary)
+                return fmt.Errorf("sandbox_required_and_failed: %s", sandboxSummary)
         }
 
         // Phase 4: Open PR
@@ -1106,6 +1147,34 @@ func extractPodLogsFromIncident(incident *schemas.Incident) string {
                 logs += anomaly.Explanation + "\n"
         }
         return logs
+}
+
+// fetchCurrentBranchFiles fetches the current file content from the fix branch
+// (which has the previous fix applied) so the LLM generates search/replace blocks
+// against the CURRENT state, not the original code. v3.14.0: Fix C.
+//
+// Without this, the retry loop fails because the LLM's search text references
+// the original code (e.g. "item = items[index]") which no longer exists — the
+// previous fix already replaced it with a bounds check.
+func fetchCurrentBranchFiles(ctx context.Context, ghExec *executors.GitHubExecutor, branchInfo executors.BranchInfo, incident *schemas.Incident) map[string]string {
+        fp := incident.State.FixProposal
+        if fp == nil || branchInfo.Repo == "" || branchInfo.BranchName == "" {
+                return nil
+        }
+
+        result := map[string]string{}
+        for _, fc := range fp.FilesToChange {
+                if fc.Path == "" {
+                        continue
+                }
+                content, err := ghExec.GetFileContent(ctx, branchInfo.Repo, fc.Path, branchInfo.BranchName)
+                if err != nil {
+                        logging.Error("failed to fetch current file state for retry", "path", fc.Path, "error", err)
+                        continue
+                }
+                result[fc.Path] = content
+        }
+        return result
 }
 
 // storeAdapter bridges feedback.Store to the api.Store interface.

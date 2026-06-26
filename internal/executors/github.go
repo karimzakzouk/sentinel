@@ -275,7 +275,11 @@ func (e *GitHubExecutor) getFileSHA(ctx context.Context, repo, path, ref string)
 // getFileContent fetches the decoded content of a file from a GitHub repo.
 // v3.9.0: Used by applySearchReplace to get the current file before applying
 // search/replace blocks.
-func (e *GitHubExecutor) getFileContent(ctx context.Context, repo, path, ref string) (string, error) {
+// GetFileContent fetches the decoded content of a file from a GitHub repo.
+// v3.14.0: Exported for the sandbox retry loop (Fix C) — fetches the current
+// file state from the branch so the LLM generates search/replace blocks against
+// the current code, not the original.
+func (e *GitHubExecutor) GetFileContent(ctx context.Context, repo, path, ref string) (string, error) {
         url := fmt.Sprintf("%s/repos/%s/contents/%s?ref=%s", e.apiURL, repo, path, ref)
         var resp struct {
                 Content  string `json:"content"`
@@ -311,7 +315,7 @@ func (e *GitHubExecutor) getFileContent(ctx context.Context, repo, path, ref str
 // Also: reject useless partial fixes. If only an import block matched but the
 // actual fix block didn't, don't ship a PR with just an unused import.
 func (e *GitHubExecutor) applySearchReplace(ctx context.Context, repo, branch, path string, changes []schemas.SearchReplace) (string, error) {
-        content, err := e.getFileContent(ctx, repo, path, branch)
+        content, err := e.GetFileContent(ctx, repo, path, branch)
         if err != nil {
                 return "", fmt.Errorf("fetch file %s: %w", path, err)
         }

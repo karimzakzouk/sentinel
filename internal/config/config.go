@@ -179,7 +179,25 @@ type Config struct {
 
         // v3.6.0: Skip sandbox verification for non-production namespaces.
         // Default true — sim/staging don't need canary verification, just open the PR.
+        // v3.14.0: superseded by SandboxEnabled — but kept for backwards compat.
+        // When SandboxEnabled=false, sandbox is skipped entirely (for all namespaces).
+        // When SandboxEnabled=true + SkipSandboxNonProd=true, sandbox is skipped
+        // for non-prod namespaces only.
         SkipSandboxNonProd bool
+
+        // v3.14.0: Sandbox configuration — operator control over verification behavior.
+        // SandboxEnabled: should we run the sandbox at all?
+        //   true (default) — build canary, deploy, verify, then open PR
+        //   false — skip sandbox entirely, open PR immediately (fast mode)
+        // SandboxRequired: when sandbox runs and FAILS, what happens?
+        //   true — don't open the PR at all (strict mode — only ship verified fixes)
+        //   false (default) — open the PR with needs-review label (lenient mode)
+        // SandboxMaxRetries: how many times to retry on sandbox failure (Layer B).
+        //   The sandbox failure details are fed back to the LLM which generates
+        //   a new fix. 0 = no retry (fail once → open PR or block).
+        SandboxEnabled    bool
+        SandboxRequired   bool
+        SandboxMaxRetries int
 
         // v3.4.0: LLM retry config (was no retry — single HTTP call).
         LLMMaxRetries        int
@@ -313,6 +331,11 @@ func Load() *Config {
                 // Operators who want fast mode (skip sandbox for non-prod) can set
                 // SENTINEL_SKIP_SANDBOX_NON_PROD=true.
                 SkipSandboxNonProd: getenvBool("SENTINEL_SKIP_SANDBOX_NON_PROD", false),
+
+                // v3.14.0: Sandbox configuration — operator control over verification.
+                SandboxEnabled:    getenvBool("SENTINEL_SANDBOX_ENABLED", true),
+                SandboxRequired:   getenvBool("SENTINEL_SANDBOX_REQUIRED", false),
+                SandboxMaxRetries: getenvInt("SENTINEL_SANDBOX_MAX_RETRIES", 2),
 
                 // v3.4.0: LLM retry (was no retry)
                 LLMMaxRetries:       getenvInt("SENTINEL_LLM_MAX_RETRIES", 3),

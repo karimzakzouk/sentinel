@@ -143,6 +143,13 @@ spec:
             # v3.4.0: Sandbox probe paths
             - name: SENTINEL_SANDBOX_PROBE_PATHS
               value: {{ .Values.sentinel.sandboxProbePaths | quote }}
+            # v3.14.0: Sandbox configuration
+            - name: SENTINEL_SANDBOX_ENABLED
+              value: {{ .Values.sentinel.sandbox.enabled | default true | quote }}
+            - name: SENTINEL_SANDBOX_REQUIRED
+              value: {{ .Values.sentinel.sandbox.required | default false | quote }}
+            - name: SENTINEL_SANDBOX_MAX_RETRIES
+              value: {{ .Values.sentinel.sandbox.maxRetries | default 2 | quote }}
             # v3.4.0: Slack webhook (optional)
             {{- if .Values.sentinel.slackWebhook }}
             - name: SENTINEL_SLACK_WEBHOOK

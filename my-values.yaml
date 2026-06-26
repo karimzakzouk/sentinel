@@ -1,0 +1,170 @@
+# =============================================================================
+# Sentinel v3.14.0 — Complete Values Reference
+# =============================================================================
+# This file documents EVERY configurable option in Sentinel.
+# Copy it, edit what you need, then install:
+#   helm install sentinel sentinel/sentinel -f my-values.yaml -n sentinel --create-namespace
+#
+# Lines starting with # are defaults — uncomment + change to customize.
+# =============================================================================
+
+# ─── Image ───────────────────────────────────────────────────────────────────
+image:
+  registry: "docker.io/karimzakzouk"
+  repository: "sentinel-v3"
+  tag: "3.14.1"
+  pullPolicy: Always
+
+# ─── Sentinel Configuration ──────────────────────────────────────────────────
+sentinel:
+
+  # ─── Required Credentials ────────────────────────────────────────────────
+  githubToken: ""                    # REQUIRED — GitHub PAT for cloning repos + opening PRs
+  apiToken: ""                       # Admin API bearer token (generate: openssl rand -hex 16)
+  allowedGithubRepos: ""             # CSV of owner/name (e.g. "myorg/my-app"). Empty = allow all (NOT recommended)
+  githubWebhookSecret: ""            # HMAC secret for GitHub webhook signature verification
+
+  # ─── LLM Provider ───────────────────────────────────────────────────────
+  # v3.12.0+: 25+ native providers via GoAI. Just set provider + apiKey + model.
+  # Supported: openai, anthropic, bedrock, azure, google, vertex, openrouter,
+  #            groq, mistral, cohere, xai, deepseek, cerebras, fireworks,
+  #            together, perplexity, ollama, vllm, zai, custom, litellm
+  llm:
+    provider: "zai"                  # Default: z.ai (free). Change to: openai, anthropic, openrouter, etc.
+    baseUrl: ""                      # Only for custom/litellm. Empty = auto-derived from provider.
+    apiKey: ""                       # REQUIRED — your LLM provider API key
+    fastModel: "glm-4-flash"         # Fast/cheap model for search queries + hypothesis generation
+    frontierModel: "glm-4.5"         # Smart model for fix generation
+    # Embeddings (optional — empty = hash fallback, similar-incident retrieval disabled)
+    embeddingModel: ""               # e.g. "text-embedding-3-small" (OpenAI only)
+    embeddingDim: 1536               # Must match the real model's dim if embeddingModel is set
+
+  # ─── Docker Hub (for Kaniko canary builds) ──────────────────────────────
+  dockerHubUsername: ""              # REQUIRED for sandbox verification
+  dockerHubToken: ""                 # REQUIRED for sandbox verification
+
+  # ─── Sandbox Configuration (v3.14.0) ────────────────────────────────────
+  # Controls whether + how the sandbox verifies fixes before opening PRs.
+  #
+  # Modes:
+  #   Fast:     sandbox.enabled=false → no sandbox, PR opens immediately
+  #   Lenient:  sandbox.enabled=true, sandbox.required=false → sandbox runs,
+  #             if it fails → retry with feedback → if still fails → PR opens with needs-review
+  #   Strict:   sandbox.enabled=true, sandbox.required=true → sandbox runs,
+  #             if it fails → retry with feedback → if still fails → NO PR
+  sandbox:
+    enabled: true                    # Run sandbox at all? (default: true)
+    required: false                  # Block PR if sandbox fails? (default: false = open with needs-review)
+    maxRetries: 2                    # Retry count on sandbox failure (default: 2 = 3 total attempts)
+
+  sandboxProbePaths: "/,/healthz,/readyz"  # Endpoints to test in sandbox Level 2
+
+  # ─── Git Configuration ──────────────────────────────────────────────────
+  gitHost: "github.com"              # GitHub Enterprise: "gh.mycorp.internal"
+  githubApiUrl: "https://api.github.com"  # GitHub Enterprise: "https://gh.mycorp.internal/api/v3"
+  defaultBranch: "main"             # Repos with master/develop/trunk
+
+  # ─── Registry (for Kaniko canary image pushes) ──────────────────────────
+  kanikoRegistry: "docker.io"        # ECR/GCR/ACR/Harbor/Quay: set to your registry
+  kanikoInitImage: "alpine/git:2.43.0"       # Kaniko init container image (clone-and-patch)
+  kanikoExecutorImage: "gcr.io/kaniko-project/executor:v1.24.0"  # Kaniko executor image
+
+  # ─── Safety Policy ──────────────────────────────────────────────────────
+  productionNamespaces: "prod,production"  # Namespaces treated as production (stricter governance)
+  highRiskServices: ""                    # CSV of services that always require human approval in prod
+
+  # ─── Detection ──────────────────────────────────────────────────────────
+  skipNamespaces: "kube-system,kube-public,kube-node-lease,calico-system,calico-apiserver,cert-manager,ingress-nginx,monitoring,prometheus,grafana,loki,metallb-system,longhorn-system,cattle-system,fleet-system,gatekeeper-system,external-secrets,vault,argo-events,argo-rollouts,tekton-pipelines,istio-system,knative-serving,kubernetes-dashboard"
+  maxConcurrentInvestigations: 3    # Max concurrent investigations (prevents LLM quota exhaustion)
+
+  # ─── RBAC ───────────────────────────────────────────────────────────────
+  rbac:
+    writeNamespaces: []              # Namespaces Sentinel can write fixes to (e.g. ["sim", "staging"])
+    # writeNamespaces:
+    #   - sim
+    #   - staging
+    readSecrets: false               # Opt-in secrets read (for sandbox to copy prod secrets)
+
+  # ─── Confidence Thresholds ──────────────────────────────────────────────
+  confidenceThresholdAutonomous: 0.92   # Above this = autonomous fix (no human review)
+  confidenceThresholdHumanReview: 0.70  # Between humanReview and autonomous = require human approval
+
+  # ─── Panic Button ───────────────────────────────────────────────────────
+  panicCpuThresholdPct: 95.0         # CPU % that triggers panic mode
+  panicConnectionsThreshold: 9000    # Connection count that triggers panic mode
+
+  # ─── Observability ──────────────────────────────────────────────────────
+  observability:
+    prometheusUrl: ""                # e.g. http://prometheus-server.monitoring.svc.cluster.local:9090
+    lokiUrl: ""
+    jaegerUrl: ""
+
+  # ─── Logging ────────────────────────────────────────────────────────────
+  logLevel: "INFO"                   # DEBUG / INFO / WARN / ERROR
+
+  # ─── LLM Retry ──────────────────────────────────────────────────────────
+  llmRetry:
+    maxRetries: 3
+    baseDelayMs: 500
+
+  # ─── Slack (optional) ───────────────────────────────────────────────────
+  slackWebhook: ""                   # Incoming webhook for alerts
+  slackBot:
+    signingSecret: ""                # Interactive bot (Events API)
+    botUserID: ""
+    botToken: ""                     # OAuth bot token (xoxb-...)
+
+# ─── Resource Limits ────────────────────────────────────────────────────────
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+# ─── Storage ─────────────────────────────────────────────────────────────────
+storage:
+  size: 5Gi                          # PVC for SQLite + vector store + repo clones
+
+# ─── Service Account + RBAC ─────────────────────────────────────────────────
+serviceAccount:
+  create: true
+  name: ""                           # Empty = auto-generated from release name
+
+rbac:
+  create: true
+  clusterScope: true                 # Cluster-wide read on pods/deployments/events
+
+# ─── NetworkPolicy ───────────────────────────────────────────────────────────
+networkPolicy:
+  enabled: false                     # Enable for production (Calico/Cilium required)
+
+# ─── Ingress (optional) ─────────────────────────────────────────────────────
+ingress:
+  enabled: false
+  className: nginx
+  hosts:
+    - host: sentinel.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# ─── Advanced (env vars, not commonly changed) ──────────────────────────────
+# These are loaded from env vars in config.go. To override, set them in the
+# deployment env block or via --set. See README "Additional Configuration"
+# section for the full list.
+#
+# Key ones:
+#   SENTINEL_INVESTIGATION_TIMEOUT=600        # Max investigation duration (seconds)
+#   SENTINEL_INVESTIGATOR_TIMEOUT=120         # Investigator agent timeout
+#   SENTINEL_FIX_PROPOSER_TIMEOUT=120         # Fix proposer timeout
+#   SENTINEL_DETECTION_COOLDOWN_SEC=300       # Detection cooldown
+#   SENTINEL_DETECTION_TAIL_LINES=100         # Pod log tail lines
+#   SENTINEL_LLM_PRIOR_WEIGHT=0.4             # LLM prior weight in Bayesian blend
+#   SENTINEL_MAX_PIPELINE_ITERATIONS=5        # Max pipeline rewind iterations
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
