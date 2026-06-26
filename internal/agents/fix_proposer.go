@@ -261,7 +261,7 @@ func (a *FixProposer) Run(ctx context.Context, state *schemas.AgentState) error 
                 }
 
                 // Debug logging
-                log.Printf("[fix_proposer] LLM response keys: %v", keysOfMap(result))
+                log.Printf("[fix_proposer] LLM response keys: %v", keysOfAny(result))
 
                 // Normalize
                 if rawList, ok := result["hypotheses"].([]any); ok && len(rawList) > 0 {
@@ -315,7 +315,7 @@ func (a *FixProposer) Run(ctx context.Context, state *schemas.AgentState) error 
                         }
                         lastError = "files_to_change was parsed but contained no valid search/replace blocks (search or replace was empty)"
                 } else {
-                        lastError = fmt.Sprintf("LLM returned 0 files. Response keys: %v", keysOfMap(result))
+                        lastError = fmt.Sprintf("LLM returned 0 files. Response keys: %v", keysOfAny(result))
                         if rawFilesVal, ok := result["files_to_change"]; ok {
                                 lastError += fmt.Sprintf(" (files_to_change type=%T)", rawFilesVal)
                         } else {
@@ -592,15 +592,6 @@ func extractFilesFromAlternativeKeys(result map[string]any, state *schemas.Agent
         }
 
         return nil
-}
-
-// keysOfMap returns the keys of a map for debug logging.
-func keysOfMap(m map[string]any) []string {
-        keys := make([]string, 0, len(m))
-        for k := range m {
-                keys = append(keys, k)
-        }
-        return keys
 }
 
 // normalizeEscapes converts literal escape sequences (backslash-n, backslash-t)

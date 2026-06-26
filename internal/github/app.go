@@ -295,9 +295,3 @@ func (a *App) HandleInstallationEvent(ctx context.Context, payload []byte, webho
         return nil
 }
 
-func min(a, b int) int {
-        if a < b {
-                return a
-        }
-        return b
-}

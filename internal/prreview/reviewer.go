@@ -437,9 +437,3 @@ func (r *Reviewer) postReviewComment(ctx context.Context, repo string, prNumber 
         return nil
 }
 
-func min(a, b int) int {
-        if a < b {
-                return a
-        }
-        return b
-}

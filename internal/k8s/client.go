@@ -14,6 +14,7 @@ import (
         corev1 "k8s.io/api/core/v1"
         metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
         "k8s.io/apimachinery/pkg/runtime/schema"
+        "k8s.io/apimachinery/pkg/types"
         "k8s.io/client-go/dynamic"
         "k8s.io/client-go/kubernetes"
         "k8s.io/client-go/rest"
@@ -302,7 +303,7 @@ func (c *Client) PatchCRStatus(ctx context.Context, name, namespace, phase strin
         }
 
         _, err = c.dynamic.Resource(gvr).Namespace(namespace).Patch(
-                ctx, name, typesMergePatch, patchBytes, metav1.PatchOptions{}, "status",
+                ctx, name, types.MergePatchType, patchBytes, metav1.PatchOptions{}, "status",
         )
         return err
 }

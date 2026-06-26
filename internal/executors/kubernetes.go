@@ -2,6 +2,7 @@ package executors
 
 import (
         "context"
+        "encoding/json"
         "errors"
         "fmt"
         "sort"
@@ -266,10 +267,6 @@ func contains(s, sub string) bool {
 var errAlreadyExists = errors.New("already exists")
 
 func mustJSON(v any) string {
-        b, _ := jsonMarshal(v)
+        b, _ := json.Marshal(v)
         return string(b)
-}
-
-func jsonMarshal(v any) ([]byte, error) {
-        return jsonMarshalImpl(v)
 }

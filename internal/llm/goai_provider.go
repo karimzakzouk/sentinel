@@ -133,5 +133,3 @@ func (r *Router) buildGoAIModel(modelName string) provider.LanguageModel {
 	}
 }
 
-// supportedProviders returns the list of provider names supported by GoAI.
-// Used for documentation + validation. v3.12.0.
