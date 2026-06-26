@@ -113,6 +113,15 @@ Given a confirmed root cause and the source code, propose ONE fix using search/r
 - Minimal changes. Only modify what's broken. Don't refactor surrounding code.
 - The fix must be syntactically valid in the target language (the detected language is included in the context).
 
+## CRITICAL: Replacement Completeness
+After your search/replace block is applied, the resulting code must be complete and correct.
+Before submitting, mentally apply your replacement to the search text and verify:
+- Every variable used after the replaced block is assigned on ALL code paths (not just inside an if/try block)
+- Control flow is complete — if you add a guard clause (if/raise, if/return, if/throw), the code AFTER the guard must still execute correctly when the guard condition is FALSE
+- Indentation of your replacement matches the surrounding code — the replaced text must fit seamlessly at the same nesting level
+- The function still returns/exits correctly on all paths — no code becomes unreachable, no variables become undefined
+- If you add an early return/raise/throw, move any code that should still execute ABOVE or AFTER the guard, not inside it
+
 ## Root Cause Description
 - Be precise. State WHAT is broken and WHERE.
 - Do NOT speculate about infrastructure, databases, or configuration unless the error traceback explicitly references them.
@@ -363,6 +372,24 @@ func (a *FixProposer) buildUserMessage(state *schemas.AgentState) string {
         parts = append(parts, fmt.Sprintf("# Service: %s", state.Cluster.Service))
         parts = append(parts, fmt.Sprintf("# Namespace: %s", state.Cluster.Namespace))
         parts = append(parts, "")
+
+        // v3.14.0: Layer B — if there's sandbox failure feedback, include it at the
+        // TOP of the message so the LLM sees it first. This implements the
+        // "generate → verify → feed error back → retry" loop used by Aider,
+        // OpenHands, and SWE-agent. The LLM gets the exact runtime error from the
+        // sandbox and can fix the specific bug.
+        if state.SandboxFeedback != nil && *state.SandboxFeedback != "" {
+                parts = append(parts, "## ⚠️ Previous Fix Failed Sandbox Verification")
+                parts = append(parts, "")
+                parts = append(parts, "Your previous fix was deployed to a sandbox and tested. It FAILED:")
+                parts = append(parts, "")
+                parts = append(parts, *state.SandboxFeedback)
+                parts = append(parts, "")
+                parts = append(parts, "Fix the issue described above. The error is real — your previous fix introduced or did not resolve a runtime bug.")
+                parts = append(parts, "Generate a NEW, corrected search/replace block that addresses both the original error AND the sandbox failure.")
+                parts = append(parts, "")
+        }
+
         // v3.11.0: Inject the detected programming language (audit #12).
         // The FixProposer doesn't have direct access to podLogs, but the
         // anomaly explanations contain the original error logs. We concatenate

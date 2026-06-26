@@ -465,3 +465,29 @@ func ExtractSearchQueriesUniversal(logs string) []string {
         log.Printf("[investigator] extracted %d search queries from %s logs: %v", len(unique), parsed.Language, unique)
         return unique
 }
+
+// httpReqRe extracts HTTP request lines from pod logs. Matches patterns like:
+//   GET /items?index=10 HTTP/1.1
+//   POST /api/users HTTP/1.1
+//   "GET /divide?a=10&b=0"
+// Works across all web server log formats (uvicorn, gunicorn, express, gin, etc.)
+// v3.14.0: Layer C — used by the sandbox to test the exact endpoint that
+// triggered the error.
+var httpReqRe = regexp.MustCompile(`(?i)(?:GET|POST|PUT|DELETE|PATCH)\s+(/[^\s"]+)`)
+
+// ExtractTriggerEndpoint pulls the HTTP request path that triggered the error
+// from the pod logs. Returns "" if no HTTP request is found (non-web service).
+// v3.14.0: Layer C — the sandbox uses this to test the exact endpoint that
+// caused the incident, not just generic health endpoints.
+//
+// Example: logs containing 'GET /items?index=10 HTTP/1.1" 500' → "/items?index=10"
+//
+// For non-web services (no HTTP path in logs), returns "" — the sandbox
+// falls back to Level 1 (pod Ready) + Level 3 (error type gone from logs).
+func ExtractTriggerEndpoint(logs string) string {
+	m := httpReqRe.FindStringSubmatch(logs)
+	if len(m) >= 2 {
+		return m[1]
+	}
+	return ""
+}

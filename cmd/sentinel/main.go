@@ -468,7 +468,7 @@ func main() {
                         logging.ErrorCtx(invCtx, "save incident (executing) failed", "error", err)
                 }
 
-                if err := executeFix(ctx, &incident, cfg, ghExec, k8sExec, sandbox, kaniko, k8sClient, store); err != nil {
+                if err := executeFix(ctx, &incident, cfg, ghExec, k8sExec, sandbox, kaniko, k8sClient, store, pipeline); err != nil {
                         logging.ErrorCtx(invCtx, "execution error", "error", err)
                         incident.Status = schemas.StatusFailed
                         s := err.Error()
@@ -889,12 +889,13 @@ func executeFix(
         kaniko *executors.KanikoBuilder,
         k8sClient *k8s.Client,
         store *feedback.Store,
+        pipeline *agents.Pipeline,
 ) error {
         fp := incident.State.FixProposal
 
         switch fp.FixType {
         case schemas.FixCodeFix, schemas.FixRollForward:
-                return executeCodeFix(ctx, incident, cfg, ghExec, sandbox, kaniko, k8sClient)
+                return executeCodeFix(ctx, incident, cfg, ghExec, sandbox, kaniko, k8sClient, pipeline)
 
         case schemas.FixRestart:
                 return k8sExec.Restart(ctx, fp)
@@ -925,6 +926,7 @@ func executeCodeFix(
         sandbox *executors.SandboxRunner,
         kaniko *executors.KanikoBuilder,
         k8sClient *k8s.Client,
+        pipeline *agents.Pipeline,
 ) error {
         fp := incident.State.FixProposal
 
@@ -941,8 +943,15 @@ func executeCodeFix(
         // Phase 2 + 3: Build canary + sandbox (only if Docker Hub creds available)
         // v3.6.0: Skip sandbox for non-production namespaces when configured (default: true).
         // v3.8.1: Re-wired — was accidentally dropped in server.go rewrite.
+        // v3.14.0: Layer B — sandbox failure feedback loop. When sandbox verification
+        // fails, the failure details are fed back to the fix proposer which generates
+        // a new fix. The loop retries up to maxSandboxRetries times. This is the same
+        // pattern used by Aider (lint → fix → retry), OpenHands (run → fail → retry),
+        // and SWE-agent (test → fail → retry).
         sandboxVerified := false
         sandboxSummary := "skipped (no Docker Hub credentials)"
+
+        const maxSandboxRetries = 2 // 3 total attempts (1 initial + 2 retries)
 
         isNonProd := !cfg.IsProductionNamespace(fp.TargetNamespace)
         if cfg.SkipSandboxNonProd && isNonProd && cfg.DockerHubToken != "" {
@@ -950,30 +959,76 @@ func executeCodeFix(
                 logging.Info("skipping sandbox for non-production namespace (fast mode)",
                         "fix_id", fp.FixID, "namespace", fp.TargetNamespace)
         } else if cfg.DockerHubToken != "" {
-                logging.Info("execution Phase 2: building canary image with Kaniko", "fix_id", fp.FixID)
-                prodImage, err := k8sClient.GetProdImage(ctx, fp.TargetService, fp.TargetNamespace)
-                if err == nil && prodImage != "" {
+                for sandboxAttempt := 0; sandboxAttempt <= maxSandboxRetries; sandboxAttempt++ {
+                        if sandboxAttempt > 0 {
+                                // v3.14.0: Layer B — feed the sandbox failure back to the fix proposer.
+                                // The fix proposer sees the error in its user message and generates a
+                                // new, corrected fix. The branch is updated with the new search/replace.
+                                logging.Info("sandbox retry: feeding failure back to fix proposer",
+                                        "fix_id", fp.FixID, "attempt", sandboxAttempt+1, "max", maxSandboxRetries+1)
+
+                                feedback := fmt.Sprintf("Sandbox verification failed: %s\n\nThe canary was built and deployed, but verification failed. Please generate a corrected fix.", sandboxSummary)
+                                incident.State.SandboxFeedback = &feedback
+
+                                // Re-run only the fix proposer (not the full pipeline — root cause hasn't changed)
+                                if err := pipeline.RetryFixProposal(ctx, &incident.State); err != nil {
+                                        logging.Error("fix proposer retry failed", "error", err)
+                                        break
+                                }
+
+                                // Update fp to the new fix proposal
+                                fp = incident.State.FixProposal
+                                if fp == nil {
+                                        break
+                                }
+
+                                // Re-prepare the branch (updates files on the existing branch)
+                                logging.Info("re-preparing fix branch with corrected code", "fix_id", fp.FixID, "attempt", sandboxAttempt+1)
+                                branchInfo = ghExec.PrepareBranch(ctx, incident)
+                                if !branchInfo.Success {
+                                        logging.Error("branch re-preparation failed", "error", branchInfo.Error)
+                                        break
+                                }
+                        }
+
+                        logging.Info("execution Phase 2: building canary image with Kaniko",
+                                "fix_id", fp.FixID, "attempt", sandboxAttempt+1, "max", maxSandboxRetries+1)
+                        prodImage, err := k8sClient.GetProdImage(ctx, fp.TargetService, fp.TargetNamespace)
+                        if err != nil || prodImage == "" {
+                                sandboxSummary = "skipped (could not find prod image)"
+                                break
+                        }
+
                         canaryImage, err := kaniko.BuildForIncident(ctx, incident, branchInfo, prodImage)
                         if err != nil {
                                 sandboxSummary = fmt.Sprintf("kaniko_error: %v", err)
-                                logging.Error("kaniko build failed", "fix_id", fp.FixID, "error", err)
-                        } else {
-                                logging.Info("canary image built", "image", canaryImage)
-                                fp.CanaryImage = &canaryImage
-
-                                logging.Info("execution Phase 3: running sandbox verification", "fix_id", fp.FixID)
-                                sandboxStart := time.Now()
-                                sb := sandbox.Run(ctx, incident)
-                                sandboxVerified = sb.Verified
-                                sandboxSummary = sb.Summary
-                                metrics.RecordSandboxVerification(sandboxVerified, time.Since(sandboxStart))
-                                logging.Info("sandbox verification complete",
-                                        "verified", sandboxVerified,
-                                        "summary", sandboxSummary,
-                                )
+                                logging.Error("kaniko build failed", "fix_id", fp.FixID, "error", err, "attempt", sandboxAttempt+1)
+                                continue // retry — the fix itself might have broken the build
                         }
-                } else {
-                        sandboxSummary = "skipped (could not find prod image)"
+
+                        logging.Info("canary image built", "image", canaryImage)
+                        fp.CanaryImage = &canaryImage
+
+                        logging.Info("execution Phase 3: running sandbox verification", "fix_id", fp.FixID, "attempt", sandboxAttempt+1)
+                        sandboxStart := time.Now()
+                        sb := sandbox.Run(ctx, incident)
+                        sandboxVerified = sb.Verified
+                        sandboxSummary = sb.Summary
+                        metrics.RecordSandboxVerification(sandboxVerified, time.Since(sandboxStart))
+                        logging.Info("sandbox verification complete",
+                                "verified", sandboxVerified,
+                                "summary", sandboxSummary,
+                                "attempt", sandboxAttempt+1,
+                        )
+
+                        if sandboxVerified {
+                                break // success — no more retries needed
+                        }
+
+                        if sandboxAttempt < maxSandboxRetries {
+                                logging.Info("sandbox verification failed — will retry with feedback",
+                                        "fix_id", fp.FixID, "attempt", sandboxAttempt+1, "summary", sandboxSummary)
+                        }
                 }
         }
 

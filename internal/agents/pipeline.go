@@ -129,6 +129,21 @@ func (p *Pipeline) SetMaxIterations(n int) {
         }
 }
 
+// RetryFixProposal re-runs ONLY the fix proposer with the current state.
+// v3.14.0: Layer B — called when the sandbox verification fails. The caller
+// sets state.SandboxFeedback with the failure details before calling this.
+// The fix proposer sees the feedback in its user message and generates a
+// new, corrected fix. Does NOT re-run the investigator/evidence/analyst —
+// those are expensive and the root cause hasn't changed.
+func (p *Pipeline) RetryFixProposal(ctx context.Context, state *schemas.AgentState) error {
+        fpCtx, fpCancel := context.WithTimeout(ctx, time.Duration(p.fixProposerTimeoutSec)*time.Second)
+        defer fpCancel()
+        if err := p.fixProposer.Run(fpCtx, state); err != nil {
+                return fmt.Errorf("fix_proposer_retry: %w", err)
+        }
+        return nil
+}
+
 // Run executes the full pipeline on the given state. Handles rewinds.
 // v3.6.0: Speed optimization — skip evidence gathering when the top hypothesis
 // already has high confidence (>= 0.7). Evidence gathering adds ~90s of LLM +

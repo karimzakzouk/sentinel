@@ -150,6 +150,41 @@ func (s *SandboxRunner) Run(ctx context.Context, inc *schemas.Incident) SandboxR
                 return SandboxResult{Verified: false, Summary: fmt.Sprintf("deploy_failed: %s", deployResult.err), Namespace: sandboxNS}
         }
 
+        // v3.14.0: Layer C — extract the HTTP endpoint that triggered the error
+        // from the pod logs and add it to the probe paths. This makes the sandbox
+        // test the EXACT request that caused the incident, not just generic health
+        // endpoints. Catches logic bugs that only manifest on specific inputs.
+        triggerEndpoint := ""
+        for _, anomaly := range inc.Cluster.Anomalies {
+                if ep := agents.ExtractTriggerEndpoint(anomaly.Explanation); ep != "" {
+                        triggerEndpoint = ep
+                        break
+                }
+        }
+        if triggerEndpoint != "" {
+                // Add the trigger endpoint to probePaths for Level 2 + Level 3.
+                // We also add a "valid" variant (strip query params) to test that
+                // the endpoint works with valid input — catches bugs like the
+                // UnboundLocalError in PR #25 where valid input crashed after the fix.
+                s.probePaths = append(s.probePaths, triggerEndpoint)
+                // Also test the path without query params (valid input)
+                if idx := strings.Index(triggerEndpoint, "?"); idx > 0 {
+                        validPath := triggerEndpoint[:idx]
+                        // Avoid duplicate if already in probePaths
+                        alreadyExists := false
+                        for _, p := range s.probePaths {
+                                if p == validPath {
+                                        alreadyExists = true
+                                        break
+                                }
+                        }
+                        if !alreadyExists {
+                                s.probePaths = append(s.probePaths, validPath)
+                        }
+                }
+                log.Printf("[sandbox] Level 2: added trigger endpoint %s to probe paths (total: %d)", triggerEndpoint, len(s.probePaths))
+        }
+
         // 3. Level 1 — wait for canary pods to be Ready AND stay Ready for
         // sustainedWindow. A pod that goes Ready then immediately crashes
         // (common with config errors that only manifest on first request)

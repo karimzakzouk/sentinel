@@ -258,6 +258,11 @@ type AgentState struct {
         MaxIterations      int                  `json:"max_iterations"`
         Status             IncidentStatus       `json:"status"`
         Error              *string              `json:"error,omitempty"`
+        // v3.14.0: Sandbox failure feedback. When the sandbox verification fails,
+        // the failure details are stored here and fed back to the fix proposer on
+        // the next retry. This implements the "generate → verify → feed error back
+        // → retry" loop that Aider/OpenHands/SWE-agent all use.
+        SandboxFeedback    *string              `json:"sandbox_feedback,omitempty"`
 }
 
 // ---------- Layer 6: Feedback ----------
