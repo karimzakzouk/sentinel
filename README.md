@@ -344,6 +344,36 @@ To use these providers, stand up a [LiteLLM](https://github.com/BerriAI/litellm)
 
 Sentinel logs an ERROR-level startup warning if the configured provider is unsupported.
 
+### Additional Configuration (v3.13.0)
+
+These env vars are supported but not commonly needed. All have sensible defaults.
+
+| Env var | Default | Purpose |
+|---------|---------|---------|
+| `SENTINEL_SANDBOX_NAMESPACE_PREFIX` | `sentinel-sandbox` | Prefix for sandbox namespaces |
+| `SENTINEL_ENABLE_TRAFFIC_MIRRORING` | `true` | Enable traffic mirroring in sandbox |
+| `SENTINEL_RELEASE_NAME` | `sentinel` | Helm release name |
+| `SENTINEL_INVESTIGATION_TIMEOUT` | `600` (10min) | Max investigation duration (seconds) |
+| `SENTINEL_PANIC_CPU_THRESHOLD_PCT` | `95.0` | CPU % that triggers panic mode |
+| `SENTINEL_PANIC_CONNECTIONS_THRESHOLD` | `9000` | Connection count that triggers panic mode |
+| `SENTINEL_INVESTIGATOR_TIMEOUT` | `120` | Investigator agent timeout (seconds) |
+| `SENTINEL_EVIDENCE_GATHERER_TIMEOUT` | `90` | Evidence gatherer timeout (seconds) |
+| `SENTINEL_ANALYST_TIMEOUT` | `15` | Analyst agent timeout (seconds) |
+| `SENTINEL_FIX_PROPOSER_TIMEOUT` | `120` | Fix proposer timeout (seconds) |
+| `SENTINEL_CONFIDENCE_LOOP_BACK` | `0.3` | Confidence threshold to loop back to investigator |
+| `SENTINEL_MAX_PIPELINE_ITERATIONS` | `5` | Max pipeline rewind iterations |
+| `SENTINEL_OUTCOME_WATCH_DURATION_MIN` | `10` | Phase 1 outcome watch (minutes) |
+| `SENTINEL_OUTCOME_CHECK_INTERVAL_SEC` | `30` | Phase 1 poll interval (seconds) |
+| `SENTINEL_DETECTION_COOLDOWN_SEC` | `300` (5min) | Detection cooldown (seconds) |
+| `SENTINEL_DETECTION_TAIL_LINES` | `100` | Pod log tail lines to stream |
+| `SENTINEL_SCALE_FIX_REPLICAS` | `2` | Default replicas for scale fixes |
+| `SENTINEL_LLM_PRIOR_WEIGHT` | `0.4` | LLM prior weight in Bayesian blend |
+| `SENTINEL_SKIP_SANDBOX_NON_PROD` | `false` | Skip sandbox for non-prod namespaces |
+| `SENTINEL_LLM_MAX_RETRIES` | `3` | LLM retry count |
+| `SENTINEL_LLM_RETRY_BASE_DELAY_MS` | `500` | LLM retry base delay (ms) |
+| `SENTINEL_LOG_LEVEL` | `INFO` | Log level (DEBUG/INFO/WARN/ERROR) |
+| `AWS_REGION` | `us-east-1` | AWS region (Bedrock provider only) |
+
 ### Manual Triggers
 
 Sentinel auto-detects incidents, but you can also trigger manually via CR:
