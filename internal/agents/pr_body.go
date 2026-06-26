@@ -118,21 +118,14 @@ func BuildPRBody(incident *schemas.Incident, sandboxVerified bool, sandboxSummar
         return b.String()
 }
 
-// extractErrorTypeFromLogs scans the anomaly explanation for error patterns.
+// extractErrorTypeFromLogs uses the multi-language ParseError to detect the
+// error type from the anomaly explanation.
+// v3.13.0: Replaced the Python-centric hardcoded list with agents.ParseError,
+// which handles Python, Go, Java, JS, Rust, Ruby, C, and signals.
 func extractErrorTypeFromLogs(cluster *schemas.AnomalyCluster) string {
         for _, a := range cluster.Anomalies {
-                text := a.Explanation
-                // Look for "ErrorType:" or "ErrorType:" patterns
-                for _, pattern := range []string{
-                        "KeyError", "ValueError", "TypeError", "ZeroDivisionError",
-                        "ImportError", "ModuleNotFoundError", "FileNotFoundError",
-                        "AttributeError", "RuntimeError", "RecursionError",
-                        "panic:", "fatal error:", "NullPointerException",
-                        "StackOverflowError", "OOMKilled", "CrashLoopBackOff",
-                } {
-                        if strings.Contains(text, pattern) {
-                                return pattern
-                        }
+                if parsed := ParseError(a.Explanation); parsed != nil && parsed.ErrorType != "" && parsed.ErrorType != "unknown" {
+                        return parsed.ErrorType
                 }
         }
         return ""

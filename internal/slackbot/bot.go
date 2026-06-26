@@ -76,20 +76,19 @@ func (b *Bot) SetBotToken(token string) {
 
 // IsPaused returns true if autonomous mode is paused.
 // v3.5.0: The detection layer checks this before triggering investigations.
+// v3.13.0: Simplified — just take the write lock since we may need to mutate
+// (auto-resume). The old RLock→RUnlock→Lock→Unlock→RLock dance created a race
+// window where readers could see stale paused-but-expired state.
 func (b *Bot) IsPaused() bool {
-        b.mu.RLock()
-        defer b.mu.RUnlock()
+        b.mu.Lock()
+        defer b.mu.Unlock()
         if b.paused && time.Now().Before(b.pausedUntil) {
                 return true
         }
         // Auto-resume if pause expired
         if b.paused && time.Now().After(b.pausedUntil) {
-                b.mu.RUnlock()
-                b.mu.Lock()
                 b.paused = false
                 b.pauseReason = ""
-                b.mu.Unlock()
-                b.mu.RLock()
         }
         return false
 }
