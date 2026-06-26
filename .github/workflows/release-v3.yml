@@ -125,6 +125,12 @@ jobs:
             ${{ env.DH_REGISTRY }}/${{ env.DH_OWNER }}/sentinel-v3:${{ steps.version.outputs.version }}-${{ matrix.arch }}
             ${{ env.GHCR_REGISTRY }}/${{ env.GHCR_OWNER }}/sentinel/sentinel-v3:${{ steps.version.outputs.version }}-${{ matrix.arch }}
           platforms: linux/${{ matrix.arch }}
+          # v3.13.0 fix: provenance=false prevents build-push-action from creating
+          # a manifest list for single-arch builds. Without this, the merge job
+          # fails with "X-amd64 is a manifest list" when trying to create the
+          # multi-arch manifest. provenance=false pushes a plain single-arch image.
+          provenance: false
+          sbom: false
           cache-from: type=gha,scope=${{ matrix.arch }}
           cache-to: type=gha,scope=${{ matrix.arch }},mode=max
 
