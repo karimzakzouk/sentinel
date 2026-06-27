@@ -26,6 +26,13 @@ import (
 // native Azure, etc.). For OpenAI-compatible providers (zai, custom,
 // litellm, ollama, vllm), the openai provider package is used with a
 // custom base URL.
+//
+// v4.0.0: Multi-provider failover pool. When cfg.LLMProviders is non-empty,
+// the Router wraps every LLM call in pool.Call(), which tries providers in
+// priority order and trips a circuit breaker on failure. The legacy
+// single-provider fields (providerType, baseURL, apiKey, fastModel,
+// frontierModel) are still used as a fallback when the pool is empty
+// (backwards compat with existing installs).
 type Router struct {
         providerType   string // v3.12.0: "openai", "anthropic", "bedrock", "azure", etc.
         baseURL        string
@@ -42,6 +49,9 @@ type Router struct {
         // changes LLM settings in the web UI). Without this lock, an in-flight
         // request could see a torn string pointer during an Update.
         mu sync.RWMutex
+
+        // v4.0.0: Optional multi-provider failover pool. nil = legacy single-provider mode.
+        pool *Pool
 }
 
 // New creates a Router with default retry settings (3 retries, 500ms base delay).
@@ -82,6 +92,26 @@ func (r *Router) SetBedrockRegion(region string) {
         if region != "" {
                 r.bedrockRegion = region
         }
+}
+
+// SetPool wires a multi-provider failover pool. v4.0.0.
+// When set, every LLM call goes through pool.Call() which tries providers
+// in priority order and trips a circuit breaker on failure. When nil,
+// the Router falls back to its single-provider fields.
+func (r *Router) SetPool(pool *Pool) {
+        r.mu.Lock()
+        defer r.mu.Unlock()
+        r.pool = pool
+        if pool != nil {
+                pool.SetRetryConfig(r.maxRetries, r.retryBaseDelay)
+        }
+}
+
+// Pool returns the router's failover pool (nil if not configured).
+func (r *Router) Pool() *Pool {
+        r.mu.RLock()
+        defer r.mu.RUnlock()
+        return r.pool
 }
 
 // SetRetryConfig configures retry behavior.
@@ -179,6 +209,12 @@ func (r *Router) FrontierText(ctx context.Context, system, user string, maxToken
 //   - Provider-specific request format (/chat/completions, /v1/messages, etc.)
 //   - Retries with exponential backoff (via WithMaxRetries)
 //   - Timeout (via WithTimeout)
+//
+// v4.0.0: When a failover pool is configured, the call is wrapped in
+// pool.Call() which tries each provider in priority order. The single-
+// provider fields (providerType, baseURL, apiKey) are temporarily
+// swapped to the acquired provider's config for the duration of the call
+// so buildGoAIModel() picks up the right credentials.
 func (r *Router) complete(ctx context.Context, model, system, user string, maxTokens int) (string, error) {
         _, _, _, _, maxRetries, _ := r.snapshot()
 
@@ -188,6 +224,74 @@ func (r *Router) complete(ctx context.Context, model, system, user string, maxTo
         }
         callStart := time.Now()
 
+        // v4.0.0: Multi-provider failover path.
+        r.mu.RLock()
+        pool := r.pool
+        r.mu.RUnlock()
+        if pool != nil && pool.HasProviders() {
+                return r.completeWithPool(ctx, pool, model, system, user, maxTokens, maxRetries, callStart)
+        }
+
+        // Legacy single-provider path.
+        return r.completeSingle(ctx, model, system, user, maxTokens, maxRetries, callStart, "")
+}
+
+// completeWithPool tries each provider in the pool in priority order.
+// On success, records metrics. On failure of one provider, the pool's
+// circuit breaker trips and the next provider is tried.
+func (r *Router) completeWithPool(ctx context.Context, pool *Pool, model, system, user string, maxTokens, maxRetries int, callStart time.Time) (string, error) {
+        var resultText string
+        var lastErr error
+        err := pool.Call(ctx, func(cfg *ProviderConfig) error {
+                // Temporarily swap the router's provider config to the acquired provider.
+                // buildGoAIModel() reads providerType/baseURL/apiKey via providerSnapshot(),
+                // so we swap those fields under the lock for the duration of this call.
+                r.mu.Lock()
+                origProvider := r.providerType
+                origBase := r.baseURL
+                origKey := r.apiKey
+                origBedrock := r.bedrockRegion
+                r.providerType = cfg.ProviderType
+                r.baseURL = cfg.BaseURL
+                r.apiKey = cfg.APIKey
+                if cfg.BedrockRegion != "" {
+                        r.bedrockRegion = cfg.BedrockRegion
+                }
+                r.mu.Unlock()
+
+                // Restore on exit.
+                defer func() {
+                        r.mu.Lock()
+                        r.providerType = origProvider
+                        r.baseURL = origBase
+                        r.apiKey = origKey
+                        r.bedrockRegion = origBedrock
+                        r.mu.Unlock()
+                }()
+
+                text, err := r.completeSingle(ctx, model, system, user, maxTokens, maxRetries, callStart, cfg.ID)
+                if err != nil {
+                        lastErr = err
+                        return err
+                }
+                resultText = text
+                return nil
+        })
+        if err != nil {
+                if recordLLMMetrics != nil {
+                        recordLLMMetrics(model, "error", time.Since(callStart), 0, 0)
+                }
+                if lastErr != nil {
+                        return "", fmt.Errorf("LLM call failed (all providers exhausted): %w", lastErr)
+                }
+                return "", err
+        }
+        return resultText, nil
+}
+
+// completeSingle executes one LLM call against the currently-configured provider.
+// providerID is used for metrics labeling (empty = legacy single-provider mode).
+func (r *Router) completeSingle(ctx context.Context, model, system, user string, maxTokens, maxRetries int, callStart time.Time, providerID string) (string, error) {
         goaiModel := r.buildGoAIModel(model)
         result, err := goai.GenerateText(ctx, goaiModel,
                 goai.WithSystem(system),

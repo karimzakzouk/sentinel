@@ -20,6 +20,8 @@ import (
 
         "github.com/karimzakzouk/sentinel/v3/internal/agents"
         "github.com/karimzakzouk/sentinel/v3/internal/api"
+        "github.com/karimzakzouk/sentinel/v3/internal/automerge"
+        "github.com/karimzakzouk/sentinel/v3/internal/chatops"
         "github.com/karimzakzouk/sentinel/v3/internal/config"
         "github.com/karimzakzouk/sentinel/v3/internal/correlation"
         "github.com/karimzakzouk/sentinel/v3/internal/detection"
@@ -44,6 +46,13 @@ import (
 // API server, used by the investigation handler to push real-time updates.
 var broadcaster events.Broadcaster = events.Noop()
 var _ = broadcaster // used in handler closures below
+
+// v4.0.0: Package-level chatops status comment manager. Assigned in main(),
+// used by executeCodeFix to post the initial [SENTINELSTATUS] comment when
+// a PR is opened. Package-level (not passed through executeFix) because
+// executeCodeFix is called from a closure that doesn't have access to main's
+// local scope.
+var chatopsStatusManager chatops.StatusCommentManager
 
 func main() {
         addr := flag.String("addr", "", "HTTP listen address (overrides env)")
@@ -138,6 +147,24 @@ func main() {
         router.SetRetryConfig(cfg.LLMMaxRetries, time.Duration(cfg.LLMRetryBaseDelayMs)*time.Millisecond)
         if cfg.LLMProvider == "bedrock" {
                 router.SetBedrockRegion(func() string { r := os.Getenv("AWS_REGION"); if r == "" { return "us-east-1" }; return r }())
+        }
+
+        // v4.0.0: Multi-provider failover pool. When cfg.LLMProviders is non-empty,
+        // wire the pool into the router. Every LLM call then tries providers in
+        // priority order with circuit-breaker failover.
+        if len(cfg.LLMProviders) > 0 {
+                pool := llm.NewPool(cfg.LLMProviders)
+                pool.SetRetryConfig(cfg.LLMMaxRetries, time.Duration(cfg.LLMRetryBaseDelayMs)*time.Millisecond)
+                router.SetPool(pool)
+                logging.Info("LLM failover pool enabled",
+                        "providers", len(cfg.LLMProviders),
+                        "mode", "multi-provider",
+                )
+        } else {
+                logging.Info("LLM failover pool disabled (single-provider mode)",
+                        "provider", cfg.LLMProvider,
+                        "hint", "set SENTINEL_LLM_PROVIDERS to enable multi-key failover",
+                )
         }
 
         // v3.8.4: Wire the runtime config apply callback. When the user
@@ -868,6 +895,72 @@ func main() {
                 WithAPIURL(cfg.GitHubAPIURL)
         apiServer.SetWebhookHandler(http.HandlerFunc(prReviewer.HandleWebhook))
 
+        // v4.0.0: Wire chatops — PR-comment-driven command execution.
+        // Creates the dependency bag, GitHub client, reactions client,
+        // status comment manager, and webhook handler. All wired into the
+        // API server via SetChatopsHandler. The webhook handler dispatches
+        // to both prreview (pull_request events) and chatops (issue_comment).
+        chatopsGHClient := chatops.NewGitHubClient(cfg.GitHubToken, cfg.GitHubAPIURL)
+        chatopsReactions := chatops.NewReactionsClient(chatopsGHClient)
+        chatopsStatus := chatops.NewStatusCommentManager(chatopsGHClient)
+        chatopsStatusManager = chatopsStatus // assign to package var for executeCodeFix
+
+        // v4.0.0: Auto-merge — policy + merger + GitHub client.
+        // Created before chatopsDeps so the deps bag can reference the merger.
+        autoMergeGH := automerge.NewGitHubClient(cfg.GitHubToken, cfg.GitHubAPIURL)
+        autoMergeCfg := automerge.Config{
+                Enabled:              cfg.AutoMergeEnabled,
+                Namespaces:           cfg.AutoMergeNamespaces,
+                MinConfidence:        cfg.AutoMergeMinConfidence,
+                RequireCIGreen:       cfg.AutoMergeRequireCI,
+                CITimeoutSec:         cfg.AutoMergeCITimeoutSec,
+                MaxPerHour:           cfg.AutoMergeMaxPerHour,
+                CooldownAfterFailMin: cfg.AutoMergeCooldownMin,
+        }
+        autoMergePolicy := automerge.NewPolicy(autoMergeCfg, policy)
+        autoMergeMerger := automerge.NewMerger(autoMergePolicy, autoMergeGH, &autoMergeStoreAdapter{store: store}, &autoMergeOutcomeAdapter{watcher: outcomeWatcher, policy: autoMergePolicy})
+
+        chatopsDeps := &chatops.Deps{
+                Store:         &chatopsStoreAdapter{store: store},
+                GitHub:        chatopsGHClient,
+                Router:        router,
+                Reactions:     chatopsReactions,
+                StatusComment: chatopsStatus,
+                Logger:        &slogAdapter{},
+                AutoMerge:     &autoMergeClientAdapter{merger: autoMergeMerger, policy: autoMergePolicy},
+                Rollback:      k8sExec,
+                // Pipeline + Sandbox adapters are wired below (they reference
+                // the pipeline + sandbox instances which are created above).
+                Pipeline:      &chatopsPipelineAdapter{pipeline: pipeline, store: store},
+                Sandbox:       &chatopsSandboxAdapter{sandbox: sandbox, k8sClient: k8sClient, store: store, ghExec: ghExec, kaniko: kaniko, cfg: cfg},
+        }
+        chatopsHandler := chatops.NewWebhookHandler(chatopsDeps, cfg.GitHubWebhookSecret)
+        apiServer.SetChatopsHandler(chatopsHandler)
+
+        // v4.0.0: Wire the LLM provider pool + auto-merge status getters
+        // so /providers and /automerge endpoints work.
+        apiServer.SetProvidersStatusGetter(&providersStatusAdapter{router: router})
+        apiServer.SetAutoMergeStatusGetter(&autoMergeStatusAdapter{policy: autoMergePolicy, merger: autoMergeMerger})
+
+        logging.Info("chatops enabled",
+                "commands", len(chatops.AllCommands()),
+                "webhook_secret_set", cfg.GitHubWebhookSecret != "",
+        )
+        logging.Info("auto-merge configured",
+                "enabled", cfg.AutoMergeEnabled,
+                "namespaces", cfg.AutoMergeNamespaces,
+                "min_confidence", cfg.AutoMergeMinConfidence,
+                "max_per_hour", cfg.AutoMergeMaxPerHour,
+        )
+
+        // v4.0.0: Start the auto-merge merger loop. Polls tracked PRs every
+        // 30s, evaluates gates, merges when all pass. Also evaluates on
+        // demand via EvaluateNow (called from /sentinel approve, /sentinel merge).
+        if cfg.AutoMergeEnabled {
+                go autoMergeMerger.Run(ctx, 30*time.Second)
+                logging.Info("auto-merge merger started", "poll_interval", "30s")
+        }
+
         // v3.8.0: GitHub App — verified bot identity + auto-webhook registration
         // v3.11.0: Use NewWithAPIURL for GitHub Enterprise support (audit #2).
         // v3.13.0: Wire the App into prReviewer via WithGitHubApp() so PR comments
@@ -935,6 +1028,10 @@ func main() {
         if cfg.SlackBotToken != "" {
                 slackBot.SetBotToken(cfg.SlackBotToken)
         }
+
+        // v4.0.0: Wire the slack bot as the chatops pause controller so
+        // /sentinel pause + /sentinel resume can pause autonomous mode.
+        chatopsDeps.PauseController = slackBot
 
         // v3.5.0: Wire the Slack bot's pause checker into the detection layer.
         // When autonomous mode is paused via Slack, the clusterer skips emitting
@@ -1021,7 +1118,7 @@ func executeFix(
 
         switch fp.FixType {
         case schemas.FixCodeFix, schemas.FixRollForward:
-                return executeCodeFix(ctx, incident, cfg, ghExec, sandbox, kaniko, k8sClient, pipeline)
+                return executeCodeFix(ctx, incident, cfg, ghExec, sandbox, kaniko, k8sClient, store, pipeline)
 
         case schemas.FixRestart:
                 return k8sExec.Restart(ctx, fp)
@@ -1052,6 +1149,7 @@ func executeCodeFix(
         sandbox *executors.SandboxRunner,
         kaniko *executors.KanikoBuilder,
         k8sClient *k8s.Client,
+        store *feedback.Store,
         pipeline *agents.Pipeline,
 ) error {
         fp := incident.State.FixProposal
@@ -1268,6 +1366,47 @@ func executeCodeFix(
                 "pr_url": prResult.PRURL, "pr_number": prResult.PRNumber,
                 "sandbox_verified": sandboxVerified,
         })
+
+        // v4.0.0: Persist the PR association so chatops commands on this PR
+        // can find the incident via FindIncidentByPR (uses the new pr_repo
+        // + pr_number columns added by the v4.0.0 DB migration).
+        repoName := ""
+        if fp.Repo != nil {
+                repoName = *fp.Repo
+        }
+        if repoName != "" && prResult.PRNumber > 0 {
+                if err := store.UpdateIncidentPR(ctx, incident.IncidentID, repoName, prResult.PRNumber, prResult.PRBranch, prResult.PRURL); err != nil {
+                        logging.Error("failed to persist PR association for chatops", "error", err)
+                }
+        }
+
+        // v4.0.0: Post the initial [SENTINELSTATUS] comment so reviewers see
+        // the state + available commands immediately when they open the PR.
+        // The status comment is updated in place as the incident progresses
+        // (Prow's [APPROVALNOTIFIER] pattern — one comment per PR, edited in place).
+        if chatopsStatusManager != nil && repoName != "" {
+                chatopsInc := &chatops.Incident{
+                        ID:         incident.IncidentID.String(),
+                        Service:    incident.Cluster.Service,
+                        Namespace:  incident.Cluster.Namespace,
+                        Status:     string(incident.Status),
+                        PRURL:      prResult.PRURL,
+                        PRNumber:   prResult.PRNumber,
+                        PRRepo:     repoName,
+                        Confidence: 0,
+                }
+                if incident.State.RootCause != nil {
+                        chatopsInc.RootCause = incident.State.RootCause.Statement
+                        chatopsInc.Confidence = incident.State.RootCause.Confidence
+                }
+                extra := "Available commands: `/sentinel help` for the full list."
+                if !sandboxVerified {
+                        extra += "\n\n⚠️ Sandbox verification did not pass — review carefully before merging."
+                }
+                if err := chatopsStatusManager.Update(ctx, repoName, prResult.PRNumber, chatopsInc, extra); err != nil {
+                        logging.Error("failed to post initial status comment", "error", err)
+                }
+        }
         return nil
 }
 
@@ -1440,4 +1579,291 @@ func (a *prReviewVectorAdapter) Search(ctx context.Context, text string, k int) 
 // v3.7.0: Pass through hash fallback status
 func (a *prReviewVectorAdapter) UsingHashFallback() bool {
         return a.vs.UsingHashFallback()
+}
+
+// v4.0.0: chatops adapters — bridge feedback.Store + slog to chatops interfaces.
+
+// chatopsStoreAdapter adapts *feedback.Store to the chatops.Store interface.
+// The chatops package uses its own minimal Incident type (decoupled from
+// schemas.Incident) so it doesn't import schemas — this adapter converts.
+type chatopsStoreAdapter struct {
+        store *feedback.Store
+}
+
+func (a *chatopsStoreAdapter) FindIncidentByPR(ctx context.Context, repo string, prNumber int) (*chatops.Incident, error) {
+        inc, err := a.store.FindIncidentByPR(ctx, repo, prNumber)
+        if err != nil || inc == nil {
+                return nil, err
+        }
+        out := &chatops.Incident{
+                ID:         inc.IncidentID.String(),
+                Service:    inc.Cluster.Service,
+                Namespace:  inc.Cluster.Namespace,
+                Status:     string(inc.Status),
+        }
+        if inc.State.RootCause != nil {
+                out.RootCause = inc.State.RootCause.Statement
+                out.Confidence = inc.State.RootCause.Confidence
+                out.HasSchemaMigration = inc.State.RootCause.HasSchemaMigration
+        }
+        if inc.State.FixProposal != nil {
+                out.FixType = string(inc.State.FixProposal.FixType)
+                if inc.State.FixProposal.BaseBranch != nil {
+                        out.BaseBranch = *inc.State.FixProposal.BaseBranch
+                }
+                if inc.State.FixProposal.BranchName != nil {
+                        out.PRBranch = *inc.State.FixProposal.BranchName
+                }
+        }
+        if inc.State.ExecutionResult != nil {
+                if inc.State.ExecutionResult.PRURL != nil {
+                        out.PRURL = *inc.State.ExecutionResult.PRURL
+                }
+                if inc.State.ExecutionResult.PRNumber != nil {
+                        out.PRNumber = *inc.State.ExecutionResult.PRNumber
+                }
+                out.SandboxVerified = inc.State.ExecutionResult.SandboxVerified
+                if inc.State.ExecutionResult.SandboxSummary != nil {
+                        out.SandboxSummary = *inc.State.ExecutionResult.SandboxSummary
+                }
+        }
+        out.PRRepo = repo
+        // Copy the agent trace + hypotheses for /sentinel trace + /sentinel explain.
+        out.AgentTrace = inc.State.AgentTrace
+        for _, h := range inc.State.Hypotheses {
+                out.Hypotheses = append(out.Hypotheses, chatops.Hypothesis{
+                        ID:         h.HID,
+                        Statement:  h.Statement,
+                        Confidence: h.Confidence,
+                        Falsified:  h.Falsified,
+                })
+        }
+        // Policy verdict: derive from the governance decision if present.
+        if inc.State.GovernanceDecision != nil {
+                out.PolicyVerdict = string(inc.State.GovernanceDecision.Verdict)
+        }
+        return out, nil
+}
+
+func (a *chatopsStoreAdapter) LogCommandEvent(ctx context.Context, ev *chatops.CommandEvent) error {
+        fbEv := &feedback.CommandEvent{
+                IncidentID:       ev.IncidentID,
+                PRNumber:         ev.PRNumber,
+                PRRepo:           ev.PRRepo,
+                Command:          ev.Command,
+                Args:             ev.Args,
+                Author:           ev.Author,
+                AuthorPermission: ev.AuthorPermission,
+                Result:           ev.Result,
+                ResultDetail:     ev.ResultDetail,
+                Timestamp:        ev.Timestamp,
+        }
+        return a.store.LogCommandEvent(ctx, fbEv)
+}
+
+// slogAdapter bridges the chatops.Logger interface to logging.Info/Warn/Error.
+type slogAdapter struct{}
+
+func (s *slogAdapter) Info(msg string, args ...any)  { logging.Info(msg, args...) }
+func (s *slogAdapter) Warn(msg string, args ...any)  { logging.Warn(msg, args...) }
+func (s *slogAdapter) Error(msg string, args ...any) { logging.Error(msg, args...) }
+
+// v4.0.0: Auto-merge adapters — bridge automerge package to feedback.Store + outcome watcher.
+
+// autoMergeStoreAdapter adapts feedback.Store to automerge.Store.
+type autoMergeStoreAdapter struct {
+        store *feedback.Store
+}
+
+func (a *autoMergeStoreAdapter) UpdateAutoMergeStatus(ctx context.Context, incidentID string, status string) error {
+        return a.store.UpdateAutoMergeStatus(ctx, uuid.MustParse(incidentID), status)
+}
+
+// autoMergeOutcomeAdapter bridges the outcome watcher to the automerge package.
+// When the outcome watcher detects a regression post-merge, it triggers the
+// auto-merge cooldown (prevents more auto-merges while we recover).
+type autoMergeOutcomeAdapter struct {
+        watcher *feedback.OutcomeWatcher
+        policy  *automerge.Policy
+}
+
+func (a *autoMergeOutcomeAdapter) WatchPostMerge(ctx context.Context, incidentID, service, namespace string) {
+        if a.watcher == nil {
+                return
+        }
+        // Best-effort: the outcome watcher handles its own goroutine + recovery.
+        go func() {
+                // Phase 1 only (10 min) — Phase 2 (24h) is started separately by the
+                // existing outcome watcher wiring in the investigation handler.
+                a.watcher.WatchWithDetails(ctx, service, namespace, incidentID, true, "code_fix", "")
+        }()
+}
+
+// autoMergeClientAdapter bridges automerge.Policy + Merger to chatops.AutoMergeClient.
+type autoMergeClientAdapter struct {
+        merger *automerge.Merger
+        policy *automerge.Policy
+}
+
+func (a *autoMergeClientAdapter) Track(incidentID, repo string, prNumber int, baseBranch string, input chatops.AutoMergeInput) {
+        a.merger.Track(&automerge.TrackedPR{
+                IncidentID: incidentID,
+                Repo:       repo,
+                PRNumber:   prNumber,
+                BaseBranch: baseBranch,
+                Input: automerge.Input{
+                        IncidentID:         input.IncidentID,
+                        Service:            input.Service,
+                        Namespace:          input.Namespace,
+                        FixType:            input.FixType,
+                        HasSchemaMigration: input.HasSchemaMigration,
+                        IsHighRisk:         input.IsHighRisk,
+                        Confidence:         input.Confidence,
+                        SandboxVerified:    input.SandboxVerified,
+                        PolicyVerdict:      input.PolicyVerdict,
+                },
+        })
+}
+
+func (a *autoMergeClientAdapter) Untrack(repo string, prNumber int) {
+        a.merger.Untrack(repo, prNumber)
+}
+
+func (a *autoMergeClientAdapter) EvaluateNow(ctx context.Context, repo string, prNumber int) {
+        a.merger.EvaluateNow(ctx, repo, prNumber)
+}
+
+func (a *autoMergeClientAdapter) Status() chatops.AutoMergeStatus {
+        s := a.policy.Status()
+        return chatops.AutoMergeStatus{
+                Enabled:        s.Enabled,
+                Namespaces:     s.Namespaces,
+                MinConfidence:  s.MinConfidence,
+                RequireCIGreen: s.RequireCIGreen,
+                MaxPerHour:     s.MaxPerHour,
+                MergesThisHour: s.MergesThisHour,
+                CooldownActive: s.CooldownActive,
+                CooldownReason: s.CooldownReason,
+        }
+}
+
+func (a *autoMergeClientAdapter) RecordRegression(reason string) {
+        a.policy.RecordRegression(reason)
+}
+
+func (a *autoMergeClientAdapter) ClearCooldown() {
+        // The policy's cooldown is internal — we expose a method on the policy
+        // via a type assertion. For now, no-op (the cooldown expires on its own).
+        // TODO: expose ClearCooldown on automerge.Policy.
+}
+
+// chatopsPipelineAdapter bridges agents.Pipeline to chatops.PipelineRunner.
+type chatopsPipelineAdapter struct {
+        pipeline *agents.Pipeline
+        store    *feedback.Store
+}
+
+func (a *chatopsPipelineAdapter) RetryFixProposal(ctx context.Context, incidentID string) error {
+        inc, err := a.store.GetIncident(ctx, uuid.MustParse(incidentID))
+        if err != nil || inc == nil {
+                return fmt.Errorf("incident not found: %w", err)
+        }
+        return a.pipeline.RetryFixProposal(ctx, &inc.State)
+}
+
+func (a *chatopsPipelineAdapter) Reinvestigate(ctx context.Context, incidentID string) error {
+        inc, err := a.store.GetIncident(ctx, uuid.MustParse(incidentID))
+        if err != nil || inc == nil {
+                return fmt.Errorf("incident not found: %w", err)
+        }
+        // Wipe hypotheses + root cause + fix proposal to force full re-investigation.
+        inc.State.Hypotheses = nil
+        inc.State.Evidence = nil
+        inc.State.RootCause = nil
+        inc.State.FixProposal = nil
+        inc.State.Iterations = 0
+        return a.pipeline.Run(ctx, &inc.State)
+}
+
+// chatopsSandboxAdapter bridges executors.SandboxRunner to chatops.SandboxRunner.
+// Re-runs the sandbox for an incident by reconstructing the incident from the DB.
+type chatopsSandboxAdapter struct {
+        sandbox   *executors.SandboxRunner
+        k8sClient *k8s.Client
+        store     *feedback.Store
+        ghExec    *executors.GitHubExecutor
+        kaniko    *executors.KanikoBuilder
+        cfg       *config.Config
+}
+
+func (a *chatopsSandboxAdapter) RunForIncident(ctx context.Context, incidentID string) (bool, string, error) {
+        inc, err := a.store.GetIncident(ctx, uuid.MustParse(incidentID))
+        if err != nil || inc == nil {
+                return false, "incident not found", err
+        }
+        if inc.State.FixProposal == nil {
+                return false, "no fix proposal on this incident", nil
+        }
+        // Run the sandbox directly.
+        result := a.sandbox.Run(ctx, inc)
+        return result.Verified, result.Summary, nil
+}
+
+// v4.0.0: Status adapters for the /providers and /automerge API endpoints.
+
+// providersStatusAdapter wraps *llm.Router to implement api.ProvidersStatusGetter.
+type providersStatusAdapter struct {
+	router *llm.Router
+}
+
+func (a *providersStatusAdapter) ProviderStatuses() []any {
+	pool := a.router.Pool()
+	if pool == nil {
+		return []any{}
+	}
+	statuses := pool.Status()
+	out := make([]any, len(statuses))
+	for i, s := range statuses {
+		out[i] = s
+	}
+	return out
+}
+
+// autoMergeStatusAdapter wraps *automerge.Policy + *automerge.Merger to
+// implement api.AutoMergeStatusGetter.
+type autoMergeStatusAdapter struct {
+	policy  *automerge.Policy
+	merger  *automerge.Merger
+}
+
+func (a *autoMergeStatusAdapter) AutoMergeStatus() any {
+	status := a.policy.Status()
+	tracked := a.merger.TrackedPRs()
+	trackedOut := make([]map[string]any, 0, len(tracked))
+	for _, pr := range tracked {
+		trackedOut = append(trackedOut, map[string]any{
+			"incident_id":  pr.IncidentID,
+			"repo":         pr.Repo,
+			"pr_number":    pr.PRNumber,
+			"base_branch":  pr.BaseBranch,
+			"added_at":     pr.AddedAt,
+			"last_eval":    pr.LastEval,
+			"ci_state":     pr.Input.CIStatus.State,
+			"confidence":   pr.Input.Confidence,
+			"service":      pr.Input.Service,
+			"namespace":    pr.Input.Namespace,
+		})
+	}
+	return map[string]any{
+		"enabled":           status.Enabled,
+		"namespaces":        status.Namespaces,
+		"min_confidence":    status.MinConfidence,
+		"require_ci_green":  status.RequireCIGreen,
+		"max_per_hour":      status.MaxPerHour,
+		"merges_this_hour":  status.MergesThisHour,
+		"cooldown_active":   status.CooldownActive,
+		"cooldown_until":    status.CooldownUntil,
+		"cooldown_reason":   status.CooldownReason,
+		"tracked_prs":       trackedOut,
+	}
 }

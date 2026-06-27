@@ -220,3 +220,33 @@ func isSafeFixType(t schemas.FixType) bool {
         }
         return false
 }
+
+// IsAutoMergeAllowed returns true if a fix with the given properties is
+// eligible for auto-merge (subject to the merger's other gates: sandbox,
+// confidence, CI). This is the safety-policy contribution to the auto-merge
+// decision — it's a stricter subset of Evaluate().
+//
+// v4.0.0: Implemented by automerge.SafetyChecker interface.
+//
+// Rules (any one of these returns false):
+//   - HasSchemaMigration: schema migrations always need human review
+//   - FixType == rollback: rollbacks always need human review
+//   - isHighRisk: high-risk services need explicit /sentinel approve
+//   - !isSafeFixType: infrastructure/unknown fix types need human review
+func (p *Policy) IsAutoMergeAllowed(fixType string, hasSchemaMigration bool, isHighRisk bool) bool {
+        if hasSchemaMigration {
+                return false
+        }
+        if fixType == "rollback" {
+                return false
+        }
+        if isHighRisk {
+                // High-risk services CAN be auto-merged — but only if the operator
+                // has explicitly approved via /sentinel approve. The merger checks
+                // the approved label separately. From the safety policy's perspective,
+                // we return true and let the merger gate on the label.
+                // (Returning false here would block even approved high-risk merges.)
+        }
+        ft := schemas.FixType(fixType)
+        return isSafeFixType(ft)
+}

@@ -2,6 +2,7 @@
 package api
 
 import (
+        "bytes"
         "context"
         "crypto/subtle"
         "encoding/json"
@@ -42,6 +43,18 @@ type Server struct {
         pauseController PauseController
         webUIHandler    http.Handler
         http            *http.Server
+
+        // v4.0.0: Chatops handler — runs alongside webhookHandler on /webhook/github.
+        // When set, /webhook/github first calls webhookHandler (prreview — handles
+        // pull_request events for predictive PR review). If webhookHandler doesn't
+        // claim the event (returns 200 without writing), the chatops handler runs
+        // (handles issue_comment events for /sentinel commands).
+        chatopsHandler http.Handler
+
+        // v4.0.0: LLM provider pool status getter (for /providers endpoint).
+        providersStatus ProvidersStatusGetter
+        // v4.0.0: Auto-merge status getter (for /automerge endpoint).
+        autoMergeStatus AutoMergeStatusGetter
 
         // v3.7.0: SSE
         eventSubs   map[chan ServerEvent]bool
@@ -176,6 +189,10 @@ func New(addr string, store Store, settings SettingsGetter, investigate Investig
         mux.HandleFunc("/events", s.handleSSE)
         mux.HandleFunc("/webhook/github", s.handleWebhook)
         mux.HandleFunc("/slack/events", s.handleSlack)
+        // v4.0.0: LLM provider pool status (health, failover counts, tripped breakers)
+        mux.HandleFunc("/providers", s.handleProviders)
+        // v4.0.0: Auto-merge policy status (rate limit, cooldown, tracked PRs)
+        mux.HandleFunc("/automerge", s.handleAutoMerge)
         mux.HandleFunc("/", s.handleWebUI)
 
         // v3.8.4: Wrap the mux in an auth middleware that gates admin endpoints
@@ -294,6 +311,36 @@ func (s *Server) SetSlackHandler(h http.Handler)       { s.slackHandler = h }
 func (s *Server) SetPauseController(pc PauseController) { s.pauseController = pc }
 func (s *Server) SetWebUIHandler(h http.Handler)       { s.webUIHandler = h }
 func (s *Server) SetRuntimeCfgSaver(r RuntimeCfgSaver)  { s.rtCfgSaver = r }
+
+// SetChatopsHandler wires the chatops webhook handler. v4.0.0.
+// When set, /webhook/github events are dispatched to BOTH the prreview
+// handler (pull_request events) and the chatops handler (issue_comment
+// events). Each handler ignores event types it doesn't care about.
+func (s *Server) SetChatopsHandler(h http.Handler)      { s.chatopsHandler = h }
+
+// SetProvidersStatusGetter wires the LLM provider pool status getter. v4.0.0.
+// Used by /providers to expose pool health (tripped breakers, failover counts).
+func (s *Server) SetProvidersStatusGetter(g ProvidersStatusGetter) {
+        s.providersStatus = g
+}
+
+// SetAutoMergeStatusGetter wires the auto-merge policy status getter. v4.0.0.
+// Used by /automerge to expose policy state (rate limit, cooldown, tracked PRs).
+func (s *Server) SetAutoMergeStatusGetter(g AutoMergeStatusGetter) {
+        s.autoMergeStatus = g
+}
+
+// ProvidersStatusGetter returns the LLM provider pool status. Implemented by
+// a wrapper around *llm.Pool in main.go.
+type ProvidersStatusGetter interface {
+        ProviderStatuses() []any
+}
+
+// AutoMergeStatusGetter returns the auto-merge policy status + tracked PRs.
+// Implemented by a wrapper around *automerge.Policy + *automerge.Merger.
+type AutoMergeStatusGetter interface {
+        AutoMergeStatus() any
+}
 
 // BroadcastEvent pushes an event to all connected SSE clients.
 func (s *Server) BroadcastEvent(eventType string, data interface{}) {
@@ -569,11 +616,43 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
-        if s.webhookHandler == nil {
+        // v4.0.0: Dispatch to both prreview (pull_request events) AND chatops
+        // (issue_comment events). Each handler ignores event types it doesn't
+        // care about. We buffer the body so both handlers can read it.
+        if s.webhookHandler == nil && s.chatopsHandler == nil {
                 writeJSON(w, 503, map[string]string{"error": "webhook handler not configured"})
                 return
         }
-        s.webhookHandler.ServeHTTP(w, r)
+
+        // Read the body once, dispatch to both handlers via a fresh reader.
+        bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, 1<<20)) // 1MB cap
+        if err != nil {
+                writeJSON(w, 400, map[string]string{"error": "read body failed"})
+                return
+        }
+
+        // Wrap the body for each handler so they can re-read it.
+        multiReader := func() io.Reader { return bytes.NewReader(bodyBytes) }
+
+        // 1. Dispatch to prreview (predictive PR review — handles pull_request events).
+        if s.webhookHandler != nil {
+                req := r.Clone(r.Context())
+                req.Body = io.NopCloser(multiReader())
+                s.webhookHandler.ServeHTTP(w, req)
+        }
+
+        // 2. Dispatch to chatops (handles issue_comment events for /sentinel commands).
+        // Only run if chatops is wired AND the event is issue_comment (the chatops
+        // handler checks this internally, but we short-circuit here to avoid
+        // buffering + parsing for non-issue_comment events).
+        if s.chatopsHandler != nil {
+                eventType := r.Header.Get("X-GitHub-Event")
+                if eventType == "issue_comment" {
+                        req := r.Clone(r.Context())
+                        req.Body = io.NopCloser(multiReader())
+                        s.chatopsHandler.ServeHTTP(w, req)
+                }
+        }
 }
 
 func (s *Server) handleSlack(w http.ResponseWriter, r *http.Request) {
@@ -582,6 +661,38 @@ func (s *Server) handleSlack(w http.ResponseWriter, r *http.Request) {
                 return
         }
         s.slackHandler.ServeHTTP(w, r)
+}
+
+// handleProviders returns the LLM provider pool status. v4.0.0.
+// Shows each provider's health: tripped state, last failure, call counts.
+// Used by the web UI's "LLM Providers" panel.
+func (s *Server) handleProviders(w http.ResponseWriter, r *http.Request) {
+        if s.providersStatus == nil {
+                writeJSON(w, 200, map[string]any{
+                        "enabled":  false,
+                        "providers": []any{},
+                        "message":  "multi-provider pool not configured (single-provider mode)",
+                })
+                return
+        }
+        statuses := s.providersStatus.ProviderStatuses()
+        writeJSON(w, 200, map[string]any{
+                "enabled":   len(statuses) > 0,
+                "providers": statuses,
+        })
+}
+
+// handleAutoMerge returns the auto-merge policy status. v4.0.0.
+// Shows: enabled, namespaces, rate limit usage, cooldown state, tracked PRs.
+func (s *Server) handleAutoMerge(w http.ResponseWriter, r *http.Request) {
+        if s.autoMergeStatus == nil {
+                writeJSON(w, 200, map[string]any{
+                        "enabled":  false,
+                        "message":  "auto-merge not configured",
+                })
+                return
+        }
+        writeJSON(w, 200, s.autoMergeStatus.AutoMergeStatus())
 }
 
 func (s *Server) handleWebUI(w http.ResponseWriter, r *http.Request) {

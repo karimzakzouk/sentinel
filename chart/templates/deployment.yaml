@@ -57,6 +57,29 @@ spec:
             # v3.11.0: Embedding dim for hash fallback (audit #13)
             - name: SENTINEL_LLM_EMBEDDING_DIM
               value: {{ .Values.sentinel.llm.embeddingDim | default 1536 | quote }}
+            # v4.0.0: Multi-provider failover pool (JSON array of ProviderConfig).
+            # Empty = single-provider mode (uses SENTINEL_LLM_PROVIDER + SENTINEL_LLM_API_KEY).
+            {{- if .Values.sentinel.llm.providers }}
+            - name: SENTINEL_LLM_PROVIDERS
+              value: {{ .Values.sentinel.llm.providers | toJson | quote }}
+            {{- end }}
+            # v4.0.0: Auto-merge configuration
+            - name: SENTINEL_AUTO_MERGE_ENABLED
+              value: {{ .Values.sentinel.autoMerge.enabled | quote }}
+            {{- if .Values.sentinel.autoMerge.namespaces }}
+            - name: SENTINEL_AUTO_MERGE_NAMESPACES
+              value: {{ join "," .Values.sentinel.autoMerge.namespaces | quote }}
+            {{- end }}
+            - name: SENTINEL_AUTO_MERGE_MIN_CONFIDENCE
+              value: {{ .Values.sentinel.autoMerge.minConfidence | quote }}
+            - name: SENTINEL_AUTO_MERGE_REQUIRE_CI
+              value: {{ .Values.sentinel.autoMerge.requireCI | quote }}
+            - name: SENTINEL_AUTO_MERGE_CI_TIMEOUT_SEC
+              value: {{ .Values.sentinel.autoMerge.ciTimeoutSec | quote }}
+            - name: SENTINEL_AUTO_MERGE_MAX_PER_HOUR
+              value: {{ .Values.sentinel.autoMerge.maxPerHour | quote }}
+            - name: SENTINEL_AUTO_MERGE_COOLDOWN_MIN
+              value: {{ .Values.sentinel.autoMerge.cooldownMin | quote }}
             - name: SENTINEL_GITHUB_TOKEN
               valueFrom:
                 secretKeyRef:

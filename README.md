@@ -592,6 +592,102 @@ make build  # Compile Go binary with embedded UI
 - [ ] Loki + Jaeger evidence backends (Prometheus is wired; Loki/Jaeger are stubs)
 - [ ] Integration tests with mock K8s API
 - [ ] Homebrew tap for `brew install sentinel`
+- [ ] Sandbox Level 4/5 (log error rate + probe latency) — strengthens the gate that auto-merge depends on
+- [ ] Regression test generation — convert each incident into permanent coverage
+
+## v4.0.0 — Chatops + Auto-merge + Multi-provider LLM Pool
+
+### Chatops in PR (`/sentinel` commands)
+
+Sentinel now responds to `/sentinel <command>` comments on its PRs. Every command is parsed, permission-checked, executed, and the result is fed back via emoji reactions + an in-place `[SENTINELSTATUS]` comment.
+
+**Informational (read access):**
+- `/sentinel help` — auto-generated list, filtered by your permission (🔒 for locked commands)
+- `/sentinel status` — re-render the in-place status comment
+- `/sentinel explain` — LLM re-explains the root cause in plain English
+- `/sentinel trace` — dump the full agent reasoning trace (hypotheses, evidence, decisions)
+
+**Operational (write access):**
+- `/sentinel retry-sandbox` — re-run sandbox verification on the current branch
+- `/sentinel alternatives` — generate 3 alternative fix approaches via LLM
+- `/sentinel apply <A|B|C>` — switch the PR to the chosen alternative (placeholder)
+- `/sentinel hold` / `/sentinel hold cancel` — block auto-merge (keeps approval)
+- `/sentinel approve` / `/sentinel approve cancel` — approve for auto-merge (audit logged)
+- `/sentinel no-merge` / `/sentinel no-merge cancel` — remove from auto-merge queue entirely
+- `/sentinel merge` / `/sentinel merge cancel` — merge now through Sentinel (evaluates gates, starts monitoring)
+- `/sentinel investigate` — full re-investigation from scratch
+- `/sentinel retest` — re-run LLM pipeline keeping the same root cause
+- `/sentinel verify <paths>` / `/sentinel verify cancel` — add extra probe paths to sandbox
+
+**Destructive (admin access):**
+- `/sentinel revert` — revert this PR (calls kubectl rollout undo)
+- `/sentinel rollback <deployment> [--namespace <ns>]` — rollback a specific deployment
+- `/sentinel pause [duration]` / `/sentinel resume` — pause autonomous mode globally
+- `/sentinel override <sandbox|ci|cooldown>` — force-pass a check (audit logged)
+
+Design principles (informed by Prow + Mergify research):
+- Always ACK with a 👍 reaction immediately (Prow's #1 complaint was silence)
+- One negation convention: every state-changing command takes `cancel`
+- Labels as the gate, a separate merger as the actor (commands never merge directly)
+- Auto-generated command registry — `/sentinel help` is generated from code
+- In-place editable `[SENTINELSTATUS]` comment (Prow's `[APPROVALNOTIFIER]` pattern)
+- Permission errors are actionable — say *why* and *what to do*
+- No fun commands — Sentinel is a prod tool
+
+### Auto-merge
+
+When all gates pass, Sentinel can auto-merge PRs — closing the loop from detection to deployment without human intervention.
+
+**Three opt-in layers (all must be true):**
+1. Global: `SENTINEL_AUTO_MERGE_ENABLED=true` (or `sentinel.autoMerge.enabled: true` in Helm)
+2. Namespace: `SENTINEL_AUTO_MERGE_NAMESPACES=sim,staging`
+3. Per-service annotation: `sentinel.io/auto-merge: "true"`
+
+**Three gates (all must pass):**
+1. Sandbox verified (hard)
+2. Confidence ≥ 0.85 + safety policy allowed (hard)
+3. CI green (configurable — soft by default, hard in strict mode)
+
+**Safety valves:**
+- Rate limit: max 3 auto-merges per hour (prevents cascade → many bad merges)
+- Cooldown: 1 hour pause after any regression detected
+- Escape hatch: `/sentinel no-merge` (chatops)
+
+Monitor via the `/automerge` API endpoint (policy status + tracked PRs).
+
+### Multi-provider LLM Pool
+
+Stack multiple API keys with priority-ordered failover + circuit breaker:
+
+```yaml
+sentinel:
+  llm:
+    providers:
+      - id: or-1
+        provider: openrouter
+        apiKey: sk-or-...
+        fastModel: anthropic/claude-3.5-sonnet
+        frontierModel: anthropic/claude-3.5-sonnet
+        priority: 1
+      - id: groq-1
+        provider: groq
+        apiKey: gsk_...
+        fastModel: llama-3.1-70b-versatile
+        frontierModel: llama-3.1-70b-versatile
+        priority: 2
+      - id: gemini-1
+        provider: gemini
+        apiKey: AIza...
+        fastModel: gemini-2.0-flash
+        frontierModel: gemini-2.0-pro
+        priority: 3
+```
+
+- Provider 1 fails → automatic failover to provider 2 (within the same LLM call)
+- Auth errors trip the breaker for 1 hour; rate limits for 60s; network for 15s
+- 2 consecutive failures needed to trip (single flake doesn't bench a provider)
+- Pool status exposed via `/providers` API endpoint + `pool.Status()` for the web UI
+- Empty config = legacy single-provider mode (backwards compatible)
 
 ## License
 

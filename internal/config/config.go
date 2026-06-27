@@ -4,9 +4,13 @@
 package config
 
 import (
+        "encoding/json"
         "fmt"
+        "log"
         "os"
         "strings"
+
+        "github.com/karimzakzouk/sentinel/v3/internal/llm"
 )
 
 // Config is the immutable-at-startup config. Runtime-mutable settings
@@ -203,6 +207,30 @@ type Config struct {
         LLMMaxRetries        int
         LLMRetryBaseDelayMs  int
 
+        // v4.0.0: Multi-provider LLM pool with priority-ordered failover + circuit breaker.
+        // Operators can stack multiple API keys (e.g. 3 OpenRouter + 2 Groq + 1 Gemini)
+        // and Sentinel will try them in priority order. If a provider fails, the
+        // circuit breaker trips for that provider and subsequent calls skip it
+        // until the reset window expires.
+        //
+        // Loaded from SENTINEL_LLM_PROVIDERS env var (JSON array) — see
+        // internal/llm/pool.go for the ProviderConfig schema. Empty = legacy
+        // single-provider mode (uses LLMProvider + LLMAPIKey above).
+        LLMProviders []llm.ProviderConfig
+
+        // v4.0.0: Auto-merge configuration. All three opt-in layers must be true
+        // for auto-merge to fire on a given PR:
+        //   1. AutoMergeEnabled (global switch)
+        //   2. Namespace in AutoMergeNamespaces
+        //   3. Service has sentinel.io/auto-merge: "true" annotation
+        AutoMergeEnabled        bool
+        AutoMergeNamespaces     []string
+        AutoMergeMinConfidence  float64
+        AutoMergeRequireCI      bool
+        AutoMergeCITimeoutSec   int
+        AutoMergeMaxPerHour     int
+        AutoMergeCooldownMin    int
+
         // v3.4.0: Observability backends (for Evidence Gatherer).
         PrometheusURL string
         LokiURL       string
@@ -356,6 +384,21 @@ func Load() *Config {
 
                 // v3.4.0: Structured logging level
                 LogLevel: getenv("SENTINEL_LOG_LEVEL", "INFO"),
+
+                // v4.0.0: Multi-provider pool. Loaded from JSON env var.
+                // Empty = legacy single-provider mode (uses LLMProvider + LLMAPIKey).
+                LLMProviders: loadLLMProviders(),
+
+                // v4.0.0: Auto-merge config. All defaults are conservative —
+                // auto-merge is OFF by default, no namespaces allowed, requires
+                // explicit opt-in per service via annotation.
+                AutoMergeEnabled:       getenvBool("SENTINEL_AUTO_MERGE_ENABLED", false),
+                AutoMergeNamespaces:    splitCSV(getenv("SENTINEL_AUTO_MERGE_NAMESPACES", "")),
+                AutoMergeMinConfidence: getenvFloat("SENTINEL_AUTO_MERGE_MIN_CONFIDENCE", 0.85),
+                AutoMergeRequireCI:     getenvBool("SENTINEL_AUTO_MERGE_REQUIRE_CI", true),
+                AutoMergeCITimeoutSec:  getenvInt("SENTINEL_AUTO_MERGE_CI_TIMEOUT_SEC", 900),
+                AutoMergeMaxPerHour:    getenvInt("SENTINEL_AUTO_MERGE_MAX_PER_HOUR", 3),
+                AutoMergeCooldownMin:   getenvInt("SENTINEL_AUTO_MERGE_COOLDOWN_MIN", 60),
         }
 }
 
@@ -584,4 +627,49 @@ func splitCSV(s string) []string {
                 }
         }
         return out
+}
+
+// loadLLMProviders loads the multi-provider pool config from the
+// SENTINEL_LLM_PROVIDERS env var. The value must be a JSON array of
+// ProviderConfig objects (see internal/llm/pool.go).
+//
+// Example env value (single line, escaped):
+//   SENTINEL_LLM_PROVIDERS='[{"id":"or-1","provider":"openrouter","apiKey":"sk-or-...","fastModel":"anthropic/claude-3.5-sonnet","frontierModel":"anthropic/claude-3.5-sonnet","priority":1},{"id":"groq-1","provider":"groq","apiKey":"gsk_...","fastModel":"llama-3.1-70b-versatile","frontierModel":"llama-3.1-70b-versatile","priority":2}]'
+//
+// For Helm, set via --set-json or a values file. Empty/unset = legacy
+// single-provider mode (uses LLMProvider + LLMAPIKey fields).
+func loadLLMProviders() []llm.ProviderConfig {
+        raw := os.Getenv("SENTINEL_LLM_PROVIDERS")
+        if raw == "" {
+                return nil
+        }
+        var configs []llm.ProviderConfig
+        if err := json.Unmarshal([]byte(raw), &configs); err != nil {
+                log.Printf("[config] SENTINEL_LLM_PROVIDERS is set but failed to parse as JSON: %v — ignoring (falling back to single-provider mode)", err)
+                return nil
+        }
+        // Validate: drop entries with no API key (unless ollama/vllm which don't need one)
+        valid := make([]llm.ProviderConfig, 0, len(configs))
+        for _, c := range configs {
+                if c.ProviderType == "" {
+                        log.Printf("[config] LLM provider entry missing 'provider' field — skipping: %+v", c)
+                        continue
+                }
+                if c.APIKey == "" && c.ProviderType != "ollama" && c.ProviderType != "vllm" {
+                        log.Printf("[config] LLM provider %s/%s has no apiKey — skipping", c.ID, c.ProviderType)
+                        continue
+                }
+                valid = append(valid, c)
+        }
+        if len(valid) > 0 {
+                log.Printf("[config] loaded %d LLM providers for failover pool: %s", len(valid),
+                        func() string {
+                                ids := make([]string, len(valid))
+                                for i, c := range valid {
+                                        ids[i] = fmt.Sprintf("%s(%s,p%d)", c.ID, c.ProviderType, c.Priority)
+                                }
+                                return strings.Join(ids, ", ")
+                        }())
+        }
+        return valid
 }

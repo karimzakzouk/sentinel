@@ -270,3 +270,16 @@ func mustJSON(v any) string {
         b, _ := json.Marshal(v)
         return string(b)
 }
+
+// RollbackByName triggers kubectl rollout undo on a deployment by name.
+// v4.0.0: Used by chatops /sentinel rollback + /sentinel revert commands.
+// This is a thin wrapper around Rollback that constructs a synthetic
+// FixProposal so we don't have to refactor the existing method.
+func (e *K8sExecutor) RollbackByName(ctx context.Context, namespace, deploymentName string) error {
+	fp := &schemas.FixProposal{
+		FixType:         schemas.FixRollback,
+		TargetService:   deploymentName,
+		TargetNamespace: namespace,
+	}
+	return e.Rollback(ctx, fp)
+}

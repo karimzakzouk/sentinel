@@ -9,6 +9,7 @@ import (
         "database/sql"
         "encoding/json"
         "fmt"
+        "log"
         // "math" // removed: no longer needed after float32 migration
         "strings"
         "sync"
@@ -127,8 +128,96 @@ func (s *Store) initSchema() error {
                         FOREIGN KEY (incident_id) REFERENCES incidents(incident_id)
                 );
                 CREATE INDEX IF NOT EXISTS idx_vectors_service ON incident_vectors(service);
+
+                -- v4.0.0: PR-tracking columns on incidents (added via ALTER in
+                -- migrateSchema — see that function for the migration logic).
+                -- Columns: pr_number INTEGER, pr_repo TEXT, pr_branch TEXT,
+                -- pr_url TEXT, auto_merge_status TEXT.
+                -- Indexed on (pr_repo, pr_number) so chatops command lookup is O(1).
+
+                -- v4.0.0: Audit log for chatops commands. Every /sentinel command
+                -- is logged here for compliance + analytics ("which commands are
+                -- actually used?").
+                CREATE TABLE IF NOT EXISTS command_events (
+                        event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        incident_id TEXT,
+                        pr_number INTEGER NOT NULL,
+                        pr_repo TEXT NOT NULL,
+                        command TEXT NOT NULL,
+                        args TEXT,
+                        author TEXT NOT NULL,
+                        author_permission TEXT NOT NULL,
+                        result TEXT NOT NULL,
+                        result_detail TEXT,
+                        ts DATETIME NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_command_events_pr ON command_events(pr_repo, pr_number);
+                CREATE INDEX IF NOT EXISTS idx_command_events_incident ON command_events(incident_id);
+                CREATE INDEX IF NOT EXISTS idx_command_events_ts ON command_events(ts DESC);
         `)
-        return err
+        if err != nil {
+                return err
+        }
+
+        // v4.0.0: Run additive migrations (ALTER TABLE ADD COLUMN — idempotent).
+        // SQLite doesn't support IF NOT EXISTS on ADD COLUMN, so we check the
+        // schema first and skip columns that already exist.
+        return s.migrateSchema()
+}
+
+// migrateSchema applies additive column migrations to the incidents table.
+// v4.0.0: Adds pr_number, pr_repo, pr_branch, pr_url, auto_merge_status
+// columns for chatops support. Idempotent — safe to run on every startup.
+func (s *Store) migrateSchema() error {
+        // PRAGMA table_info returns one row per column. We check which columns
+        // already exist before issuing ALTER TABLE statements.
+        rows, err := s.db.Query(`PRAGMA table_info(incidents)`)
+        if err != nil {
+                return fmt.Errorf("pragma table_info: %w", err)
+        }
+        defer rows.Close()
+
+        existing := map[string]bool{}
+        for rows.Next() {
+                var cid int
+                var name, ctype string
+                var notnull, pk int
+                var dflt sql.NullString
+                if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+                        return fmt.Errorf("scan pragma row: %w", err)
+                }
+                existing[name] = true
+        }
+        if err := rows.Err(); err != nil {
+                return err
+        }
+
+        type colAdd struct {
+                name, decl string
+        }
+        additions := []colAdd{
+                {"pr_number", "INTEGER"},
+                {"pr_repo", "TEXT"},
+                {"pr_branch", "TEXT"},
+                {"pr_url", "TEXT"},
+                {"auto_merge_status", "TEXT DEFAULT 'not_eligible'"},
+        }
+        for _, a := range additions {
+                if existing[a.name] {
+                        continue
+                }
+                if _, err := s.db.Exec(fmt.Sprintf("ALTER TABLE incidents ADD COLUMN %s %s", a.name, a.decl)); err != nil {
+                        return fmt.Errorf("alter table add %s: %w", a.name, err)
+                }
+                log.Printf("[store] migration: added column %s to incidents table", a.name)
+        }
+
+        // Add the (pr_repo, pr_number) index if it doesn't exist.
+        // SQLite supports CREATE INDEX IF NOT EXISTS so we can do this unconditionally.
+        if _, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_incidents_pr ON incidents(pr_repo, pr_number) WHERE pr_number IS NOT NULL`); err != nil {
+                log.Printf("[store] WARNING: could not create idx_incidents_pr: %v (continuing)", err)
+        }
+        return nil
 }
 
 // UpsertIncident stores or updates an incident.
@@ -578,4 +667,172 @@ func boolToInt(b bool) int {
                 return 1
         }
         return 0
+}
+
+// v4.0.0: chatops support methods.
+
+// FindIncidentByPR looks up an incident by its associated PR number + repo.
+// Used by chatops command handlers to resolve "/sentinel <cmd>" on a PR
+// comment to the underlying incident. Returns nil if no incident matches.
+func (s *Store) FindIncidentByPR(ctx context.Context, repo string, prNumber int) (*schemas.Incident, error) {
+        s.mu.RLock()
+        defer s.mu.RUnlock()
+
+        // Try the dedicated pr_repo/pr_number columns first (v4.0.0 migration).
+        row := s.db.QueryRowContext(ctx, `
+                SELECT incident_id, created_at, updated_at, service, namespace, status, severity, cluster_json, state_json, beta_alpha, beta_beta, git_commit_at_resolution, postmortem
+                FROM incidents
+                WHERE pr_repo = ? AND pr_number = ?
+                ORDER BY updated_at DESC
+                LIMIT 1
+        `, repo, prNumber)
+
+        inc, _, err := scanIncidentRow(row)
+        if err == nil && inc != nil {
+                return inc, nil
+        }
+        if err != nil && err != sql.ErrNoRows {
+                return nil, err
+        }
+
+        // Fallback: scan state_json for matching PR info (older incidents
+        // from before the v4.0.0 migration that haven't been updated).
+        rows, err := s.db.QueryContext(ctx, `
+                SELECT incident_id, created_at, updated_at, service, namespace, status, severity, cluster_json, state_json, beta_alpha, beta_beta, git_commit_at_resolution, postmortem
+                FROM incidents
+                WHERE status IN ('verified', 'resolved', 'executing', 'fix_proposed', 'approved')
+                ORDER BY updated_at DESC
+                LIMIT 200
+        `)
+        if err != nil {
+                return nil, err
+        }
+        defer rows.Close()
+        for rows.Next() {
+                inc, _, err := scanIncidentRow(rows)
+                if err != nil {
+                        continue
+                }
+                // Check if this incident's PR matches
+                if inc.State.ExecutionResult != nil && inc.State.ExecutionResult.PRNumber != nil &&
+                        *inc.State.ExecutionResult.PRNumber == prNumber {
+                        if fp := inc.State.FixProposal; fp != nil && fp.Repo != nil {
+                                if normalizeRepo(*fp.Repo) == normalizeRepo(repo) {
+                                        return inc, nil
+                                }
+                        }
+                        return inc, nil
+                }
+        }
+        return nil, nil
+}
+
+// normalizeRepo lowercases + strips trailing .git for repo comparison.
+func normalizeRepo(r string) string {
+        r = strings.ToLower(strings.TrimSpace(r))
+        r = strings.TrimSuffix(r, ".git")
+        return r
+}
+
+// UpdateIncidentPR associates an incident with a PR number + repo.
+// Called after the GitHub executor opens a PR, so chatops commands on that
+// PR can find the incident.
+func (s *Store) UpdateIncidentPR(ctx context.Context, incidentID uuid.UUID, repo string, prNumber int, prBranch, prURL string) error {
+        s.mu.Lock()
+        defer s.mu.Unlock()
+        _, err := s.db.ExecContext(ctx, `
+                UPDATE incidents SET pr_repo = ?, pr_number = ?, pr_branch = ?, pr_url = ?, updated_at = ?
+                WHERE incident_id = ?
+        `, repo, prNumber, nullableString(&prBranch), nullableString(&prURL), time.Now().UTC(), incidentID.String())
+        return err
+}
+
+// UpdateAutoMergeStatus sets the auto_merge_status column on an incident.
+// Values: "not_eligible", "pending_ci", "merged", "skipped:<reason>", "regressed".
+func (s *Store) UpdateAutoMergeStatus(ctx context.Context, incidentID uuid.UUID, status string) error {
+        s.mu.Lock()
+        defer s.mu.Unlock()
+        _, err := s.db.ExecContext(ctx, `
+                UPDATE incidents SET auto_merge_status = ?, updated_at = ?
+                WHERE incident_id = ?
+        `, status, time.Now().UTC(), incidentID.String())
+        return err
+}
+
+// LogCommandEvent writes a chatops command invocation to the audit log.
+// Used for compliance + analytics. Every /sentinel command is recorded.
+func (s *Store) LogCommandEvent(ctx context.Context, ev *CommandEvent) error {
+        s.mu.Lock()
+        defer s.mu.Unlock()
+        var incidentID interface{}
+        if ev.IncidentID != "" {
+                incidentID = ev.IncidentID
+        }
+        _, err := s.db.ExecContext(ctx, `
+                INSERT INTO command_events (incident_id, pr_number, pr_repo, command, args, author, author_permission, result, result_detail, ts)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `, incidentID, ev.PRNumber, ev.PRRepo, ev.Command, ev.Args, ev.Author, ev.AuthorPermission, ev.Result, ev.ResultDetail, ev.Timestamp)
+        return err
+}
+
+// CommandEvent is one row in the command_events audit log.
+type CommandEvent struct {
+        EventID          int64     `json:"event_id"`
+        IncidentID       string    `json:"incident_id,omitempty"`
+        PRNumber         int       `json:"pr_number"`
+        PRRepo           string    `json:"pr_repo"`
+        Command          string    `json:"command"`
+        Args             string    `json:"args,omitempty"`
+        Author           string    `json:"author"`
+        AuthorPermission string    `json:"author_permission"`
+        Result           string    `json:"result"`
+        ResultDetail     string    `json:"result_detail,omitempty"`
+        Timestamp        time.Time `json:"ts"`
+}
+
+// ListCommandEvents returns recent command events for analytics.
+// If repo is non-empty, filters to that repo. Limit defaults to 100.
+func (s *Store) ListCommandEvents(ctx context.Context, repo string, limit int) ([]*CommandEvent, error) {
+        s.mu.RLock()
+        defer s.mu.RUnlock()
+        if limit <= 0 || limit > 1000 {
+                limit = 100
+        }
+        var rows *sql.Rows
+        var err error
+        if repo == "" {
+                rows, err = s.db.QueryContext(ctx, `
+                        SELECT event_id, incident_id, pr_number, pr_repo, command, args, author, author_permission, result, result_detail, ts
+                        FROM command_events ORDER BY ts DESC LIMIT ?
+                `, limit)
+        } else {
+                rows, err = s.db.QueryContext(ctx, `
+                        SELECT event_id, incident_id, pr_number, pr_repo, command, args, author, author_permission, result, result_detail, ts
+                        FROM command_events WHERE pr_repo = ? ORDER BY ts DESC LIMIT ?
+                `, repo, limit)
+        }
+        if err != nil {
+                return nil, err
+        }
+        defer rows.Close()
+        var out []*CommandEvent
+        for rows.Next() {
+                ev := &CommandEvent{}
+                var incidentID sql.NullString
+                var args, detail sql.NullString
+                if err := rows.Scan(&ev.EventID, &incidentID, &ev.PRNumber, &ev.PRRepo, &ev.Command, &args, &ev.Author, &ev.AuthorPermission, &ev.Result, &detail, &ev.Timestamp); err != nil {
+                        continue
+                }
+                if incidentID.Valid {
+                        ev.IncidentID = incidentID.String
+                }
+                if args.Valid {
+                        ev.Args = args.String
+                }
+                if detail.Valid {
+                        ev.ResultDetail = detail.String
+                }
+                out = append(out, ev)
+        }
+        return out, rows.Err()
 }
