@@ -217,6 +217,10 @@ func (m *Merger) evaluateAndMerge(ctx context.Context, pr *TrackedPR) {
         // Evaluate the policy.
         decision := m.policy.Evaluate(pr.Input)
         if !decision.AutoMerge {
+                // v4.2.2: Always log the reason — was silent when GatesFailed was empty
+                // (which happens when a pre-gate check fails, e.g. missing annotation).
+                log.Printf("[automerge] PR %s#%d NOT auto-merging: %s (gates_passed=%v gates_failed=%v)",
+                        pr.Repo, pr.PRNumber, decision.Reason, decision.GatesPassed, decision.GatesFailed)
                 // If CI is pending, just wait — don't untrack.
                 if ciStatus.State == "pending" {
                         return
@@ -227,6 +231,12 @@ func (m *Merger) evaluateAndMerge(ctx context.Context, pr *TrackedPR) {
                                 decision.Reason, formatGatesList(decision.GatesFailed, false))
                         _ = m.gh.PostComment(ctx, pr.Repo, pr.PRNumber, body)
                         _ = m.store.UpdateAutoMergeStatus(ctx, pr.IncidentID, "skipped:"+strings.Join(decision.GatesFailed, ","))
+                        m.Untrack(pr.Repo, pr.PRNumber)
+                } else if len(decision.GatesPassed) == 0 {
+                        // Pre-gate failure (e.g. missing annotation, disabled, wrong namespace) — untrack.
+                        body := fmt.Sprintf("ℹ️ Auto-merge skipped: %s", decision.Reason)
+                        _ = m.gh.PostComment(ctx, pr.Repo, pr.PRNumber, body)
+                        _ = m.store.UpdateAutoMergeStatus(ctx, pr.IncidentID, "skipped:"+decision.Reason)
                         m.Untrack(pr.Repo, pr.PRNumber)
                 }
                 return
