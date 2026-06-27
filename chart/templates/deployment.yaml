@@ -21,6 +21,10 @@ spec:
         app.kubernetes.io/instance: {{ .Release.Name }}
     spec:
       serviceAccountName: {{ .Values.serviceAccount.name | default .Release.Name }}
+      # v3.18.0: M40 — 45s grace period so in-flight SQLite writes + investigation
+      # cleanup (15s wait + 10s apiServer.Shutdown + ~5s buffer) can finish before
+      # SIGKILL. Was: default 30s, which killed mid-commit.
+      terminationGracePeriodSeconds: 45
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532

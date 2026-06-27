@@ -3,10 +3,12 @@ const nextConfig = {
   output: "export",
   images: { unoptimized: true },
   trailingSlash: true,
-  // Skip TypeScript checking during build — we validate types in dev.
-  // This prevents one type error from breaking the Docker image build.
-  typescript: { ignoreBuildErrors: true },
-  eslint: { ignoreDuringBuilds: true },
+  // v3.18.0: H23 — re-enabled TypeScript + ESLint checking during build.
+  // Was: ignoreBuildErrors=true + ignoreDuringBuilds=true, which silently
+  // shipped typos (e.g. useFoo() undefined) to production. Fix any type
+  // errors that surface instead of suppressing them.
+  typescript: { ignoreBuildErrors: false },
+  eslint: { ignoreDuringBuilds: false },
 };
 
 export default nextConfig;

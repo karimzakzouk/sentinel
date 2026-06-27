@@ -88,7 +88,23 @@ type metricSet struct {
         // Gauges
         activeIncidents float64
         llmInFlight     float64
+
+        // v3.18.0: M27 — histogram buckets for p50/p95/p99 computation.
+        // Each bucket counts investigations/LLM calls/sandbox runs that took
+        // <= the bucket's upper bound. Prometheus can compute quantiles from
+        // these via histogram_quantile().
+        investigationBuckets map[string]float64 // key: bucket upper bound (e.g. "30", "60", "120", "300", "+Inf")
+        llmCallBuckets       map[string]float64
+        sandboxBuckets       map[string]float64
 }
+
+// Standard bucket boundaries (seconds).
+// v3.18.0: M27 — without these, Prometheus couldn't compute p50/p95/p99.
+var (
+        investBuckets = []float64{30, 60, 120, 180, 300, 600, 1200, 1800}
+        llmBuckets    = []float64{1, 5, 10, 30, 60, 120, 300}
+        sandboxBuckets= []float64{30, 60, 120, 240, 360, 600}
+)
 
 var metrics = &metricSet{
         incidentsTotal:       make(map[string]float64),
@@ -99,6 +115,9 @@ var metrics = &metricSet{
         llmTotalCostUSD:      make(map[string]float64),
         sandboxLevelFailures: make(map[string]int),
         sandboxRetryCount:    make(map[string]int),
+        investigationBuckets: make(map[string]float64),
+        llmCallBuckets:       make(map[string]float64),
+        sandboxBuckets:       make(map[string]float64),
 }
 
 // RecordInvestigationStart increments the investigations_started counter
@@ -119,6 +138,8 @@ func RecordInvestigationComplete(status string, duration time.Duration) {
         metrics.activeIncidents--
         metrics.investigationDurationCount++
         metrics.investigationDurationSum += duration.Seconds()
+        // v3.18.0: M27 — bump histogram buckets.
+        bumpBucket(metrics.investigationBuckets, investBuckets, duration.Seconds())
 }
 
 // RecordPROpened increments the prs_opened counter.
@@ -139,6 +160,20 @@ func RecordSandboxVerification(verified bool, duration time.Duration) {
         metrics.sandboxVerifications[key]++
         metrics.sandboxDurationCount++
         metrics.sandboxDurationSum += duration.Seconds()
+        // v3.18.0: M27 — bump histogram buckets.
+        bumpBucket(metrics.sandboxBuckets, sandboxBuckets, duration.Seconds())
+}
+
+// bumpBucket increments all buckets whose upper bound is >= the value.
+// This produces a cumulative histogram (each bucket includes counts from
+// all smaller buckets, as Prometheus expects).
+func bumpBucket(buckets map[string]float64, bounds []float64, value float64) {
+        for _, b := range bounds {
+                if value <= b {
+                        buckets[fmt.Sprintf("%g", b)]++
+                }
+        }
+        buckets["+Inf"]++
 }
 
 // RecordLLMCall records an LLM API call: model, status (success/error/rate_limited), duration.
@@ -149,6 +184,8 @@ func RecordLLMCall(model, status string, duration time.Duration) {
         metrics.llmCallsTotal[key]++
         metrics.llmCallDurationCount++
         metrics.llmCallDurationSum += duration.Seconds()
+        // v3.18.0: M27 — bump histogram buckets.
+        bumpBucket(metrics.llmCallBuckets, llmBuckets, duration.Seconds())
 }
 
 // RecordLLMTokens records token usage + estimated cost for an LLM call.
@@ -352,6 +389,29 @@ func render() string {
         b.help("sentinel_sandbox_duration_seconds_sum", "Sandbox verification duration sum (seconds)")
         b.typ("sentinel_sandbox_duration_seconds_sum", "counter")
         b.metric("sentinel_sandbox_duration_seconds_sum", sandboxDurationSum)
+
+        // v3.18.0: M27 — histogram buckets (cumulative). Enables p50/p95/p99 via
+        // histogram_quantile() in Prometheus.
+        b.help("sentinel_investigation_duration_seconds_bucket", "Investigation duration histogram (cumulative buckets)")
+        b.typ("sentinel_investigation_duration_seconds_bucket", "histogram")
+        for _, bound := range investBuckets {
+                b.metric("sentinel_investigation_duration_seconds_bucket", metrics.investigationBuckets[fmt.Sprintf("%g", bound)], "le", fmt.Sprintf("%g", bound))
+        }
+        b.metric("sentinel_investigation_duration_seconds_bucket", metrics.investigationBuckets["+Inf"], "le", "+Inf")
+
+        b.help("sentinel_llm_call_duration_seconds_bucket", "LLM call duration histogram (cumulative buckets)")
+        b.typ("sentinel_llm_call_duration_seconds_bucket", "histogram")
+        for _, bound := range llmBuckets {
+                b.metric("sentinel_llm_call_duration_seconds_bucket", metrics.llmCallBuckets[fmt.Sprintf("%g", bound)], "le", fmt.Sprintf("%g", bound))
+        }
+        b.metric("sentinel_llm_call_duration_seconds_bucket", metrics.llmCallBuckets["+Inf"], "le", "+Inf")
+
+        b.help("sentinel_sandbox_duration_seconds_bucket", "Sandbox duration histogram (cumulative buckets)")
+        b.typ("sentinel_sandbox_duration_seconds_bucket", "histogram")
+        for _, bound := range sandboxBuckets {
+                b.metric("sentinel_sandbox_duration_seconds_bucket", metrics.sandboxBuckets[fmt.Sprintf("%g", bound)], "le", fmt.Sprintf("%g", bound))
+        }
+        b.metric("sentinel_sandbox_duration_seconds_bucket", metrics.sandboxBuckets["+Inf"], "le", "+Inf")
 
         // Gauges
         b.help("sentinel_active_incidents", "Currently active investigations")
