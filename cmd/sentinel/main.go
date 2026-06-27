@@ -965,23 +965,43 @@ func main() {
         // v3.11.0: Use NewWithAPIURL for GitHub Enterprise support (audit #2).
         // v3.13.0: Wire the App into prReviewer via WithGitHubApp() so PR comments
         // appear as the verified "Sentinel" bot instead of the PAT user.
+        // v4.0.0: Also wire into ghExec (PR opener), chatopsGHClient (comments +
+        // reactions), and autoMergeGH (merge API). When configured, ALL GitHub
+        // operations appear as "Sentinel[bot]" instead of the PAT owner.
+        // v4.0.0: Also read from env vars (SENTINEL_GITHUB_APP_*) not just runtime config.
         var ghApp *githubapp.App
         rtConfig := rtCfg.Get()
-        if rtConfig.GitHubAppID != "" && rtConfig.GitHubAppPrivateKey != "" && rtConfig.GitHubAppInstallID != "" {
-                app, err := githubapp.NewWithAPIURL(rtConfig.GitHubAppID, rtConfig.GitHubAppPrivateKey, rtConfig.GitHubAppInstallID, cfg.GitHubAPIURL)
+        appID := rtConfig.GitHubAppID
+        appKey := rtConfig.GitHubAppPrivateKey
+        appInstall := rtConfig.GitHubAppInstallID
+        // v4.0.0: Fall back to env vars if runtime config is empty
+        if appID == "" {
+                appID = cfg.GitHubAppID
+                appKey = cfg.GitHubAppPrivateKey
+                appInstall = cfg.GitHubAppInstallID
+        }
+        if appID != "" && appKey != "" && appInstall != "" {
+                app, err := githubapp.NewWithAPIURL(appID, appKey, appInstall, cfg.GitHubAPIURL)
                 if err != nil {
                         logging.Error("GitHub App init failed", "error", err)
                 } else {
                         ghApp = app
-                        prReviewer.WithGitHubApp(ghApp) // v3.13.0: wire it — was dead code before
-                        logging.Info("GitHub App configured (verified bot identity enabled)",
-                                "app_id", rtConfig.GitHubAppID,
-                                "install_id", rtConfig.GitHubAppInstallID,
+                        prReviewer.WithGitHubApp(ghApp)     // v3.13.0: predictive PR review
+                        ghExec.WithTokenProvider(ghApp)     // v4.0.0: PR opening + branch pushing
+                        chatopsGHClient.WithTokenProvider(&chatopsTokenProviderAdapter{app: ghApp})  // v4.0.0: comments + reactions + labels + merges
+                        autoMergeGH.WithTokenProvider(&automergeTokenProviderAdapter{app: ghApp})    // v4.0.0: auto-merge API calls
+                        logging.Info("GitHub App configured — ALL GitHub operations appear as Sentinel[bot]",
+                                "app_id", appID,
+                                "install_id", appInstall,
                                 "api_url", cfg.GitHubAPIURL,
                         )
                 }
+        } else {
+                logging.Info("GitHub App not configured — PRs + comments appear as the PAT owner",
+                        "hint", "set SENTINEL_GITHUB_APP_ID + SENTINEL_GITHUB_APP_PRIVATE_KEY + SENTINEL_GITHUB_APP_INSTALL_ID for verified bot identity",
+                )
         }
-        _ = ghApp // Used by prReviewer.WithGitHubApp() above
+        _ = ghApp // Used by the reviewers + executors above
 
         // v3.5.0: Wire interactive Slack bot (two-way commands).
         // Accepts: pause, resume, investigate, list, status, help.
@@ -1813,57 +1833,78 @@ func (a *chatopsSandboxAdapter) RunForIncident(ctx context.Context, incidentID s
 
 // providersStatusAdapter wraps *llm.Router to implement api.ProvidersStatusGetter.
 type providersStatusAdapter struct {
-	router *llm.Router
+        router *llm.Router
 }
 
 func (a *providersStatusAdapter) ProviderStatuses() []any {
-	pool := a.router.Pool()
-	if pool == nil {
-		return []any{}
-	}
-	statuses := pool.Status()
-	out := make([]any, len(statuses))
-	for i, s := range statuses {
-		out[i] = s
-	}
-	return out
+        pool := a.router.Pool()
+        if pool == nil {
+                return []any{}
+        }
+        statuses := pool.Status()
+        out := make([]any, len(statuses))
+        for i, s := range statuses {
+                out[i] = s
+        }
+        return out
 }
 
 // autoMergeStatusAdapter wraps *automerge.Policy + *automerge.Merger to
 // implement api.AutoMergeStatusGetter.
 type autoMergeStatusAdapter struct {
-	policy  *automerge.Policy
-	merger  *automerge.Merger
+        policy  *automerge.Policy
+        merger  *automerge.Merger
 }
 
 func (a *autoMergeStatusAdapter) AutoMergeStatus() any {
-	status := a.policy.Status()
-	tracked := a.merger.TrackedPRs()
-	trackedOut := make([]map[string]any, 0, len(tracked))
-	for _, pr := range tracked {
-		trackedOut = append(trackedOut, map[string]any{
-			"incident_id":  pr.IncidentID,
-			"repo":         pr.Repo,
-			"pr_number":    pr.PRNumber,
-			"base_branch":  pr.BaseBranch,
-			"added_at":     pr.AddedAt,
-			"last_eval":    pr.LastEval,
-			"ci_state":     pr.Input.CIStatus.State,
-			"confidence":   pr.Input.Confidence,
-			"service":      pr.Input.Service,
-			"namespace":    pr.Input.Namespace,
-		})
-	}
-	return map[string]any{
-		"enabled":           status.Enabled,
-		"namespaces":        status.Namespaces,
-		"min_confidence":    status.MinConfidence,
-		"require_ci_green":  status.RequireCIGreen,
-		"max_per_hour":      status.MaxPerHour,
-		"merges_this_hour":  status.MergesThisHour,
-		"cooldown_active":   status.CooldownActive,
-		"cooldown_until":    status.CooldownUntil,
-		"cooldown_reason":   status.CooldownReason,
-		"tracked_prs":       trackedOut,
-	}
+        status := a.policy.Status()
+        tracked := a.merger.TrackedPRs()
+        trackedOut := make([]map[string]any, 0, len(tracked))
+        for _, pr := range tracked {
+                trackedOut = append(trackedOut, map[string]any{
+                        "incident_id":  pr.IncidentID,
+                        "repo":         pr.Repo,
+                        "pr_number":    pr.PRNumber,
+                        "base_branch":  pr.BaseBranch,
+                        "added_at":     pr.AddedAt,
+                        "last_eval":    pr.LastEval,
+                        "ci_state":     pr.Input.CIStatus.State,
+                        "confidence":   pr.Input.Confidence,
+                        "service":      pr.Input.Service,
+                        "namespace":    pr.Input.Namespace,
+                })
+        }
+        return map[string]any{
+                "enabled":           status.Enabled,
+                "namespaces":        status.Namespaces,
+                "min_confidence":    status.MinConfidence,
+                "require_ci_green":  status.RequireCIGreen,
+                "max_per_hour":      status.MaxPerHour,
+                "merges_this_hour":  status.MergesThisHour,
+                "cooldown_active":   status.CooldownActive,
+                "cooldown_until":    status.CooldownUntil,
+                "cooldown_reason":   status.CooldownReason,
+                "tracked_prs":       trackedOut,
+        }
+}
+
+// v4.0.0: GitHub App token provider adapters — bridge githubapp.App to the
+// TokenProvider interfaces in chatops + automerge packages.
+
+// chatopsTokenProviderAdapter wraps githubapp.App for the chatops package.
+type chatopsTokenProviderAdapter struct {
+	app *githubapp.App
+}
+
+func (a *chatopsTokenProviderAdapter) GetInstallToken(ctx context.Context) (string, error) {
+	return a.app.GetInstallToken(ctx)
+}
+
+// automergeTokenProviderAdapter wraps githubapp.App for the automerge package.
+type automergeTokenProviderAdapter struct {
+	app *githubapp.App
+}
+
+func (a *automergeTokenProviderAdapter) GetInstallToken(ctx context.Context) (string, error) {
+	return a.app.GetInstallToken(ctx)
 }

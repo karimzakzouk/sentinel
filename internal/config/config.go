@@ -71,6 +71,27 @@ type Config struct {
         // and metrics endpoints remain unauthenticated.
         APIToken string
 
+        // v4.0.0: GitHub App credentials. When all three are set, Sentinel uses
+        // the GitHub App's installation token for ALL GitHub API calls (opening
+        // PRs, posting comments, reacting, merging) instead of the PAT. This makes
+        // PRs and comments appear as the verified "Sentinel" bot identity instead
+        // of the PAT owner's personal account.
+        //
+        // To create a GitHub App:
+        //   1. Go to https://github.com/settings/apps/new (or org settings → Developer settings → GitHub Apps)
+        //   2. Name: "Sentinel", Homepage URL: your repo
+        //   3. Webhook URL: https://your-sentinel/webhook/github (or leave empty for now)
+        //   4. Permissions:
+        //      - Repository: Contents (Read+Write), Pull requests (Read+Write), Issues (Read+Write), Metadata (Read)
+        //      - Organization: Members (Read) — optional, for permission checks
+        //   5. Generate a private key (.pem file) — set contents as SENTINEL_GITHUB_APP_PRIVATE_KEY
+        //   6. Install the app on your repo/org → note the installation ID from the URL
+        //
+        // When set, the PAT (GitHubToken) is used as a fallback if the App token call fails.
+        GitHubAppID         string
+        GitHubAppPrivateKey string
+        GitHubAppInstallID  string
+
         // Docker Hub (for Kaniko sandbox image builder)
         DockerHubUsername string
         DockerHubToken    string
@@ -290,6 +311,11 @@ func Load() *Config {
                 GitHubWebhookSecret:    getenv("SENTINEL_GITHUB_WEBHOOK_SECRET", ""),
                 AllowedGitHubRepos:     splitCSV(getenv("SENTINEL_ALLOWED_GITHUB_REPOS", "")),
                 APIToken:               getenv("SENTINEL_API_TOKEN", ""),
+                // v4.0.0: GitHub App credentials (optional — when set, PRs + comments
+                // appear as the "Sentinel" bot instead of the PAT owner).
+                GitHubAppID:            getenv("SENTINEL_GITHUB_APP_ID", ""),
+                GitHubAppPrivateKey:    getenv("SENTINEL_GITHUB_APP_PRIVATE_KEY", ""),
+                GitHubAppInstallID:     getenv("SENTINEL_GITHUB_APP_INSTALL_ID", ""),
                 DockerHubUsername:      getenv("SENTINEL_DOCKER_HUB_USERNAME", ""),
                 DockerHubToken:         getenv("SENTINEL_DOCKER_HUB_TOKEN", ""),
                 // v3.11.0: Registry-aware Kaniko (CRITICAL audit #7)

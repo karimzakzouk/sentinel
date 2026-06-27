@@ -25,12 +25,23 @@ import (
 // v3.11.0: Now supports GitHub Enterprise / GitLab / Bitbucket via
 // cfg.GitHost + cfg.GitHubAPIURL (CRITICAL audit #2). Was hardcoded to
 // https://api.github.com in 8 sites within this file.
+// TokenProvider returns a fresh GitHub API token. Implemented by
+// githubapp.App — when wired, PRs + comments appear as the "Sentinel" bot
+// instead of the PAT owner. v4.0.0.
+type TokenProvider interface {
+        GetInstallToken(ctx context.Context) (string, error)
+}
+
 type GitHubExecutor struct {
         token        string
         http         *http.Client
         apiURL       string // v3.11.0: base API URL (default "https://api.github.com")
         gitHost      string // v3.11.0: git host for clone URLs (default "github.com")
         defaultBranch string // v3.11.0: default branch fallback (default "main")
+        // v4.0.0: Optional GitHub App token provider. When set, takes precedence
+        // over the static token — every API call fetches a fresh installation token
+        // (cached internally by the App). Falls back to the static token on error.
+        tokenProvider TokenProvider
 }
 
 // NewGitHub creates a GitHubExecutor.
@@ -42,6 +53,27 @@ func NewGitHub(token string) *GitHubExecutor {
                 gitHost:       "github.com",             // v3.11.0: default; override via WithGitHost
                 defaultBranch: "main",                   // v3.11.0: default; override via WithDefaultBranch
         }
+}
+
+// WithTokenProvider wires a GitHub App token provider. v4.0.0.
+// When set, all GitHub API calls use the App's installation token, making
+// PRs + comments appear as the "Sentinel" bot identity. Falls back to the
+// PAT on error.
+func (e *GitHubExecutor) WithTokenProvider(tp TokenProvider) *GitHubExecutor {
+        e.tokenProvider = tp
+        return e
+}
+
+// authToken returns the token to use for an API call. v4.0.0.
+// Prefers the GitHub App installation token (verified bot identity) when
+// configured, falls back to the PAT.
+func (e *GitHubExecutor) authToken(ctx context.Context) string {
+        if e.tokenProvider != nil {
+                if token, err := e.tokenProvider.GetInstallToken(ctx); err == nil && token != "" {
+                        return token
+                }
+        }
+        return e.token
 }
 
 // WithAPIURL sets the GitHub API base URL. v3.11.0: Replaces the hardcoded
@@ -830,7 +862,7 @@ func (e *GitHubExecutor) do(ctx context.Context, method, url string, body any, o
                 if err != nil {
                         return err
                 }
-                req.Header.Set("Authorization", "Bearer "+e.token)
+                req.Header.Set("Authorization", "Bearer "+e.authToken(ctx)) // v4.0.0: GitHub App token when configured
                 req.Header.Set("Accept", "application/vnd.github+json")
                 req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
                 if body != nil {

@@ -146,6 +146,24 @@ spec:
             - name: SENTINEL_ALLOWED_GITHUB_REPOS
               value: {{ .Values.sentinel.allowedGithubRepos | quote }}
             {{- end }}
+            # v4.0.0: GitHub App credentials — when set, PRs + comments appear
+            # as "Sentinel[bot]" instead of the PAT owner. All three required.
+            {{- if .Values.sentinel.githubAppId }}
+            - name: SENTINEL_GITHUB_APP_ID
+              value: {{ .Values.sentinel.githubAppId | quote }}
+            {{- end }}
+            {{- if .Values.sentinel.githubAppPrivateKey }}
+            - name: SENTINEL_GITHUB_APP_PRIVATE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-secrets
+                  key: githubAppPrivateKey
+                  optional: true
+            {{- end }}
+            {{- if .Values.sentinel.githubAppInstallId }}
+            - name: SENTINEL_GITHUB_APP_INSTALL_ID
+              value: {{ .Values.sentinel.githubAppInstallId | quote }}
+            {{- end }}
             # v3.4.0: Observability backends (for Evidence Gatherer)
             {{- if .Values.sentinel.observability.prometheusUrl }}
             - name: SENTINEL_PROMETHEUS_URL

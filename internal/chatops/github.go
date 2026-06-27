@@ -22,6 +22,16 @@ type GitHubClientImpl struct {
         token   string
         apiURL  string // default "https://api.github.com"
         http    *http.Client
+        // v4.0.0: Optional GitHub App token provider. When set, all API calls
+        // (comments, reactions, labels, merges) use the App's installation token,
+        // making them appear as the "Sentinel" bot identity.
+        tokenProvider TokenProvider
+}
+
+// TokenProvider returns a fresh GitHub API token. v4.0.0.
+// Implemented by githubapp.App.
+type TokenProvider interface {
+        GetInstallToken(ctx context.Context) (string, error)
 }
 
 // NewGitHubClient creates a GitHubClientImpl.
@@ -38,6 +48,24 @@ func NewGitHubClient(token, apiURL string) *GitHubClientImpl {
                 apiURL: apiURL,
                 http:   &http.Client{Timeout: 30 * time.Second},
         }
+}
+
+// WithTokenProvider wires a GitHub App token provider. v4.0.0.
+// When set, all chatops GitHub API calls (comments, reactions, labels,
+// merges) use the App's installation token, appearing as "Sentinel[bot]".
+func (g *GitHubClientImpl) WithTokenProvider(tp TokenProvider) *GitHubClientImpl {
+        g.tokenProvider = tp
+        return g
+}
+
+// authToken returns the token to use for an API call. v4.0.0.
+func (g *GitHubClientImpl) authToken(ctx context.Context) string {
+        if g.tokenProvider != nil {
+                if token, err := g.tokenProvider.GetInstallToken(ctx); err == nil && token != "" {
+                        return token
+                }
+        }
+        return g.token
 }
 
 // ReactComment adds an emoji reaction to a PR comment.
@@ -244,10 +272,12 @@ func (g *GitHubClientImpl) GetPermission(ctx context.Context, repo, username str
         return result.Permission, nil
 }
 
-// setHeaders adds the standard GitHub API headers.
+// setHeaders adds the standard GitHub API headers. v4.0.0: uses authToken()
+// which prefers the GitHub App installation token when configured.
 func (g *GitHubClientImpl) setHeaders(req *http.Request) {
+        ctx := req.Context()
         req.Header.Set("Accept", "application/vnd.github+json")
-        req.Header.Set("Authorization", "Bearer "+g.token)
+        req.Header.Set("Authorization", "Bearer "+g.authToken(ctx))
         req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
         req.Header.Set("Content-Type", "application/json")
 }

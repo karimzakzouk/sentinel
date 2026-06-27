@@ -11,7 +11,7 @@
 image:
   registry: "docker.io/karimzakzouk"
   repository: "sentinel-v3"
-  tag: "4.0.0"
+  tag: "4.0.1"
   pullPolicy: Always
 
 sentinel:
@@ -22,6 +22,21 @@ sentinel:
   # (trigger, pause, resume, config set). Empty = admin API unauthenticated
   # (NOT recommended — the server logs a loud warning at startup).
   apiToken: ""
+
+  # v4.0.1: GitHub App credentials. When all three are set, ALL GitHub
+  # operations (PRs, comments, reactions, labels, merges) appear as
+  # "Sentinel[bot]" instead of the PAT owner's personal account.
+  # Empty = use the PAT (githubToken) — PRs appear as the PAT owner.
+  #
+  # To create a GitHub App:
+  #   1. https://github.com/settings/apps/new (or org settings)
+  #   2. Name: "Sentinel", Homepage URL: your repo
+  #   3. Permissions: Contents (RW), Pull requests (RW), Issues (RW), Metadata (R)
+  #   4. Generate a private key (.pem) → set contents as githubAppPrivateKey
+  #   5. Install on your repo/org → note the installation ID from the URL
+  githubAppId: ""
+  githubAppPrivateKey: ""   # full PEM contents, including BEGIN/END lines
+  githubAppInstallId: ""    # numeric, from the install URL
 
   # v3.8.5: GitHub repo allowlist (CSV of owner/name). When set, Sentinel
   # only clones repos in this list. Empty = allow all (NOT recommended).
@@ -52,7 +67,7 @@ sentinel:
     # Default 1536 (matches text-embedding-3-small for backwards compat).
     embeddingDim: 1536
 
-    # v4.0.0: Multi-provider failover pool. Stack multiple API keys (e.g. 3
+    # v4.0.1: Multi-provider failover pool. Stack multiple API keys (e.g. 3
     # OpenRouter + 2 Groq + 1 Gemini) and Sentinel will try them in priority
     # order with circuit-breaker failover. Empty = single-provider mode (uses
     # provider + apiKey above).
@@ -79,7 +94,7 @@ sentinel:
     #       priority: 3
     providers: []
 
-  # v4.0.0: Auto-merge configuration. All three opt-in layers must be true
+  # v4.0.1: Auto-merge configuration. All three opt-in layers must be true
   # for auto-merge to fire on a given PR:
   #   1. autoMerge.enabled (global switch, default false)
   #   2. namespace in autoMerge.namespaces
@@ -266,7 +281,7 @@ nodeSelector: {}
 tolerations: []
 affinity: {}
 
-# v4.0.0: Metrics configuration
+# v4.0.1: Metrics configuration
 metrics:
   # ServiceMonitor for Prometheus Operator (kube-prometheus-stack).
   # When enabled, Sentinel's /metrics endpoint is auto-discovered.
@@ -278,7 +293,7 @@ metrics:
     # (e.g. release: prometheus for kube-prometheus-stack's default selector)
     labels: {}
 
-# v4.0.0: PodDisruptionBudget — prevents all replicas from being evicted
+# v4.0.1: PodDisruptionBudget — prevents all replicas from being evicted
 # simultaneously during voluntary disruptions (node drain, cluster autoscaler).
 podDisruptionBudget:
   enabled: false
