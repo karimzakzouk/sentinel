@@ -432,6 +432,98 @@ func (c *Config) IsRepoAllowed(repo string) bool {
         return false
 }
 
+// Validate checks the config for missing required fields, invalid values, and
+// insecure defaults. Returns a list of errors (empty if all checks pass) and
+// a list of warnings (non-blocking).
+// v3.18.0: Closes audit finding M2 — previously Sentinel started "successfully"
+// with empty required fields and failed 5-10 minutes later at the first LLM call.
+func (c *Config) Validate() (errors []string, warnings []string) {
+        // Critical: LLM credentials
+        if c.LLMAPIKey == "" {
+                errors = append(errors, "SENTINEL_LLM_API_KEY is empty — Sentinel cannot run without an LLM API key")
+        }
+        if c.LLMProvider == "" {
+                errors = append(errors, "SENTINEL_LLM_PROVIDER is empty — set to a known provider (openai, anthropic, zai, openrouter, ...)")
+        } else if !isKnownProvider(c.LLMProvider) {
+                warnings = append(warnings, fmt.Sprintf("SENTINEL_LLM_PROVIDER=%q is not in the known-providers list — "+
+                        "if this is a typo, LLM calls will be sent to the wrong endpoint with your API key attached", c.LLMProvider))
+        }
+        if c.LLMFastModel == "" {
+                errors = append(errors, "SENTINEL_LLM_FAST_MODEL is empty — set a valid model name")
+        }
+        if c.LLMFrontierModel == "" {
+                errors = append(errors, "SENTINEL_LLM_FRONTIER_MODEL is empty — set a valid model name")
+        }
+
+        // Critical: GitHub credentials
+        if c.GitHubToken == "" {
+                errors = append(errors, "SENTINEL_GITHUB_TOKEN is empty — Sentinel needs a GitHub PAT to clone repos and open PRs. "+
+                        "(If using a GitHub App, configure it via runtime config or SENTINEL_GITHUB_APP_* env vars.)")
+        }
+
+        // Critical: namespace config
+        if len(c.WriteNamespaces) == 0 {
+                warnings = append(warnings, "SENTINEL_WRITE_NAMESPACES is empty — Sentinel cannot write fixes to any namespace")
+        }
+
+        // High: API token (security)
+        if c.APIToken == "" {
+                warnings = append(warnings, "SENTINEL_API_TOKEN is empty — admin API is unauthenticated. "+
+                        "Anyone with cluster network access can trigger investigations, pause autonomous mode, "+
+                        "and overwrite the LLM API key. Set this in production.")
+        }
+
+        // High: GitHub repo allowlist
+        if len(c.AllowedGitHubRepos) == 0 && c.GitHubToken != "" {
+                warnings = append(warnings, "SENTINEL_ALLOWED_GITHUB_REPOS is empty — Sentinel will clone ANY repo "+
+                        "annotated on a pod using the configured GitHub PAT. Set an explicit allowlist.")
+        }
+
+        // High: Slack signing secret
+        if c.SlackBotToken != "" && c.SlackSigningSecret == "" {
+                warnings = append(warnings, "SENTINEL_SLACK_SIGNING_SECRET is empty but SLACK_BOT_TOKEN is set — "+
+                        "Slack requests will be REJECTED (signature verification cannot run without the secret)")
+        }
+
+        // Range checks
+        if c.SandboxMaxRetries < 0 {
+                warnings = append(warnings, fmt.Sprintf("SENTINEL_SANDBOX_MAX_RETRIES=%d (negative) — clamping to 0", c.SandboxMaxRetries))
+                c.SandboxMaxRetries = 0
+        }
+        if c.SandboxMaxRetries > 10 {
+                warnings = append(warnings, fmt.Sprintf("SENTINEL_SANDBOX_MAX_RETRIES=%d (very high) — each retry takes ~5-10min; "+
+                        "a single incident could spend hours in sandbox retries", c.SandboxMaxRetries))
+        }
+        if c.InvestigatorTimeoutSec <= 0 {
+                warnings = append(warnings, fmt.Sprintf("SENTINEL_INVESTIGATOR_TIMEOUT=%d (non-positive) — using default", c.InvestigatorTimeoutSec))
+        }
+        if c.ConfidenceAutonomous < 0 || c.ConfidenceAutonomous > 1 {
+                warnings = append(warnings, fmt.Sprintf("SENTINEL_CONFIDENCE_THRESHOLD_AUTONOMOUS=%.2f out of [0,1] — "+
+                        "clamping to [0,1]", c.ConfidenceAutonomous))
+                if c.ConfidenceAutonomous < 0 {
+                        c.ConfidenceAutonomous = 0
+                } else if c.ConfidenceAutonomous > 1 {
+                        c.ConfidenceAutonomous = 1
+                }
+        }
+
+        return errors, warnings
+}
+
+// isKnownProvider returns true if the provider string is recognized by the
+// goai_provider mapping. This is a non-exhaustive list — unknown providers
+// are allowed (with a warning) because the user might be using a custom base URL.
+func isKnownProvider(p string) bool {
+        switch p {
+        case "openai", "anthropic", "zai", "openrouter", "gemini", "bedrock",
+                "azure", "vertex", "mistral", "ollama", "deepseek", "groq",
+                "together", "fireworks", "cohere", "perplexity", "anyscale",
+                "lepton", "replicate", "novita", "siliconflow":
+                return true
+        }
+        return false
+}
+
 // normalizeRepoForCompare lowercases the repo string and strips a trailing
 // ".git" so "Acme/App.git" matches "acme/app".
 func normalizeRepoForCompare(repo string) string {

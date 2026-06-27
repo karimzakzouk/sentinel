@@ -26,6 +26,7 @@ import (
         "io"
         "log"
         "net/http"
+        neturl "net/url"
         "strings"
         "sync"
         "time"
@@ -183,7 +184,13 @@ func (a *App) PostReviewComment(ctx context.Context, owner, repo string, prNumbe
 }
 
 // FetchPRDiff fetches the PR diff using the app's installation token.
+// v3.18.0: SECURITY — diffURL is validated to be under api.github.com (or the
+// configured GitHub Enterprise URL). Caller-supplied URLs from webhook bodies
+// are an SSRF + token-exfiltration vector.
 func (a *App) FetchPRDiff(ctx context.Context, diffURL string) (string, error) {
+        if err := validateGitHubURL(diffURL, a.apiURL); err != nil {
+                return "", fmt.Errorf("refusing to fetch diff: %w", err)
+        }
         token, err := a.GetInstallToken(ctx)
         if err != nil {
                 return "", fmt.Errorf("get install token: %w", err)
@@ -206,11 +213,34 @@ func (a *App) FetchPRDiff(ctx context.Context, diffURL string) (string, error) {
                 return "", fmt.Errorf("diff fetch returned %d", resp.StatusCode)
         }
 
-        body, err := io.ReadAll(resp.Body)
+        body, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20)) // 10MB cap
         if err != nil {
                 return "", err
         }
         return string(body), nil
+}
+
+// validateGitHubURL refuses any URL whose host is not the expected GitHub host.
+// This blocks SSRF attacks where a webhook payload supplies an attacker-controlled URL.
+func validateGitHubURL(rawURL, expectedBase string) error {
+        if expectedBase == "" {
+                expectedBase = "https://api.github.com"
+        }
+        expectedHost := strings.TrimPrefix(strings.TrimPrefix(expectedBase, "https://"), "http://")
+        if i := strings.Index(expectedHost, "/"); i >= 0 {
+                expectedHost = expectedHost[:i]
+        }
+        u, err := neturl.Parse(rawURL)
+        if err != nil {
+                return fmt.Errorf("invalid URL: %w", err)
+        }
+        if u.Scheme != "https" {
+                return fmt.Errorf("scheme must be https, got %q", u.Scheme)
+        }
+        if u.Host != expectedHost {
+                return fmt.Errorf("host %q does not match expected GitHub host %q", u.Host, expectedHost)
+        }
+        return nil
 }
 
 // RegisterWebhook registers a webhook on a repo using the app's installation token.

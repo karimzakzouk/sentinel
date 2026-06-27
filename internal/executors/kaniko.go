@@ -39,6 +39,12 @@ type KanikoBuilder struct {
         // v3.11.0: Configurable git host (CRITICAL audit #2). Default "github.com".
         // The Kaniko init container's git clone uses this host.
         gitHost string
+        // v3.18.0: GitHub token used by the init container's `git clone` for
+        // private repos. Was empty (so private repos failed with "authentication
+        // required"). The token is passed via an env var (never interpolated
+        // into the shell script body) sourced from a K8s Secret, so it doesn't
+        // leak via pod logs.
+        githubToken string
 }
 
 // NewKaniko creates a KanikoBuilder.
@@ -106,6 +112,15 @@ func (k *KanikoBuilder) WithGitHost(host string) *KanikoBuilder {
         return k
 }
 
+// WithGitHubToken sets the GitHub PAT used by the init container's git clone.
+// v3.18.0: Without this, private repos fail with "authentication required".
+// The token is passed to the init container via an env var sourced from a
+// K8s Secret reference (not inline), so it doesn't leak via pod describe/logs.
+func (k *KanikoBuilder) WithGitHubToken(token string) *KanikoBuilder {
+        k.githubToken = token
+        return k
+}
+
 // repoBranchRe is the strict allowlist for repo and branch strings passed
 // from pod annotations. Anything outside this set is rejected before it can
 // reach a shell. The regex matches:
@@ -157,7 +172,7 @@ func (k *KanikoBuilder) Build(ctx context.Context, repo, branch string, fixedFil
                 return "", err
         }
 
-        buildID := strings.ReplaceAll(imageTag, "sentinel-", "")[:8]
+        buildID := buildIDFromTag(imageTag)
         configmapName := fmt.Sprintf("kaniko-fixed-files-%s", buildID)
         podName := fmt.Sprintf("kaniko-build-%s", buildID)
         // v3.11.0: Use the configured registry (CRITICAL audit #7). Was:
@@ -311,6 +326,13 @@ func (k *KanikoBuilder) buildPodSpec(podName, repo, branch, configmapName, fullI
 # operator-set cfg.GitHost (default "github.com"). It is NOT an env var
 # because that would re-introduce the injection surface — the host is
 # trusted config, repo/branch are not.
+# v3.18.0: If SENTINEL_GITHUB_TOKEN is set, configure git to use it via
+# the credential helper (instead of embedding it in the URL, which would
+# leak via pod logs). Empty token = anonymous clone (public repos only).
+if [ -n "$SENTINEL_GITHUB_TOKEN" ]; then
+  git config --global credential.helper store
+  echo "https://x-access-token:${SENTINEL_GITHUB_TOKEN}@` + k.gitHost + `" > ~/.git-credentials
+fi
 git clone --depth 1 --branch "$SENTINEL_BRANCH" "https://` + k.gitHost + `/$SENTINEL_REPO.git" /workspace/repo
 cd /workspace/repo
 
@@ -382,6 +404,17 @@ ls -la /workspace/repo/`
                                         Env: []corev1.EnvVar{
                                                 {Name: "SENTINEL_REPO", Value: repo},
                                                 {Name: "SENTINEL_BRANCH", Value: branch},
+                                                // v3.18.0: GitHub token via env var so private repos can be cloned.
+                                                // We use EnvVarSource (not inline Value) so the token doesn't appear
+                                                // in `kubectl describe pod` output. The secret name is fixed
+                                                // "sentinel-secrets" (created by Helm) and the key is "githubToken".
+                                                {Name: "SENTINEL_GITHUB_TOKEN", ValueFrom: &corev1.EnvVarSource{
+                                                        SecretKeyRef: &corev1.SecretKeySelector{
+                                                                LocalObjectReference: corev1.LocalObjectReference{Name: "sentinel"},
+                                                                Key:                  "githubToken",
+                                                                Optional:             newBool(true), // optional so public repos still work without the secret
+                                                        },
+                                                }},
                                         },
                                         SecurityContext: &corev1.SecurityContext{
                                                 AllowPrivilegeEscalation: &allowPrivilegeEscalation,
@@ -430,6 +463,11 @@ func newBool(b bool) *bool { return &b }
 func (k *KanikoBuilder) waitForCompletion(ctx context.Context, podName string, timeout time.Duration) bool {
         deadline := time.Now().Add(timeout)
         for time.Now().Before(deadline) {
+                select {
+                case <-ctx.Done():
+                        return false
+                default:
+                }
                 pod, err := k.clientset.CoreV1().Pods(k.namespace).Get(ctx, podName, metav1.GetOptions{})
                 if err == nil {
                         switch pod.Status.Phase {
@@ -439,7 +477,12 @@ func (k *KanikoBuilder) waitForCompletion(ctx context.Context, podName string, t
                                 return false
                         }
                 }
-                time.Sleep(5 * time.Second)
+                // v3.18.0: use select-on-time.After so the loop is interruptible by ctx cancellation.
+                select {
+                case <-ctx.Done():
+                        return false
+                case <-time.After(5 * time.Second):
+                }
         }
         return false
 }
@@ -459,8 +502,14 @@ func (k *KanikoBuilder) getPodLogs(ctx context.Context, podName string) (string,
 }
 
 func (k *KanikoBuilder) cleanup(ctx context.Context, configmapName, podName string) {
-        _ = k.clientset.CoreV1().ConfigMaps(k.namespace).Delete(ctx, configmapName, metav1.DeleteOptions{})
-        _ = k.clientset.CoreV1().Pods(k.namespace).Delete(ctx, podName, metav1.DeleteOptions{})
+        // v3.18.0: Use a fresh context for cleanup so we can still delete resources
+        // after the parent ctx is cancelled (e.g. on investigation timeout).
+        // Without this, leaked Kaniko pods accumulate forever (no reaper exists).
+        cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+        defer cancel()
+        _ = k.clientset.CoreV1().ConfigMaps(k.namespace).Delete(cleanupCtx, configmapName, metav1.DeleteOptions{})
+        _ = k.clientset.CoreV1().Pods(k.namespace).Delete(cleanupCtx, podName, metav1.DeleteOptions{})
+        _ = ctx // parent ctx accepted for API compat but not used
 }
 
 func lastN(s string, n int) string {
@@ -468,6 +517,23 @@ func lastN(s string, n int) string {
                 return s
         }
         return s[len(s)-n:]
+}
+
+// buildIDFromTag extracts an 8-char build ID from an image tag.
+// v3.18.0: Replaces `strings.ReplaceAll(imageTag, "sentinel-", "")[:8]` which
+// panicked with slice-out-of-range if the tag was shorter than 8 chars or
+// didn't contain "sentinel-". Falls back to a hash of the tag.
+func buildIDFromTag(imageTag string) string {
+        s := strings.TrimPrefix(imageTag, "sentinel-")
+        if len(s) >= 8 {
+                return s[:8]
+        }
+        // Pad or hash short tags
+        if s == "" {
+                return "build000"
+        }
+        // Use the tag as-is if non-empty but short
+        return fmt.Sprintf("%-8s", s)[:8]
 }
 
 // BuildForIncident is a convenience wrapper that extracts all params from a

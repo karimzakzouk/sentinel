@@ -27,6 +27,7 @@ import (
         "github.com/go-git/go-git/v5"
         "github.com/go-git/go-git/v5/config"
         "github.com/go-git/go-git/v5/plumbing"
+        githttpprovider "github.com/go-git/go-git/v5/plumbing/transport/http"
 )
 
 // Cloner clones a GitHub repo to a local temp dir using go-git (pure Go, no CGO).
@@ -99,11 +100,10 @@ func (c *Cloner) Clone(ctx context.Context, repo, ref string) (string, error) {
                 existingDir := matches[0]
                 log.Printf("[cloner] found existing clone at %s, fetching updates", existingDir)
 
-                // Build the fetch URL with token auth
+                // v3.18.0: SECURITY — fetch URL must NOT embed the token (logs leak).
+                // Use a token-free URL + Auth option on the fetch.
                 fetchURL := fmt.Sprintf("https://%s/%s.git", c.gitHost, repo)
-                if c.githubToken != "" {
-                        fetchURL = fmt.Sprintf("https://x-access-token:%s@%s/%s.git", c.githubToken, c.gitHost, repo)
-                }
+                fetchAuth := c.gitAuth()
 
                 fetchCtx, fetchCancel := context.WithTimeout(ctx, 30*time.Second)
                 defer fetchCancel()
@@ -116,15 +116,16 @@ func (c *Cloner) Clone(ctx context.Context, repo, ref string) (string, error) {
                                 RefSpecs:     []config.RefSpec{config.RefSpec("+refs/heads/*:refs/heads/*")},
                                 Depth: 1,
                                 Force:        true,
+                                Auth:         fetchAuth,
                         })
                         if err != nil && err != git.NoErrAlreadyUpToDate {
-                                log.Printf("[cloner] fetch failed (%v), falling back to full clone", err)
+                                log.Printf("[cloner] fetch failed (%s), falling back to full clone", c.sanitizeErr(err))
                         } else {
                                 log.Printf("[cloner] fetch succeeded, reusing existing clone at %s", existingDir)
                                 return existingDir, nil
                         }
                 } else {
-                        log.Printf("[cloner] open existing clone failed (%v), falling back to full clone", err)
+                        log.Printf("[cloner] open existing clone failed (%s), falling back to full clone", c.sanitizeErr(err))
                 }
                 // If fetch failed, fall through to full clone below
                 // Clean up the old clone to avoid confusion
@@ -145,12 +146,11 @@ func (c *Cloner) Clone(ctx context.Context, repo, ref string) (string, error) {
                 return "", fmt.Errorf("create clone dir: %w", err)
         }
 
-        // Build the clone URL with token auth (if private)
-        // v3.11.0: Use c.gitHost instead of hardcoded "github.com" (CRITICAL audit #2).
+        // v3.18.0: SECURITY — clone URL must NOT embed the token in the URL
+        // itself (go-git error messages include the URL, leaking the token to logs).
+        // Instead, use a token-free URL + the Auth option on CloneOptions.
         cloneURL := fmt.Sprintf("https://%s/%s.git", c.gitHost, repo)
-        if c.githubToken != "" {
-                cloneURL = fmt.Sprintf("https://x-access-token:%s@%s/%s.git", c.githubToken, c.gitHost, repo)
-        }
+        cloneAuth := c.gitAuth()
 
         cloneCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
         defer cancel()
@@ -165,10 +165,11 @@ func (c *Cloner) Clone(ctx context.Context, repo, ref string) (string, error) {
                 r, err := git.PlainCloneContext(cloneCtx, tmpDir, false, &git.CloneOptions{
                         URL:   cloneURL,
                         Depth: 50,
+                        Auth:  cloneAuth,
                 })
                 if err != nil {
                         _ = os.RemoveAll(tmpDir)
-                        return "", fmt.Errorf("clone %s@%s: %w", repo, ref, err)
+                        return "", fmt.Errorf("clone %s@%s: %w", repo, ref, c.sanitizeErr(err))
                 }
                 // Checkout the specific commit
                 w, err := r.Worktree()
@@ -179,7 +180,7 @@ func (c *Cloner) Clone(ctx context.Context, repo, ref string) (string, error) {
                 hash := plumbing.NewHash(ref)
                 if err := w.Checkout(&git.CheckoutOptions{Hash: hash}); err != nil {
                         _ = os.RemoveAll(tmpDir)
-                        return "", fmt.Errorf("checkout commit %s: %w", ref, err)
+                        return "", fmt.Errorf("checkout commit %s: %w", ref, c.sanitizeErr(err))
                 }
                 return tmpDir, nil
         }
@@ -190,6 +191,7 @@ func (c *Cloner) Clone(ctx context.Context, repo, ref string) (string, error) {
                 Depth:         1,
                 SingleBranch:  true,
                 ReferenceName: plumbing.NewBranchReferenceName(ref),
+                Auth:          cloneAuth,
         })
         if err != nil {
                 // Try as a tag
@@ -198,21 +200,45 @@ func (c *Cloner) Clone(ctx context.Context, repo, ref string) (string, error) {
                         Depth:         1,
                         SingleBranch:  true,
                         ReferenceName: plumbing.NewTagReferenceName(ref),
+                        Auth:          cloneAuth,
                 })
                 if err != nil {
                         // Last resort: full shallow clone (works for any ref)
                         _, err = git.PlainCloneContext(cloneCtx, tmpDir, false, &git.CloneOptions{
                                 URL:   cloneURL,
                                 Depth: 1,
+                                Auth:  cloneAuth,
                         })
                         if err != nil {
                                 _ = os.RemoveAll(tmpDir)
-                                return "", fmt.Errorf("clone %s@%s: %w", repo, ref, err)
+                                return "", fmt.Errorf("clone %s@%s: %w", repo, ref, c.sanitizeErr(err))
                         }
                 }
         }
 
         return tmpDir, nil
+}
+
+// gitAuth returns an HTTP basic-auth object for go-git, or nil if no token is set.
+// v3.18.0: Replaces URL-embedded token (which leaked to logs on clone failure).
+func (c *Cloner) gitAuth() *githttpprovider.BasicAuth {
+        if c.githubToken == "" {
+                return nil
+        }
+        return &githttpprovider.BasicAuth{
+                Username: "x-access-token", // GitHub convention for PATs
+                Password: c.githubToken,
+        }
+}
+
+// sanitizeErr strips any embedded token from an error message before it is
+// logged or returned. v3.18.0: defense-in-depth — even though we no longer
+// embed the token in URLs, go-git might still leak it via other paths.
+func (c *Cloner) sanitizeErr(err error) error {
+        if err == nil || c.githubToken == "" {
+                return err
+        }
+        return fmt.Errorf("%s", strings.ReplaceAll(err.Error(), c.githubToken, "***"))
 }
 
 // isHex returns true if s contains only hexadecimal characters.
@@ -226,8 +252,12 @@ func isHex(s string) bool {
 }
 
 // Cleanup removes the cloned repo.
+// v3.18.0: Logs an error if RemoveAll fails (was silently swallowed — caused
+// slow PVC disk leak when clones contained read-only files).
 func (c *Cloner) Cleanup(path string) {
-        _ = os.RemoveAll(path)
+        if err := os.RemoveAll(path); err != nil {
+                log.Printf("[cloner] cleanup failed for %s: %v", path, err)
+        }
 }
 
 // WalkTree returns the file paths in the cloned repo, filtered + capped.

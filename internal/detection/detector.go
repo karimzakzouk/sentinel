@@ -20,7 +20,9 @@ import (
         "time"
 
         corev1 "k8s.io/api/core/v1"
+        apierrors "k8s.io/apimachinery/pkg/api/errors"
         metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+        "k8s.io/apimachinery/pkg/watch"
         "k8s.io/client-go/kubernetes"
 )
 
@@ -254,6 +256,14 @@ watchLoop:
                                 if !ok {
                                         continue
                                 }
+                                // v3.18.0: H1 — on pod DELETED, cancel its log stream so the
+                                // goroutine doesn't retry forever against a non-existent pod.
+                                // Was: cancel was stored in d.streams but never invoked, leaking
+                                // a permanent 5s-tick goroutine per deleted pod.
+                                if event.Type == watch.Deleted {
+                                        d.stopLogStream(string(pod.UID))
+                                        continue
+                                }
                                 d.handlePod(ctx, pod)
                         }
                 }
@@ -447,6 +457,35 @@ func (d *Detector) startLogStream(ctx context.Context, pod *corev1.Pod, repo str
         }()
 }
 
+// stopLogStream cancels the log stream goroutine for a pod UID.
+// v3.18.0: H1 — was stored but never called, leaking a permanent 5s-tick
+// goroutine per deleted pod (the retry loop hit "pod not found" forever).
+func (d *Detector) stopLogStream(podUID string) {
+        d.streamsMu.Lock()
+        cancel, ok := d.streams[podUID]
+        if ok {
+                delete(d.streams, podUID)
+        }
+        d.streamsMu.Unlock()
+        if ok {
+                cancel()
+                log.Printf("[detection] log stream stopped for pod UID %s", podUID)
+        }
+}
+
+// StopAllLogStreams cancels every active log stream. Called on shutdown.
+// v3.18.0: H1 — previously no way to stop streams on SIGTERM, so they
+// raced with store.Close() and could panic on a closed SQLite handle.
+func (d *Detector) StopAllLogStreams() {
+        d.streamsMu.Lock()
+        defer d.streamsMu.Unlock()
+        for uid, cancel := range d.streams {
+                cancel()
+                delete(d.streams, uid)
+        }
+        log.Printf("[detection] stopped all log streams")
+}
+
 func (d *Detector) streamPodLogs(ctx context.Context, pod *corev1.Pod, repo string) {
         containerName := ""
         if len(pod.Spec.Containers) > 0 {
@@ -469,6 +508,11 @@ func (d *Detector) streamPodLogs(ctx context.Context, pod *corev1.Pod, repo stri
                 req := d.clientset.CoreV1().Pods(pod.Namespace).GetLogs(pod.Name, opts)
                 stream, err := req.Stream(ctx)
                 if err != nil {
+                        // v3.18.0: H1 — break out if the pod is gone (was retrying forever).
+                        if apierrors.IsNotFound(err) || apierrors.IsGone(err) {
+                                log.Printf("[detection] log stream %s/%s: pod no longer exists, stopping", pod.Namespace, pod.Name)
+                                return
+                        }
                         select {
                         case <-ctx.Done():
                                 return

@@ -353,18 +353,27 @@ func (e *GitHubExecutor) applySearchReplace(ctx context.Context, repo, branch, p
                         continue
                 }
 
+                // v3.18.0: H10 — "already applied" detection.
+                // If the search text is absent BUT the replacement is present,
+                // the fix was already applied in a previous retry. Treat as success
+                // instead of looping forever regenerating the same fix.
+                if ch.Replace != "" && strings.Contains(content, ch.Replace) {
+                        applied++
+                        log.Printf("[github] block %d: already applied (replacement text found in content) — treating as success", i)
+                        continue
+                }
+
                 // All strategies failed
                 failedBlocks = append(failedBlocks, i)
-                errMsg := fmt.Sprintf("block %d: search text not found (tried exact, whitespace-insensitive, fuzzy)", i)
+                // v3.18.0: H19 — include the search preview in the returned error
+                // so the LLM sees what didn't match (was only logged, not fed back).
+                preview := ch.Search
+                if len(preview) > 120 {
+                        preview = preview[:120] + "..."
+                }
+                errMsg := fmt.Sprintf("block %d: search text not found (tried exact, whitespace-insensitive, fuzzy). Search preview: %q", i, preview)
                 matchErrors = append(matchErrors, errMsg)
                 log.Printf("[github] %s", errMsg)
-
-                // Log what the search text was looking for (first 100 chars)
-                preview := ch.Search
-                if len(preview) > 100 {
-                        preview = preview[:100] + "..."
-                }
-                log.Printf("[github] block %d search preview: %q", i, preview)
         }
 
         if applied == 0 {
@@ -411,6 +420,7 @@ func (e *GitHubExecutor) applySearchReplace(ctx context.Context, repo, branch, p
                 // Try applying blocks one at a time, skipping syntax-breaking ones
                 content = originalContent
                 goodBlocks := 0
+                var droppedBlocks []int // v3.18.0: H13 — track which blocks were dropped
                 for i, ch := range changes {
                         matched, trial := tryAllStrategies(content, ch.Search, ch.Replace)
                         if !matched {
@@ -418,6 +428,7 @@ func (e *GitHubExecutor) applySearchReplace(ctx context.Context, repo, branch, p
                         }
                         if err := validateSyntax(path, trial); err != nil {
                                 log.Printf("[github] block %d produces syntax error — skipping: %v", i, err)
+                                droppedBlocks = append(droppedBlocks, i)
                                 continue
                         }
                         content = trial
@@ -425,6 +436,14 @@ func (e *GitHubExecutor) applySearchReplace(ctx context.Context, repo, branch, p
                 }
                 if goodBlocks == 0 {
                         return "", fmt.Errorf("all search/replace blocks produce syntax errors — LLM generated broken code")
+                }
+                // v3.18.0: H13 — if any blocks were dropped, log a loud warning so
+                // the operator (and the LLM retry loop via logs) knows the fix is
+                // incomplete. We still ship the partial fix (better than nothing)
+                // but the warning ensures it's visible.
+                if len(droppedBlocks) > 0 {
+                        log.Printf("[github] WARNING: partial fix — recovered %d/%d blocks, dropped %d due to syntax errors (indices: %v). The PR may not fully resolve the incident.",
+                                goodBlocks, len(changes), len(droppedBlocks), droppedBlocks)
                 }
                 log.Printf("[github] recovered: applied %d/%d blocks after syntax recovery", goodBlocks, len(changes))
                 return content, nil

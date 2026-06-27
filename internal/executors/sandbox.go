@@ -3,9 +3,11 @@ package executors
 import (
         "context"
         "fmt"
+        "io"
         "log"
         "net/http"
         "strings"
+        "sync"
         "time"
 
         appsv1 "k8s.io/api/apps/v1"
@@ -27,6 +29,8 @@ import (
 var sandboxHTTPClient = &http.Client{Timeout: 5 * time.Second}
 
 // SandboxResult is the outcome of a sandbox run.
+// v3.18.0: Added PodLogs and ProbeResults fields so the LLM gets concrete
+// failure details (was a one-line Summary, making the retry loop ineffective).
 type SandboxResult struct {
         Verified      bool
         Summary       string
@@ -39,6 +43,10 @@ type SandboxResult struct {
         // When true, the retry loop should NOT feed the error back to the LLM —
         // the LLM can't fix a permissions issue.
         InfrastructureError bool
+        // v3.18.0: Concrete failure evidence — included in SandboxFeedback so
+        // the LLM can actually diagnose + fix the issue.
+        PodLogs      string   // last N bytes of canary pod logs (Level 1 failure)
+        ProbeResults []string // per-probe outcome (Level 2/3 failure)
 }
 
 // SandboxRunner creates an isolated namespace, deploys the fix, and verifies it.
@@ -80,6 +88,9 @@ type SandboxRunner struct {
         probePaths       []string // v3.4.0: configurable probe paths for Level 2 + 3
         sustainedWindow  time.Duration // v3.8.4: how long Ready must be sustained for Level 1
         sentinelNamespace string // v3.11.0: for the sandbox NetworkPolicy ingress allow-list
+        // v3.18.0: probePathsMu guards probePaths against concurrent Run() calls.
+        // Run() is invoked on the shared instance from multiple investigation goroutines.
+        probePathsMu sync.RWMutex
 }
 
 // NewSandbox creates a SandboxRunner.
@@ -164,35 +175,37 @@ func (s *SandboxRunner) Run(ctx context.Context, inc *schemas.Incident) SandboxR
         // from the pod logs and add it to the probe paths. This makes the sandbox
         // test the EXACT request that caused the incident, not just generic health
         // endpoints. Catches logic bugs that only manifest on specific inputs.
-        triggerEndpoint := ""
+        //
+        // v3.18.0: ExtractTriggerEndpoint now returns (path, method) — we use
+        // the method for probing instead of always GET (which returned 405 on
+        // POST/DELETE endpoints and falsely passed Level 2 because 405 < 500).
+        // Also: trigger endpoints are accumulated into a LOCAL slice (not the
+        // shared s.probePaths) so concurrent investigations don't cross-contaminate.
+        localProbePaths := append([]string(nil), s.getProbePaths()...) // copy
         for _, anomaly := range inc.Cluster.Anomalies {
-                if ep := agents.ExtractTriggerEndpoint(anomaly.Explanation); ep != "" {
-                        triggerEndpoint = ep
-                        break
+                epPath, epMethod := agents.ExtractTriggerEndpointWithMethod(anomaly.Explanation)
+                if epPath == "" {
+                        continue
                 }
-        }
-        if triggerEndpoint != "" {
-                // Add the trigger endpoint to probePaths for Level 2 + Level 3.
-                // We also add a "valid" variant (strip query params) to test that
-                // the endpoint works with valid input — catches bugs like the
-                // UnboundLocalError in PR #25 where valid input crashed after the fix.
-                s.probePaths = append(s.probePaths, triggerEndpoint)
+                // Add the trigger endpoint to localProbePaths for Level 2 + Level 3.
+                // Format: METHOD path so verifyEndpoints/verifyOriginalErrorFixed know how to call it.
+                localProbePaths = append(localProbePaths, epMethod+" "+epPath)
                 // Also test the path without query params (valid input)
-                if idx := strings.Index(triggerEndpoint, "?"); idx > 0 {
-                        validPath := triggerEndpoint[:idx]
-                        // Avoid duplicate if already in probePaths
+                if idx := strings.Index(epPath, "?"); idx > 0 {
+                        validPath := epPath[:idx]
                         alreadyExists := false
-                        for _, p := range s.probePaths {
-                                if p == validPath {
+                        for _, p := range localProbePaths {
+                                if p == epMethod+" "+validPath || p == validPath {
                                         alreadyExists = true
                                         break
                                 }
                         }
                         if !alreadyExists {
-                                s.probePaths = append(s.probePaths, validPath)
+                                localProbePaths = append(localProbePaths, epMethod+" "+validPath)
                         }
                 }
-                log.Printf("[sandbox] Level 2: added trigger endpoint %s to probe paths (total: %d)", triggerEndpoint, len(s.probePaths))
+                log.Printf("[sandbox] Level 2: added trigger endpoint %s %s to local probe paths (total: %d)", epMethod, epPath, len(localProbePaths))
+                break // first failing endpoint is enough
         }
 
         // 3. Level 1 — wait for canary pods to be Ready AND stay Ready for
@@ -201,22 +214,30 @@ func (s *SandboxRunner) Run(ctx context.Context, inc *schemas.Incident) SandboxR
         // no longer passes Level 1.
         ready := s.waitForReady(ctx, sandboxNS, fp.TargetService, 240*time.Second)
         if !ready {
-                return SandboxResult{Verified: false, Summary: "canary_pods_not_ready_or_unstable (startup crash not fixed, or pod crashes after going Ready)", Namespace: sandboxNS}
+                // v3.18.0: Capture canary pod logs so the LLM gets the actual error
+                // instead of a generic "canary_pods_not_ready" message.
+                podLogs := s.fetchCanaryPodLogs(ctx, sandboxNS, fp.TargetService)
+                summary := "canary_pods_not_ready_or_unstable (startup crash not fixed, or pod crashes after going Ready)"
+                if podLogs != "" {
+                        summary += "\n\n--- CANARY POD LOGS (last 2KB) ---\n" + lastN(podLogs, 2048)
+                }
+                return SandboxResult{Verified: false, Summary: summary, Namespace: sandboxNS, PodLogs: podLogs}
         }
         log.Printf("[sandbox] Level 1 PASSED: canary pod is Ready and stayed Ready for %s", s.sustainedWindow)
 
         // 4. Level 2 — call the app's own endpoints to verify they respond.
         // v3.8.4: No longer silently passes when the Service is missing or every
         // probe fails to connect — that masked canaries that never bound their port.
-        if !s.verifyEndpoints(ctx, sandboxNS, fp.TargetService) {
+        // v3.18.0: Pass localProbePaths (with trigger endpoint) instead of s.probePaths.
+        if !s.verifyEndpointsWithPaths(ctx, sandboxNS, fp.TargetService, localProbePaths) {
                 return SandboxResult{Verified: false, Summary: "endpoints_unreachable_or_5xx (app starts but endpoints fail or never bind)", Namespace: sandboxNS}
         }
         log.Printf("[sandbox] Level 2 PASSED: all endpoints returned 2xx/3xx")
 
         // 5. Level 3 — reproduce the original error and verify it's gone
-        if level3 := s.verifyOriginalErrorFixed(ctx, sandboxNS, fp.TargetService, inc); level3 != nil {
+        if level3 := s.verifyOriginalErrorFixedWithPaths(ctx, sandboxNS, fp.TargetService, inc, localProbePaths); level3 != nil {
                 if !level3.passed {
-                        return SandboxResult{Verified: false, Summary: fmt.Sprintf("original_error_still_present: %s", level3.detail), Namespace: sandboxNS}
+                        return SandboxResult{Verified: false, Summary: fmt.Sprintf("original_error_still_present: %s", level3.detail), Namespace: sandboxNS, ProbeResults: []string{level3.detail}}
                 }
                 log.Printf("[sandbox] Level 3 PASSED: %s", level3.detail)
         }
@@ -447,6 +468,12 @@ func (s *SandboxRunner) waitForReady(ctx context.Context, ns, name string, timeo
         readySince := time.Time{}
 
         for time.Now().Before(deadline) {
+                // v3.18.0: check ctx.Done so the loop is interruptible by SIGTERM/investigation timeout.
+                select {
+                case <-ctx.Done():
+                        return false
+                default:
+                }
                 deploy, err := s.clientset.AppsV1().Deployments(ns).Get(ctx, name, metav1.GetOptions{})
                 if err == nil && deploy.Status.ReadyReplicas >= 1 {
                         if readySince.IsZero() {
@@ -464,78 +491,145 @@ func (s *SandboxRunner) waitForReady(ctx context.Context, ns, name string, timeo
                         }
                         readySince = time.Time{}
                 }
-                time.Sleep(3 * time.Second)
+                // v3.18.0: interruptible sleep
+                select {
+                case <-ctx.Done():
+                        return false
+                case <-time.After(3 * time.Second):
+                }
         }
         return false
 }
 
-// verifyEndpoints probes each configured path on the canary Service and
-// requires every probe to return 2xx/3xx. v3.8.4: no longer silently passes
-// when the Service is missing or every probe fails to connect — that masked
-// canaries that never bound their port. Connection errors are now counted;
-// if every probe fails to connect, Level 2 fails.
-func (s *SandboxRunner) verifyEndpoints(ctx context.Context, ns, service string) bool {
+// getProbePaths returns a copy of probePaths under the read lock.
+// v3.18.0: Replaces direct s.probePaths access — Run() is invoked concurrently
+// from multiple investigation goroutines, so the slice must be guarded.
+func (s *SandboxRunner) getProbePaths() []string {
+        s.probePathsMu.RLock()
+        defer s.probePathsMu.RUnlock()
+        return append([]string(nil), s.probePaths...)
+}
+
+// fetchCanaryPodLogs retrieves the canary pod's logs for inclusion in
+// SandboxResult.PodLogs. v3.18.0: gives the LLM the actual error instead of
+// a generic "canary_pods_not_ready" summary.
+func (s *SandboxRunner) fetchCanaryPodLogs(ctx context.Context, ns, service string) string {
+        pods, err := s.clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
+                LabelSelector: fmt.Sprintf("app=%s", service),
+                Limit:         1,
+        })
+        if err != nil || len(pods.Items) == 0 {
+                return ""
+        }
+        pod := pods.Items[0]
+        // Pick the main container (first non-init container)
+        if len(pod.Spec.Containers) == 0 {
+                return ""
+        }
+        containerName := pod.Spec.Containers[0].Name
+        req := s.clientset.CoreV1().Pods(ns).GetLogs(pod.Name, &corev1.PodLogOptions{
+                Container: containerName,
+                TailLines: newInt64(100),
+        })
+        stream, err := req.Stream(ctx)
+        if err != nil {
+                return ""
+        }
+        defer stream.Close()
+        buf, err := io.ReadAll(io.LimitReader(stream, 8<<10)) // 8KB max
+        if err != nil {
+                return string(buf) // partial
+        }
+        return string(buf)
+}
+
+func newInt64(n int64) *int64 { return &n }
+
+// parsePathMethod splits a probe path entry like "POST /api/users" into
+// (method, path). Default method is GET (backwards-compatible).
+func parsePathMethod(entry string) (method, path string) {
+        method = "GET"
+        path = entry
+        if idx := strings.Index(entry, " "); idx > 0 {
+                m := strings.ToUpper(entry[:idx])
+                switch m {
+                case "GET", "POST", "PUT", "DELETE", "PATCH", "HEAD":
+                        method = m
+                        path = entry[idx+1:]
+                }
+        }
+        return
+}
+
+// verifyEndpointsWithPaths probes each path on the canary Service and requires
+// every probe to return 2xx/3xx. v3.18.0: extracted from verifyEndpoints so the
+// caller passes a local slice (no shared state race).
+//
+// v3.18.0: Fixed two critical bugs:
+//   1. 4xx responses now FAIL (was: only 5xx failed; 404/401/405 falsely passed).
+//   2. POST/DELETE/PATCH endpoints are now probed with the correct method (was:
+//      always GET, returning 405 on POST endpoints which falsely passed).
+//   3. consecutiveSuccesses now resets on failure (was: [success, fail, success] passed).
+func (s *SandboxRunner) verifyEndpointsWithPaths(ctx context.Context, ns, service string, paths []string) bool {
         svc, err := s.clientset.CoreV1().Services(ns).Get(ctx, service, metav1.GetOptions{})
         if err != nil {
-                // v3.8.4: Previously returned true here ("Don't fail if no Service"),
-                // which let a sandbox with no Service pass Level 2 for free. Now we
-                // fail — if the prod deployment has a Service (which is what we just
-                // tried to copy in deployCanary), the sandbox should have one too.
                 log.Printf("[sandbox] Level 2 FAILED: Service %s/%s not found (deployCanary should have created it)", ns, service)
                 return false
         }
-        port := int32(80)
-        if len(svc.Spec.Ports) > 0 {
-                port = svc.Spec.Ports[0].Port
+        // v3.18.0: probe ALL service ports, not just the first (multi-port services).
+        if len(svc.Spec.Ports) == 0 {
+                log.Printf("[sandbox] Level 2 FAILED: Service %s/%s has no ports", ns, service)
+                return false
         }
         svcName := svc.Name
 
-        // v3.4.0: Use configurable probe paths instead of hardcoded [/, /healthz, /readyz].
-        endpoints := s.probePaths
-        if len(endpoints) == 0 {
-                endpoints = []string{"/", "/healthz", "/readyz"}
+        if len(paths) == 0 {
+                paths = []string{"/", "/healthz", "/readyz"}
         }
 
         client := sandboxHTTPClient
-        consecutiveFailures := 0
-        consecutiveSuccesses := 0
-        requiredSuccesses := 2 // v3.8.4: require 2 consecutive successes per path to ride through transient blips
+        requiredSuccesses := 2 // require 2 consecutive successes per path
 
-        for _, path := range endpoints {
-                url := fmt.Sprintf("http://%s.%s.svc.cluster.local:%d%s", svcName, ns, port, path)
-                consecutiveFailures = 0
-                consecutiveSuccesses = 0
+        for _, portSpec := range svc.Spec.Ports {
+                port := portSpec.Port
+                for _, p := range paths {
+                        method, path := parsePathMethod(p)
+                        url := fmt.Sprintf("http://%s.%s.svc.cluster.local:%d%s", svcName, ns, port, path)
+                        consecutiveFailures := 0
+                        consecutiveSuccesses := 0
 
-                // Try each path up to 3 times to ride through pod-startup transients.
-                // After 3 consecutive failures on a single path, fail Level 2.
-                for attempt := 0; attempt < 3; attempt++ {
-                        req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-                        if err != nil {
-                                consecutiveFailures++
-                                continue
+                        for attempt := 0; attempt < 3; attempt++ {
+                                req, err := http.NewRequestWithContext(ctx, method, url, nil)
+                                if err != nil {
+                                        consecutiveFailures++
+                                        continue
+                                }
+                                resp, err := client.Do(req)
+                                if err != nil {
+                                        consecutiveFailures++
+                                        // Reset consecutive successes on failure — was NOT being reset (audit H4.8).
+                                        consecutiveSuccesses = 0
+                                        log.Printf("[sandbox] Level 2: probe %s %s attempt %d failed: %v", method, url, attempt+1, err)
+                                        continue
+                                }
+                                resp.Body.Close()
+                                // v3.18.0: 4xx now fails (was only 5xx). 404/401/405 = app broken.
+                                if resp.StatusCode >= 400 {
+                                        consecutiveFailures++
+                                        consecutiveSuccesses = 0
+                                        log.Printf("[sandbox] Level 2: probe %s %s attempt %d returned %d (4xx/5xx = failure)", method, url, attempt+1, resp.StatusCode)
+                                        continue
+                                }
+                                consecutiveSuccesses++
+                                if consecutiveSuccesses >= requiredSuccesses {
+                                        break
+                                }
                         }
-                        resp, err := client.Do(req)
-                        if err != nil {
-                                consecutiveFailures++
-                                log.Printf("[sandbox] Level 2: probe %s attempt %d failed: %v", url, attempt+1, err)
-                                continue
+                        if consecutiveSuccesses < requiredSuccesses {
+                                log.Printf("[sandbox] Level 2 FAILED: %s %s (port %d) never returned 2xx/3xx in 3 attempts (%d successes, %d failures)",
+                                        method, url, port, consecutiveSuccesses, consecutiveFailures)
+                                return false
                         }
-                        resp.Body.Close()
-                        if resp.StatusCode >= 500 {
-                                consecutiveFailures++
-                                log.Printf("[sandbox] Level 2: probe %s attempt %d returned %d", url, attempt+1, resp.StatusCode)
-                                continue
-                        }
-                        // 2xx or 3xx — count as a success.
-                        consecutiveSuccesses++
-                        if consecutiveSuccesses >= requiredSuccesses {
-                                break
-                        }
-                }
-                if consecutiveSuccesses < requiredSuccesses {
-                        log.Printf("[sandbox] Level 2 FAILED: %s never returned 2xx/3xx in %d attempts (%d successes, %d failures)",
-                                url, 3, consecutiveSuccesses, consecutiveFailures)
-                        return false
                 }
         }
         return true
@@ -564,7 +658,10 @@ type level3Result struct {
 // + JS startup SyntaxError all auto-pass Level 1 (the canary pod started and
 // stayed Ready for sustainedWindow — that's sufficient evidence the startup
 // error is gone).
-func (s *SandboxRunner) verifyOriginalErrorFixed(ctx context.Context, ns, service string, inc *schemas.Incident) *level3Result {
+// verifyOriginalErrorFixedWithPaths is the same as verifyOriginalErrorFixed
+// but takes an explicit paths slice (avoids the shared s.probePaths race).
+// v3.18.0: Also uses the correct HTTP method per probe (was always GET).
+func (s *SandboxRunner) verifyOriginalErrorFixedWithPaths(ctx context.Context, ns, service string, inc *schemas.Incident, paths []string) *level3Result {
         // Get the original pod logs from the anomaly explanation
         explanation := ""
         for _, anomaly := range inc.Cluster.Anomalies {
@@ -574,7 +671,6 @@ func (s *SandboxRunner) verifyOriginalErrorFixed(ctx context.Context, ns, servic
                 return nil
         }
 
-        // v3.11.0: Use the multi-language parser instead of a Python-only regex.
         parsed := agents.ParseError(explanation)
         if parsed == nil {
                 return nil // No recognizable error — can't reproduce
@@ -582,23 +678,15 @@ func (s *SandboxRunner) verifyOriginalErrorFixed(ctx context.Context, ns, servic
         errorType := parsed.ErrorType
         errorDetail := parsed.ErrorDetail
 
-        // Startup errors are already verified by Level 1 (pod is Ready + sustained
-        // for 30s = no crash). v3.11.0: This auto-pass is now multi-language.
-        // Previously only Python startup errors were recognized; a Go panic or
-        // Java ExceptionInInitializerError at startup would fall through to the
-        // runtime-error probe path and potentially pass Level 3 on Level 2 alone.
+        // Startup errors are already verified by Level 1.
         startupErrors := map[string]bool{
-                // Python
                 "KeyError": true, "ImportError": true, "ModuleNotFoundError": true,
                 "FileNotFoundError": true, "SyntaxError": true,
-                // Go (panic at startup = init() or package-level crash)
                 "panic": true,
-                // Java
                 "ExceptionInInitializerError": true, "NoClassDefFoundError": true,
                 "NoSuchMethodError": true, "NoSuchFieldError": true,
                 "UnsupportedClassVersionError": true,
-                // JS
-                "ReferenceError": true, // undefined var at module load
+                "ReferenceError": true,
         }
         if startupErrors[errorType] {
                 return &level3Result{
@@ -607,82 +695,70 @@ func (s *SandboxRunner) verifyOriginalErrorFixed(ctx context.Context, ns, servic
                 }
         }
 
-        // For runtime errors — call the app's endpoints and verify:
-        //   1. No 4xx/5xx responses (v3.8.4: previously only 5xx + error-string match failed)
-        //   2. The original error type/detail doesn't appear in any response body
         svc, err := s.clientset.CoreV1().Services(ns).Get(ctx, service, metav1.GetOptions{})
         if err != nil || svc == nil {
                 return nil
         }
-        port := int32(80)
-        if len(svc.Spec.Ports) > 0 {
-                port = svc.Spec.Ports[0].Port
+        // v3.18.0: probe ALL ports (was first only).
+        if len(svc.Spec.Ports) == 0 {
+                return nil
         }
         svcName := svc.Name
 
-        probePaths := s.probePaths
-        if len(probePaths) == 0 {
-                probePaths = []string{"/", "/healthz", "/readyz"}
+        if len(paths) == 0 {
+                paths = []string{"/", "/healthz", "/readyz"}
         }
 
         client := sandboxHTTPClient
         totalProbes := 0
         failedProbes := 0
 
-        for _, path := range probePaths {
-                url := fmt.Sprintf("http://%s.%s.svc.cluster.local:%d%s", svcName, ns, port, path)
-                req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
+        for _, portSpec := range svc.Spec.Ports {
+                port := portSpec.Port
+                for _, p := range paths {
+                        method, path := parsePathMethod(p)
+                        url := fmt.Sprintf("http://%s.%s.svc.cluster.local:%d%s", svcName, ns, port, path)
+                        req, _ := http.NewRequestWithContext(ctx, method, url, nil)
 
-                // v3.8.4: Retry each path up to 2 times to ride through transients.
-                // If after 2 retries the path still returns 4xx/5xx or fails to
-                // connect, count it as a failure.
-                pathOK := false
-                for attempt := 0; attempt < 2; attempt++ {
-                        resp, err := client.Do(req)
-                        if err != nil {
-                                log.Printf("[sandbox] Level 3: probe %s attempt %d connect error: %v", url, attempt+1, err)
-                                continue
-                        }
-                        body := make([]byte, 4096)
-                        n, _ := resp.Body.Read(body)
-                        resp.Body.Close()
-                        bodyStr := strings.ToLower(string(body[:n]))
-
-                        // Check 1: original error type/detail not in response body
-                        if strings.Contains(bodyStr, strings.ToLower(errorType)) ||
-                                (errorDetail != "" && strings.Contains(bodyStr, strings.ToLower(strings.TrimSpace(errorDetail)))) {
-                                return &level3Result{
-                                        passed: false,
-                                        detail: fmt.Sprintf("%s: %s still present in response body from %s (status %d)", errorType, errorDetail, path, resp.StatusCode),
+                        pathOK := false
+                        for attempt := 0; attempt < 2; attempt++ {
+                                resp, err := client.Do(req)
+                                if err != nil {
+                                        log.Printf("[sandbox] Level 3: probe %s %s attempt %d connect error: %v", method, url, attempt+1, err)
+                                        continue
                                 }
-                        }
+                                // v3.18.0: read full body up to 64KB (was single 4KB Read, missed errors past 4096).
+                                body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+                                resp.Body.Close()
+                                bodyStr := strings.ToLower(string(body))
 
-                        // v3.14.5: Check 2 — only 5xx responses fail Level 3.
-                        // A 4xx (400 Bad Request, 404 Not Found) means the app handled
-                        // the bad input gracefully instead of crashing. That's the fix
-                        // WORKING. The original v3.8.4 code failed on ANY 4xx/5xx,
-                        // which rejected correct fixes that return 400 for bad input.
-                        // Only 5xx (server error) means the app crashed — that's a real
-                        // failure. The error-type-in-body check (Check 1) above already
-                        // catches if the original error string appears in the response.
-                        if resp.StatusCode >= 500 {
-                                log.Printf("[sandbox] Level 3: probe %s returned %d (5xx = server error, fix not working)", url, resp.StatusCode)
-                                continue
-                        }
+                                if strings.Contains(bodyStr, strings.ToLower(errorType)) ||
+                                        (errorDetail != "" && strings.Contains(bodyStr, strings.ToLower(strings.TrimSpace(errorDetail)))) {
+                                        return &level3Result{
+                                                passed: false,
+                                                detail: fmt.Sprintf("%s: %s still present in response body from %s %s (status %d)", errorType, errorDetail, method, path, resp.StatusCode),
+                                        }
+                                }
 
-                        pathOK = true
-                        break
-                }
-                totalProbes++
-                if !pathOK {
-                        failedProbes++
+                                if resp.StatusCode >= 500 {
+                                        log.Printf("[sandbox] Level 3: probe %s %s returned %d (5xx = server error, fix not working)", method, url, resp.StatusCode)
+                                        continue
+                                }
+
+                                pathOK = true
+                                break
+                        }
+                        totalProbes++
+                        if !pathOK {
+                                failedProbes++
+                        }
                 }
         }
 
         if failedProbes > 0 {
                 return &level3Result{
                         passed: false,
-                        detail: fmt.Sprintf("%d/%d probe paths returned 4xx/5xx or failed to connect (%s: %s not fully gone)",
+                        detail: fmt.Sprintf("%d/%d probe paths returned 5xx or failed to connect (%s: %s not fully gone)",
                                 failedProbes, totalProbes, errorType, errorDetail),
                 }
         }
@@ -694,7 +770,16 @@ func (s *SandboxRunner) verifyOriginalErrorFixed(ctx context.Context, ns, servic
 }
 
 func (s *SandboxRunner) cleanup(ctx context.Context, ns string) {
-        _ = s.clientset.CoreV1().Namespaces().Delete(ctx, ns, metav1.DeleteOptions{})
+        // v3.18.0: Use a fresh context so cleanup runs even if the parent ctx
+        // is cancelled (e.g. investigation timeout). Previously, the cancelled
+        // ctx caused Namespace.Delete to return context.Canceled immediately,
+        // leaking the namespace + all its resources.
+        cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+        defer cancel()
+        if err := s.clientset.CoreV1().Namespaces().Delete(cleanupCtx, ns, metav1.DeleteOptions{}); err != nil {
+                log.Printf("[sandbox] cleanup: failed to delete namespace %s: %v", ns, err)
+        }
+        _ = ctx // parent ctx accepted for API compat but not used
 }
 
 // ReapStaleSandboxNamespaces lists all namespaces with the sentinel.io/sandbox

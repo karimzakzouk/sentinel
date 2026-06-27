@@ -10,6 +10,8 @@ import (
         "net/http"
         "os"
         "os/signal"
+        "sync"
+        "sync/atomic"
         "syscall"
         "time"
 
@@ -56,6 +58,24 @@ func main() {
                 listenAddr = *addr
         }
 
+        // v3.18.0: Validate config BEFORE initializing the logger — fail fast
+        // on missing required fields instead of crashing 5-10 minutes later
+        // at the first LLM call.
+        if errs, warns := cfg.Validate(); len(errs) > 0 || len(warns) > 0 {
+                // Initialize logger first so warnings are structured
+                logging.Init(cfg.LogLevel)
+                for _, w := range warns {
+                        logging.Warn("config validation warning: " + w)
+                }
+                for _, e := range errs {
+                        logging.Error("config validation error: " + e)
+                }
+                if len(errs) > 0 {
+                        logging.Error("refusing to start due to config validation errors")
+                        os.Exit(1)
+                }
+        }
+
         // v3.4.0: Initialize structured logger (JSON to stdout, level from config).
         // Falls back to stdlib log for any code not yet migrated to slog.
         logging.Init(cfg.LogLevel)
@@ -70,9 +90,9 @@ func main() {
                 "log_level", cfg.LogLevel,
         )
 
-	// v3.12.0: GoAI now supports Anthropic, Bedrock, Azure, and 20+ other
-	// providers natively. The old "unsupported native provider" warning
-	// (v3.11.0 audit #16) is no longer needed — removed.
+        // v3.12.0: GoAI now supports Anthropic, Bedrock, Azure, and 20+ other
+        // providers natively. The old "unsupported native provider" warning
+        // (v3.11.0 audit #16) is no longer needed — removed.
 
 
         // v3.11.0: Warn if the embedding model is empty but the operator is using
@@ -233,9 +253,12 @@ func main() {
                 WithRegistry(cfg.KanikoRegistry).
                 WithInitImage(cfg.KanikoInitImage).
                 WithExecutorImage(cfg.KanikoExecutorImage).
-                WithGitHost(cfg.GitHost)
+                WithGitHost(cfg.GitHost).
+                WithGitHubToken(cfg.GitHubToken) // v3.18.0: private repo support
 
-        ready := false
+        // v3.18.0: H2 — `ready` is read by HTTP handlers on /readyz and written by a
+        // background goroutine. Was a plain bool (race detector failure). Use atomic.
+        var ready atomic.Bool
 
         // v3.2: Active incident tracker (per-service dedup)
         tracker := detection.NewActiveTracker()
@@ -271,9 +294,16 @@ func main() {
                 maxConcurrent = 3
         }
         invSem := make(chan struct{}, maxConcurrent)
+        // v3.18.0: H3 — WaitGroup tracking in-flight investigations so shutdown
+        // can wait for them to finish (with a deadline) before closing the SQLite store.
+        var invWG sync.WaitGroup
 
         // 7. The full investigation handler — runs the agent pipeline + execution
         handler := func(ctx context.Context, cluster schemas.AnomalyCluster, crName, crNamespace string) {
+                // v3.18.0: H3 — track this investigation in the WaitGroup so shutdown can wait.
+                invWG.Add(1)
+                defer invWG.Done()
+
                 // v3.8.2: Acquire semaphore — blocks if 3 investigations are already running
                 select {
                 case invSem <- struct{}{}:
@@ -717,8 +747,14 @@ func main() {
         }()
 
         go func() {
+                // v3.18.0: H6 — panic recovery for background goroutine.
+                defer func() {
+                        if r := recover(); r != nil {
+                                logging.Error("ready-setter goroutine panicked", "panic", r)
+                        }
+                }()
                 time.Sleep(2 * time.Second)
-                ready = true
+                ready.Store(true)
                 logging.Info("Sentinel ready — watching for incidents")
         }()
 
@@ -751,7 +787,7 @@ func main() {
                         go handler(ctx, cluster, "manual", cfg.Namespace)
                         return cluster.ClusterID.String(), nil
                 },
-                func() bool { return ready },
+                func() bool { return ready.Load() },
         )
         // v3.8.4: Enable admin API bearer-token auth when SENTINEL_API_TOKEN is set.
         // Empty token = auth disabled (logs a loud warning). Health/readiness/metrics
@@ -862,7 +898,28 @@ func main() {
         signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
         <-sigCh
         logging.Info("shutting down...")
+
+        // v3.18.0: H4 — stop clusterer timers so pending triggers don't fire post-shutdown.
+        clusterer.Stop()
+        // v3.18.0: H1 — cancel all active pod log streams so they don't race with store.Close().
+        detector.StopAllLogStreams()
+
         cancel()
+
+        // v3.18.0: H3 — wait for in-flight investigations to finish (with a deadline)
+        // before closing the SQLite store. Was: process could os.Exit mid-LLM-call,
+        // leaving half-written incidents and half-applied branches.
+        done := make(chan struct{})
+        go func() {
+                invWG.Wait()
+                close(done)
+        }()
+        select {
+        case <-done:
+                logging.Info("all in-flight investigations completed")
+        case <-time.After(15 * time.Second):
+                logging.Warn("15s shutdown deadline exceeded — proceeding with force-close (some investigations may be incomplete)")
+        }
 
         shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
         defer shutdownCancel()
