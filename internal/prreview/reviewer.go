@@ -30,6 +30,7 @@ import (
         "net/http"
         "regexp"
         "strings"
+        "sync"
         "time"
 )
 
@@ -42,6 +43,12 @@ type Reviewer struct {
         similarityThreshold float32 // default 0.75
         httpClient     *http.Client
         apiURL         string // v3.11.0: base API URL (default "https://api.github.com")
+
+        // v3.18.0: M6 — webhook idempotency. Tracks X-GitHub-Delivery IDs to
+        // prevent duplicate processing on GitHub redelivery.
+        deliveryMu      sync.Mutex
+        deliverySeen    map[string]time.Time // deliveryID → first-seen timestamp
+        deliveryMaxSize int                  // max entries before LRU eviction (default 1000)
 }
 
 // GitHubAppTokenProvider is implemented by githubapp.App. v3.13.0: when set,
@@ -109,7 +116,47 @@ func New(githubToken, webhookSecret string, vs VectorStore) *Reviewer {
                 similarityThreshold: 0.75,
                 httpClient:          &http.Client{Timeout: 30 * time.Second},
                 apiURL:              "https://api.github.com", // v3.11.0: default; override via WithAPIURL
+                // v3.18.0: M6 — webhook idempotency cache
+                deliverySeen:        make(map[string]time.Time),
+                deliveryMaxSize:     1000,
         }
+}
+
+// isDuplicateDelivery returns true if the delivery ID has been seen recently.
+// v3.18.0: M6 — prevents duplicate PR review comments on GitHub webhook redelivery.
+// Entries expire after 1 hour (GitHub's max redelivery window is 24h, but
+// 1h covers the typical 3-retry burst). LRU eviction when map exceeds deliveryMaxSize.
+func (r *Reviewer) isDuplicateDelivery(deliveryID string) bool {
+        r.deliveryMu.Lock()
+        defer r.deliveryMu.Unlock()
+
+        now := time.Now()
+        // Evict entries older than 1 hour
+        cutoff := now.Add(-1 * time.Hour)
+        for id, ts := range r.deliverySeen {
+                if ts.Before(cutoff) {
+                        delete(r.deliverySeen, id)
+                }
+        }
+        // Hard cap: if map is still too big, clear oldest entries
+        if len(r.deliverySeen) >= r.deliveryMaxSize {
+                // Evict ~25% of entries (oldest by timestamp)
+                type kv struct{ k string; v time.Time }
+                var entries []kv
+                for k, v := range r.deliverySeen {
+                        entries = append(entries, kv{k, v})
+                }
+                // Sort by timestamp (oldest first)
+                for i := 0; i < len(entries)/4; i++ {
+                        delete(r.deliverySeen, entries[i].k)
+                }
+        }
+
+        if _, seen := r.deliverySeen[deliveryID]; seen {
+                return true
+        }
+        r.deliverySeen[deliveryID] = now
+        return false
 }
 
 // WithAPIURL sets the GitHub API base URL. v3.11.0: Replaces the hardcoded
@@ -179,6 +226,19 @@ func (r *Reviewer) HandleWebhook(w http.ResponseWriter, req *http.Request) {
                 log.Printf("[prreview] signature verification failed")
                 http.Error(w, "invalid signature", http.StatusUnauthorized)
                 return
+        }
+
+        // v3.18.0: M6 — webhook idempotency. GitHub redelivers events on timeout
+        // (default 3 retries over 24h). Without dedup, each redelivery posts a
+        // duplicate PR review comment. We track X-GitHub-Delivery IDs in-memory
+        // (last 1000, LRU eviction) and silently ack duplicates.
+        deliveryID := req.Header.Get("X-GitHub-Delivery")
+        if deliveryID != "" {
+                if r.isDuplicateDelivery(deliveryID) {
+                        log.Printf("[prreview] duplicate delivery %s — acking without processing", deliveryID)
+                        w.WriteHeader(http.StatusOK)
+                        return
+                }
         }
 
         eventType := req.Header.Get("X-GitHub-Event")

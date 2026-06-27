@@ -56,6 +56,78 @@ type Server struct {
         // 'Authorization: Bearer <token>'. Health/readiness/metrics/SSE/web UI
         // remain unauthenticated so dashboards and probes still work.
         apiToken string
+
+        // v3.18.0: H27 — per-IP rate limiter for admin + webhook endpoints.
+        // Prevents brute-force token attacks and webhook flood DoS.
+        rateLimiter *ipRateLimiter
+}
+
+// ipRateLimiter is a simple per-IP token bucket rate limiter.
+// v3.18.0: H27 — was missing entirely; admin endpoints had no throttle,
+// allowing brute-force token attacks at line speed despite constant-time compare.
+// 10 requests per minute per IP — generous enough for legitimate use
+// (a human clicking buttons) but blocks scripted attacks.
+type ipRateLimiter struct {
+        mu       sync.Mutex
+        visitors map[string]*visitorBucket
+        rate     int           // requests per window
+        window   time.Duration // window duration
+}
+
+type visitorBucket struct {
+        count     int
+        resetAt   time.Time
+}
+
+func newIPRateLimiter(rate int, window time.Duration) *ipRateLimiter {
+        rl := &ipRateLimiter{
+                visitors: make(map[string]*visitorBucket),
+                rate:     rate,
+                window:   window,
+        }
+        // Background cleanup of stale buckets every 5 minutes
+        go func() {
+                ticker := time.NewTicker(5 * time.Minute)
+                defer ticker.Stop()
+                for range ticker.C {
+                        rl.mu.Lock()
+                        now := time.Now()
+                        for ip, b := range rl.visitors {
+                                if now.After(b.resetAt) {
+                                        delete(rl.visitors, ip)
+                                }
+                        }
+                        rl.mu.Unlock()
+                }
+        }()
+        return rl
+}
+
+// Allow returns true if the IP is under the rate limit, false otherwise.
+// Extracts the IP from addr (strips port).
+func (rl *ipRateLimiter) Allow(addr string) bool {
+        // Strip port from addr (e.g. "1.2.3.4:5678" → "1.2.3.4")
+        ip := addr
+        if idx := strings.LastIndex(addr, ":"); idx >= 0 {
+                ip = addr[:idx]
+        }
+        // Handle IPv6 addresses with brackets
+        ip = strings.TrimPrefix(strings.TrimSuffix(ip, "]"), "[")
+
+        rl.mu.Lock()
+        defer rl.mu.Unlock()
+
+        now := time.Now()
+        b, exists := rl.visitors[ip]
+        if !exists || now.After(b.resetAt) {
+                rl.visitors[ip] = &visitorBucket{count: 1, resetAt: now.Add(rl.window)}
+                return true
+        }
+        if b.count >= rl.rate {
+                return false
+        }
+        b.count++
+        return true
 }
 
 type Store interface {
@@ -87,6 +159,8 @@ func New(addr string, store Store, settings SettingsGetter, investigate Investig
                 investigate:  investigate,
                 readyChecker: ready,
                 eventSubs:    make(map[chan ServerEvent]bool),
+                // v3.18.0: H27 — 10 req/min per IP for admin + webhook endpoints.
+                rateLimiter:  newIPRateLimiter(10, time.Minute),
         }
         mux := http.NewServeMux()
         mux.HandleFunc("/healthz", s.handleHealthz)
@@ -148,8 +222,24 @@ func (s *Server) SetAPIToken(token string) {
 //
 // Webhook and Slack endpoints do their own signature verification and are
 // not gated by this middleware.
+//
+// v3.18.0: H27 — admin + webhook endpoints now have per-IP rate limiting
+// (10 req/min) to prevent brute-force token attacks and webhook flood DoS.
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
         return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+                // v3.18.0: H27 — rate limit admin + webhook + slack endpoints.
+                // Health/metrics/incidents reads are not rate-limited (kubelet + Prometheus scrape frequently).
+                if strings.HasPrefix(r.URL.Path, "/admin/") ||
+                        r.URL.Path == "/webhook/github" ||
+                        r.URL.Path == "/slack/events" {
+                        if !s.rateLimiter.Allow(r.RemoteAddr) {
+                                writeJSON(w, 429, map[string]string{
+                                        "error": "rate limit exceeded (max 10 req/min per IP) — retry after 60s",
+                                })
+                                return
+                        }
+                }
+
                 if s.apiToken == "" {
                         next.ServeHTTP(w, r)
                         return

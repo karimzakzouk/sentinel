@@ -536,6 +536,51 @@ func buildIDFromTag(imageTag string) string {
         return fmt.Sprintf("%-8s", s)[:8]
 }
 
+// validateDockerfilePath validates that a dockerfile_path from LLM output is safe.
+// v3.18.0: M48 — was passed unsanitized to Kaniko's --dockerfile flag, allowing
+// path traversal (e.g. "../../vendor/attacker/Dockerfile") and build-chain attacks.
+// Allowed: "Dockerfile", "Dockerfile.*", "docker/Dockerfile", "subdir/Dockerfile".
+// Rejected: absolute paths, "..", control chars, non-Dockerfile filenames.
+func validateDockerfilePath(path string) error {
+        if path == "" {
+                return nil // empty = use default "Dockerfile"
+        }
+        if len(path) > 200 {
+                return fmt.Errorf("path too long (%d chars)", len(path))
+        }
+        // Reject control chars
+        for _, r := range path {
+                if r < 0x20 || r == 0x7f {
+                        return fmt.Errorf("control character in path")
+                }
+        }
+        // Reject absolute paths
+        if filepathIsAbs(path) {
+                return fmt.Errorf("absolute paths not allowed")
+        }
+        // Reject path traversal
+        if strings.Contains(path, "..") {
+                return fmt.Errorf("path traversal (..) not allowed")
+        }
+        // The basename must be "Dockerfile" or start with "Dockerfile."
+        // This prevents LLM from pointing Kaniko at an arbitrary file like
+        // "backdoor-Dockerfile" that it created via files_to_change.
+        base := path
+        if idx := strings.LastIndex(path, "/"); idx >= 0 {
+                base = path[idx+1:]
+        }
+        if base != "Dockerfile" && !strings.HasPrefix(base, "Dockerfile.") {
+                return fmt.Errorf("dockerfile path must end with 'Dockerfile' or 'Dockerfile.<variant>', got %q", base)
+        }
+        return nil
+}
+
+// filepathIsAbs is a minimal implementation to avoid importing path/filepath
+// (which would add an import for a single use).
+func filepathIsAbs(path string) bool {
+        return strings.HasPrefix(path, "/") || (len(path) >= 2 && path[1] == ':')
+}
+
 // BuildForIncident is a convenience wrapper that extracts all params from a
 // FixProposal + branch info and calls Build.
 //
@@ -551,6 +596,11 @@ func (k *KanikoBuilder) BuildForIncident(ctx context.Context, inc *schemas.Incid
         dockerfilePath := "Dockerfile"
         if fp.DockerfilePath != nil && *fp.DockerfilePath != "" {
                 dockerfilePath = *fp.DockerfilePath
+                // v3.18.0: M48 — validate dockerfilePath (was passed unsanitized to Kaniko's
+                // --dockerfile flag, allowing path traversal / build-chain attacks via LLM output).
+                if err := validateDockerfilePath(dockerfilePath); err != nil {
+                        return "", fmt.Errorf("invalid dockerfile_path: %w", err)
+                }
         }
 
         fixedFiles := map[string]string{}

@@ -7,6 +7,7 @@ import (
         "log"
         "path/filepath"
         "strings"
+        "time"
 
         "github.com/google/uuid"
 
@@ -278,9 +279,16 @@ func (a *FixProposer) Run(ctx context.Context, state *schemas.AgentState) error 
                         userMsg = a.buildUserMessage(state) + retryHint
                 }
 
+                // v3.18.0: H20 — give each attempt its own sub-context with a per-attempt
+                // timeout. Was: all attempts shared the parent ctx (120s). If the first
+                // call took 119s, retries 1-3 were immediately cancelled — making the
+                // retry loop useless when the first call was slow.
+                // Per-attempt timeout = parent deadline / remaining attempts, capped at 90s.
+                attemptCtx, attemptCancel := context.WithTimeout(ctx, 90*time.Second)
                 log.Printf("[fix_proposer] attempt %d/%d", attempt+1, maxRetries+1)
                 var llmErr error
-                result, llmErr = a.router.FrontierJSON(ctx, fixProposerSystemPrompt, userMsg, 16000)
+                result, llmErr = a.router.FrontierJSON(attemptCtx, fixProposerSystemPrompt, userMsg, 16000)
+                attemptCancel()
                 if llmErr != nil {
                         lastError = fmt.Sprintf("LLM call failed: %v", llmErr)
                         log.Printf("[fix_proposer] attempt %d LLM error: %v", attempt+1, llmErr)
