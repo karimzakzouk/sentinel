@@ -148,7 +148,12 @@ func (c *client) handleAppSetup(args []string) {
                 fmt.Fprintf(os.Stderr, "Failed to start localhost callback server: %v\n", err)
                 os.Exit(1)
         }
-        port := listener.Addr().(*net.TCPAddr).Port
+        tcpAddr, ok := listener.Addr().(*net.TCPAddr)
+        if !ok {
+                fmt.Fprintf(os.Stderr, "Internal error: listener.Addr() returned non-TCPAddr: %T\n", listener.Addr())
+                os.Exit(1)
+        }
+        port := tcpAddr.Port
         callbackURL := fmt.Sprintf("http://localhost:%d/callback", port)
         if err := listener.Close(); err != nil {
                 fmt.Fprintf(os.Stderr, "Warning: failed to close temporary listener: %v\n", err)

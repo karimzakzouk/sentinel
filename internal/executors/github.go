@@ -25,9 +25,10 @@ import (
 // v3.11.0: Now supports GitHub Enterprise / GitLab / Bitbucket via
 // cfg.GitHost + cfg.GitHubAPIURL (CRITICAL audit #2). Was hardcoded to
 // https://api.github.com in 8 sites within this file.
-// TokenProvider returns a fresh GitHub API token. v4.0.0.
+
+// TokenProvider returns a fresh GitHub API token for GitHub App auth.
 // Implemented by githubapp.App — when wired, PRs + comments appear as
-// the "Sentinel" bot instead of the PAT owner.
+// the "Sentinel" bot instead of the PAT owner. v4.0.0.
 type TokenProvider interface {
         GetInstallToken(ctx context.Context) (string, error)
 }
