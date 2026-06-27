@@ -100,7 +100,7 @@ func NewSandbox(clientset *kubernetes.Clientset, sandboxPrefix string, enableMir
                 sandboxPrefix:    sandboxPrefix,
                 enableMirroring:  enableMirroring,
                 probePaths:       []string{"/", "/healthz", "/readyz"}, // sensible defaults
-                sustainedWindow:  10 * time.Second, // v3.15.0: was 30s, reduced to 10s (catches immediate crashes + first-request crashes)
+                sustainedWindow:  30 * time.Second, // v3.18.0: H14 — was 10s (v3.15.0), missed delayed crashes (connection pool exhaustion ~30s, GC pressure 15-60s, cache TTL expiry ~60s). Restored to 30s.
                 sentinelNamespace: "sentinel", // v3.11.0: default; override via WithSentinelNamespace
         }
 }

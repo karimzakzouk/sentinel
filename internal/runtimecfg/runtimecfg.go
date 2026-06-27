@@ -134,12 +134,64 @@ func (m *Manager) Save(cfg *RuntimeConfig) error {
 }
 
 // SaveFromJSON saves config from raw JSON bytes (implements api.RuntimeCfgSaver).
+// v3.18.0: M8 — validate before persisting. Was: any garbage JSON was accepted
+// and applied (negative timeouts, invalid providers, etc.), causing silent failures.
 func (m *Manager) SaveFromJSON(jsonBytes []byte) error {
         var cfg RuntimeConfig
         if err := json.Unmarshal(jsonBytes, &cfg); err != nil {
                 return fmt.Errorf("parse JSON: %w", err)
         }
+        if errs := cfg.Validate(); len(errs) > 0 {
+                return fmt.Errorf("invalid runtime config: %s", joinStrings(errs, "; "))
+        }
         return m.Save(&cfg)
+}
+
+// Validate returns a list of validation errors (empty if config is valid).
+// v3.18.0: M8 — was missing; operators could POST {"investigator_timeout_sec": -1}
+// and break every LLM call (negative timeout = already-expired context).
+func (c *RuntimeConfig) Validate() []string {
+        var errs []string
+        if c.InvestigatorTimeoutSec < 0 {
+                errs = append(errs, "investigator_timeout_sec must be >= 0")
+        }
+        if c.EvidenceGathererTimeoutSec < 0 {
+                errs = append(errs, "evidence_gatherer_timeout_sec must be >= 0")
+        }
+        if c.AnalystTimeoutSec < 0 {
+                errs = append(errs, "analyst_timeout_sec must be >= 0")
+        }
+        if c.FixProposerTimeoutSec < 0 {
+                errs = append(errs, "fix_proposer_timeout_sec must be >= 0")
+        }
+        if c.ConfidenceLoopBackThreshold < 0 || c.ConfidenceLoopBackThreshold > 1 {
+                errs = append(errs, "confidence_loop_back_threshold must be in [0, 1]")
+        }
+        if c.LLMMaxRetries < 0 || c.LLMMaxRetries > 10 {
+                errs = append(errs, "llm_max_retries must be in [0, 10]")
+        }
+        if c.LLMRetryBaseDelayMs < 0 {
+                errs = append(errs, "llm_retry_base_delay_ms must be >= 0")
+        }
+        if c.SandboxMaxRetries < 0 || c.SandboxMaxRetries > 10 {
+                errs = append(errs, "sandbox_max_retries must be in [0, 10]")
+        }
+        validLogLevels := map[string]bool{"debug": true, "info": true, "warn": true, "error": true}
+        if c.LogLevel != "" && !validLogLevels[c.LogLevel] {
+                errs = append(errs, "log_level must be one of: debug, info, warn, error")
+        }
+        return errs
+}
+
+func joinStrings(parts []string, sep string) string {
+        if len(parts) == 0 {
+                return ""
+        }
+        out := parts[0]
+        for _, p := range parts[1:] {
+                out += sep + p
+        }
+        return out
 }
 
 func (m *Manager) Get() *RuntimeConfig {
@@ -174,5 +226,9 @@ func countOverrides(c *RuntimeConfig) int {
         if c.LLMMaxRetries > 0 { n++ }
         if c.LLMRetryBaseDelayMs > 0 { n++ }
         if c.SkipSandboxNonProd != nil { n++ }
+        // v3.18.0: M20 — was missing sandbox fields (count under-reported).
+        if c.SandboxEnabled != nil { n++ }
+        if c.SandboxRequired != nil { n++ }
+        if c.SandboxMaxRetries > 0 { n++ }
         return n
 }

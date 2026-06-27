@@ -10,6 +10,7 @@ import (
         "net/http"
         "os"
         "os/signal"
+        "strings"
         "sync"
         "sync/atomic"
         "syscall"
@@ -186,10 +187,53 @@ func main() {
                 logging.Info("LLM router reconfigured from runtime settings",
                         "fast_model", fastModel, "frontier_model", frontierModel,
                         "api_key_set", apiKey != "", "base_url_changed", baseURL != "")
+
+                // v3.18.0: H22 — apply sandbox config + timeouts + thresholds to the live cfg.
+                // Was: only LLM fields were applied; the v3.17.0 sandbox config fields were
+                // silently dropped (the headline feature was dead code via the web UI).
+                if rc.SandboxEnabled != nil {
+                        cfg.SandboxEnabled = *rc.SandboxEnabled
+                        logging.Info("sandbox enabled reconfigured", "enabled", cfg.SandboxEnabled)
+                }
+                if rc.SandboxRequired != nil {
+                        cfg.SandboxRequired = *rc.SandboxRequired
+                        logging.Info("sandbox required reconfigured", "required", cfg.SandboxRequired)
+                }
+                if rc.SandboxMaxRetries > 0 {
+                        cfg.SandboxMaxRetries = rc.SandboxMaxRetries
+                        logging.Info("sandbox max retries reconfigured", "max", cfg.SandboxMaxRetries)
+                }
+                if rc.InvestigatorTimeoutSec > 0 {
+                        cfg.InvestigatorTimeoutSec = rc.InvestigatorTimeoutSec
+                }
+                if rc.EvidenceGathererTimeoutSec > 0 {
+                        cfg.EvidenceGathererTimeoutSec = rc.EvidenceGathererTimeoutSec
+                }
+                if rc.AnalystTimeoutSec > 0 {
+                        cfg.AnalystTimeoutSec = rc.AnalystTimeoutSec
+                }
+                if rc.FixProposerTimeoutSec > 0 {
+                        cfg.FixProposerTimeoutSec = rc.FixProposerTimeoutSec
+                }
+                if rc.ConfidenceLoopBackThreshold > 0 {
+                        cfg.ConfidenceLoopBackThreshold = rc.ConfidenceLoopBackThreshold
+                }
+                if rc.LLMMaxRetries > 0 {
+                        cfg.LLMMaxRetries = rc.LLMMaxRetries
+                }
+                if rc.LogLevel != "" {
+                        logging.Init(rc.LogLevel)
+                }
         })
 
         // v3.4.0: Wire LLM metrics (avoids circular import: llm → metrics → ... → llm)
-        llm.SetMetricsRecorder(metrics.RecordLLMCall)
+        // v3.18.0: H9 — record token counts + estimated cost alongside count+duration.
+        llm.SetMetricsRecorder(func(model, status string, duration time.Duration, inputTokens, outputTokens int) {
+                metrics.RecordLLMCall(model, status, duration)
+                if status == "success" && (inputTokens > 0 || outputTokens > 0) {
+                        metrics.RecordLLMTokens(model, inputTokens, outputTokens)
+                }
+        })
         llm.SetInFlightHooks(metrics.LLMCallStart, metrics.LLMCallEnd)
 
         // 3.5 Vector store (HNSW + LLM embeddings) — created before pipeline for memory loop
@@ -929,6 +973,23 @@ func main() {
 
 // executeFix runs the appropriate executor based on fix type.
 // For CODE_FIX / ROLL_FORWARD: 4-phase flow (branch → Kaniko → sandbox → PR)
+// detectSandboxFailureLevel parses the sandbox summary to determine which
+// verification level failed (1, 2, or 3). Used for per-Level metrics.
+// v3.18.0: H34 — operators can now see which level is the bottleneck.
+func detectSandboxFailureLevel(summary string) int {
+        switch {
+        case strings.Contains(summary, "canary_pods_not_ready"):
+                return 1
+        case strings.Contains(summary, "endpoints_unreachable"):
+                return 2
+        case strings.Contains(summary, "original_error_still_present"):
+                return 3
+        case strings.Contains(summary, "deploy_failed"), strings.Contains(summary, "create_namespace"):
+                return 0 // infrastructure error (not Level 1/2/3)
+        }
+        return 0
+}
+
 func executeFix(
         ctx context.Context,
         incident *schemas.Incident,
@@ -1094,11 +1155,26 @@ func executeCodeFix(
 
                         // Phase 3: Sandbox verification
                         logging.Info("execution Phase 3: running sandbox verification", "fix_id", fp.FixID, "attempt", sandboxAttempt+1)
+                        // v3.18.0: H34 — record which retry attempt we're on.
+                        metrics.RecordSandboxRetry(sandboxAttempt + 1)
                         sandboxStart := time.Now()
                         sb := sandbox.Run(ctx, incident)
                         sandboxVerified = sb.Verified
                         sandboxSummary = sb.Summary
                         metrics.RecordSandboxVerification(sandboxVerified, time.Since(sandboxStart))
+                        // v3.18.0: H34 — record which Level failed for observability.
+                        if !sandboxVerified {
+                                level := detectSandboxFailureLevel(sb.Summary)
+                                metrics.RecordSandboxLevelFailure(level)
+                        }
+                        // v3.18.0: C12 — include pod logs + probe results in the LLM feedback
+                        // (was a one-line Summary, making the retry loop ineffective).
+                        if sb.PodLogs != "" {
+                                sandboxSummary += "\n\n--- POD LOGS ---\n" + sb.PodLogs
+                        }
+                        if len(sb.ProbeResults) > 0 {
+                                sandboxSummary += "\n\n--- PROBE RESULTS ---\n" + strings.Join(sb.ProbeResults, "\n")
+                        }
                         logging.Info("sandbox verification complete",
                                 "verified", sandboxVerified,
                                 "summary", sandboxSummary,
