@@ -32,7 +32,7 @@ jobs:
           cache-dependency-path: go.sum
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v7
+        uses: golangci/golangci-lint-action@v9
         with:
           # v3.5.0: golangci-lint v2.x requires action v7 (v6 doesn't support v2 format).
           # v2.x is needed because v1.x was built with Go 1.23 and can't lint Go 1.25 code.
