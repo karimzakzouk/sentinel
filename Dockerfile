@@ -34,7 +34,7 @@ RUN test -f out/index.html || (echo "ERROR: next build did not produce out/index
 RUN mkdir -p /out && cp -r out/* /out/
 
 # ── Stage 2: Compile the Go binary with embedded web UI ────────────────────
-FROM golang:1.25-alpine AS builder
+FROM golang:1.26-alpine AS builder
 
 RUN apk add --no-cache git ca-certificates
 
