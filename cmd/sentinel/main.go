@@ -1002,12 +1002,17 @@ func main() {
                 "max_per_hour", cfg.AutoMergeMaxPerHour,
         )
 
-        // v4.0.0: Start the auto-merge merger loop. Polls tracked PRs every
-        // 30s, evaluates gates, merges when all pass. Also evaluates on
-        // demand via EvaluateNow (called from /sentinel approve, /sentinel merge).
+        // v4.0.0: Start the auto-merge merger loop.
         if cfg.AutoMergeEnabled {
                 go autoMergeMerger.Run(ctx, 30*time.Second)
                 logging.Info("auto-merge merger started", "poll_interval", "30s")
+        }
+
+        // v4.2.0: Start the auto-remediation controller (disk pressure, stuck pods).
+        if cfg.AutoRemediationEnabled {
+                remediation := executors.NewRemediationController(k8sClient.Clientset(), cfg.SkipNamespaces)
+                go remediation.Run(ctx, 5*time.Minute)
+                logging.Info("auto-remediation controller started", "poll_interval", "5m")
         }
 
         // v3.8.0: GitHub App — verified bot identity + auto-webhook registration

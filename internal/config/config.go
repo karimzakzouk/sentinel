@@ -239,11 +239,7 @@ type Config struct {
         // single-provider mode (uses LLMProvider + LLMAPIKey above).
         LLMProviders []llm.ProviderConfig
 
-        // v4.0.0: Auto-merge configuration. All three opt-in layers must be true
-        // for auto-merge to fire on a given PR:
-        //   1. AutoMergeEnabled (global switch)
-        //   2. Namespace in AutoMergeNamespaces
-        //   3. Service has sentinel.io/auto-merge: "true" annotation
+        // v4.0.0: Auto-merge configuration.
         AutoMergeEnabled        bool
         AutoMergeNamespaces     []string
         AutoMergeMinConfidence  float64
@@ -251,6 +247,10 @@ type Config struct {
         AutoMergeCITimeoutSec   int
         AutoMergeMaxPerHour     int
         AutoMergeCooldownMin    int
+
+        // v4.2.0: Auto-remediation — detects + fixes infra issues (disk full,
+        // stuck pods, etc.) without code changes. Default false.
+        AutoRemediationEnabled bool
 
         // v3.4.0: Observability backends (for Evidence Gatherer).
         PrometheusURL string
@@ -425,6 +425,8 @@ func Load() *Config {
                 AutoMergeCITimeoutSec:  getenvInt("SENTINEL_AUTO_MERGE_CI_TIMEOUT_SEC", 900),
                 AutoMergeMaxPerHour:    getenvInt("SENTINEL_AUTO_MERGE_MAX_PER_HOUR", 3),
                 AutoMergeCooldownMin:   getenvInt("SENTINEL_AUTO_MERGE_COOLDOWN_MIN", 60),
+                // v4.2.0: Auto-remediation (default false — opt-in)
+                AutoRemediationEnabled: getenvBool("SENTINEL_AUTO_REMEDIATION_ENABLED", false),
         }
 }
 
