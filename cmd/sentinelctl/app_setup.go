@@ -154,9 +154,48 @@ func (c *client) handleAppSetup(args []string) {
                 os.Exit(1)
         }
         port := tcpAddr.Port
-        callbackURL := fmt.Sprintf("http://localhost:%d/callback", port)
         if err := listener.Close(); err != nil {
                 fmt.Fprintf(os.Stderr, "Warning: failed to close temporary listener: %v\n", err)
+        }
+
+        // v4.1.3: Codespaces detection.
+        // In a Codespace browser editor, `http://localhost:<port>` is unreachable
+        // from the user's browser (localhost = the laptop, not the Codespace).
+        // GitHub's manifest redirect fails silently.
+        //
+        // Fix: when CODESPACES=true, use the Codespace port-forwarding URL:
+        //   https://<CODESPACE_NAME>-<PORT>.<GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN>/callback
+        //
+        // The port must be set to "public" visibility, otherwise Codespaces
+        // 302-redirects to GitHub login and breaks the flow. We use `gh` if
+        // available, otherwise print instructions for the user.
+        codespacesRedirectURL := ""
+        if os.Getenv("CODESPACES") == "true" {
+                codespaceName := os.Getenv("CODESPACE_NAME")
+                domain := os.Getenv("GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN")
+                if codespaceName != "" && domain != "" {
+                        codespacesRedirectURL = fmt.Sprintf("https://%s-%d.%s/callback", codespaceName, port, domain)
+                        fmt.Printf("Codespaces detected — using forwarded URL for callback:\n  %s\n", codespacesRedirectURL)
+                        fmt.Println()
+                        // Try to make the port public (requires `gh` CLI + auth).
+                        // If it fails, we print instructions below.
+                        makePortPublicCmd := exec.Command("gh", "codespace", "ports", "visibility",
+                                fmt.Sprintf("%d:public", port), "-c", codespaceName)
+                        if err := makePortPublicCmd.Run(); err != nil {
+                                fmt.Printf("⚠️  Could not auto-set port visibility (gh CLI not available or not authed).\n")
+                                fmt.Printf("    Manually make port %d public:\n", port)
+                                fmt.Printf("    In VS Code: Ports tab → right-click port %d → Port Visibility → Public\n", port)
+                                fmt.Println()
+                        } else {
+                                fmt.Printf("✓ Port %d set to public visibility\n", port)
+                                fmt.Println()
+                        }
+                }
+        }
+
+        callbackURL := codespacesRedirectURL
+        if callbackURL == "" {
+                callbackURL = fmt.Sprintf("http://localhost:%d/callback", port)
         }
 
         if setupURL == "" {
