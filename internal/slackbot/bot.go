@@ -133,12 +133,26 @@ func (b *Bot) HandleEvents(w http.ResponseWriter, r *http.Request) {
         // v3.5.0: Verify Slack signature (HMAC-SHA256).
         // Slack sends: X-Slack-Signature (HMAC of body using signing secret + timestamp)
         // and X-Slack-Request-Timestamp.
-        if b.signingSecret != "" {
-                if !b.verifySlackSignature(r, body) {
-                        log.Printf("[slackbot] signature verification failed")
-                        http.Error(w, "invalid signature", http.StatusUnauthorized)
+        // v3.18.0: When signingSecret is empty, REFUSE event callbacks (was silently
+        // accepted, allowing unauthenticated pause/investigate commands).
+        // URL verification challenges are still accepted without a secret so initial
+        // Slack app setup works (the secret may not be configured yet at install time).
+        if b.signingSecret == "" {
+                // Allow url_verification challenges (Slack sends these during app setup)
+                var probe struct {
+                        Type string `json:"type"`
+                }
+                if json.Unmarshal(body, &probe) == nil && probe.Type == "url_verification" {
+                        log.Printf("[slackbot] accepting url_verification without signature (signing secret not yet configured)")
+                } else {
+                        log.Printf("[slackbot] REJECTED request: signing secret is empty (configure SENTINEL_SLACK_SIGNING_SECRET to enable)")
+                        http.Error(w, "slack signing secret not configured", http.StatusServiceUnavailable)
                         return
                 }
+        } else if !b.verifySlackSignature(r, body) {
+                log.Printf("[slackbot] signature verification failed")
+                http.Error(w, "invalid signature", http.StatusUnauthorized)
+                return
         }
 
         // v3.5.0: Slack sends a URL verification challenge on first setup.

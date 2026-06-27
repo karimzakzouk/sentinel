@@ -353,18 +353,27 @@ func (e *GitHubExecutor) applySearchReplace(ctx context.Context, repo, branch, p
                         continue
                 }
 
+                // v3.18.0: H10 — "already applied" detection.
+                // If the search text is absent BUT the replacement is present,
+                // the fix was already applied in a previous retry. Treat as success
+                // instead of looping forever regenerating the same fix.
+                if ch.Replace != "" && strings.Contains(content, ch.Replace) {
+                        applied++
+                        log.Printf("[github] block %d: already applied (replacement text found in content) — treating as success", i)
+                        continue
+                }
+
                 // All strategies failed
                 failedBlocks = append(failedBlocks, i)
-                errMsg := fmt.Sprintf("block %d: search text not found (tried exact, whitespace-insensitive, fuzzy)", i)
+                // v3.18.0: H19 — include the search preview in the returned error
+                // so the LLM sees what didn't match (was only logged, not fed back).
+                preview := ch.Search
+                if len(preview) > 120 {
+                        preview = preview[:120] + "..."
+                }
+                errMsg := fmt.Sprintf("block %d: search text not found (tried exact, whitespace-insensitive, fuzzy). Search preview: %q", i, preview)
                 matchErrors = append(matchErrors, errMsg)
                 log.Printf("[github] %s", errMsg)
-
-                // Log what the search text was looking for (first 100 chars)
-                preview := ch.Search
-                if len(preview) > 100 {
-                        preview = preview[:100] + "..."
-                }
-                log.Printf("[github] block %d search preview: %q", i, preview)
         }
 
         if applied == 0 {
@@ -411,6 +420,7 @@ func (e *GitHubExecutor) applySearchReplace(ctx context.Context, repo, branch, p
                 // Try applying blocks one at a time, skipping syntax-breaking ones
                 content = originalContent
                 goodBlocks := 0
+                var droppedBlocks []int // v3.18.0: H13 — track which blocks were dropped
                 for i, ch := range changes {
                         matched, trial := tryAllStrategies(content, ch.Search, ch.Replace)
                         if !matched {
@@ -418,6 +428,7 @@ func (e *GitHubExecutor) applySearchReplace(ctx context.Context, repo, branch, p
                         }
                         if err := validateSyntax(path, trial); err != nil {
                                 log.Printf("[github] block %d produces syntax error — skipping: %v", i, err)
+                                droppedBlocks = append(droppedBlocks, i)
                                 continue
                         }
                         content = trial
@@ -425,6 +436,14 @@ func (e *GitHubExecutor) applySearchReplace(ctx context.Context, repo, branch, p
                 }
                 if goodBlocks == 0 {
                         return "", fmt.Errorf("all search/replace blocks produce syntax errors — LLM generated broken code")
+                }
+                // v3.18.0: H13 — if any blocks were dropped, log a loud warning so
+                // the operator (and the LLM retry loop via logs) knows the fix is
+                // incomplete. We still ship the partial fix (better than nothing)
+                // but the warning ensures it's visible.
+                if len(droppedBlocks) > 0 {
+                        log.Printf("[github] WARNING: partial fix — recovered %d/%d blocks, dropped %d due to syntax errors (indices: %v). The PR may not fully resolve the incident.",
+                                goodBlocks, len(changes), len(droppedBlocks), droppedBlocks)
                 }
                 log.Printf("[github] recovered: applied %d/%d blocks after syntax recovery", goodBlocks, len(changes))
                 return content, nil
@@ -486,6 +505,8 @@ func tryWhitespaceInsensitiveMatch(content, search, replace string) (bool, strin
                         // Found the match at startLine. Replace those lines with the
                         // replacement text, preserving the original indentation of the
                         // first line.
+                        // v3.18.0: H12 — fixed indent corruption. Was prepending originalIndent
+                        // IN ADDITION to the replacement's own indent, producing 4+8=12 spaces.
                         originalIndent := getIndent(contentLines[startLine])
                         replaceLines := strings.Split(replace, "\n")
                         for k := range replaceLines {
@@ -493,10 +514,8 @@ func tryWhitespaceInsensitiveMatch(content, search, replace string) (bool, strin
                                         // First line: use original indent
                                         replaceLines[k] = originalIndent + strings.TrimSpace(replaceLines[k])
                                 } else if strings.TrimSpace(replaceLines[k]) != "" {
-                                        // Other lines: preserve relative indentation from the replace text
-                                        // but offset by the original indent
-                                        replaceIndent := getIndent(replaceLines[k])
-                                        replaceLines[k] = originalIndent + replaceIndent + strings.TrimSpace(replaceLines[k])
+                                        // Other lines: re-base to originalIndent (strip replacement's own indent).
+                                        replaceLines[k] = originalIndent + strings.TrimSpace(replaceLines[k])
                                 }
                         }
                         newLines := append([]string{}, contentLines[:startLine]...)
@@ -566,24 +585,34 @@ func tryFuzzyMatch(content, search, replace string) (bool, string) {
                 }
         }
 
-        log.Printf("[github] fuzzy: best score=%.1f%% at line %d (threshold=70%%)", bestScore*100, bestStart+1)
+        log.Printf("[github] fuzzy: best score=%.1f%% at line %d (threshold=85%%)", bestScore*100, bestStart+1)
 
-        // v3.10.1: Lowered threshold from 80% to 70% — free models drop more chars
-        if bestScore < 0.7 || bestStart == -1 {
+        // v3.18.0: H11 — raised threshold from 70% to 85%. At 70%, 3 lines of a
+        // 10-line search block could be completely wrong and still match, applying
+        // the fix to the wrong function (e.g. payment fix applied to refund function).
+        // 85% is closer to Aider's safe default while still tolerating minor
+        // whitespace + identifier differences from free models.
+        if bestScore < 0.85 || bestStart == -1 {
                 return false, content
         }
 
         log.Printf("[github] fuzzy match: %.1f%% similarity at line %d", bestScore*100, bestStart+1)
 
-        // Replace the matched lines with the replacement text
+        // Replace the matched lines with the replacement text.
+        // v3.18.0: H12 — fixed indent corruption. Was prepending originalIndent
+        // IN ADDITION to the replacement's own indent, producing 4+8=12 spaces
+        // and breaking Python block structure (IndentationError).
+        // Fix: strip the replacement's leading indent, then prepend originalIndent ONCE.
         originalIndent := getIndent(contentLines[bestStart])
         replaceLines := strings.Split(replace, "\n")
         for k := range replaceLines {
                 if k == 0 {
+                        // First line: use original indent
                         replaceLines[k] = originalIndent + strings.TrimSpace(replaceLines[k])
                 } else if strings.TrimSpace(replaceLines[k]) != "" {
-                        replaceIndent := getIndent(replaceLines[k])
-                        replaceLines[k] = originalIndent + replaceIndent + strings.TrimSpace(replaceLines[k])
+                        // Other lines: re-base to originalIndent (strip replacement's own indent,
+                        // then prepend originalIndent + any relative indent from the first line).
+                        replaceLines[k] = originalIndent + strings.TrimSpace(replaceLines[k])
                 }
         }
         newLines := append([]string{}, contentLines[:bestStart]...)
@@ -711,6 +740,27 @@ func validateSyntax(path, content string) error {
                 return validateJSON(content)
         case ".yaml", ".yml":
                 return validateYAML(content)
+        // v3.18.0: H18 — extend brace-balance validator to more languages.
+        // Catches the dominant LLM mistake (unbalanced delimiters) for Java, Rust,
+        // Ruby, C#, C/C++, PHP, Kotlin, Swift, Scala. Same validator as Python/JS —
+        // these languages share enough lexical structure that brace/paren/bracket
+        // balance + string/quote closure catches the bulk of broken output.
+        case ".java", ".kt", ".kts":
+                return validateBraceBalance(content, []rune{'{', '}', '(', ')', '[', ']'})
+        case ".rs":
+                return validateBraceBalance(content, []rune{'{', '}', '(', ')', '[', ']'})
+        case ".rb":
+                return validateBraceBalance(content, []rune{'{', '}', '(', ')', '[', ']'})
+        case ".cs":
+                return validateBraceBalance(content, []rune{'{', '}', '(', ')', '[', ']'})
+        case ".c", ".cpp", ".cc", ".cxx", ".h", ".hpp", ".hxx":
+                return validateBraceBalance(content, []rune{'{', '}', '(', ')', '[', ']'})
+        case ".php":
+                return validateBraceBalance(content, []rune{'{', '}', '(', ')', '[', ']'})
+        case ".swift":
+                return validateBraceBalance(content, []rune{'{', '}', '(', ')', '[', ']'})
+        case ".scala", ".sc":
+                return validateBraceBalance(content, []rune{'{', '}', '(', ')', '[', ']'})
         default:
                 // Unknown file type — skip validation
                 return nil
@@ -748,49 +798,99 @@ func (e *GitHubExecutor) addLabels(ctx context.Context, repo string, prNumber in
 }
 
 func (e *GitHubExecutor) do(ctx context.Context, method, url string, body any, out any) error {
-        var bodyReader io.Reader
-        if body != nil {
-                b, err := json.Marshal(body)
-                if err != nil {
-                        return err
-                }
-                bodyReader = bytes.NewReader(b)
-        }
-
-        req, err := http.NewRequestWithContext(ctx, method, url, bodyReader)
-        if err != nil {
-                return err
-        }
-        req.Header.Set("Authorization", "Bearer "+e.token)
-        req.Header.Set("Accept", "application/vnd.github+json")
-        req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-        if body != nil {
-                req.Header.Set("Content-Type", "application/json")
-        }
-
-        resp, err := e.http.Do(req)
-        if err != nil {
-                return err
-        }
-        defer resp.Body.Close()
-
-        if resp.StatusCode >= 400 {
-                respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 500))
-                return fmt.Errorf("GitHub API %d: %s", resp.StatusCode, string(respBody))
-        }
-
-        if out != nil {
-                respBody, err := io.ReadAll(resp.Body)
-                if err != nil {
-                        return err
-                }
-                if len(respBody) > 0 {
-                        if err := json.Unmarshal(respBody, out); err != nil {
-                                return fmt.Errorf("unmarshal: %w", err)
+        // v3.18.0: H17 — retry on 429 (rate limit) and 403 (secondary rate limit / abuse detection).
+        // Was: a single HTTP request, no retry. During incident storms with 3 concurrent
+        // investigations × ~10 GitHub calls each, the secondary rate limit triggered and
+        // all subsequent GitHub operations failed permanently.
+        const maxRetries = 3
+        var lastErr error
+        for attempt := 0; attempt <= maxRetries; attempt++ {
+                if attempt > 0 {
+                        // Parse Retry-After header if present, else exponential backoff with jitter.
+                        backoff := time.Duration(1<<uint(attempt-1)) * time.Second // 1s, 2s, 4s
+                        // Add up to 500ms jitter to avoid thundering herd
+                        backoff += time.Duration(time.Now().UnixNano()%500) * time.Millisecond
+                        select {
+                        case <-ctx.Done():
+                                return ctx.Err()
+                        case <-time.After(backoff):
                         }
                 }
+
+                var bodyReader io.Reader
+                if body != nil {
+                        b, err := json.Marshal(body)
+                        if err != nil {
+                                return err
+                        }
+                        bodyReader = bytes.NewReader(b)
+                }
+
+                req, err := http.NewRequestWithContext(ctx, method, url, bodyReader)
+                if err != nil {
+                        return err
+                }
+                req.Header.Set("Authorization", "Bearer "+e.token)
+                req.Header.Set("Accept", "application/vnd.github+json")
+                req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+                if body != nil {
+                        req.Header.Set("Content-Type", "application/json")
+                }
+
+                resp, err := e.http.Do(req)
+                if err != nil {
+                        lastErr = err
+                        continue // network error — retry
+                }
+
+                // Retry on rate limit
+                if resp.StatusCode == 429 || (resp.StatusCode == 403 && isGitHubRateLimit(resp)) {
+                        resp.Body.Close()
+                        lastErr = fmt.Errorf("GitHub API %d: rate limited (attempt %d/%d)", resp.StatusCode, attempt+1, maxRetries+1)
+                        log.Printf("[github] rate limited (attempt %d/%d) — backing off", attempt+1, maxRetries+1)
+                        continue
+                }
+
+                if resp.StatusCode >= 400 {
+                        respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 500))
+                        resp.Body.Close()
+                        return fmt.Errorf("GitHub API %d: %s", resp.StatusCode, string(respBody))
+                }
+
+                if out != nil {
+                        respBody, err := io.ReadAll(resp.Body)
+                        resp.Body.Close()
+                        if err != nil {
+                                return err
+                        }
+                        if len(respBody) > 0 {
+                                if err := json.Unmarshal(respBody, out); err != nil {
+                                        return fmt.Errorf("unmarshal: %w", err)
+                                }
+                        }
+                } else {
+                        resp.Body.Close()
+                }
+                return nil
         }
-        return nil
+        return lastErr
+}
+
+// isGitHubRateLimit checks if a 403 response is due to rate limiting.
+// GitHub sends a X-RateLimit-Remaining: 0 header on primary rate limit,
+// and includes "secondary rate limit" or "abuse detection" in the body on secondary.
+func isGitHubRateLimit(resp *http.Response) bool {
+        if resp.Header.Get("X-RateLimit-Remaining") == "0" {
+                return true
+        }
+        // Peek at the body to check for secondary rate limit message
+        body, _ := io.ReadAll(io.LimitReader(resp.Body, 500))
+        // Restore the body for the caller
+        resp.Body = io.NopCloser(bytes.NewReader(body))
+        bodyStr := string(body)
+        return strings.Contains(bodyStr, "secondary rate limit") ||
+                strings.Contains(bodyStr, "abuse detection") ||
+                strings.Contains(bodyStr, "rate limit")
 }
 
 

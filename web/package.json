@@ -1,6 +1,6 @@
 {
   "name": "sentinel-web",
-  "version": "3.6.0",
+  "version": "3.18.0",
   "private": true,
   "scripts": {
     "dev": "next dev --turbopack",

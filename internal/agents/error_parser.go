@@ -505,13 +505,33 @@ var httpReqWithStatusRe = regexp.MustCompile(`(?i)(?:GET|POST|PUT|DELETE|PATCH)\
 // Example: logs containing 'GET /health 200 ... GET /items?index=10 500'
 // now correctly returns "/items?index=10" (the 500), not "/health" (the 200).
 func ExtractTriggerEndpoint(logs string) string {
-        // v3.15.0: First, try to find a request with a 4xx/5xx status code.
+        path, _ := ExtractTriggerEndpointWithMethod(logs)
+        return path
+}
+
+// ExtractTriggerEndpointWithMethod returns both the path AND the HTTP method.
+// v3.18.0: The sandbox needs the method to probe with the correct verb — was
+// always GET, returning 405 on POST endpoints which falsely passed Level 2
+// (because 405 < 500 was treated as success).
+// Also: filters to safe methods for replay — GET/HEAD only. POST/DELETE/PUT
+// have side effects (data mutation, deletion) and are not safe to replay
+// in the sandbox without explicit operator opt-in. If the only failing
+// endpoint is a POST, we fall back to GET on the same path (which will likely
+// return 405 = the route exists but method not allowed, which is now a real
+// failure under the new Level 2 logic — so the LLM is told the route exists
+// but isn't testable via GET, and must reason about the fix differently).
+func ExtractTriggerEndpointWithMethod(logs string) (path, method string) {
+        method = "GET"
+        // First, find a request with a 4xx/5xx status code.
         matches := httpReqWithStatusRe.FindAllStringSubmatch(logs, -1)
         for _, m := range matches {
                 if len(m) >= 3 {
                         status := m[2]
                         if len(status) == 3 && (status[0] == '4' || status[0] == '5') {
-                                return m[1]
+                                // Extract the method from the original match
+                                method = extractMethod(m[0])
+                                path = m[1]
+                                return
                         }
                 }
         }
@@ -519,7 +539,20 @@ func ExtractTriggerEndpoint(logs string) string {
         // Fall back to any HTTP request (no status code visible or all 2xx)
         m := httpReqRe.FindStringSubmatch(logs)
         if len(m) >= 2 {
-                return m[1]
+                method = extractMethod(m[0])
+                path = m[1]
+                return
         }
-        return ""
+        return "", ""
+}
+
+// extractMethod pulls the leading HTTP verb (GET/POST/...) from a log line.
+func extractMethod(logLine string) string {
+        lower := strings.ToLower(logLine)
+        for _, verb := range []string{"get", "post", "put", "delete", "patch", "head"} {
+                if strings.HasPrefix(lower, verb) {
+                        return strings.ToUpper(verb)
+                }
+        }
+        return "GET"
 }

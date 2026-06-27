@@ -54,16 +54,19 @@ rules:
   # When sandbox is disabled, these permissions are NOT granted, restoring
   # the least-privilege posture. The sandbox creates dynamic namespaces
   # (sentinel-sandbox-*) and needs cluster-wide create on deployments,
-  # services, configmaps, pods, secrets, roles, rolebindings.
+  # services, configmaps, pods, roles, rolebindings.
+  #
+  # v3.18.0: SECURITY — removed cluster-wide secrets: create/update/patch/delete.
+  # A compromised Sentinel pod could have wiped Secrets in EVERY namespace
+  # (kube-system, vault, external-secrets, cert-manager). Sandbox Secrets
+  # are now created via the per-sandbox-namespace Role bound dynamically
+  # after the namespace is created (see internal/executors/sandbox.go).
   {{- if .Values.sentinel.sandbox.enabled }}
   - apiGroups: ["apps"]
     resources: ["deployments", "statefulsets"]
     verbs: ["create", "update", "patch", "delete"]
   - apiGroups: [""]
     resources: ["pods", "services", "configmaps"]
-    verbs: ["create", "update", "patch", "delete"]
-  - apiGroups: [""]
-    resources: ["secrets"]
     verbs: ["create", "update", "patch", "delete"]
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: ["roles", "rolebindings"]
@@ -90,10 +93,14 @@ rules:
   # Namespace creation — only cluster-wide write permission retained.
   # Sandbox namespaces are named sentinel-sandbox-<service>-<fixid> and
   # can't be pre-created. If you don't want Sentinel creating namespaces,
-  # disable the sandbox (TODO: helm value not yet implemented).
+  # disable the sandbox via sentinel.sandbox.enabled: false.
+  # v3.18.0: Now gated behind sandbox.enabled (was always granted, defeating
+  # the purpose of disabling the sandbox).
+  {{- if .Values.sentinel.sandbox.enabled }}
   - apiGroups: [""]
     resources: ["namespaces"]
     verbs: ["create", "delete"]
+  {{- end }}
   # NetworkPolicy creation in any namespace — used to isolate sandbox
   # namespaces. Read-only on existing NetworkPolicies elsewhere.
   - apiGroups: ["networking.k8s.io"]

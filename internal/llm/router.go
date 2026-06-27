@@ -205,24 +205,28 @@ func (r *Router) complete(ctx context.Context, model, system, user string, maxTo
         )
         if err != nil {
                 if recordLLMMetrics != nil {
-                        recordLLMMetrics(model, "error", time.Since(callStart))
+                        recordLLMMetrics(model, "error", time.Since(callStart), 0, 0)
                 }
                 return "", fmt.Errorf("LLM call failed: %w", err)
         }
         if recordLLMMetrics != nil {
-                recordLLMMetrics(model, "success", time.Since(callStart))
+                // v3.18.0: H9 — record token usage from GoAI's TotalUsage.
+                inTokens := result.TotalUsage.InputTokens
+                outTokens := result.TotalUsage.OutputTokens
+                recordLLMMetrics(model, "success", time.Since(callStart), inTokens, outTokens)
         }
         return result.Text, nil
 }
 
 // recordLLMMetrics is set by main.go via SetMetricsRecorder. This avoids a
 // circular import (llm → metrics → ... → llm). If nil, metrics are skipped.
-var recordLLMMetrics func(model, status string, duration time.Duration)
+// v3.18.0: H9 — signature extended with token counts (was model+status+duration only).
+var recordLLMMetrics func(model, status string, duration time.Duration, inputTokens, outputTokens int)
 
 // SetMetricsRecorder wires in the metrics recorder. Called from main.go.
 // v3.4.0: Allows the metrics package to observe LLM call latencies without
 // creating a dependency cycle.
-func SetMetricsRecorder(fn func(model, status string, duration time.Duration)) {
+func SetMetricsRecorder(fn func(model, status string, duration time.Duration, inputTokens, outputTokens int)) {
         recordLLMMetrics = fn
 }
 

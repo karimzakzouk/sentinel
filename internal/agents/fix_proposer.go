@@ -78,6 +78,7 @@ func validateFilePath(path string) string {
         // Windows-style paths too (LLMs sometimes return backslashes).
         cleanSlash := filepath.ToSlash(clean)
         sensitive := false
+        sensitiveReason := ""
         switch {
         case strings.HasPrefix(cleanSlash, ".github/workflows/"),
                 strings.HasPrefix(cleanSlash, ".github/actions/"),
@@ -90,9 +91,26 @@ func validateFilePath(path string) string {
                 strings.HasPrefix(cleanSlash, ".azure-pipelines.yml"),
                 strings.HasPrefix(cleanSlash, "azure-pipelines.yml"):
                 sensitive = true
+                sensitiveReason = "CI/CD-sensitive path"
+        // v3.18.0: Block Dockerfile and build-chain config files (the docstring
+        // always claimed these were blocked, but the switch missed them).
+        // These let an LLM (potentially prompt-injected via pod logs) add
+        // backdoor RUN commands or postinstall hooks.
+        case cleanSlash == "Dockerfile" || strings.HasPrefix(cleanSlash, "Dockerfile."),
+                strings.HasPrefix(cleanSlash, "docker-compose.yml"),
+                strings.HasPrefix(cleanSlash, "docker-compose.yaml"),
+                cleanSlash == "package.json" || cleanSlash == "package-lock.json",
+                cleanSlash == "pyproject.toml" || cleanSlash == "setup.py" || cleanSlash == "requirements.txt" || cleanSlash == "Pipfile" || cleanSlash == "Pipfile.lock",
+                cleanSlash == "go.mod" || cleanSlash == "go.sum",
+                cleanSlash == ".npmrc" || cleanSlash == ".pypirc" || cleanSlash == ".netrc",
+                cleanSlash == "Makefile" || strings.HasSuffix(cleanSlash, ".mk"),
+                strings.HasSuffix(cleanSlash, ".sh"),
+                strings.HasPrefix(cleanSlash, ".env") && cleanSlash != ".env.example":
+                sensitive = true
+                sensitiveReason = "build-chain-sensitive path"
         }
         if sensitive {
-                log.Printf("[fix_proposer] SECURITY: rejecting CI/CD-sensitive path: %q", path)
+                log.Printf("[fix_proposer] SECURITY: rejecting %s: %q", sensitiveReason, path)
                 return ""
         }
 

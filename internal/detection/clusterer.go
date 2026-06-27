@@ -71,8 +71,12 @@ func NewClusterer(handler IncidentHandler, tracker *ActiveTracker) *Clusterer {
 // SetPauseChecker wires in a pause checker (e.g. the Slack bot).
 // v3.5.0: When set, the clusterer checks IsPaused() before emitting triggers.
 // If paused, signals are silently dropped (not buffered).
+// v3.18.0: Guarded by mu — was written without a lock, racing with the timer
+// goroutine's read at emit() (interface assignment is not atomic).
 func (c *Clusterer) SetPauseChecker(pc PauseChecker) {
+        c.mu.Lock()
         c.pauseChecker = pc
+        c.mu.Unlock()
 }
 
 // Send sends a signal to the clusterer.
@@ -108,6 +112,22 @@ func (c *Clusterer) Send(ctx context.Context, sig Signal) {
                 }()
                 c.emit(key)
         })
+}
+
+// Stop cancels all pending cluster timers. Call on shutdown so pending timers
+// don't fire after the parent context is cancelled.
+// v3.18.0: H4 — was missing, so pending timers (up to 500ms old) fired
+// post-shutdown, spawning handler goroutines against a cancelled ctx.
+func (c *Clusterer) Stop() {
+        c.mu.Lock()
+        defer c.mu.Unlock()
+        for key, p := range c.pending {
+                if p.timer != nil {
+                        p.timer.Stop()
+                }
+                delete(c.pending, key)
+        }
+        log.Printf("[clusterer] stopped — cancelled %d pending clusters", len(c.pending))
 }
 
 // emit fires the cluster after the grouping window closes.
@@ -148,7 +168,16 @@ func (c *Clusterer) emit(key string) {
 
         // v3.2.4: Pass EMPTY pod logs — the investigator will fetch full logs itself.
         // This is the industry pattern: detection triggers, investigation fetches context.
+        // v3.18.0: H6 — added panic recovery (was missing — a panic in the handler
+        // chain killed the process).
         if c.handler != nil {
-                go c.handler(sig.Service, sig.Namespace, sig.Reason, "")
+                go func() {
+                        defer func() {
+                                if r := recover(); r != nil {
+                                        log.Printf("[panic] clusterer.handler recovered: %v", r)
+                                }
+                        }()
+                        c.handler(sig.Service, sig.Namespace, sig.Reason, "")
+                }()
         }
 }

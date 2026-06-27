@@ -288,7 +288,17 @@ func (c *Client) GetProdImage(ctx context.Context, service, namespace string) (s
 // "slack" from non-CRD trigger paths), the patch is silently skipped instead
 // of returning a "not found" error. This eliminates the noisy error log at
 // the end of every auto-detected investigation.
+// v3.18.0: M4 — delegates to PatchCRStatusFull so callers that pass extra
+// fields (incidentId, rootCause, confidence, prUrl) populate the CRD status
+// columns. Was: only phase + lastUpdated were written, leaving kubectl get si
+// showing empty Confidence/PR columns.
 func (c *Client) PatchCRStatus(ctx context.Context, name, namespace, phase string) error {
+        return c.PatchCRStatusFull(ctx, name, namespace, phase, "", "", 0, "")
+}
+
+// PatchCRStatusFull patches all status fields of a SentinelIncident CR.
+// v3.18.0: M4 — was missing; CRD declared 6 status fields but code only wrote 2.
+func (c *Client) PatchCRStatusFull(ctx context.Context, name, namespace, phase, incidentID, rootCause string, confidence float64, prURL string) error {
         // v3.15.0: Skip patching for fake CR names from auto/manual/slack triggers.
         // Only real CRD-watcher triggers pass a valid CR name.
         if name == "" || name == "auto-detected" || name == "manual" || name == "slack" {
@@ -301,12 +311,26 @@ func (c *Client) PatchCRStatus(ctx context.Context, name, namespace, phase strin
                 Resource: "sentinelincidents",
         }
 
-        patch := map[string]any{
-                "status": map[string]any{
-                        "phase":       phase,
-                        "lastUpdated": time.Now().UTC().Format(time.RFC3339),
-                },
+        status := map[string]any{
+                "phase":       phase,
+                "lastUpdated": time.Now().UTC().Format(time.RFC3339),
         }
+        // v3.18.0: Only include non-zero values so we don't overwrite a real
+        // incidentId with "" on a status-only update.
+        if incidentID != "" {
+                status["incidentId"] = incidentID
+        }
+        if rootCause != "" {
+                status["rootCause"] = rootCause
+        }
+        if confidence > 0 {
+                status["confidence"] = confidence
+        }
+        if prURL != "" {
+                status["prUrl"] = prURL
+        }
+
+        patch := map[string]any{"status": status}
         patchBytes, err := json.Marshal(patch)
         if err != nil {
                 return fmt.Errorf("marshal patch: %w", err)

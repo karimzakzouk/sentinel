@@ -111,7 +111,7 @@ const mockIncidents: Incident[] = [
 ];
 
 const mockLogs: LogEntry[] = [
-  { time: "01:35:26", level: "INFO", msg: "Sentinel v3.7.0 starting — watching for incidents" },
+  { time: "01:35:26", level: "INFO", msg: "Sentinel v3.18.0 starting — watching for incidents" },
   { time: "01:35:26", level: "INFO", msg: "[detection] found annotated pod: sim/demo-app (repo=karimzakzouk/demo-app)" },
   { time: "01:35:26", level: "INFO", msg: "[detection] log error: sim/demo-app — ZeroDivisionError" },
   { time: "01:35:28", level: "INFO", msg: "investigation started — service=demo-app namespace=sim" },
@@ -327,7 +327,7 @@ export default function Page() {
           </div>
           <div>
             <span className="font-mono text-sm font-bold tracking-tight">SENTINEL</span>
-            <span className="ml-1.5 text-[9px] text-zinc-600 font-mono">v3.7.0</span>
+            <span className="ml-1.5 text-[9px] text-zinc-600 font-mono">v3.18.0</span>
           </div>
         </div>
 
@@ -449,7 +449,7 @@ function DashboardView({ incidents, loading, onSelect, pipelineEvents, sseConnec
             <CardHeader className="pb-3"><CardTitle className="text-sm font-medium text-zinc-300">System Status</CardTitle></CardHeader>
             <CardContent className="space-y-3">
               <StatusRow icon={<Server className="h-3 w-3" />} label="Detection" status="active" detail="Live streaming" />
-              <StatusRow icon={<Brain className="h-3 w-3" />} label="LLM Router" status="active" detail="openai/gpt-oss-120b:free" />
+              <StatusRow icon={<Brain className="h-3 w-3" />} label="LLM Router" status="active" detail={config.llm_fast_model || "glm-4-flash"} />
               <StatusRow icon={<Cpu className="h-3 w-3" />} label="Memory (HNSW)" status="active" detail={`${incidents.length} vectors`} />
               <StatusRow icon={<Shield className="h-3 w-3" />} label="Safety Policy" status="active" detail="5 rules active" />
               <StatusRow icon={<Database className="h-3 w-3" />} label="SQLite" status="active" detail="/data/sentinel.db" />
@@ -648,13 +648,13 @@ function MemoryView({ incidents }: { incidents: Incident[] }) {
 function SettingsView({ paused, setPaused }: { paused: boolean; setPaused: (p: boolean) => void; }) {
   const [config, setConfig] = useState({
     llm_provider: "custom", llm_base_url: "https://openrouter.ai/api/v1",
-    llm_api_key: "", llm_fast_model: "openai/gpt-oss-120b:free",
-    llm_frontier_model: "openai/gpt-oss-120b:free", llm_embedding_model: "text-embedding-3-small",
+    llm_api_key: "", llm_fast_model: "glm-4-flash",
+    llm_frontier_model: "glm-4.5", llm_embedding_model: "text-embedding-3-small",
     github_token: "", github_webhook_secret: "",
     docker_hub_username: "", docker_hub_token: "",
     slack_webhook: "", slack_signing_secret: "", slack_bot_token: "", slack_bot_user_id: "",
     prometheus_url: "", loki_url: "", jaeger_url: "",
-    write_namespaces: "sim", production_namespaces: "prod,production,payments",
+    write_namespaces: "sim", production_namespaces: "prod,production",
     confidence_autonomous: "0.92", confidence_loop_back: "0.3",
     investigator_timeout: "120", evidence_gatherer_timeout: "90",
     analyst_timeout: "15", fix_proposer_timeout: "120",
@@ -755,7 +755,27 @@ function SettingsView({ paused, setPaused }: { paused: boolean; setPaused: (p: b
 
       <div className="flex justify-end gap-3 pb-6">
         <Button variant="outline" size="sm" className="border-zinc-700 text-zinc-400">Reset</Button>
-        <Button size="sm" className="bg-cyan-600 hover:bg-cyan-700">Save Changes</Button>
+        <Button
+          size="sm"
+          className="bg-cyan-600 hover:bg-cyan-700"
+          onClick={async () => {
+            try {
+              const resp = await fetch("/settings", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(config),
+              });
+              if (!resp.ok) {
+                const text = await resp.text();
+                alert(`Failed to save settings: ${resp.status} ${text}`);
+                return;
+              }
+              alert("Settings saved — runtime config updated.");
+            } catch (err) {
+              alert(`Error saving settings: ${err}`);
+            }
+          }}
+        >Save Changes</Button>
       </div>
     </div>
   );

@@ -243,8 +243,10 @@ func (r *Reviewer) handlePullRequest(ctx context.Context, payload []byte) {
 
         log.Printf("[prreview] reviewing PR #%d in %s (action=%s)", prNumber, repo, event.Action)
 
-        // Fetch the diff
-        diff, err := r.fetchPRDiff(ctx, event.PullRequest.DiffURL)
+        // v3.18.0: SECURITY — never trust diff_url from the webhook body (SSRF + PAT exfil).
+        // Rebuild the diff URL from the trusted apiURL + repo + PR number.
+        diffURLOverride := r.apiURL + "/repos/" + repo + "/pulls/" + fmt.Sprintf("%d", prNumber)
+        diff, err := r.fetchPRDiff(ctx, diffURLOverride)
         if err != nil {
                 log.Printf("[prreview] failed to fetch diff for PR #%d: %v", prNumber, err)
                 return
@@ -296,7 +298,10 @@ func (r *Reviewer) handlePullRequest(ctx context.Context, payload []byte) {
         log.Printf("[prreview] posted review comment on PR #%d: %d warnings", prNumber, len(warnings))
 }
 
-// fetchPRDiff fetches the PR diff text via the diff_url.
+// fetchPRDiff fetches the PR diff text via the GitHub API.
+// v3.18.0: diffURL must be a trusted URL reconstructed from r.apiURL — NEVER
+// the diff_url field from the webhook body, which is an SSRF + PAT exfil
+// vector (an attacker who can send a webhook can substitute their own URL).
 func (r *Reviewer) fetchPRDiff(ctx context.Context, diffURL string) (string, error) {
         req, err := http.NewRequestWithContext(ctx, "GET", diffURL, nil)
         if err != nil {
@@ -315,7 +320,7 @@ func (r *Reviewer) fetchPRDiff(ctx context.Context, diffURL string) (string, err
                 return "", fmt.Errorf("diff fetch returned %d", resp.StatusCode)
         }
 
-        body, err := io.ReadAll(resp.Body)
+        body, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20)) // 10MB cap
         if err != nil {
                 return "", err
         }

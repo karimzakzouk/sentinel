@@ -12,26 +12,26 @@ WORKDIR /web
 # Copy package files first (cacheable)
 COPY web/package.json web/package-lock.json* ./
 
-RUN npm install --frozen-lockfile 2>/dev/null || npm install
+# v3.18.0: M41 — use `npm ci` (strict lockfile mode). Was:
+#   npm install --frozen-lockfile 2>/dev/null || npm install
+# which silently fell back to `npm install` on lockfile drift, regenerating the
+# lockfile and hiding dependency mismatches. `npm ci` fails loudly on drift.
+RUN npm ci
 
 # Copy web source and build
 COPY web/ .
 
-# v3.8.4: Build the Next.js static export. Previous version piped through
-# `|| true` to allow broken UI builds to fall through to a placeholder —
-# that masked real CI failures (a broken JS bundle would produce a green
-# build with no dashboard). Now we let the build fail loudly. The fallback
-# HTML below catches only the "out/ dir missing" case, not "build errored".
+# v3.18.0: H23 + M42 — let the build fail loudly. Was: piped through `|| true`
+# + a placeholder HTML fallback that masked real CI failures (broken JS bundle
+# produced a green build with no dashboard). Now if `next build` fails OR
+# produces no out/index.html, the Docker build fails.
 RUN npx next build
 
+# v3.18.0: M42 — fail loudly if the build didn't produce output.
+RUN test -f out/index.html || (echo "ERROR: next build did not produce out/index.html" && exit 1)
+
 # Copy built files to output directory
-RUN mkdir -p /out && \
-    if [ -d out ]; then \
-      cp -r out/* /out/; \
-    fi && \
-    if [ ! -f /out/index.html ]; then \
-      echo '<!DOCTYPE html><html><head><title>Sentinel</title></head><body style="background:#0A0A0B;color:#A1A1AA;font-family:monospace;padding:40px"><h1 style="color:#06B6D4">Sentinel</h1><p>Web UI build incomplete. API at /healthz, /incidents, /metrics.</p></body></html>' > /out/index.html; \
-    fi
+RUN mkdir -p /out && cp -r out/* /out/
 
 # ── Stage 2: Compile the Go binary with embedded web UI ────────────────────
 FROM golang:1.25-alpine AS builder

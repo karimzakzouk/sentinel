@@ -108,7 +108,17 @@ func New(addr string, store Store, settings SettingsGetter, investigate Investig
         // on a bearer token. The middleware is a no-op when apiToken is empty
         // (set via SetAPIToken), but we still register it so the wrapping order
         // is consistent.
-        s.http = &http.Server{Addr: addr, Handler: s.authMiddleware(mux)}
+        s.http = &http.Server{
+                Addr:         addr,
+                Handler:      s.authMiddleware(mux),
+                ReadTimeout:  10 * time.Second,
+                ReadHeaderTimeout: 5 * time.Second,
+                IdleTimeout:  60 * time.Second,
+                // v3.18.0: H26 — was missing all timeouts. Slowloris could exhaust FDs.
+                // WriteTimeout is intentionally 0 (infinite) so SSE /events can stream
+                // indefinitely. Non-SSE routes are wrapped in http.TimeoutHandler where
+                // appropriate (admin operations get a 60s hard cap).
+        }
         return s
 }
 
@@ -147,8 +157,12 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 
                 isAdmin := strings.HasPrefix(r.URL.Path, "/admin/")
                 isSettingsWrite := r.URL.Path == "/settings" && r.Method == http.MethodPost
+                // v3.18.0: H28 — gate /incidents behind auth. Incident data (root cause,
+                // repo, branch, PR URL) is sensitive. Was: anyone with cluster network
+                // access could read every incident.
+                isIncidentsRead := strings.HasPrefix(r.URL.Path, "/incidents")
 
-                if !isAdmin && !isSettingsWrite {
+                if !isAdmin && !isSettingsWrite && !isIncidentsRead {
                         next.ServeHTTP(w, r)
                         return
                 }
