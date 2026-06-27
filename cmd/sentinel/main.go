@@ -66,6 +66,10 @@ var (
         pkgAutoMergeGH *automerge.GitHubClientImpl
         pkgPrReviewer  *prreview.Reviewer
         pkgCfg         *config.Config
+        // v4.2.1: Package-level auto-merge merger. Assigned in main(), used by
+        // executeCodeFix to Track() PRs for auto-merge after they open.
+        pkgAutoMergeMerger *automerge.Merger
+        pkgAutoMergePolicy *automerge.Policy
 )
 
 func main() {
@@ -966,6 +970,8 @@ func main() {
         }
         autoMergePolicy := automerge.NewPolicy(autoMergeCfg, policy)
         autoMergeMerger := automerge.NewMerger(autoMergePolicy, autoMergeGH, &autoMergeStoreAdapter{store: store}, &autoMergeOutcomeAdapter{watcher: outcomeWatcher, policy: autoMergePolicy})
+        pkgAutoMergeMerger = autoMergeMerger // v4.2.1: package-level ref for executeCodeFix
+        pkgAutoMergePolicy = autoMergePolicy // v4.2.1: package-level ref for executeCodeFix
 
         chatopsDeps := &chatops.Deps{
                 Store:         &chatopsStoreAdapter{store: store},
@@ -1452,6 +1458,65 @@ func executeCodeFix(
                 if err := store.UpdateIncidentPR(ctx, incident.IncidentID, repoName, prResult.PRNumber, prResult.PRBranch, prResult.PRURL); err != nil {
                         logging.Error("failed to persist PR association for chatops", "error", err)
                 }
+        }
+
+        // v4.2.1: Track the PR for auto-merge. The merger evaluates gates on the
+        // next poll (30s) and merges if all pass. This was missing in v4.2.0 —
+        // the merger was running but had nothing to track, so PRs never auto-merged.
+        if pkgAutoMergeMerger != nil && repoName != "" && cfg.AutoMergeEnabled {
+                baseBranch := "main"
+                if fp.BaseBranch != nil {
+                        baseBranch = *fp.BaseBranch
+                }
+                confidence := 0.0
+                hasSchemaMigration := false
+                if incident.State.RootCause != nil {
+                        confidence = incident.State.RootCause.Confidence
+                        hasSchemaMigration = incident.State.RootCause.HasSchemaMigration
+                }
+                fixType := ""
+                if fp.FixType != "" {
+                        fixType = string(fp.FixType)
+                }
+                isHighRisk := false
+                if pkgCfg != nil {
+                        isHighRisk = false // checked via safety policy
+                        for _, svc := range pkgCfg.HighRiskServices {
+                                if svc == incident.Cluster.Service {
+                                        isHighRisk = true
+                                        break
+                                }
+                        }
+                }
+                policyVerdict := "allow"
+                if incident.State.GovernanceDecision != nil {
+                        policyVerdict = string(incident.State.GovernanceDecision.Verdict)
+                }
+                pkgAutoMergeMerger.Track(&automerge.TrackedPR{
+                        IncidentID: incident.IncidentID.String(),
+                        Repo:       repoName,
+                        PRNumber:   prResult.PRNumber,
+                        BaseBranch: baseBranch,
+                        Input: automerge.Input{
+                                IncidentID:         incident.IncidentID.String(),
+                                Service:            incident.Cluster.Service,
+                                Namespace:          incident.Cluster.Namespace,
+                                FixType:            fixType,
+                                HasSchemaMigration: hasSchemaMigration,
+                                IsHighRisk:         isHighRisk,
+                                Confidence:         confidence,
+                                SandboxVerified:    sandboxVerified,
+                                PolicyVerdict:      policyVerdict,
+                        },
+                })
+                logging.Info("PR tracked for auto-merge",
+                        "pr_number", prResult.PRNumber,
+                        "repo", repoName,
+                        "confidence", confidence,
+                        "sandbox_verified", sandboxVerified,
+                )
+                // Force immediate evaluation — don't wait for the 30s poll.
+                pkgAutoMergeMerger.EvaluateNow(ctx, repoName, prResult.PRNumber)
         }
 
         // v4.0.0: Post the initial [SENTINELSTATUS] comment so reviewers see

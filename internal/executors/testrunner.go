@@ -74,7 +74,13 @@ func (r *TestRunner) RunTest(ctx context.Context, fixCanaryImage, sandboxNS stri
         log.Printf("[testrunner] running test %s in %s (framework=%s, cmd=%s)",
                 test.TestFile, sandboxNS, test.TestFramework, test.TestCommand)
 
-        // 1. Create a ConfigMap with the test file content
+        // 1. Create a ConfigMap with the test file content.
+        // v4.2.1: ConfigMap keys can't contain "/" — use just the filename (last path segment).
+        // The full path is preserved in the pod by creating subdirectories.
+        cmKey := test.TestFile
+        if idx := strings.LastIndex(cmKey, "/"); idx >= 0 {
+                cmKey = cmKey[idx+1:]
+        }
         cmName := fmt.Sprintf("test-%d", time.Now().Unix())
         testCM := &corev1.ConfigMap{
                 ObjectMeta: metav1.ObjectMeta{
@@ -85,7 +91,7 @@ func (r *TestRunner) RunTest(ctx context.Context, fixCanaryImage, sandboxNS stri
                         },
                 },
                 Data: map[string]string{
-                        test.TestFile: test.TestContent,
+                        cmKey: test.TestContent,
                 },
         }
         _, err := r.clientset.CoreV1().ConfigMaps(sandboxNS).Create(ctx, testCM, metav1.CreateOptions{})
@@ -131,11 +137,11 @@ func (r *TestRunner) RunTest(ctx context.Context, fixCanaryImage, sandboxNS stri
                                         Command:         []string{"/bin/sh", "-c"},
                                         Args: []string{
                                                 fmt.Sprintf(
-                                                        "mkdir -p $(dirname /app/%s) && "+
+                                                        "mkdir -p /app/$(dirname %s) && "+
                                                                 "cp /test-file/%s /app/%s && "+
                                                                 "cd /app && "+
                                                                 "%s 2>&1 || true",
-                                                        test.TestFile, test.TestFile, test.TestFile, testCmd,
+                                                        test.TestFile, cmKey, test.TestFile, testCmd,
                                                 ),
                                         },
                                         VolumeMounts: []corev1.VolumeMount{
