@@ -69,7 +69,6 @@ var (
         // v4.2.1: Package-level auto-merge merger. Assigned in main(), used by
         // executeCodeFix to Track() PRs for auto-merge after they open.
         pkgAutoMergeMerger *automerge.Merger
-        pkgAutoMergePolicy *automerge.Policy
 )
 
 func main() {
@@ -971,7 +970,6 @@ func main() {
         autoMergePolicy := automerge.NewPolicy(autoMergeCfg, policy)
         autoMergeMerger := automerge.NewMerger(autoMergePolicy, autoMergeGH, &autoMergeStoreAdapter{store: store}, &autoMergeOutcomeAdapter{watcher: outcomeWatcher, policy: autoMergePolicy})
         pkgAutoMergeMerger = autoMergeMerger // v4.2.1: package-level ref for executeCodeFix
-        pkgAutoMergePolicy = autoMergePolicy // v4.2.1: package-level ref for executeCodeFix
 
         chatopsDeps := &chatops.Deps{
                 Store:         &chatopsStoreAdapter{store: store},

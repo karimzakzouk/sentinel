@@ -232,7 +232,7 @@ func (r *TestRunner) waitForPodCompletion(ctx context.Context, ns, name string, 
                         }
                         defer stream.Close()
                         buf := new(bytes.Buffer)
-                        buf.ReadFrom(stream)
+                        _, _ = buf.ReadFrom(stream)
                         return buf.String(), nil
                 }
                 time.Sleep(3 * time.Second)
@@ -391,7 +391,7 @@ func defaultTestCommand(language, framework, testFile string) string {
                 }
                 return fmt.Sprintf("python -m pytest %s -v", testFile)
         case "go":
-                return fmt.Sprintf("go test -v -run . ./...")
+                return "go test -v -run . ./..."
         case "javascript", "typescript":
                 if strings.Contains(strings.ToLower(framework), "jest") {
                         return fmt.Sprintf("npx jest %s --verbose", testFile)

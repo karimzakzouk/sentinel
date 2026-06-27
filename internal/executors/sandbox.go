@@ -488,45 +488,8 @@ func (s *SandboxRunner) deployCanary(ctx context.Context, inc *schemas.Incident,
 // passes Level 1 because ReadyReplicas briefly hit 1 between pod start and
 // the first crash.
 //
-// v3.8.4: Previous implementation returned true the instant ReadyReplicas >= 1
-// was observed, missing the crash-after-ready case entirely.
-func (s *SandboxRunner) waitForReady(ctx context.Context, ns, name string, timeout time.Duration) bool {
-        deadline := time.Now().Add(timeout)
-        readySince := time.Time{}
-
-        for time.Now().Before(deadline) {
-                // v3.18.0: check ctx.Done so the loop is interruptible by SIGTERM/investigation timeout.
-                select {
-                case <-ctx.Done():
-                        return false
-                default:
-                }
-                deploy, err := s.clientset.AppsV1().Deployments(ns).Get(ctx, name, metav1.GetOptions{})
-                if err == nil && deploy.Status.ReadyReplicas >= 1 {
-                        if readySince.IsZero() {
-                                readySince = time.Now()
-                                log.Printf("[sandbox] Level 1: canary pod went Ready at %s — sustaining for %s", readySince.Format(time.RFC3339), s.sustainedWindow)
-                        }
-                        if time.Since(readySince) >= s.sustainedWindow {
-                                return true
-                        }
-                } else {
-                        // Reset the sustained-ready timer if we drop below 1 Ready replica.
-                        // This catches pods that go Ready -> CrashLoopBackOff -> Ready -> CrashLoopBackOff.
-                        if !readySince.IsZero() {
-                                log.Printf("[sandbox] Level 1: canary pod dropped below ReadyReplicas=1 before sustaining %s — resetting timer", s.sustainedWindow)
-                        }
-                        readySince = time.Time{}
-                }
-                // v3.18.0: interruptible sleep
-                select {
-                case <-ctx.Done():
-                        return false
-                case <-time.After(3 * time.Second):
-                }
-        }
-        return false
-}
+// v4.2.1: Removed old waitForReady (replaced by waitForReadyWithLogs which
+// also captures canary logs during the sustained window).
 
 // getProbePaths returns a copy of probePaths under the read lock.
 // v3.18.0: Replaces direct s.probePaths access — Run() is invoked concurrently
@@ -966,116 +929,9 @@ type level3Result struct {
 // + JS startup SyntaxError all auto-pass Level 1 (the canary pod started and
 // stayed Ready for sustainedWindow — that's sufficient evidence the startup
 // error is gone).
-// verifyOriginalErrorFixedWithPaths is the same as verifyOriginalErrorFixed
-// but takes an explicit paths slice (avoids the shared s.probePaths race).
-// v3.18.0: Also uses the correct HTTP method per probe (was always GET).
-func (s *SandboxRunner) verifyOriginalErrorFixedWithPaths(ctx context.Context, ns, service string, inc *schemas.Incident, paths []string) *level3Result {
-        // Get the original pod logs from the anomaly explanation
-        explanation := ""
-        for _, anomaly := range inc.Cluster.Anomalies {
-                explanation += anomaly.Explanation + "\n"
-        }
-        if explanation == "" {
-                return nil
-        }
-
-        parsed := agents.ParseError(explanation)
-        if parsed == nil {
-                return nil // No recognizable error — can't reproduce
-        }
-        errorType := parsed.ErrorType
-        errorDetail := parsed.ErrorDetail
-
-        // Startup errors are already verified by Level 1.
-        startupErrors := map[string]bool{
-                "KeyError": true, "ImportError": true, "ModuleNotFoundError": true,
-                "FileNotFoundError": true, "SyntaxError": true,
-                "panic": true,
-                "ExceptionInInitializerError": true, "NoClassDefFoundError": true,
-                "NoSuchMethodError": true, "NoSuchFieldError": true,
-                "UnsupportedClassVersionError": true,
-                "ReferenceError": true,
-        }
-        if startupErrors[errorType] {
-                return &level3Result{
-                        passed: true,
-                        detail: fmt.Sprintf("Startup error %s: %s — canary pod started + stayed Ready for %s (error is gone)", errorType, errorDetail, s.sustainedWindow),
-                }
-        }
-
-        svc, err := s.clientset.CoreV1().Services(ns).Get(ctx, service, metav1.GetOptions{})
-        if err != nil || svc == nil {
-                return nil
-        }
-        // v3.18.0: probe ALL ports (was first only).
-        if len(svc.Spec.Ports) == 0 {
-                return nil
-        }
-        svcName := svc.Name
-
-        if len(paths) == 0 {
-                paths = []string{"/", "/healthz", "/readyz"}
-        }
-
-        client := sandboxHTTPClient
-        totalProbes := 0
-        failedProbes := 0
-
-        for _, portSpec := range svc.Spec.Ports {
-                port := portSpec.Port
-                for _, p := range paths {
-                        method, path := parsePathMethod(p)
-                        url := fmt.Sprintf("http://%s.%s.svc.cluster.local:%d%s", svcName, ns, port, path)
-                        req, _ := http.NewRequestWithContext(ctx, method, url, nil)
-
-                        pathOK := false
-                        for attempt := 0; attempt < 2; attempt++ {
-                                resp, err := client.Do(req)
-                                if err != nil {
-                                        log.Printf("[sandbox] Level 3: probe %s %s attempt %d connect error: %v", method, url, attempt+1, err)
-                                        continue
-                                }
-                                // v3.18.0: read full body up to 64KB (was single 4KB Read, missed errors past 4096).
-                                body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
-                                resp.Body.Close()
-                                bodyStr := strings.ToLower(string(body))
-
-                                if strings.Contains(bodyStr, strings.ToLower(errorType)) ||
-                                        (errorDetail != "" && strings.Contains(bodyStr, strings.ToLower(strings.TrimSpace(errorDetail)))) {
-                                        return &level3Result{
-                                                passed: false,
-                                                detail: fmt.Sprintf("%s: %s still present in response body from %s %s (status %d)", errorType, errorDetail, method, path, resp.StatusCode),
-                                        }
-                                }
-
-                                if resp.StatusCode >= 500 {
-                                        log.Printf("[sandbox] Level 3: probe %s %s returned %d (5xx = server error, fix not working)", method, url, resp.StatusCode)
-                                        continue
-                                }
-
-                                pathOK = true
-                                break
-                        }
-                        totalProbes++
-                        if !pathOK {
-                                failedProbes++
-                        }
-                }
-        }
-
-        if failedProbes > 0 {
-                return &level3Result{
-                        passed: false,
-                        detail: fmt.Sprintf("%d/%d probe paths returned 5xx or failed to connect (%s: %s not fully gone)",
-                                failedProbes, totalProbes, errorType, errorDetail),
-                }
-        }
-
-        return &level3Result{
-                passed: true,
-                detail: fmt.Sprintf("Runtime error %s: %s — not reproduced on any endpoint, all probes returned 2xx/3xx (error is gone)", errorType, errorDetail),
-        }
-}
+// v4.2.1: Removed verifyOriginalErrorFixedWithPaths (replaced by
+// verifyErrorGoneFromLogs which is the primary oracle — scans canary
+// logs for the original error type instead of probing HTTP endpoints).
 
 func (s *SandboxRunner) cleanup(ctx context.Context, ns string) {
         // v3.18.0: Use a fresh context so cleanup runs even if the parent ctx
