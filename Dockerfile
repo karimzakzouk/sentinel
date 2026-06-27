@@ -5,7 +5,7 @@
 # Build time: ~4 min cold, ~2 min cached.
 
 # ── Stage 1: Build the web UI (Next.js static export) ──────────────────────
-FROM node:22-alpine AS web-builder
+FROM node:26-alpine AS web-builder
 
 WORKDIR /web
 
