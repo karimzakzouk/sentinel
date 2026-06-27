@@ -246,6 +246,7 @@ func (p *Policy) IsAutoMergeAllowed(fixType string, hasSchemaMigration bool, isH
                 // the approved label separately. From the safety policy's perspective,
                 // we return true and let the merger gate on the label.
                 // (Returning false here would block even approved high-risk merges.)
+                _ = isHighRisk // explicit no-op: documented above
         }
         ft := schemas.FixType(fixType)
         return isSafeFixType(ft)

@@ -88,7 +88,6 @@ type providerHealth struct {
         totalCalls          int64
         totalSuccesses      int64
         totalFailures       int64
-        totalFailovers      int64 // times this provider caused a failover to the next
 }
 
 // trip marks the provider as tripped until the given reset time.

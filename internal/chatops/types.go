@@ -152,9 +152,7 @@ func ParseCommand(commentBody, author string, prNumber int, prRepo string, comme
 
                 argList := []string{}
                 if args != "" {
-                        for _, a := range strings.Fields(args) {
-                                argList = append(argList, a)
-                        }
+                        argList = append(argList, strings.Fields(args)...)
                 }
 
                 commands = append(commands, &Command{
