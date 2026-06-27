@@ -21,9 +21,13 @@ spec:
           properties:
             spec:
               type: object
+              # v3.18.0: M3 — `service` is required. Was: empty spec accepted,
+              # triggering an investigation against "unknown" service.
+              required: ["service"]
               properties:
                 service:
                   type: string
+                  minLength: 1
                 namespace:
                   type: string
                 reason:
@@ -61,6 +65,9 @@ spec:
         - name: Confidence
           type: number
           jsonPath: .status.confidence
+        - name: PR
+          type: string
+          jsonPath: .status.prUrl
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp

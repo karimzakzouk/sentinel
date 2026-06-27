@@ -455,7 +455,13 @@ func main() {
 
                 if incident.State.FixProposal == nil {
                         logging.InfoCtx(invCtx, "no fix proposed", "status", incident.Status)
-                        if err := k8sClient.PatchCRStatus(ctx, crName, crNamespace, string(incident.Status)); err != nil {
+                        // v3.18.0: M4 — pass incidentId + rootCause so kubectl get si shows them.
+                        rootCause := ""
+                        if incident.State.RootCause != nil {
+                                rootCause = incident.State.RootCause.Statement
+                        }
+                        if err := k8sClient.PatchCRStatusFull(ctx, crName, crNamespace, string(incident.Status),
+                                incident.IncidentID.String(), rootCause, 0, ""); err != nil {
                                 logging.ErrorCtx(invCtx, "patch CR status (no-fix) failed", "error", err)
                         }
                         return
@@ -631,7 +637,16 @@ func main() {
                         "pr_url": prURL, "success": success,
                 })
                 finalStatus = string(incident.Status)
-                if err := k8sClient.PatchCRStatus(ctx, crName, crNamespace, string(incident.Status)); err != nil {
+                // v3.18.0: M4 — pass confidence + prURL + rootCause so kubectl get si shows them.
+                rootCause := ""
+                confidence := 0.0
+                if incident.State.RootCause != nil {
+                        rootCause = incident.State.RootCause.Statement
+                        confidence = incident.State.RootCause.Confidence
+                }
+                // prURL is already in scope (declared above in the resolved path).
+                if err := k8sClient.PatchCRStatusFull(ctx, crName, crNamespace, string(incident.Status),
+                        incident.IncidentID.String(), rootCause, confidence, prURL); err != nil {
                         logging.ErrorCtx(invCtx, "patch CR status (resolved) failed", "error", err)
                 }
         }

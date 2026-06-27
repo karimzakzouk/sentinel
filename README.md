@@ -421,6 +421,72 @@ helm lint chart/
 
 ## What's New
 
+### v3.18.0 — Full Codebase Audit Round 2
+
+73 findings addressed across security, correctness, robustness, observability, frontend, and CI:
+
+**Security (P0):**
+- SSRF + GitHub PAT exfiltration via `diff_url` from webhook body — rebuild URL from trusted apiURL
+- Cluster-wide `secrets: delete` RBAC removed (was wiping cluster TLS if compromised)
+- GitHub PAT leaked to logs via URL-embedded token — switched to `http.BasicAuth{}` + error sanitization
+- `validateFilePath` now actually blocks Dockerfile / package.json / go.mod / pyproject.toml (the docstring always claimed it did — switch was missing them)
+- Slack bot signature bypass on empty signing secret — now refuses event callbacks
+- `Config.Validate()` — fail fast on missing LLM/GitHub creds + range checks (refuses to start)
+- Kaniko can now clone private repos (passes GitHub token via SecretKeyRef env var)
+
+**Sandbox correctness:**
+- `probePaths` data race + cross-incident contamination — local slice copy + mutex
+- Level 2 treats 4xx (404/401/405) as failure (was: only 5xx; 404 falsely passed)
+- Trigger endpoint probed with correct HTTP method (was: always GET → 405 → false pass)
+- Sandbox feedback now includes canary pod logs + probe results (was one-line Summary)
+- Sustained window restored from 10s to 30s (missed delayed crashes)
+
+**LLM pipeline:**
+- Token + cost tracking (`sentinel_llm_input/output_tokens_total`, `sentinel_llm_cost_usd_total`)
+- Fuzzy match threshold raised from 70% to 85% (was applying fixes to wrong function)
+- Indent corruption fix in whitespace-insensitive + fuzzy match (was 4+8=12 spaces)
+- GitHub API retry with exponential backoff on 429/403 secondary rate limit
+- Syntax validators added for Java/Rust/Ruby/C#/C/C++/PHP/Kotlin/Swift/Scala
+
+**Robustness:**
+- Pod log streamer leaks goroutine per deleted pod — fixed (call cancel on DELETED, break on IsNotFound)
+- `ready` race fixed (atomic.Bool)
+- WaitGroup tracking in-flight investigations (15s shutdown deadline)
+- Clusterer.Stop() cancels pending timers on shutdown
+- Goroutine panic recovery in clusterer handler + ready-setter
+- Sandbox/Kaniko cleanup uses fresh context.Background() (was: cancelled parent ctx → leaked namespaces)
+
+**Observability:**
+- Per-Level (1/2/3) sandbox failure metrics + retry counter
+- Histogram buckets (cumulative) for p50/p95/p99 computation
+- Secret redaction in logging (api_key, token, secret, password, etc.)
+- ServiceMonitor template for Prometheus Operator
+- PodDisruptionBudget template
+- HTTP server timeouts (ReadTimeout=10s, IdleTimeout=60s)
+
+**Frontend:**
+- Settings "Save Changes" button now POSTs to /settings (was decorative)
+- TypeScript + ESLint checks re-enabled (was silently shipping typos)
+- Removed `payments` from production_namespaces default (was undoing v3.11.0 fix)
+- LLM Router status shows actual configured model (was hardcoded openai/gpt-oss-120b:free)
+- Version strings synced across sidebar / package.json / mock logs
+
+**Helm/Docker/CI:**
+- Dockerfile uses `npm ci` (was silent lockfile drift)
+- Build fails loudly if next build produces no `out/index.html` (was silent placeholder HTML)
+- Trivy container CVE scan in CI
+- Dependabot.yml for gomod + npm + docker + github-actions
+- Web build verified in CI (was: only at release time, too late)
+- release-bump syncs web/package.json + my-values.yaml + sidebar version string
+- `terminationGracePeriodSeconds: 45` (was 30s, killed SQLite mid-commit)
+
+**Config & API:**
+- `/incidents` now gated behind auth (was unauthenticated — incident data exposed)
+- Sandbox config fields now actually take effect via runtime config callback (was dead code)
+- Runtime config validation (reject negative timeouts, invalid log levels, etc.)
+- CRD `spec.service` is now required (was: empty CR triggered investigation against "unknown")
+- CRD status now writes incidentId / rootCause / confidence / prUrl (was only phase)
+
 ### v3.16.0 — Production Hardening
 
 - **3-layer fix verification** — stronger prompts (replacement completeness), trigger endpoint testing (Layer C), sandbox failure feedback loop (Layer B: generate → verify → feed error back → retry)
