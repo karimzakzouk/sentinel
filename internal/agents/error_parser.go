@@ -521,7 +521,9 @@ func ExtractTriggerEndpoint(logs string) string {
 // failure under the new Level 2 logic — so the LLM is told the route exists
 // but isn't testable via GET, and must reason about the fix differently).
 func ExtractTriggerEndpointWithMethod(logs string) (path, method string) {
-        method = "GET"
+        // v3.18.0: removed ineffectual `method = "GET"` assignment (golangci-lint
+        // ineffassign). The method is always set by extractMethod() before return,
+        // or we return ("", "") if no match — callers check path == "" first.
         // First, find a request with a 4xx/5xx status code.
         matches := httpReqWithStatusRe.FindAllStringSubmatch(logs, -1)
         for _, m := range matches {

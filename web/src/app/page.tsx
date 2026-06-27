@@ -449,7 +449,7 @@ function DashboardView({ incidents, loading, onSelect, pipelineEvents, sseConnec
             <CardHeader className="pb-3"><CardTitle className="text-sm font-medium text-zinc-300">System Status</CardTitle></CardHeader>
             <CardContent className="space-y-3">
               <StatusRow icon={<Server className="h-3 w-3" />} label="Detection" status="active" detail="Live streaming" />
-              <StatusRow icon={<Brain className="h-3 w-3" />} label="LLM Router" status="active" detail={config.llm_fast_model || "glm-4-flash"} />
+              <StatusRow icon={<Brain className="h-3 w-3" />} label="LLM Router" status="active" detail="glm-4-flash" />
               <StatusRow icon={<Cpu className="h-3 w-3" />} label="Memory (HNSW)" status="active" detail={`${incidents.length} vectors`} />
               <StatusRow icon={<Shield className="h-3 w-3" />} label="Safety Policy" status="active" detail="5 rules active" />
               <StatusRow icon={<Database className="h-3 w-3" />} label="SQLite" status="active" detail="/data/sentinel.db" />
