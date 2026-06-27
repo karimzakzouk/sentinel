@@ -125,6 +125,8 @@ func main() {
                 c.handleConfig(positional)
         case "metrics", "m":
                 c.handleMetrics()
+        case "app":
+                c.handleApp(positional)
         case "version", "v":
                 fmt.Printf("sentinelctl %s\n", version.Version)
         case "help", "h", "--help", "-h":

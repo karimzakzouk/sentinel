@@ -54,6 +54,21 @@ var _ = broadcaster // used in handler closures below
 // local scope.
 var chatopsStatusManager chatops.StatusCommentManager
 
+// v4.1.0: Package-level GitHub client refs, assigned in main(). Used by
+// the runtimecfg apply callback (registered BEFORE these clients exist) to
+// reconfigure them live when the GitHub App credentials change at runtime.
+// Without these package-level vars, the apply callback would have to be
+// registered AFTER all clients are created, which is fragile (easy to
+// forget when adding new clients).
+var (
+        pkgGHExec       *executors.GitHubExecutor
+        pkgChatopsGH    *chatops.GitHubClientImpl
+        pkgAutoMergeGH  *automerge.GitHubClientImpl
+        pkgPrReviewer   *prreview.Reviewer
+        pkgRTCfg        *runtimecfg.Manager
+        pkgCfg          *config.Config
+)
+
 func main() {
         addr := flag.String("addr", "", "HTTP listen address (overrides env)")
         dbPath := flag.String("db", "", "SQLite DB path (overrides env)")
@@ -251,6 +266,34 @@ func main() {
                 if rc.LogLevel != "" {
                         logging.Init(rc.LogLevel)
                 }
+
+                // v4.1.0: GitHub App credentials — when set, reconfigure all 4 GitHub
+                // clients live (no restart). When cleared, fall back to PAT.
+                // Uses package-level vars (pkgGHExec etc.) because the apply callback
+                // is registered BEFORE the clients are created.
+                if rc.GitHubAppID != "" && rc.GitHubAppPrivateKey != "" && rc.GitHubAppInstallID != "" {
+                        app, err := githubapp.NewWithAPIURL(rc.GitHubAppID, rc.GitHubAppPrivateKey, rc.GitHubAppInstallID, pkgCfg.GitHubAPIURL)
+                        if err != nil {
+                                logging.Error("GitHub App reconfiguration failed", "error", err)
+                        } else {
+                                if pkgGHExec != nil {
+                                        pkgGHExec.WithTokenProvider(app)
+                                }
+                                if pkgChatopsGH != nil {
+                                        pkgChatopsGH.WithTokenProvider(&chatopsTokenProviderAdapter{app: app})
+                                }
+                                if pkgAutoMergeGH != nil {
+                                        pkgAutoMergeGH.WithTokenProvider(&automergeTokenProviderAdapter{app: app})
+                                }
+                                if pkgPrReviewer != nil {
+                                        pkgPrReviewer.WithGitHubApp(app)
+                                }
+                                logging.Info("GitHub App reconfigured via runtime config",
+                                        "app_id", rc.GitHubAppID,
+                                        "install_id", rc.GitHubAppInstallID,
+                                )
+                        }
+                }
         })
 
         // v3.4.0: Wire LLM metrics (avoids circular import: llm → metrics → ... → llm)
@@ -311,6 +354,9 @@ func main() {
                 WithAPIURL(cfg.GitHubAPIURL).
                 WithGitHost(cfg.GitHost).
                 WithDefaultBranch(cfg.DefaultBranch)
+        pkgGHExec = ghExec // v4.1.0: package-level ref for runtimecfg apply callback
+        pkgCfg = cfg       // v4.1.0: package-level ref for runtimecfg apply callback
+        pkgRTCfg = rtCfg   // v4.1.0: package-level ref for GitHubAppManager wiring
         k8sExec := executors.NewK8s(k8sClient.Clientset())
         // v3.11.0: Wire cfg.Namespace into the sandbox (audit #8).
         // Was: hardcoded "sentinel" in the NetworkPolicy ingress allow-list.
@@ -893,6 +939,7 @@ func main() {
         // v3.13.0: Actually wire the App into prReviewer (was dead code — audit #2).
         prReviewer := prreview.New(cfg.GitHubToken, cfg.GitHubWebhookSecret, &prReviewVectorAdapter{vs: vectorStore}).
                 WithAPIURL(cfg.GitHubAPIURL)
+        pkgPrReviewer = prReviewer // v4.1.0: package-level ref for runtimecfg apply callback
         apiServer.SetWebhookHandler(http.HandlerFunc(prReviewer.HandleWebhook))
 
         // v4.0.0: Wire chatops — PR-comment-driven command execution.
@@ -901,6 +948,7 @@ func main() {
         // API server via SetChatopsHandler. The webhook handler dispatches
         // to both prreview (pull_request events) and chatops (issue_comment).
         chatopsGHClient := chatops.NewGitHubClient(cfg.GitHubToken, cfg.GitHubAPIURL)
+        pkgChatopsGH = chatopsGHClient // v4.1.0: package-level ref for runtimecfg apply callback
         chatopsReactions := chatops.NewReactionsClient(chatopsGHClient)
         chatopsStatus := chatops.NewStatusCommentManager(chatopsGHClient)
         chatopsStatusManager = chatopsStatus // assign to package var for executeCodeFix
@@ -908,6 +956,7 @@ func main() {
         // v4.0.0: Auto-merge — policy + merger + GitHub client.
         // Created before chatopsDeps so the deps bag can reference the merger.
         autoMergeGH := automerge.NewGitHubClient(cfg.GitHubToken, cfg.GitHubAPIURL)
+        pkgAutoMergeGH = autoMergeGH // v4.1.0: package-level ref for runtimecfg apply callback
         autoMergeCfg := automerge.Config{
                 Enabled:              cfg.AutoMergeEnabled,
                 Namespaces:           cfg.AutoMergeNamespaces,
@@ -941,6 +990,8 @@ func main() {
         // so /providers and /automerge endpoints work.
         apiServer.SetProvidersStatusGetter(&providersStatusAdapter{router: router})
         apiServer.SetAutoMergeStatusGetter(&autoMergeStatusAdapter{policy: autoMergePolicy, merger: autoMergeMerger})
+        // v4.1.0: Wire the GitHubAppManager so /settings/github-app + sentinelctl app setup work.
+        apiServer.SetGitHubAppManager(rtCfg)
 
         logging.Info("chatops enabled",
                 "commands", len(chatops.AllCommands()),
@@ -1893,18 +1944,18 @@ func (a *autoMergeStatusAdapter) AutoMergeStatus() any {
 
 // chatopsTokenProviderAdapter wraps githubapp.App for the chatops package.
 type chatopsTokenProviderAdapter struct {
-	app *githubapp.App
+        app *githubapp.App
 }
 
 func (a *chatopsTokenProviderAdapter) GetInstallToken(ctx context.Context) (string, error) {
-	return a.app.GetInstallToken(ctx)
+        return a.app.GetInstallToken(ctx)
 }
 
 // automergeTokenProviderAdapter wraps githubapp.App for the automerge package.
 type automergeTokenProviderAdapter struct {
-	app *githubapp.App
+        app *githubapp.App
 }
 
 func (a *automergeTokenProviderAdapter) GetInstallToken(ctx context.Context) (string, error) {
-	return a.app.GetInstallToken(ctx)
+        return a.app.GetInstallToken(ctx)
 }

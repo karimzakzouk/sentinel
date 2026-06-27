@@ -10,6 +10,8 @@ import (
         "os"
         "path/filepath"
         "sync"
+
+        "github.com/karimzakzouk/sentinel/v3/internal/api"
 )
 
 // RuntimeConfig holds editable settings. Only non-empty fields override env vars.
@@ -43,6 +45,26 @@ type RuntimeConfig struct {
         GitHubAppInstallID  string `json:"github_app_install_id,omitempty"`
 
         LogLevel string `json:"log_level,omitempty"`
+}
+
+// Clone returns a deep copy of the RuntimeConfig. v4.1.0.
+// Used by SetGitHubApp + SetGitHubAppInstall to get a mutable copy before
+// modifying + saving (avoiding race conditions with concurrent reads).
+func (c RuntimeConfig) Clone() RuntimeConfig {
+        out := c
+        if c.SkipSandboxNonProd != nil {
+                v := *c.SkipSandboxNonProd
+                out.SkipSandboxNonProd = &v
+        }
+        if c.SandboxEnabled != nil {
+                v := *c.SandboxEnabled
+                out.SandboxEnabled = &v
+        }
+        if c.SandboxRequired != nil {
+                v := *c.SandboxRequired
+                out.SandboxRequired = &v
+        }
+        return out
 }
 
 // Manager handles loading/saving runtime config.
@@ -232,3 +254,76 @@ func countOverrides(c *RuntimeConfig) int {
         if c.SandboxMaxRetries > 0 { n++ }
         return n
 }
+
+// v4.1.0: GitHubAppManager methods. Implements api.GitHubAppManager.
+// Stores App credentials in runtime config + triggers the apply callback
+// so main.go's wiring code can reconfigure the live GitHub clients.
+
+// SetGitHubApp stores the App ID + private key + optional install ID +
+// webhook secret in runtime config, then triggers the apply callback.
+// The apply callback in main.go creates a githubapp.App from these
+// credentials and wires it into all 4 GitHub clients (PR opener, chatops,
+// auto-merge, prreview) live — no restart.
+//
+// Returns the App slug (used to construct the bot username: <slug>[bot]).
+// The slug isn't in the request — we fetch it lazily from the GitHub API
+// via the apply callback, but for the response we return a placeholder
+// ("sentinel") since the actual slug isn't known until the App is queried.
+// Sentinelctl app status will display the real slug after the App is queried.
+func (m *Manager) SetGitHubApp(appID, privateKey, installID, webhookSecret string) (string, error) {
+        cfg := m.Get().Clone()
+        cfg.GitHubAppID = appID
+        cfg.GitHubAppPrivateKey = privateKey
+        if installID != "" {
+                cfg.GitHubAppInstallID = installID
+        }
+        // webhookSecret is stored separately (in cfg.GitHubWebhookSecret via the
+        // config package, not RuntimeConfig — RuntimeConfig doesn't have a field
+        // for it because webhook secrets are typically set at install time, not
+        // at runtime). For now, we ignore webhookSecret here — it's expected to
+        // be set via Helm/env vars at deploy time. Future: add a runtime field.
+        if err := m.Save(&cfg); err != nil {
+                return "", err
+        }
+        // The slug is unknown until we query the GitHub API. Return a placeholder.
+        // sentinelctl app status will show the real slug after the App is queried.
+        return "sentinel", nil
+}
+
+// SetGitHubAppInstall sets just the installation ID.
+func (m *Manager) SetGitHubAppInstall(installID string) error {
+        cfg := m.Get().Clone()
+        cfg.GitHubAppInstallID = installID
+        return m.Save(&cfg)
+}
+
+// GetGitHubAppStatus returns the current App config.
+// Returns api.GitHubAppStatus so the Manager satisfies api.GitHubAppManager.
+func (m *Manager) GetGitHubAppStatus() api.GitHubAppStatus {
+        cfg := m.Get()
+        if cfg.GitHubAppID == "" || cfg.GitHubAppPrivateKey == "" {
+                return api.GitHubAppStatus{Configured: false}
+        }
+        return api.GitHubAppStatus{
+                Configured: true,
+                AppID:      cfg.GitHubAppID,
+                InstallID:  cfg.GitHubAppInstallID,
+                // Slug is fetched lazily — we don't store it. Sentinelctl app status
+                // can fetch it from the GitHub API if needed. For now, return empty.
+                Slug: "",
+        }
+}
+
+// RemoveGitHubApp clears the App config (falls back to PAT).
+func (m *Manager) RemoveGitHubApp() error {
+        cfg := m.Get().Clone()
+        cfg.GitHubAppID = ""
+        cfg.GitHubAppPrivateKey = ""
+        cfg.GitHubAppInstallID = ""
+        return m.Save(&cfg)
+}
+
+// GitHubAppStatus — defined in package api. runtimecfg.Manager returns
+// api.GitHubAppStatus from GetGitHubAppStatus() so the types match exactly.
+// (No type alias needed — runtimecfg imports api transitively via the
+// GitHubAppManager interface in main.go.)

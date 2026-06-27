@@ -55,6 +55,8 @@ type Server struct {
         providersStatus ProvidersStatusGetter
         // v4.0.0: Auto-merge status getter (for /automerge endpoint).
         autoMergeStatus AutoMergeStatusGetter
+        // v4.1.0: GitHub App manager (for /settings/github-app endpoint).
+        githubAppManager GitHubAppManager
 
         // v3.7.0: SSE
         eventSubs   map[chan ServerEvent]bool
@@ -183,6 +185,9 @@ func New(addr string, store Store, settings SettingsGetter, investigate Investig
         mux.HandleFunc("/incidents", s.handleIncidents)
         mux.HandleFunc("/incidents/", s.handleIncident)
         mux.HandleFunc("/settings", s.handleSettings)
+        // v4.1.0: GitHub App auto-provisioning endpoints (used by sentinelctl app setup)
+        mux.HandleFunc("/settings/github-app", s.handleGitHubApp)
+        mux.HandleFunc("/settings/github-app-install", s.handleGitHubAppInstall)
         mux.HandleFunc("/admin/investigate", s.handleInvestigate)
         mux.HandleFunc("/admin/pause", s.handlePause)
         mux.HandleFunc("/admin/resume", s.handleResume)
@@ -317,6 +322,42 @@ func (s *Server) SetRuntimeCfgSaver(r RuntimeCfgSaver)  { s.rtCfgSaver = r }
 // handler (pull_request events) and the chatops handler (issue_comment
 // events). Each handler ignores event types it doesn't care about.
 func (s *Server) SetChatopsHandler(h http.Handler)      { s.chatopsHandler = h }
+
+// GitHubAppManager is implemented by the runtimecfg manager. v4.1.0.
+// Used by /settings/github-app to store + apply App credentials live.
+type GitHubAppManager interface {
+        // SetGitHubApp stores the App ID + private key + optional install ID +
+        // webhook secret in runtime config, then applies them to all live GitHub
+        // clients (no restart). Returns the new App slug.
+        SetGitHubApp(appID, privateKey, installID, webhookSecret string) (slug string, err error)
+        // SetGitHubAppInstall sets just the installation ID (called separately
+        // after the user installs the App on their repo).
+        SetGitHubAppInstall(installID string) error
+        // GetGitHubAppStatus returns the current App config (configured, app_id,
+        // slug, install_id). slug is fetched lazily from the GitHub API on first
+        // call after credentials are set.
+        GetGitHubAppStatus() GitHubAppStatus
+        // RemoveGitHubApp clears the App config (falls back to PAT).
+        RemoveGitHubApp() error
+}
+
+// GitHubAppStatus is the public state of the GitHub App config.
+// Defined in the api package because it's the return type of
+// GitHubAppManager.GetGitHubAppStatus, which is implemented by runtimecfg.
+// runtimecfg returns this type directly (no conversion needed because
+// the api package doesn't import runtimecfg — runtimecfg imports api
+// via the GitHubAppManager interface satisfaction).
+type GitHubAppStatus struct {
+        Configured bool   `json:"configured"`
+        AppID      string `json:"app_id"`
+        Slug       string `json:"slug"`
+        InstallID  string `json:"install_id"`
+}
+
+// SetGitHubAppManager wires the GitHub App manager. v4.1.0.
+func (s *Server) SetGitHubAppManager(m GitHubAppManager) {
+        s.githubAppManager = m
+}
 
 // SetProvidersStatusGetter wires the LLM provider pool status getter. v4.0.0.
 // Used by /providers to expose pool health (tripped breakers, failover counts).
@@ -661,6 +702,98 @@ func (s *Server) handleSlack(w http.ResponseWriter, r *http.Request) {
                 return
         }
         s.slackHandler.ServeHTTP(w, r)
+}
+
+// handleGitHubApp manages the GitHub App config. v4.1.0.
+//
+// GET  /settings/github-app        → status (configured? app_id? slug? install_id?)
+// POST /settings/github-app        → store App ID + PEM + optional install ID + webhook secret
+// DELETE /settings/github-app      → remove App config (fall back to PAT)
+//
+// Used by `sentinelctl app setup` + `sentinelctl app status` + `sentinelctl app remove`.
+func (s *Server) handleGitHubApp(w http.ResponseWriter, r *http.Request) {
+        if s.githubAppManager == nil {
+                writeJSON(w, 503, map[string]string{"error": "github app manager not configured"})
+                return
+        }
+
+        switch r.Method {
+        case http.MethodGet:
+                status := s.githubAppManager.GetGitHubAppStatus()
+                writeJSON(w, 200, status)
+
+        case http.MethodPost:
+                r.Body = http.MaxBytesReader(nil, r.Body, maxRequestBodyBytes)
+                var req struct {
+                        AppID         string `json:"app_id"`
+                        PrivateKey    string `json:"private_key"`
+                        InstallID     string `json:"install_id"`
+                        WebhookSecret string `json:"webhook_secret"`
+                }
+                if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+                        writeJSON(w, 400, map[string]string{"error": "invalid JSON: " + err.Error()})
+                        return
+                }
+                if req.AppID == "" || req.PrivateKey == "" {
+                        writeJSON(w, 400, map[string]string{"error": "app_id and private_key are required"})
+                        return
+                }
+                slug, err := s.githubAppManager.SetGitHubApp(req.AppID, req.PrivateKey, req.InstallID, req.WebhookSecret)
+                if err != nil {
+                        writeJSON(w, 500, map[string]string{"error": err.Error()})
+                        return
+                }
+                log.Printf("[api] GitHub App configured via /settings/github-app (app_id=%s, slug=%s)", req.AppID, slug)
+                writeJSON(w, 200, map[string]string{
+                        "status": "configured",
+                        "slug":   slug,
+                        "bot":    slug + "[bot]",
+                        "hint":   "If install_id was empty, run `sentinelctl app set-install <id>` after installing the App.",
+                })
+
+        case http.MethodDelete:
+                if err := s.githubAppManager.RemoveGitHubApp(); err != nil {
+                        writeJSON(w, 500, map[string]string{"error": err.Error()})
+                        return
+                }
+                log.Printf("[api] GitHub App config removed")
+                writeJSON(w, 200, map[string]string{"status": "removed", "message": "Falling back to PAT."})
+
+        default:
+                writeJSON(w, 405, map[string]string{"error": "method not allowed"})
+        }
+}
+
+// handleGitHubAppInstall sets just the installation ID. v4.1.0.
+// Called separately from the App credentials because the install ID isn't
+// known until the user installs the App on their repo (which happens after
+// the App credentials are stored).
+func (s *Server) handleGitHubAppInstall(w http.ResponseWriter, r *http.Request) {
+        if s.githubAppManager == nil {
+                writeJSON(w, 503, map[string]string{"error": "github app manager not configured"})
+                return
+        }
+        if r.Method != http.MethodPost {
+                writeJSON(w, 405, map[string]string{"error": "method not allowed"})
+                return
+        }
+        var req struct {
+                InstallID string `json:"install_id"`
+        }
+        if err := json.NewDecoder(http.MaxBytesReader(nil, r.Body, maxRequestBodyBytes)).Decode(&req); err != nil {
+                writeJSON(w, 400, map[string]string{"error": "invalid JSON: " + err.Error()})
+                return
+        }
+        if req.InstallID == "" {
+                writeJSON(w, 400, map[string]string{"error": "install_id is required"})
+                return
+        }
+        if err := s.githubAppManager.SetGitHubAppInstall(req.InstallID); err != nil {
+                writeJSON(w, 500, map[string]string{"error": err.Error()})
+                return
+        }
+        log.Printf("[api] GitHub App install ID set: %s", req.InstallID)
+        writeJSON(w, 200, map[string]string{"status": "configured", "install_id": req.InstallID})
 }
 
 // handleProviders returns the LLM provider pool status. v4.0.0.

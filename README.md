@@ -689,6 +689,55 @@ sentinel:
 - Pool status exposed via `/providers` API endpoint + `pool.Status()` for the web UI
 - Empty config = legacy single-provider mode (backwards compatible)
 
+### Bot Identity (GitHub App)
+
+By default, Sentinel uses your PAT — PRs and comments appear as your personal GitHub account. To make them appear as **`Sentinel[bot]`** instead, configure a GitHub App.
+
+**Three ways to set it up:**
+
+| Path | When | Effort |
+|------|------|--------|
+| `sentinelctl app setup` | Self-hosted / local dev / GitHub Enterprise | 30 sec, one click on GitHub |
+| Public Sentinel App | Cloud-hosted, you want zero-config for users | 2 clicks per user |
+| Manual env vars | You want full control, no CLI | 5 min |
+| PAT (default) | Quick demo, testing | 0 min |
+
+**Path A — `sentinelctl app setup` (recommended):**
+
+```bash
+kubectl -n sentinel port-forward svc/sentinel 8000:8000
+sentinelctl app setup --server http://localhost:8000 --token $SENTINEL_API_TOKEN
+# Browser opens → click "Create GitHub App" → click "Install" → copy install ID from URL
+sentinelctl app set-install <install-id> --server http://localhost:8000 --token $SENTINEL_API_TOKEN
+sentinelctl app status --server http://localhost:8000 --token $SENTINEL_API_TOKEN
+```
+
+**Path B — Public App (for maintainers hosting Sentinel as a service):**
+
+Create one public GitHub App at https://github.com/settings/apps/new with the permissions listed in [docs/SENTINEL_GITHUB_APP.md](docs/SENTINEL_GITHUB_APP.md). Users install it in 2 clicks at `https://github.com/apps/yourname-sentinel/installations/new`.
+
+**Path C — Manual env vars:**
+
+```bash
+SENTINEL_GITHUB_APP_ID=1234567
+SENTINEL_GITHUB_APP_PRIVATE_KEY=$(cat sentinel-private-key.pem)
+SENTINEL_GITHUB_APP_INSTALL_ID=12345678
+```
+
+Or via Helm:
+
+```yaml
+sentinel:
+  githubAppId: "1234567"
+  githubAppPrivateKey: |
+    -----BEGIN RSA PRIVATE KEY-----
+    ...
+    -----END RSA PRIVATE KEY-----
+  githubAppInstallId: "12345678"
+```
+
+**Fallback behavior:** if the App is not configured OR the App token call fails, Sentinel silently uses the PAT. Nothing breaks. Full docs at [docs/SENTINEL_GITHUB_APP.md](docs/SENTINEL_GITHUB_APP.md).
+
 ## License
 
 MIT — see [LICENSE](LICENSE)
