@@ -186,7 +186,10 @@ func (c *client) handleAppSetup(args []string) {
         // Open the browser.
         openBrowser(createURL)
 
-        // Start the callback server.
+        // v4.1.2: Build the callback server. We serve on the listener we
+        // already opened (to find a free port) — no ListenAndServe (which
+        // defaults to :80 and fails with permission denied).
+        // Declare channels first so the handler closure can capture them.
         codeCh := make(chan string, 1)
         errCh := make(chan error, 1)
         srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -207,8 +210,14 @@ func (c *client) handleAppSetup(args []string) {
                 codeCh <- code
         })}
 
+        // Re-listen on the same port (we closed the listener above to find a free port).
+        listener, err = net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+        if err != nil {
+                fmt.Fprintf(os.Stderr, "Failed to bind callback port: %v\n", err)
+                os.Exit(1)
+        }
         go func() {
-                if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+                if err := srv.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
                         errCh <- err
                 }
         }()
@@ -216,17 +225,6 @@ func (c *client) handleAppSetup(args []string) {
                 ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
                 defer cancel()
                 _ = srv.Shutdown(ctx)
-        }()
-
-        // Need to re-listen on the same port (we closed the listener above to find a free port).
-        // Re-create the listener.
-        listener, err = net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
-        if err != nil {
-                fmt.Fprintf(os.Stderr, "Failed to bind callback port: %v\n", err)
-                os.Exit(1)
-        }
-        go func() {
-                _ = srv.Serve(listener)
         }()
 
         // Wait for the callback (timeout 5 min).
