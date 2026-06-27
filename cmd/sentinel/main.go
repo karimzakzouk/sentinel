@@ -61,12 +61,11 @@ var chatopsStatusManager chatops.StatusCommentManager
 // registered AFTER all clients are created, which is fragile (easy to
 // forget when adding new clients).
 var (
-        pkgGHExec       *executors.GitHubExecutor
-        pkgChatopsGH    *chatops.GitHubClientImpl
-        pkgAutoMergeGH  *automerge.GitHubClientImpl
-        pkgPrReviewer   *prreview.Reviewer
-        pkgRTCfg        *runtimecfg.Manager
-        pkgCfg          *config.Config
+        pkgGHExec      *executors.GitHubExecutor
+        pkgChatopsGH   *chatops.GitHubClientImpl
+        pkgAutoMergeGH *automerge.GitHubClientImpl
+        pkgPrReviewer  *prreview.Reviewer
+        pkgCfg         *config.Config
 )
 
 func main() {
@@ -356,7 +355,6 @@ func main() {
                 WithDefaultBranch(cfg.DefaultBranch)
         pkgGHExec = ghExec // v4.1.0: package-level ref for runtimecfg apply callback
         pkgCfg = cfg       // v4.1.0: package-level ref for runtimecfg apply callback
-        pkgRTCfg = rtCfg   // v4.1.0: package-level ref for GitHubAppManager wiring
         k8sExec := executors.NewK8s(k8sClient.Clientset())
         // v3.11.0: Wire cfg.Namespace into the sandbox (audit #8).
         // Was: hardcoded "sentinel" in the NetworkPolicy ingress allow-list.
