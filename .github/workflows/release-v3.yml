@@ -12,6 +12,7 @@ on:
   push:
     tags:
       - "v3.*.*"
+      - "v4.*.*"
   workflow_dispatch:
 
 permissions:
@@ -100,7 +101,7 @@ jobs:
         id: version
         run: |
           FILE_VERSION=$(cat VERSION | tr -d '[:space:]')
-          if [[ "${GITHUB_REF}" == refs/tags/v3* ]]; then
+          if [[ "${GITHUB_REF}" == refs/tags/v[34]* ]]; then
             TAG_VERSION=${GITHUB_REF_NAME#v}
             if [[ "${TAG_VERSION}" != "${FILE_VERSION}" ]]; then
               echo "ERROR: git tag version (${TAG_VERSION}) does not match VERSION file (${FILE_VERSION})"
@@ -161,7 +162,7 @@ jobs:
         id: version
         run: |
           FILE_VERSION=$(cat VERSION | tr -d '[:space:]')
-          if [[ "${GITHUB_REF}" == refs/tags/v3* ]]; then
+          if [[ "${GITHUB_REF}" == refs/tags/v[34]* ]]; then
             TAG_VERSION=${GITHUB_REF_NAME#v}
             echo "version=${TAG_VERSION}" >> $GITHUB_OUTPUT
             echo "is_tag=true" >> $GITHUB_OUTPUT
@@ -213,7 +214,7 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: Sentinel ${{ github.ref_name }}
           body: |
-            ## Install (v3 — single Go binary, ~43MB)
+            ## Install (v4 — single Go binary, ~43MB)
 
             ```bash
             helm repo add sentinel https://karimzakzouk.github.io/sentinel/
@@ -226,25 +227,31 @@ jobs:
 
             ## What's New
 
-            ### v3.12.0 — GoAI Integration: 25+ Native LLM Providers
+            ### v4.0.0 — Chatops + Auto-merge + Multi-provider LLM Pool
 
-            - **25+ LLM providers natively** — Anthropic, Bedrock, Azure, OpenAI, Google, Vertex, OpenRouter, Groq, Mistral, Cohere, xAI, DeepSeek, Cerebras, Fireworks, Together, Perplexity, Ollama, vLLM. No proxy needed.
-            - **Native ARM64 CI** — builds on free GitHub ARM64 runners (no QEMU). Release time halved.
-            - **200-with-error-body retry** — handles providers that return HTTP 200 with an error in the JSON body.
+            **Chatops in PR (19 `/sentinel` commands)** — Sentinel now responds to `/sentinel <command>` comments on its PRs. Informational (help, status, explain, trace), Operational (retry-sandbox, alternatives, apply, hold, approve, no-merge, merge, investigate, retest, verify), Destructive (revert, rollback, pause, resume, override). Every command ACKs with 👍, every state-changing command takes `cancel` to undo, permission errors are actionable. In-place `[SENTINELSTATUS]` comment (Prow's `[APPROVALNOTIFIER]` pattern).
 
-            ### v3.11.0 — Codebase Audit Fixes (16 issues)
+            **Auto-merge** — closes the loop from detection to deployment. Three opt-in layers (global + namespace + per-service annotation), three gates (sandbox + confidence + CI), rate limit (3/hour) + cooldown (1h after regression). Monitor via `GET /automerge`.
 
-            - Pure-Go syntax validators (was broken in distroless)
-            - Multi-language sandbox Level 3 (was Python-only)
-            - GitHub Enterprise / GitLab / Bitbucket support
-            - Registry-aware Kaniko (ECR/GCR/ACR/Harbor/Quay)
-            - Configurable default branch, namespace skip list, high-risk services
-            - 6 dead config fields wired
-            - Language-agnostic prompts
+            **Multi-provider LLM pool** — stack multiple API keys (OpenRouter + Groq + Gemini) with priority-ordered failover + circuit breaker. Auth errors trip for 1h, rate limits 60s, network 15s. Monitor via `GET /providers`.
+
+            **New API endpoints:** `GET /providers`, `GET /automerge`.
+
+            **DB migration:** idempotent ALTER TABLE adds `pr_number`, `pr_repo`, `pr_branch`, `pr_url`, `auto_merge_status` columns + `command_events` audit table.
+
+            Design informed by Prow + Mergify research (Prow's UX mistakes avoided: silent ack, inconsistent negation, vague denials, poor command discovery).
+
+            ### v3.18.0 — Full Codebase Audit Round 2
+
+            73 findings addressed across security, correctness, robustness, observability, frontend, and CI. Key: SSRF + GitHub PAT exfiltration fix, cluster-wide `secrets: delete` RBAC removed, sandbox Level 2 treats 4xx as failure, token + cost tracking, per-Level sandbox failure metrics.
+
+            ### v3.12.0 — GoAI: 25+ Native LLM Providers
+
+            25+ providers natively (Anthropic, Bedrock, Azure, OpenAI, Google, Vertex, OpenRouter, Groq, Mistral, Cohere, xAI, DeepSeek, etc.). No proxy needed. Native ARM64 CI.
 
             ### v3.8.2 — UI + GitHub App + Slack Bot
 
-            - Professional Web UI, CLI (sentinelctl), GitHub App, Settings persistence, SSE real-time updates, 24-hour feedback loop, Predictive PR review, Interactive Slack bot, Cross-service correlation, Shared library support, Concurrency limiter, Arm64 support, Production hardening.
+            Professional Web UI, CLI (sentinelctl), GitHub App, Settings persistence, SSE real-time updates, 24-hour feedback loop, Predictive PR review, Interactive Slack bot, Cross-service correlation, Shared library support.
           files: /tmp/sentinel-${{ steps.version.outputs.version }}.tgz
           generate_release_notes: true
 
