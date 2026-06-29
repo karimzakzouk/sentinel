@@ -40,7 +40,15 @@ Sentinel runs in your Kubernetes cluster with elevated RBAC (it can read pods, l
 
 3. **Sandbox escape**: The sandbox namespace has a default-deny NetworkPolicy. The canary pod runs with a forced security context (non-root, read-only root filesystem, no privilege escalation).
 
-4. **RBAC escalation**: Sentinel's RBAC is scoped to the namespaces you specify in `sentinel.rbac.writeNamespaces`. It does NOT have cluster-admin.
+4. **PromQL injection via prompt injection**: The Evidence Gatherer agent sends LLM-generated PromQL queries to your Prometheus (`internal/agents/evidence_gatherer.go:queryPrometheus`). An attacker who can influence pod logs could prompt-inject the LLM into generating queries that read any metric your Prometheus has (data exfiltration via metric labels). Sentinel does NOT currently filter PromQL. Mitigations:
+   - Run Sentinel's Prometheus queries through a read-only proxy that filters queries
+   - Use Prometheus RBAC to restrict which metrics Sentinel's token can read
+   - Set `SENTINEL_PROMETHEUS_URL` to a Prometheus instance that only has non-sensitive metrics
+   - Leave `SENTINEL_PROMETHEUS_URL` empty to disable Prometheus evidence gathering entirely
+
+5. **RBAC escalation**: Sentinel's RBAC is scoped to the namespaces you specify in `sentinel.rbac.writeNamespaces`. It does NOT have cluster-admin.
+
+6. **Alertmanager webhook injection**: The `/webhook/alertmanager` endpoint accepts Alertmanager payloads and triggers investigations. Without auth, anyone who can reach the endpoint can trigger investigations. Set `SENTINEL_ALERTMANAGER_WEBHOOK_SECRET` and configure Alertmanager to send it in the `X-Sentinel-Webhook-Secret` header.
 
 ## What Sentinel cannot defend against
 

@@ -89,6 +89,7 @@ func newIPRateLimiter(rate int, window time.Duration) *ipRateLimiter {
         }
         // Background cleanup of stale buckets every 5 minutes
         go func() {
+                defer func() { if r := recover(); r != nil { log.Printf("[api] rate-limiter cleanup panic recovered: %v", r) } }()
                 ticker := time.NewTicker(5 * time.Minute)
                 defer ticker.Stop()
                 for range ticker.C {
@@ -173,6 +174,15 @@ func New(addr string, store Store, settings SettingsGetter, investigate Investig
         mux.HandleFunc("/incidents/", s.handleIncident)
         mux.HandleFunc("/settings", s.handleSettings)
 
+        // pprof endpoints for production profiling. Mounted at /debug/pprof/
+        // so they're discoverable by Go tooling. Protected by the apiToken
+        // auth middleware (if set) — same as /admin/* endpoints.
+        mux.HandleFunc("/debug/pprof/", s.handlePprof)
+        mux.HandleFunc("/debug/pprof/cmdline", s.handlePprof)
+        mux.HandleFunc("/debug/pprof/profile", s.handlePprof)
+        mux.HandleFunc("/debug/pprof/symbol", s.handlePprof)
+        mux.HandleFunc("/debug/pprof/trace", s.handlePprof)
+
         mux.HandleFunc("/settings/github-app", s.handleGitHubApp)
         mux.HandleFunc("/settings/github-app-install", s.handleGitHubAppInstall)
         mux.HandleFunc("/admin/investigate", s.handleInvestigate)
@@ -255,7 +265,8 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
                         return
                 }
 
-                isAdmin := strings.HasPrefix(r.URL.Path, "/admin/")
+                isAdmin := strings.HasPrefix(r.URL.Path, "/admin/") ||
+				strings.HasPrefix(r.URL.Path, "/debug/pprof/")
                 isSettingsWrite := r.URL.Path == "/settings" && r.Method == http.MethodPost
 
                 // repo, branch, PR URL) is sensitive. Was: anyone with cluster network

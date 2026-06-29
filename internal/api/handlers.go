@@ -5,6 +5,7 @@
 package api
 
 import (
+	"net/http/pprof"
         "bytes"
         "encoding/json"
         "fmt"
@@ -462,4 +463,11 @@ func (s *Server) handleWebUI(w http.ResponseWriter, r *http.Request) {
                 return
         }
         s.webUIHandler.ServeHTTP(w, r)
+}
+
+// handlePprof delegates to net/http/pprof for production profiling.
+// Protected by the apiToken auth middleware (same as /admin/* endpoints).
+// Usage: `go tool pprof http://sentinel.sentinel.svc:8000/debug/pprof/heap`
+func (s *Server) handlePprof(w http.ResponseWriter, r *http.Request) {
+	pprof.Index(w, r)
 }

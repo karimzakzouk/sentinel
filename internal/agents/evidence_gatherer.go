@@ -1,6 +1,7 @@
 package agents
 
 import (
+	"log"
         "context"
         "encoding/json"
         "fmt"
@@ -126,6 +127,7 @@ func (a *EvidenceGatherer) Run(ctx context.Context, state *schemas.AgentState) e
                 wg.Add(1)
                 go func(idx int, qm map[string]any) {
                         defer wg.Done()
+                        defer func() { if r := recover(); r != nil { log.Printf("[evidence] query panic recovered: %v", r) } }()
                         ev := a.runSingleQuery(ctx, idx, qm)
                         mu.Lock()
                         evidence = append(evidence, ev)

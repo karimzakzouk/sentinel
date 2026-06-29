@@ -146,6 +146,7 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
         // webhooks after 10s. Long-running commands (retry-sandbox takes minutes)
         // must run async.
         go func() {
+                defer func() { if r := recover(); r != nil { log.Printf("[chatops] dispatch panic recovered: %v", r) } }()
                 ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
                 defer cancel()
                 if err := Dispatch(ctx, commands, h.deps); err != nil {

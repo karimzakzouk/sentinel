@@ -208,6 +208,7 @@ func (a *autoMergeOutcomeAdapter) WatchPostMerge(ctx context.Context, incidentID
 		return
 	}
 	go func() {
+		defer recoverPanic("outcome watcher")
 		a.watcher.WatchWithDetails(ctx, service, namespace, incidentID, true, "code_fix", "")
 	}()
 }

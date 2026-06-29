@@ -54,6 +54,12 @@ type Config struct {
 
         GitHubWebhookSecret string
 
+        // AlertmanagerWebhookSecret, if set, requires callers of
+        // POST /webhook/alertmanager to send it in the
+        // X-Sentinel-Webhook-Secret header. Prevents unauthorized alert
+        // injection. Empty = no auth (NOT recommended in production).
+        AlertmanagerWebhookSecret string
+
         // is allowed to clone and open PRs against. Sourced from the
         // sentinel.io/repo pod annotation. Empty list = allow all (legacy
         // behavior, NOT recommended for production). When non-empty, any pod
@@ -283,7 +289,8 @@ func Load() *Config {
                 Namespace:              getenv("SENTINEL_NAMESPACE", "sentinel"),
                 ReleaseName:            getenv("SENTINEL_RELEASE_NAME", "sentinel"),
                 GitHubToken:            getenv("SENTINEL_GITHUB_TOKEN", ""),
-                GitHubWebhookSecret:    getenv("SENTINEL_GITHUB_WEBHOOK_SECRET", ""),
+                GitHubWebhookSecret:      getenv("SENTINEL_GITHUB_WEBHOOK_SECRET", ""),
+                AlertmanagerWebhookSecret: getenv("SENTINEL_ALERTMANAGER_WEBHOOK_SECRET", ""),
                 AllowedGitHubRepos:     splitCSV(getenv("SENTINEL_ALLOWED_GITHUB_REPOS", "")),
                 APIToken:               getenv("SENTINEL_API_TOKEN", ""),
 

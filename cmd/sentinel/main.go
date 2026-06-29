@@ -56,16 +56,9 @@ var chatopsStatusManager chatops.StatusCommentManager
 // Without these package-level vars, the apply callback would have to be
 // registered AFTER all clients are created, which is fragile (easy to
 // forget when adding new clients).
-var (
-        pkgGHExec      *executors.GitHubExecutor
-        pkgChatopsGH   *chatops.GitHubClientImpl
-        pkgAutoMergeGH *automerge.GitHubClientImpl
-        pkgPrReviewer  *prreview.Reviewer
-        pkgCfg         *config.Config
-
-        // executeCodeFix to Track() PRs for auto-merge after they open.
-        pkgAutoMergeMerger *automerge.Merger
-)
+// Package-level mutable vars (pkgGHExec, etc.) are now defined in
+// pkg_vars.go with RWMutex-protected accessors. Use getGHExec(),
+// getCfg(), etc. for reads and withPkgWriteLock(...) for writes.
 
 // Compile-time assertion: alertmanagerAdapter satisfies alertmanager.SignalHandler.
 var _ alertmanager.SignalHandler = (*alertmanagerAdapter)(nil)
@@ -261,22 +254,28 @@ func main() {
                 // Uses package-level vars (pkgGHExec etc.) because the apply callback
                 // is registered BEFORE the clients are created.
                 if rc.GitHubAppID != "" && rc.GitHubAppPrivateKey != "" && rc.GitHubAppInstallID != "" {
-                        app, err := githubapp.NewWithAPIURL(rc.GitHubAppID, rc.GitHubAppPrivateKey, rc.GitHubAppInstallID, pkgCfg.GitHubAPIURL)
+                        cfgSnapshot := getCfg()
+                        app, err := githubapp.NewWithAPIURL(rc.GitHubAppID, rc.GitHubAppPrivateKey, rc.GitHubAppInstallID, cfgSnapshot.GitHubAPIURL)
                         if err != nil {
                                 logging.Error("GitHub App reconfiguration failed", "error", err)
                         } else {
-                                if pkgGHExec != nil {
-                                        pkgGHExec.WithTokenProvider(app)
-                                }
-                                if pkgChatopsGH != nil {
-                                        pkgChatopsGH.WithTokenProvider(&chatopsTokenProviderAdapter{app: app})
-                                }
-                                if pkgAutoMergeGH != nil {
-                                        pkgAutoMergeGH.WithTokenProvider(&automergeTokenProviderAdapter{app: app})
-                                }
-                                if pkgPrReviewer != nil {
-                                        pkgPrReviewer.WithGitHubApp(app)
-                                }
+                                // Hold the write lock while mutating all 4 clients.
+                                // Prevents investigation/chatops/automerge goroutines
+                                // from reading a half-mutated client.
+                                withPkgWriteLock(func() {
+                                        if pkgGHExec != nil {
+                                                pkgGHExec.WithTokenProvider(app)
+                                        }
+                                        if pkgChatopsGH != nil {
+                                                pkgChatopsGH.WithTokenProvider(&chatopsTokenProviderAdapter{app: app})
+                                        }
+                                        if pkgAutoMergeGH != nil {
+                                                pkgAutoMergeGH.WithTokenProvider(&automergeTokenProviderAdapter{app: app})
+                                        }
+                                        if pkgPrReviewer != nil {
+                                                pkgPrReviewer.WithGitHubApp(app)
+                                        }
+                                })
                                 logging.Info("GitHub App reconfigured via runtime config",
                                         "app_id", rc.GitHubAppID,
                                         "install_id", rc.GitHubAppInstallID,
@@ -340,8 +339,10 @@ func main() {
                 WithAPIURL(cfg.GitHubAPIURL).
                 WithGitHost(cfg.GitHost).
                 WithDefaultBranch(cfg.DefaultBranch)
-        pkgGHExec = ghExec
-        pkgCfg = cfg
+        withPkgWriteLock(func() {
+                pkgGHExec = ghExec
+                pkgCfg = cfg
+        })
         k8sExec := executors.NewK8s(k8sClient.Clientset())
 
         sandbox := executors.NewSandbox(k8sClient.Clientset(), cfg.SandboxNamespacePrefix, cfg.EnableTrafficMirroring).
@@ -377,6 +378,7 @@ func main() {
         }
         // Load existing vectors from SQLite into HNSW index on startup (delay 2s for DB to be ready)
         go func() {
+                defer recoverPanic("vector store loader")
                 time.Sleep(2 * time.Second)
                 loadCtx := context.Background()
                 if err := vectorStore.LoadFromDB(loadCtx, store); err != nil {
@@ -710,6 +712,7 @@ func main() {
         defer cancel()
 
         go func() {
+                defer recoverPanic("CRD watcher")
                 logging.Info("CRD watcher started")
                 w.Run(ctx)
         }()
@@ -720,6 +723,7 @@ func main() {
         // older than 30 minutes (a sandbox run takes <5 min, so 30 min is a safe
         // cutoff that won't interrupt active runs).
         go func() {
+                defer recoverPanic("sandbox reaper")
                 ticker := time.NewTicker(5 * time.Minute)
                 defer ticker.Stop()
                 // Run once at startup to clean up leaks from a previous run.
@@ -847,6 +851,7 @@ func main() {
                 cfg.SkipNamespaces,
         )
         go func() {
+                defer recoverPanic("detection layer")
                 logging.Info("detection layer started (live log streaming + pod status)")
                 detector.Run(ctx)
         }()
@@ -858,7 +863,7 @@ func main() {
         amReceiver := alertmanager.NewReceiver(&alertmanagerAdapter{
                 clusterer: clusterer,
                 k8sClient: k8sClient,
-        })
+        }).WithSharedSecret(cfg.AlertmanagerWebhookSecret)
         amReceiver.StartPurger(ctx)
 
         go func() {
@@ -904,8 +909,16 @@ func main() {
                 func() bool { return ready.Load() },
         )
 
-        // Empty token = auth disabled (logs a loud warning). Health/readiness/metrics
-        // endpoints remain open so kubelet probes and Prometheus still work.
+        // Empty token = auth disabled. In production (in-cluster), this is
+        // dangerous: anyone with cluster network access can trigger
+        // investigations, pause autonomous mode, or change runtime config.
+        // Log a loud warning. Health/readiness/metrics endpoints remain open
+        // regardless so kubelet probes + Prometheus still work.
+        if cfg.APIToken == "" {
+                logging.Warn("SENTINEL_API_TOKEN is empty — admin API endpoints (/admin/*, /settings, /incidents, /debug/pprof) are UNAUTHENTICATED. Set SENTINEL_API_TOKEN in production to prevent unauthorized access.")
+        } else {
+                logging.Info("admin API authentication enabled", "token_length", len(cfg.APIToken))
+        }
         apiServer.SetAPIToken(cfg.APIToken)
 
         // compiled into the binary via go:embed (internal/web/out/). Without
@@ -917,7 +930,7 @@ func main() {
 
         prReviewer := prreview.New(cfg.GitHubToken, cfg.GitHubWebhookSecret, &prReviewVectorAdapter{vs: vectorStore}).
                 WithAPIURL(cfg.GitHubAPIURL)
-        pkgPrReviewer = prReviewer
+        withPkgWriteLock(func() { pkgPrReviewer = prReviewer })
         apiServer.SetWebhookHandler(http.HandlerFunc(prReviewer.HandleWebhook))
         apiServer.SetAlertmanagerHandler(amReceiver)
         logging.Info("alertmanager webhook receiver wired at /webhook/alertmanager")
@@ -927,14 +940,14 @@ func main() {
         // API server via SetChatopsHandler. The webhook handler dispatches
         // to both prreview (pull_request events) and chatops (issue_comment).
         chatopsGHClient := chatops.NewGitHubClient(cfg.GitHubToken, cfg.GitHubAPIURL)
-        pkgChatopsGH = chatopsGHClient
+        withPkgWriteLock(func() { pkgChatopsGH = chatopsGHClient })
         chatopsReactions := chatops.NewReactionsClient(chatopsGHClient)
         chatopsStatus := chatops.NewStatusCommentManager(chatopsGHClient)
         chatopsStatusManager = chatopsStatus // assign to package var for executeCodeFix
 
         // Created before chatopsDeps so the deps bag can reference the merger.
         autoMergeGH := automerge.NewGitHubClient(cfg.GitHubToken, cfg.GitHubAPIURL)
-        pkgAutoMergeGH = autoMergeGH
+        withPkgWriteLock(func() { pkgAutoMergeGH = autoMergeGH })
         autoMergeCfg := automerge.Config{
                 Enabled:              cfg.AutoMergeEnabled,
                 Namespaces:           cfg.AutoMergeNamespaces,
@@ -946,7 +959,7 @@ func main() {
         }
         autoMergePolicy := automerge.NewPolicy(autoMergeCfg, policy)
         autoMergeMerger := automerge.NewMerger(autoMergePolicy, autoMergeGH, &autoMergeStoreAdapter{store: store}, &autoMergeOutcomeAdapter{watcher: outcomeWatcher, policy: autoMergePolicy})
-        pkgAutoMergeMerger = autoMergeMerger
+        withPkgWriteLock(func() { pkgAutoMergeMerger = autoMergeMerger })
 
         // after merge/skip. Was: the status comment said "(not configured)" forever.
         autoMergeMerger.SetOnMerged(func(repo string, prNumber int) {
@@ -1105,6 +1118,7 @@ func main() {
         clusterer.SetPauseChecker(slackBot)
 
         go func() {
+                defer recoverPanic("API server")
                 if err := apiServer.Start(); err != nil && err != http.ErrServerClosed {
 
                         // Previously, the error was just logged and Sentinel continued running
@@ -1131,6 +1145,7 @@ func main() {
         // leaving half-written incidents and half-applied branches.
         done := make(chan struct{})
         go func() {
+                defer recoverPanic("shutdown waiter")
                 invWG.Wait()
                 close(done)
         }()

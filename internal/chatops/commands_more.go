@@ -19,6 +19,7 @@
 package chatops
 
 import (
+	"log"
         "context"
         "fmt"
         "strconv"
@@ -313,6 +314,7 @@ func cmdInvestigate(ctx context.Context, cmd *Command, deps *Deps) error {
         _ = deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
                 "🔄 Re-investigating from scratch (this takes 2-5 minutes)...")
         go func() {
+                defer func() { if r := recover(); r != nil { log.Printf("[chatops] reinvestigate panic recovered: %v", r) } }()
                 if err := deps.Pipeline.Reinvestigate(context.Background(), inc.ID); err != nil {
                         _ = deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
                                 fmt.Sprintf("❌ Re-investigation failed: %v", err))
@@ -342,6 +344,7 @@ func cmdRetest(ctx context.Context, cmd *Command, deps *Deps) error {
         _ = deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
                 "🔄 Re-running LLM pipeline (re-generating fix with same root cause, ~1-2 minutes)...")
         go func() {
+                defer func() { if r := recover(); r != nil { log.Printf("[chatops] retryfix panic recovered: %v", r) } }()
                 if err := deps.Pipeline.RetryFixProposal(context.Background(), inc.ID); err != nil {
                         _ = deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
                                 fmt.Sprintf("❌ Retest failed: %v", err))

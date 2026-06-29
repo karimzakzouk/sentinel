@@ -152,6 +152,7 @@ func (w *Watcher) handleItem(ctx context.Context, item *unstructured.Unstructure
         // Also pass ctx (not context.Background()) so in-flight handlers stop on SIGTERM.
         if w.handler != nil {
                 go func() {
+                        defer func() { if r := recover(); r != nil { log.Printf("[watcher] handler panic recovered: %v", r) } }()
                         // Discover sentinel.io/* annotations from the affected workload
                         annotations, _ := w.k8s.LookupWorkloadAnnotations(ctx, service, svcNs)
                         if repoFromSpec != "" {

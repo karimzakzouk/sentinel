@@ -379,7 +379,7 @@ func executeCodeFix(
         // EvaluateNow is synchronous — it triggers the merge + onMerged callback
         // which updates the status comment to "✅ Merged". If we post the initial
         // comment after this, it overwrites "✅ Merged" with "⏳ Queued".
-        if pkgAutoMergeMerger != nil && repoName != "" && cfg.AutoMergeEnabled {
+        if merger := getAutoMergeMerger(); merger != nil && repoName != "" && cfg.AutoMergeEnabled {
                 baseBranch := "main"
                 if fp.BaseBranch != nil {
                         baseBranch = *fp.BaseBranch
@@ -395,9 +395,9 @@ func executeCodeFix(
                         fixType = string(fp.FixType)
                 }
                 isHighRisk := false
-                if pkgCfg != nil {
+                if cfgSnapshot := getCfg(); cfgSnapshot != nil {
                         isHighRisk = false // checked via safety policy
-                        for _, svc := range pkgCfg.HighRiskServices {
+                        for _, svc := range cfgSnapshot.HighRiskServices {
                                 if svc == incident.Cluster.Service {
                                         isHighRisk = true
                                         break
@@ -426,7 +426,7 @@ func executeCodeFix(
                                 }
                         }
                 }
-                pkgAutoMergeMerger.Track(&automerge.TrackedPR{
+                merger.Track(&automerge.TrackedPR{
                         IncidentID: incident.IncidentID.String(),
                         Repo:       repoName,
                         PRNumber:   prResult.PRNumber,
@@ -451,7 +451,7 @@ func executeCodeFix(
                         "sandbox_verified", sandboxVerified,
                 )
                 // Force immediate evaluation — don't wait for the 30s poll.
-                pkgAutoMergeMerger.EvaluateNow(ctx, repoName, prResult.PRNumber)
+                merger.EvaluateNow(ctx, repoName, prResult.PRNumber)
         }
 
         // The onMerged callback updates it to "✅ Merged" if the merge succeeds.
