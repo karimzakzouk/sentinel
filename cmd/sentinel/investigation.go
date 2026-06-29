@@ -1,40 +1,74 @@
 package main
 
 import (
-	"context"
-	"fmt"
-	"strings"
-	"time"
+        "context"
+        "fmt"
+        "strings"
+        "time"
 
-	"github.com/karimzakzouk/sentinel/internal/agents"
-	"github.com/karimzakzouk/sentinel/internal/automerge"
-	"github.com/karimzakzouk/sentinel/internal/chatops"
-	"github.com/karimzakzouk/sentinel/internal/config"
-	"github.com/karimzakzouk/sentinel/internal/executors"
-	"github.com/karimzakzouk/sentinel/internal/feedback"
-	"github.com/karimzakzouk/sentinel/internal/k8s"
-	"github.com/karimzakzouk/sentinel/internal/logging"
-	"github.com/karimzakzouk/sentinel/internal/metrics"
-	"github.com/karimzakzouk/sentinel/internal/schemas"
+        "github.com/karimzakzouk/sentinel/internal/agents"
+        "github.com/karimzakzouk/sentinel/internal/automerge"
+        "github.com/karimzakzouk/sentinel/internal/chatops"
+        "github.com/karimzakzouk/sentinel/internal/config"
+        "github.com/karimzakzouk/sentinel/internal/executors"
+        "github.com/karimzakzouk/sentinel/internal/feedback"
+        "github.com/karimzakzouk/sentinel/internal/k8s"
+        "github.com/karimzakzouk/sentinel/internal/logging"
+        "github.com/karimzakzouk/sentinel/internal/metrics"
+        "github.com/karimzakzouk/sentinel/internal/schemas"
 )
 
 // executeFix runs the appropriate executor based on fix type.
 // For CODE_FIX / ROLL_FORWARD: 4-phase flow (branch → Kaniko → sandbox → PR)
 // detectSandboxFailureLevel parses the sandbox summary to determine which
-// verification level failed (1, 2, or 3). Used for per-Level metrics.
-
+// verification level failed. Used for per-Level metrics + level-specific LLM
+// feedback.
+//
+// Levels:
+//   1 = canary pod not Ready / not sustained (startup crash not fixed)
+//   2 = health endpoints failing (app starts but serves 4xx/5xx)
+//   3 = original error still present in canary logs (PRIMARY ORACLE)
+//   4 = regression test failed (LLM-generated test reproduces the bug, fix didn't fix it)
+//   5 = reproducer script crashed (strongest signal — fix didn't actually fix)
+//   0 = infrastructure error (RBAC, image pull, namespace creation) — LLM can't fix
 func detectSandboxFailureLevel(summary string) int {
         switch {
         case strings.Contains(summary, "canary_pods_not_ready"):
                 return 1
-        case strings.Contains(summary, "endpoints_unreachable"):
+        case strings.Contains(summary, "endpoints_unreachable"), strings.Contains(summary, "health_endpoints_failing"):
                 return 2
         case strings.Contains(summary, "original_error_still_present"):
                 return 3
-        case strings.Contains(summary, "deploy_failed"), strings.Contains(summary, "create_namespace"):
-                return 0 // infrastructure error (not Level 1/2/3)
+        case strings.Contains(summary, "regression_test_failed"):
+                return 4
+        case strings.Contains(summary, "reproducer_failed"):
+                return 5
+        case strings.Contains(summary, "deploy_failed"), strings.Contains(summary, "create_namespace"), strings.Contains(summary, "kaniko_error"):
+                return 0 // infrastructure error (not Level 1-5)
         }
         return 0
+}
+
+// levelSpecificFeedback returns a targeted feedback message for the LLM based
+// on which sandbox level failed. This is critical for L4/L5 — without it,
+// the LLM just sees "sandbox failed" without knowing that its fix passed
+// Levels 1-3 but failed the regression test.
+func levelSpecificFeedback(summary string, fullSummary string) string {
+        level := detectSandboxFailureLevel(summary)
+        switch level {
+        case 1:
+                return fmt.Sprintf("Sandbox Level 1 FAILED: the canary pod did not become Ready (or did not stay Ready for the sustained window).\n\nThis means the startup crash was NOT fixed — the app still crashes on boot.\n\nFull failure detail:\n%s\n\nPlease generate a corrected fix that addresses the startup crash.", fullSummary)
+        case 2:
+                return fmt.Sprintf("Sandbox Level 2 FAILED: the canary pod is Ready, but health endpoints (/, /healthz, /readyz) returned 4xx/5xx.\n\nThis means the app starts but is broken at the HTTP layer.\n\nFull failure detail:\n%s\n\nPlease generate a corrected fix that makes the health endpoints return 2xx.", fullSummary)
+        case 3:
+                return fmt.Sprintf("Sandbox Level 3 FAILED: the original error is still present in the canary pod's logs.\n\nThis means the fix did NOT eliminate the original error (the canary still logs the same TypeError/panic/KeyError/etc.).\n\nFull failure detail:\n%s\n\nPlease generate a corrected fix that actually eliminates the original error.", fullSummary)
+        case 4:
+                return fmt.Sprintf("Sandbox Level 4 FAILED: the regression test did not pass.\n\nIMPORTANT: Your fix passed Levels 1-3 (pod is Ready, health endpoints OK, original error gone from logs). But the LLM-generated regression test — which reproduces the original bug — still FAILS against your fixed code. This means your fix did not actually fix the underlying bug; it only masked the symptom.\n\nFull failure detail:\n%s\n\nPlease generate a corrected fix that makes the regression test PASS.", fullSummary)
+        case 5:
+                return fmt.Sprintf("Sandbox Level 5 FAILED: the reproducer script crashed (exit code != 0).\n\nIMPORTANT: Your fix passed Levels 1-4. But the LLM-generated reproducer script — which exercises the buggy code path — still crashes against your fixed code. This is the strongest signal that the fix is incomplete.\n\nFull failure detail:\n%s\n\nPlease generate a corrected fix that makes the reproducer script exit 0.", fullSummary)
+        default:
+                return fmt.Sprintf("Sandbox verification failed (infrastructure or unknown error — the LLM may not be able to fix this):\n%s\n\nPlease generate a corrected fix if you can; otherwise the PR will be opened with needs-review.", fullSummary)
+        }
 }
 
 func executeFix(
@@ -139,11 +173,12 @@ func executeCodeFix(
                 for sandboxAttempt := 0; sandboxAttempt <= maxRetries; sandboxAttempt++ {
                         if sandboxAttempt > 0 {
 
-                                // Only sandbox Level 1/2/3 failures trigger retries (not Kaniko failures).
-                                logging.Info("sandbox retry: feeding failure back to fix proposer",
-                                        "fix_id", fp.FixID, "attempt", sandboxAttempt+1, "max", maxRetries+1)
+                                // Only sandbox Level 1-5 failures trigger retries (not Kaniko failures).
+                                logging.Info("sandbox retry: feeding level-specific failure back to fix proposer",
+                                        "fix_id", fp.FixID, "attempt", sandboxAttempt+1, "max", maxRetries+1,
+                                        "level", detectSandboxFailureLevel(sandboxSummary))
 
-                                feedback := fmt.Sprintf("Sandbox verification failed: %s\n\nThe canary was built and deployed, but verification failed. Please generate a corrected fix.", sandboxSummary)
+                                feedback := levelSpecificFeedback(sandboxSummary, sandboxSummary)
                                 incident.State.SandboxFeedback = &feedback
 
                                 // Re-run only the fix proposer (not the full pipeline — root cause hasn't changed)

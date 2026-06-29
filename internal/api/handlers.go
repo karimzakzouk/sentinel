@@ -320,6 +320,17 @@ func (s *Server) handleSlack(w http.ResponseWriter, r *http.Request) {
         s.slackHandler.ServeHTTP(w, r)
 }
 
+// handleAlertmanager receives Alertmanager webhook notifications.
+// POST /webhook/alertmanager with Alertmanager v4 payload.
+// Only "firing" alerts trigger investigation; "resolved" alerts are logged.
+func (s *Server) handleAlertmanager(w http.ResponseWriter, r *http.Request) {
+        if s.alertmanagerHandler == nil {
+                writeJSON(w, 503, map[string]string{"error": "alertmanager handler not configured"})
+                return
+        }
+        s.alertmanagerHandler.ServeHTTP(w, r)
+}
+
 // handleGitHubApp manages the GitHub App config. v4.1.0.
 //
 // GET  /settings/github-app        → status (configured? app_id? slug? install_id?)

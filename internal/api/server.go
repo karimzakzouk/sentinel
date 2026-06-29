@@ -32,6 +32,7 @@ type Server struct {
         readyChecker    ReadyChecker
         webhookHandler  http.Handler
         slackHandler    http.Handler
+        alertmanagerHandler http.Handler // POST /webhook/alertmanager
         pauseController PauseController
         webUIHandler    http.Handler
         http            *http.Server
@@ -179,6 +180,7 @@ func New(addr string, store Store, settings SettingsGetter, investigate Investig
         mux.HandleFunc("/admin/resume", s.handleResume)
         mux.HandleFunc("/events", s.handleSSE)
         mux.HandleFunc("/webhook/github", s.handleWebhook)
+        mux.HandleFunc("/webhook/alertmanager", s.handleAlertmanager)
         mux.HandleFunc("/slack/events", s.handleSlack)
 
         mux.HandleFunc("/providers", s.handleProviders)
@@ -238,6 +240,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
                 // Health/metrics/incidents reads are not rate-limited (kubelet + Prometheus scrape frequently).
                 if strings.HasPrefix(r.URL.Path, "/admin/") ||
                         r.URL.Path == "/webhook/github" ||
+                        r.URL.Path == "/webhook/alertmanager" ||
                         r.URL.Path == "/slack/events" {
                         if !s.rateLimiter.Allow(r.RemoteAddr) {
                                 writeJSON(w, 429, map[string]string{
@@ -298,6 +301,7 @@ func secureCompare(a, b string) bool {
 
 func (s *Server) SetWebhookHandler(h http.Handler)     { s.webhookHandler = h }
 func (s *Server) SetSlackHandler(h http.Handler)       { s.slackHandler = h }
+func (s *Server) SetAlertmanagerHandler(h http.Handler) { s.alertmanagerHandler = h }
 func (s *Server) SetPauseController(pc PauseController) { s.pauseController = pc }
 func (s *Server) SetWebUIHandler(h http.Handler)       { s.webUIHandler = h }
 func (s *Server) SetRuntimeCfgSaver(r RuntimeCfgSaver)  { s.rtCfgSaver = r }

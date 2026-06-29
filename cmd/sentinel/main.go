@@ -17,6 +17,7 @@ import (
 
         "github.com/google/uuid"
 
+        "github.com/karimzakzouk/sentinel/internal/alertmanager"
         "github.com/karimzakzouk/sentinel/internal/agents"
         "github.com/karimzakzouk/sentinel/internal/api"
         "github.com/karimzakzouk/sentinel/internal/automerge"
@@ -65,6 +66,9 @@ var (
         // executeCodeFix to Track() PRs for auto-merge after they open.
         pkgAutoMergeMerger *automerge.Merger
 )
+
+// Compile-time assertion: alertmanagerAdapter satisfies alertmanager.SignalHandler.
+var _ alertmanager.SignalHandler = (*alertmanagerAdapter)(nil)
 
 func main() {
         addr := flag.String("addr", "", "HTTP listen address (overrides env)")
@@ -847,6 +851,16 @@ func main() {
                 detector.Run(ctx)
         }()
 
+        // Alertmanager webhook receiver — converts Alertmanager firing alerts
+        // into detection Signals and feeds them to the clusterer. Unblocks
+        // "Sentinel doesn't accept alerts from Prometheus/Alertmanager" gap.
+        // Wired up after apiServer is created (see below).
+        amReceiver := alertmanager.NewReceiver(&alertmanagerAdapter{
+                clusterer: clusterer,
+                k8sClient: k8sClient,
+        })
+        amReceiver.StartPurger(ctx)
+
         go func() {
 
                 defer func() {
@@ -905,6 +919,8 @@ func main() {
                 WithAPIURL(cfg.GitHubAPIURL)
         pkgPrReviewer = prReviewer
         apiServer.SetWebhookHandler(http.HandlerFunc(prReviewer.HandleWebhook))
+        apiServer.SetAlertmanagerHandler(amReceiver)
+        logging.Info("alertmanager webhook receiver wired at /webhook/alertmanager")
 
         // Creates the dependency bag, GitHub client, reactions client,
         // status comment manager, and webhook handler. All wired into the
