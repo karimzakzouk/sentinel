@@ -94,17 +94,19 @@ func (w *OutcomeWatcher) WatchWithFixType(ctx context.Context, service, namespac
 // its re-occurrence in pod logs over 24h. If empty, Phase 2 is skipped.
 func (w *OutcomeWatcher) WatchWithDetails(ctx context.Context, service, namespace, incidentID string, prOpened bool, fixType, errorFingerprint string) {
         // v4.2.5: Deduplicate — if a watch is already running for this incident, skip.
-        // Was: the investigation handler + the auto-merge merger both called this,
-        // starting 3+ concurrent watches for the same incident.
+        // v4.2.6: Fixed — the Delete was in the function's defer (ran immediately),
+        // not in the goroutine's defer (runs when the watch finishes). Now the key
+        // stays active until the goroutine completes.
         watchKey := fmt.Sprintf("%s/%s/%s", service, namespace, incidentID)
         if _, alreadyWatching := w.activeWatches.LoadOrStore(watchKey, true); alreadyWatching {
                 log.Printf("[outcome] %s/%s — watch already running, skipping duplicate (incident %s)", service, namespace, incidentID)
                 return
         }
-        // Clean up the watch flag when done.
-        defer w.activeWatches.Delete(watchKey)
 
         go func() {
+                // v4.2.6: Clean up the watch flag when the goroutine finishes, not when
+                // the function returns. Was: defer in the function body → deleted immediately.
+                defer w.activeWatches.Delete(watchKey)
                 defer func() {
                         if r := recover(); r != nil {
                                 log.Printf("[panic] outcome watcher recovered: %v", r)

@@ -1481,9 +1481,41 @@ func executeCodeFix(
                 }
         }
 
-        // v4.2.1: Track the PR for auto-merge. The merger evaluates gates on the
-        // next poll (30s) and merges if all pass. This was missing in v4.2.0 —
-        // the merger was running but had nothing to track, so PRs never auto-merged.
+        // v4.0.0: Post the initial [SENTINELSTATUS] comment so reviewers see
+        // the state + available commands immediately when they open the PR.
+        // v4.2.6: MUST be posted BEFORE EvaluateNow — EvaluateNow is synchronous
+        // and triggers the merge + onMerged callback which updates the status
+        // comment. If we post the initial comment AFTER EvaluateNow, it overwrites
+        // the merged status with "⏳ Queued".
+        if chatopsStatusManager != nil && repoName != "" {
+                chatopsInc := &chatops.Incident{
+                        ID:               incident.IncidentID.String(),
+                        Service:          incident.Cluster.Service,
+                        Namespace:        incident.Cluster.Namespace,
+                        Status:           string(incident.Status),
+                        PRURL:            prResult.PRURL,
+                        PRNumber:         prResult.PRNumber,
+                        PRRepo:           repoName,
+                        Confidence:       0,
+                        AutoMergeEnabled: cfg.AutoMergeEnabled,
+                }
+                if incident.State.RootCause != nil {
+                        chatopsInc.RootCause = incident.State.RootCause.Statement
+                        chatopsInc.Confidence = incident.State.RootCause.Confidence
+                }
+                extra := "Available commands: `/sentinel help` for the full list."
+                if !sandboxVerified {
+                        extra += "\n\n⚠️ Sandbox verification did not pass — review carefully before merging."
+                }
+                if err := chatopsStatusManager.Update(ctx, repoName, prResult.PRNumber, chatopsInc, extra); err != nil {
+                        logging.Error("failed to post initial status comment", "error", err)
+                }
+        }
+
+        // v4.2.6: Track for auto-merge AFTER posting the status comment.
+        // EvaluateNow is synchronous — it triggers the merge + onMerged callback
+        // which updates the status comment to "✅ Merged". If we post the initial
+        // comment after this, it overwrites "✅ Merged" with "⏳ Queued".
         if pkgAutoMergeMerger != nil && repoName != "" && cfg.AutoMergeEnabled {
                 baseBranch := "main"
                 if fp.BaseBranch != nil {
@@ -1559,35 +1591,8 @@ func executeCodeFix(
                 pkgAutoMergeMerger.EvaluateNow(ctx, repoName, prResult.PRNumber)
         }
 
-        // v4.0.0: Post the initial [SENTINELSTATUS] comment so reviewers see
-        // the state + available commands immediately when they open the PR.
-        // The status comment is updated in place as the incident progresses
-        // (Prow's [APPROVALNOTIFIER] pattern — one comment per PR, edited in place).
-        if chatopsStatusManager != nil && repoName != "" {
-                chatopsInc := &chatops.Incident{
-                        ID:         incident.IncidentID.String(),
-                        Service:    incident.Cluster.Service,
-                        Namespace:  incident.Cluster.Namespace,
-                        Status:     string(incident.Status),
-                        PRURL:      prResult.PRURL,
-                        PRNumber:   prResult.PRNumber,
-                        PRRepo:     repoName,
-                        Confidence: 0,
-                }
-                if incident.State.RootCause != nil {
-                        chatopsInc.RootCause = incident.State.RootCause.Statement
-                        chatopsInc.Confidence = incident.State.RootCause.Confidence
-                }
-                // v4.2.5: Set auto-merge status for the status comment
-                chatopsInc.AutoMergeEnabled = cfg.AutoMergeEnabled
-                extra := "Available commands: `/sentinel help` for the full list."
-                if !sandboxVerified {
-                        extra += "\n\n⚠️ Sandbox verification did not pass — review carefully before merging."
-                }
-                if err := chatopsStatusManager.Update(ctx, repoName, prResult.PRNumber, chatopsInc, extra); err != nil {
-                        logging.Error("failed to post initial status comment", "error", err)
-                }
-        }
+        // v4.2.6: Status comment was already posted above (before EvaluateNow).
+        // The onMerged callback updates it to "✅ Merged" if the merge succeeds.
         return nil
 }
 
