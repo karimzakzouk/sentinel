@@ -98,8 +98,13 @@ func (m *Merger) SetOnSkipped(fn func(repo string, prNumber int, reason string))
 // + duplicate comments).
 func (m *Merger) prLock(repo string, prNumber int) *sync.Mutex {
         key := fmt.Sprintf("%s#%d", repo, prNumber)
-        val, _ := m.prLocks.LoadOrStore(key, &sync.Mutex{})
-        return val.(*sync.Mutex)
+        val, loaded := m.prLocks.LoadOrStore(key, &sync.Mutex{})
+        _ = loaded // we don't care if it was already there — we just need the mutex
+        mu, ok := val.(*sync.Mutex)
+        if !ok {
+                return &sync.Mutex{} // fallback — should never happen
+        }
+        return mu
 }
 
 // Track adds a PR to the auto-merge watch list. Called after Sentinel opens
