@@ -283,9 +283,6 @@ func (p *Pipeline) Run(ctx context.Context, state *schemas.AgentState) error {
                 }
 
                 // v4.2.0: Tier 4 — generate a reproducer script (best-effort, non-blocking).
-                // This is a fallback for repos with no test framework. The reproducer is
-                // a standalone script that calls the buggy function + asserts it doesn't crash.
-                // The sandbox runs it as Level 5.
                 if p.generateReproducer && state.FixProposal != nil {
                         reproCtx, reproCancel := context.WithTimeout(ctx, 60*time.Second)
                         reproducer, err := p.reproducerGen.Generate(reproCtx, state)
@@ -309,6 +306,43 @@ func (p *Pipeline) Run(ctx context.Context, state *schemas.AgentState) error {
                                 })
                                 log.Printf("[pipeline] reproducer script generated: %s (%s)", reproducer.ScriptFile, reproducer.ScriptLanguage)
                         }
+                }
+
+                // v4.4.0: Security scan + reviewer agent.
+                // Runs AFTER the fix is generated but BEFORE the pipeline returns.
+                // If the security check fails, the fix is marked as requiring human review
+                // (status = governance_review) and the security findings are stored.
+                if state.FixProposal != nil {
+                        secCtx, secCancel := context.WithTimeout(ctx, 30*time.Second)
+                        secResult := RunSecurityCheck(secCtx, p.investigator.router, state)
+                        secCancel()
+
+                        state.AgentTrace = append(state.AgentTrace, map[string]any{
+                                "agent":       "security_scanner",
+                                "action":      "security_scan",
+                                "passed":      secResult.Passed,
+                                "findings":    len(secResult.Findings),
+                                "summary":     secResult.Summary,
+                        })
+
+                        if !secResult.Passed {
+                                log.Printf("[pipeline] SECURITY CHECK FAILED: %s", secResult.Summary)
+                                // Store the security findings in the error field so the PR body
+                                // (if opened) shows them, and the safety policy can block auto-merge.
+                                secDetail := secResult.Summary
+                                for _, f := range secResult.Findings {
+                                        secDetail += fmt.Sprintf("\n  - [%s] %s: %s (%s)", f.Severity, f.Rule, f.Message, f.File)
+                                }
+                                // Mark as governance review — the safety policy will block auto-merge
+                                state.Status = schemas.StatusGovernanceReview
+                                s := fmt.Sprintf("security_check_failed: %s", secDetail)
+                                state.Error = &s
+                                // Still return nil (not an error) — the pipeline completed, but the
+                                // fix needs human review. The handler in main.go will see the status
+                                // and skip auto-merge.
+                                return nil
+                        }
+                        log.Printf("[pipeline] security check PASSED: %s", secResult.Summary)
                 }
 
                 return nil
