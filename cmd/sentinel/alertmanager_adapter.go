@@ -1,5 +1,4 @@
 // Package main — Alertmanager adapter.
-//
 // Bridges the alertmanager.Receiver to the detection.Clusterer. Implements
 // alertmanager.SignalHandler by converting each alert into a detection.Signal
 // and sending it to the clusterer for deduplication + grouping.
@@ -18,9 +17,9 @@ import (
 // (We can't import alertmanager here without creating an import cycle in main
 // package — but the struct shape matches the interface. The assertion is in
 // main.go where alertmanager is already imported.)
-
 // alertmanagerAdapter forwards Alertmanager firing alerts to the detection
 // Clusterer as SignalLogError-type signals.
+
 type alertmanagerAdapter struct {
         clusterer *detection.Clusterer
         k8sClient *k8s.Client
@@ -29,6 +28,7 @@ type alertmanagerAdapter struct {
 // HandleAlert is called by the Alertmanager Receiver for each firing alert.
 // It looks up the GitHub repo via K8s annotations (if not provided in the
 // alert labels) and sends the signal to the clusterer.
+
 func (a *alertmanagerAdapter) HandleAlert(service, namespace, reason, repo, description string, labels map[string]string) {
         ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
         defer cancel()

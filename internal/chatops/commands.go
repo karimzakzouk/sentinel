@@ -1,5 +1,4 @@
 // Package chatops — MVP command implementations.
-//
 // 6 commands ship in v4.0.0:
 //   /sentinel help          — auto-generated command list (filtered by user's perm)
 //   /sentinel status        — re-render the in-place [SENTINELSTATUS] comment
@@ -8,7 +7,6 @@
 //   /sentinel retry-sandbox — re-run sandbox verification on the current branch
 //   /sentinel alternatives  — generate 3 alternative fix approaches via LLM
 //   /sentinel apply <A|B|C> — switch the PR to the chosen alternative (placeholder)
-//
 // More commands (hold, approve, no-merge, merge, revert, rollback, pause,
 // override, investigate, retest, verify) ship in v4.1.0 alongside auto-merge.
 package chatops
@@ -22,6 +20,7 @@ import (
 
 func init() {
         // Informational (Tier 1 — read access)
+
         RegisterCommand(&CommandSpec{
                 Name:        "help",
                 Description: "List available commands (filtered by your permission)",
@@ -60,6 +59,7 @@ func init() {
         })
 
         // Operational (Tier 2 — write access)
+
         RegisterCommand(&CommandSpec{
                 Name:        "retry-sandbox",
                 Description: "Re-run sandbox verification on the current branch state",
@@ -92,10 +92,12 @@ func init() {
 // cmdHelp posts the auto-generated help text, filtered by the user's permission.
 // Fixes Prow's #5 complaint (command discovery is poor) — users see exactly
 // what they can run, plus 🔒 markers for higher-tier commands they can't.
+
 func cmdHelp(ctx context.Context, cmd *Command, deps *Deps) error {
         perm, err := deps.GitHub.GetPermission(ctx, cmd.PRRepo, cmd.Author)
         if err != nil {
                 // Fall back to "read" — informational commands will still be shown.
+
                 perm = "read"
         }
         body := RenderHelp(cmd.Author, perm)
@@ -105,6 +107,7 @@ func cmdHelp(ctx context.Context, cmd *Command, deps *Deps) error {
 // cmdStatus re-renders the in-place [SENTINELSTATUS] comment with the
 // current incident state. Useful when the comment is stale (e.g. after a
 // manual intervention that didn't go through Sentinel).
+
 func cmdStatus(ctx context.Context, cmd *Command, deps *Deps) error {
         inc, err := deps.Store.FindIncidentByPR(ctx, cmd.PRRepo, cmd.PRNumber)
         if err != nil {
@@ -127,6 +130,7 @@ func cmdStatus(ctx context.Context, cmd *Command, deps *Deps) error {
 // posts a plain-English explanation. Reviewers want to understand *why*
 // before merging — this gives them the "why" without reading the full
 // agent trace.
+
 func cmdExplain(ctx context.Context, cmd *Command, deps *Deps) error {
         inc, err := deps.Store.FindIncidentByPR(ctx, cmd.PRRepo, cmd.PRNumber)
         if err != nil {
@@ -138,10 +142,12 @@ func cmdExplain(ctx context.Context, cmd *Command, deps *Deps) error {
         }
 
         // Acknowledge that we're working (sandbox retries take minutes).
+
         _ = deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
                 "🧠 Re-explaining the root cause... (this takes ~10-20s)")
 
         // Use the LLM to generate a plain-English explanation.
+
         system := `You are Sentinel, an autonomous AI SRE. A reviewer has asked for a plain-English explanation of an incident's root cause. Be clear, concise, and actionable. Avoid jargon. Structure your response as:
 
 ## What happened
@@ -174,9 +180,9 @@ Do NOT include a "what to do next" section — the reviewer can decide that.`
 // cmdTrace dumps the full agent reasoning trace (hypotheses considered,
 // evidence gathered, why each was kept/dropped). For engineers who want
 // the full picture before reviewing.
-//
 // Format: a markdown table of every agent step with timestamps + decisions.
 // Source: the incident's state.agent_trace (a []map[string]any).
+
 func cmdTrace(ctx context.Context, cmd *Command, deps *Deps) error {
         inc, err := deps.Store.FindIncidentByPR(ctx, cmd.PRRepo, cmd.PRNumber)
         if err != nil {
@@ -196,6 +202,7 @@ func cmdTrace(ctx context.Context, cmd *Command, deps *Deps) error {
         }
 
         // Hypotheses section
+
         if len(inc.Hypotheses) > 0 {
                 sb.WriteString("### Hypotheses Considered\n\n")
                 sb.WriteString("| ID | Confidence | Falsified | Statement |\n")
@@ -217,6 +224,7 @@ func cmdTrace(ctx context.Context, cmd *Command, deps *Deps) error {
         }
 
         // Agent trace section
+
         if len(inc.AgentTrace) > 0 {
                 sb.WriteString("### Agent Steps\n\n")
                 sb.WriteString("| Step | Agent | Action | Detail |\n")
@@ -226,12 +234,14 @@ func cmdTrace(ctx context.Context, cmd *Command, deps *Deps) error {
                         action, _ := step["action"].(string)
                         if action == "" {
                                 // Fall back to other common keys
+
                                 if v, ok := step["iteration"]; ok {
                                         action = fmt.Sprintf("iteration %v", v)
                                 }
                         }
                         detail := ""
                         // Pick the most informative field
+
                         for _, k := range []string{"hypothesis_count", "files_changed", "search_results", "fetched_files", "evidence_count", "fix_type", "error"} {
                                 if v, ok := step[k]; ok {
                                         detail = fmt.Sprintf("%s=%v", k, v)
@@ -257,9 +267,9 @@ func cmdTrace(ctx context.Context, cmd *Command, deps *Deps) error {
 // current branch state. Catches the case where a human edited the PR after
 // Sentinel opened it (e.g. fixed a typo, added a test) and wants the new
 // code verified.
-//
 // Implementation: calls deps.Sandbox.RunForIncident(incidentID), which
 // re-fetches the branch state and runs Levels 1-3 (and 4/5 in strict mode).
+
 func cmdRetrySandbox(ctx context.Context, cmd *Command, deps *Deps) error {
         inc, err := deps.Store.FindIncidentByPR(ctx, cmd.PRRepo, cmd.PRNumber)
         if err != nil {
@@ -299,9 +309,9 @@ func cmdRetrySandbox(ctx context.Context, cmd *Command, deps *Deps) error {
 // cmdAlternatives re-runs the FixProposer at higher temperature with a
 // prompt that asks for 3 different fix approaches. Reviewers can compare
 // them and pick the one they prefer via `/sentinel apply <A|B|C>`.
-//
 // This is the most LLM-intensive command — it makes one frontier LLM call
 // with a longer prompt and asks for structured output (3 alternatives).
+
 func cmdAlternatives(ctx context.Context, cmd *Command, deps *Deps) error {
         inc, err := deps.Store.FindIncidentByPR(ctx, cmd.PRRepo, cmd.PRNumber)
         if err != nil {
@@ -354,6 +364,7 @@ Output ONLY the JSON object. No prose before or after.`
 }
 
 // renderAlternatives formats the LLM's JSON response as a markdown comment.
+
 func renderAlternatives(result map[string]any, author, incidentID string) string {
         alts, _ := result["alternatives"].([]any)
         if len(alts) == 0 {
@@ -397,9 +408,9 @@ func renderAlternatives(result map[string]any, author, incidentID string) string
 // [SENTINELALTERNATIVES] comment, parses the chosen alternative, re-runs
 // the FixProposer with that approach as the system hint, and pushes the
 // new commits to the branch.
-//
 // v4.0.0 MVP: posts a "coming soon" message. Full implementation requires
 // extending the FixProposer to accept an "approach hint" parameter.
+
 func cmdApply(ctx context.Context, cmd *Command, deps *Deps) error {
         if len(cmd.ArgList) == 0 {
                 return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
@@ -418,6 +429,7 @@ func cmdApply(ctx context.Context, cmd *Command, deps *Deps) error {
         // command posts the LLM-generated approach description so the developer
         // can implement it manually.
 
+
         body := fmt.Sprintf("## ⏳ Apply Approach %s\n\n"+
                 "Requested by @%s.\n\n"+
                 "Automatic approach application is not yet implemented. To use approach %s:\n\n"+
@@ -431,6 +443,7 @@ func cmdApply(ctx context.Context, cmd *Command, deps *Deps) error {
 }
 
 // unused import guards (kept for future expansion)
+
 var (
         _ = json.Marshal
         _ = context.Background

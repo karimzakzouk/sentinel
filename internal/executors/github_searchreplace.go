@@ -1,12 +1,10 @@
 // Package executors — SEARCH/REPLACE block parser + fuzzy matcher.
-//
 // Parses the LLM's output for SEARCH/REPLACE blocks (Aider format) and
 // applies them to the file content. Three matching strategies, tried in
 // order:
 //   1. tryExactMatch        — exact substring match
 //   2. tryWhitespaceInsensitiveMatch — same match ignoring whitespace
 //   3. tryFuzzyMatch        — Levenshtein-based fuzzy match for typos
-//
 // Also includes syntax validation (brace balance) for the patched file.
 package executors
 
@@ -33,6 +31,7 @@ func (e *GitHubExecutor) applySearchReplace(ctx context.Context, repo, branch, p
 
         for i, ch := range changes {
                 // Strategy 1: Exact match
+
                 matched, replacement := tryExactMatch(content, ch.Search, ch.Replace)
                 if matched {
                         content = replacement
@@ -42,6 +41,7 @@ func (e *GitHubExecutor) applySearchReplace(ctx context.Context, repo, branch, p
                 }
 
                 // Strategy 2: Whitespace-insensitive match
+
                 matched, replacement = tryWhitespaceInsensitiveMatch(content, ch.Search, ch.Replace)
                 if matched {
                         content = replacement
@@ -51,6 +51,7 @@ func (e *GitHubExecutor) applySearchReplace(ctx context.Context, repo, branch, p
                 }
 
                 // Strategy 3: Fuzzy match (Levenshtein >80%)
+
                 matched, replacement = tryFuzzyMatch(content, ch.Search, ch.Replace)
                 if matched {
                         content = replacement
@@ -62,6 +63,7 @@ func (e *GitHubExecutor) applySearchReplace(ctx context.Context, repo, branch, p
                 // If the search text is absent BUT the replacement is present,
                 // the fix was already applied in a previous retry. Treat as success
                 // instead of looping forever regenerating the same fix.
+
                 if ch.Replace != "" && strings.Contains(content, ch.Replace) {
                         applied++
                         log.Printf("[github] block %d: already applied (replacement text found in content) — treating as success", i)
@@ -69,9 +71,11 @@ func (e *GitHubExecutor) applySearchReplace(ctx context.Context, repo, branch, p
                 }
 
                 // All strategies failed
+
                 failedBlocks = append(failedBlocks, i)
 
                 // so the LLM sees what didn't match (was only logged, not fed back).
+
                 preview := ch.Search
                 if len(preview) > 120 {
                         preview = preview[:120] + "..."
@@ -90,10 +94,12 @@ func (e *GitHubExecutor) applySearchReplace(ctx context.Context, repo, branch, p
         // (i.e. they actually change code logic, not just add an import).
         // If ALL applied blocks are just import changes and the actual fix blocks
         // failed, reject the PR — shipping an unused import is worse than no PR.
+
         if len(failedBlocks) > 0 {
                 hasMeaningfulChange := false
                 for i, ch := range changes {
                         // Skip blocks that failed
+
                         isFailed := false
                         for _, fb := range failedBlocks {
                                 if fb == i {
@@ -107,6 +113,7 @@ func (e *GitHubExecutor) applySearchReplace(ctx context.Context, repo, branch, p
                         // Check if this block does more than just change imports
                         // An import-only change typically has "import" in the search text
                         // and doesn't contain function/class definitions
+
                         if !isImportOnlyChange(ch.Search, ch.Replace) {
                                 hasMeaningfulChange = true
                                 break
@@ -119,9 +126,11 @@ func (e *GitHubExecutor) applySearchReplace(ctx context.Context, repo, branch, p
         }
 
         // Syntax validation
+
         if syntaxErr := validateSyntax(path, content); syntaxErr != nil {
                 log.Printf("[github] SYNTAX VALIDATION FAILED: %v", syntaxErr)
                 // Try applying blocks one at a time, skipping syntax-breaking ones
+
                 content = originalContent
                 goodBlocks := 0
                 var droppedBlocks []int
@@ -145,6 +154,7 @@ func (e *GitHubExecutor) applySearchReplace(ctx context.Context, repo, branch, p
                 // the operator (and the LLM retry loop via logs) knows the fix is
                 // incomplete. We still ship the partial fix (better than nothing)
                 // but the warning ensures it's visible.
+
                 if len(droppedBlocks) > 0 {
                         log.Printf("[github] WARNING: partial fix — recovered %d/%d blocks, dropped %d due to syntax errors (indices: %v). The PR may not fully resolve the incident.",
                                 goodBlocks, len(changes), len(droppedBlocks), droppedBlocks)
@@ -159,6 +169,7 @@ func (e *GitHubExecutor) applySearchReplace(ctx context.Context, repo, branch, p
 
 // tryExactMatch tries to find ch.Search in content exactly once.
 // Returns (matched, newContent).
+
 func tryExactMatch(content, search, replace string) (bool, string) {
         count := strings.Count(content, search)
         if count != 1 {
@@ -170,10 +181,11 @@ func tryExactMatch(content, search, replace string) (bool, string) {
 // tryWhitespaceInsensitiveMatch strips leading/trailing whitespace from each
 // line of both the search text and the file content, then tries to match.
 // This handles the #1 LLM error: getting indentation wrong.
-//
+
 
 func tryWhitespaceInsensitiveMatch(content, search, replace string) (bool, string) {
         // Normalize: strip leading/trailing whitespace from each line
+
         normalize := func(s string) string {
                 lines := strings.Split(s, "\n")
                 for i, line := range lines {
@@ -194,6 +206,7 @@ func tryWhitespaceInsensitiveMatch(content, search, replace string) (bool, strin
         // corresponding location in the original content and replace it.
         // Strategy: find the starting line by matching the first non-empty
         // normalized line, then verify the rest match.
+
         searchLines := strings.Split(search, "\n")
         contentLines := strings.Split(content, "\n")
 
@@ -209,16 +222,18 @@ func tryWhitespaceInsensitiveMatch(content, search, replace string) (bool, strin
                         // Found the match at startLine. Replace those lines with the
                         // replacement text, preserving the original indentation of the
                         // first line.
-
                         // IN ADDITION to the replacement's own indent, producing 4+8=12 spaces.
+
                         originalIndent := getIndent(contentLines[startLine])
                         replaceLines := strings.Split(replace, "\n")
                         for k := range replaceLines {
                                 if k == 0 {
                                         // First line: use original indent
+
                                         replaceLines[k] = originalIndent + strings.TrimSpace(replaceLines[k])
                                 } else if strings.TrimSpace(replaceLines[k]) != "" {
                                         // Other lines: re-base to originalIndent (strip replacement's own indent).
+
                                         replaceLines[k] = originalIndent + strings.TrimSpace(replaceLines[k])
                                 }
                         }
@@ -234,11 +249,10 @@ func tryWhitespaceInsensitiveMatch(content, search, replace string) (bool, strin
 
 // tryFuzzyMatch uses a simple similarity score to find the closest match.
 // If the best match has >80% similarity (Levenshtein-based), use it.
-//
-
 // safety, but we enable it because free models produce more search text
 // errors than GPT-4. The 80% threshold is conservative enough to avoid
 // false matches.
+
 func tryFuzzyMatch(content, search, replace string) (bool, string) {
         searchLines := strings.Split(search, "\n")
         contentLines := strings.Split(content, "\n")
@@ -259,6 +273,7 @@ func tryFuzzyMatch(content, search, replace string) (bool, string) {
         bestStart := -1
 
         // Slide a window over the content lines
+
         for start := 0; start <= len(contentLines)-len(searchLines); start++ {
                 totalSim := 0.0
                 for j := 0; j < len(searchLines); j++ {
@@ -293,6 +308,7 @@ func tryFuzzyMatch(content, search, replace string) (bool, string) {
         // the fix to the wrong function (e.g. payment fix applied to refund function).
         // 85% is closer to Aider's safe default while still tolerating minor
         // whitespace + identifier differences from free models.
+
         if bestScore < 0.85 || bestStart == -1 {
                 return false, content
         }
@@ -300,19 +316,21 @@ func tryFuzzyMatch(content, search, replace string) (bool, string) {
         log.Printf("[github] fuzzy match: %.1f%% similarity at line %d", bestScore*100, bestStart+1)
 
         // Replace the matched lines with the replacement text.
-
         // IN ADDITION to the replacement's own indent, producing 4+8=12 spaces
         // and breaking Python block structure (IndentationError).
         // Fix: strip the replacement's leading indent, then prepend originalIndent ONCE.
+
         originalIndent := getIndent(contentLines[bestStart])
         replaceLines := strings.Split(replace, "\n")
         for k := range replaceLines {
                 if k == 0 {
                         // First line: use original indent
+
                         replaceLines[k] = originalIndent + strings.TrimSpace(replaceLines[k])
                 } else if strings.TrimSpace(replaceLines[k]) != "" {
                         // Other lines: re-base to originalIndent (strip replacement's own indent,
                         // then prepend originalIndent + any relative indent from the first line).
+
                         replaceLines[k] = originalIndent + strings.TrimSpace(replaceLines[k])
                 }
         }
@@ -324,6 +342,7 @@ func tryFuzzyMatch(content, search, replace string) (bool, string) {
 
 // tryAllStrategies tries exact, whitespace-insensitive, and fuzzy in order.
 // Used by the syntax-validation recovery path.
+
 func tryAllStrategies(content, search, replace string) (bool, string) {
         if matched, result := tryExactMatch(content, search, replace); matched {
                 return true, result
@@ -340,6 +359,7 @@ func tryAllStrategies(content, search, replace string) (bool, string) {
 // isImportOnlyChange returns true if the search/replace only changes an import
 // statement (e.g. "from fastapi import FastAPI" → "from fastapi import FastAPI, HTTPException").
 // These changes are useless on their own without the actual fix.
+
 func isImportOnlyChange(search, replace string) bool {
         searchTrimmed := strings.TrimSpace(search)
         replaceTrimmed := strings.TrimSpace(replace)
@@ -348,6 +368,7 @@ func isImportOnlyChange(search, replace string) bool {
 }
 
 // getIndent returns the leading whitespace of a line.
+
 func getIndent(line string) string {
         for i, c := range line {
                 if c != ' ' && c != '\t' {
@@ -359,6 +380,7 @@ func getIndent(line string) string {
 
 // lineSimilarity computes a similarity score between two strings [0.0, 1.0]
 // using a simple Levenshtein-distance-based ratio.
+
 func lineSimilarity(a, b string) float64 {
         if a == b {
                 return 1.0
@@ -375,6 +397,7 @@ func lineSimilarity(a, b string) float64 {
 }
 
 // levenshtein computes the edit distance between two strings.
+
 func levenshtein(a, b string) int {
         la := len(a)
         lb := len(b)
@@ -386,6 +409,7 @@ func levenshtein(a, b string) int {
         }
 
         // Use a single row for DP (memory optimization)
+
         prev := make([]int, lb+1)
         curr := make([]int, lb+1)
         for j := 0; j <= lb; j++ {
@@ -422,12 +446,10 @@ func min3(a, b, c int) int {
 //   - JavaScript/TypeScript (.js/.ts): uses `node --check`
 //   - JSON (.json): uses json.Unmarshal
 //   - YAML (.yaml/.yml): uses yaml.Unmarshal
-//
 // For unknown file types, validation is skipped (returns nil).
-//
-
 // sometimes generates code with missing closing quotes, unclosed parens,
 // or broken indentation. This catches those before writing to GitHub.
+
 func validateSyntax(path, content string) error {
         ext := strings.ToLower(filepath.Ext(path))
         switch ext {
@@ -446,6 +468,7 @@ func validateSyntax(path, content string) error {
         // Ruby, C#, C/C++, PHP, Kotlin, Swift, Scala. Same validator as Python/JS —
         // these languages share enough lexical structure that brace/paren/bracket
         // balance + string/quote closure catches the bulk of broken output.
+
         case ".java", ".kt", ".kts":
                 return validateBraceBalance(content, []rune{'{', '}', '(', ')', '[', ']'})
         case ".rs":
@@ -464,6 +487,7 @@ func validateSyntax(path, content string) error {
                 return validateBraceBalance(content, []rune{'{', '}', '(', ')', '[', ']'})
         default:
                 // Unknown file type — skip validation
+
                 return nil
         }
 }

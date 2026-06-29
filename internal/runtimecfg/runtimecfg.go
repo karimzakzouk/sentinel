@@ -15,6 +15,7 @@ import (
 )
 
 // RuntimeConfig holds editable settings. Only non-empty fields override env vars.
+
 type RuntimeConfig struct {
         LLMProvider       string `json:"llm_provider,omitempty"`
         LLMBaseURL        string `json:"llm_base_url,omitempty"`
@@ -50,6 +51,7 @@ type RuntimeConfig struct {
 // Clone returns a deep copy of the RuntimeConfig. v4.1.0.
 // Used by SetGitHubApp + SetGitHubAppInstall to get a mutable copy before
 // modifying + saving (avoiding race conditions with concurrent reads).
+
 func (c RuntimeConfig) Clone() RuntimeConfig {
         out := c
         if c.SkipSandboxNonProd != nil {
@@ -68,6 +70,7 @@ func (c RuntimeConfig) Clone() RuntimeConfig {
 }
 
 // Manager handles loading/saving runtime config.
+
 type Manager struct {
         mu       sync.RWMutex
         config   *RuntimeConfig
@@ -76,19 +79,19 @@ type Manager struct {
         // receives the new RuntimeConfig so the caller can propagate changes
         // to live components (LLM router, pipeline, sandbox, etc.) without
         // requiring a restart. Set via SetApplyCallback.
+
         appliedCallback func(*RuntimeConfig)
 }
 
 // SetApplyCallback registers a function to be called after every successful
 // Save. The callback runs under the Manager's lock — keep it fast (it
 // should just copy fields into live components, not do I/O).
-//
-
 // actually take effect. main.go registers a callback that propagates the
 // new LLM provider/model/key, timeouts, and confidence thresholds into
-// the live Router, Pipeline, and Policy. Previously, settings were saved
+// the live Router, Pipeline, and Policy.
 // to disk but only read back at startup — the UI gave the illusion of
 // editable settings without actually editing anything.
+
 func (m *Manager) SetApplyCallback(cb func(*RuntimeConfig)) {
         m.mu.Lock()
         defer m.mu.Unlock()
@@ -96,6 +99,7 @@ func (m *Manager) SetApplyCallback(cb func(*RuntimeConfig)) {
 }
 
 // New creates a Manager that reads from filePath.
+
 func New(filePath string) *Manager {
         m := &Manager{filePath: filePath, config: &RuntimeConfig{}}
         m.Load()
@@ -133,6 +137,7 @@ func (m *Manager) Save(cfg *RuntimeConfig) error {
         // but fails locally with "no such file or directory" when /data doesn't
         // exist. This makes local testing work without requiring operators to
         // pre-create the directory.
+
         dir := filepath.Dir(m.filePath)
         if dir != "" && dir != "." {
                 if err := os.MkdirAll(dir, 0755); err != nil {
@@ -149,6 +154,7 @@ func (m *Manager) Save(cfg *RuntimeConfig) error {
         // panics, the deferred unlock still runs (the panic propagates up
         // through SaveFromJSON -> api.handleSettings -> recovers via the
         // pipeline's panic guard, but at worst the HTTP handler returns 500).
+
         if m.appliedCallback != nil {
                 m.appliedCallback(cfg)
         }
@@ -156,8 +162,8 @@ func (m *Manager) Save(cfg *RuntimeConfig) error {
 }
 
 // SaveFromJSON saves config from raw JSON bytes (implements api.RuntimeCfgSaver).
-
 // and applied (negative timeouts, invalid providers, etc.), causing silent failures.
+
 func (m *Manager) SaveFromJSON(jsonBytes []byte) error {
         var cfg RuntimeConfig
         if err := json.Unmarshal(jsonBytes, &cfg); err != nil {
@@ -170,8 +176,8 @@ func (m *Manager) SaveFromJSON(jsonBytes []byte) error {
 }
 
 // Validate returns a list of validation errors (empty if config is valid).
-
 // and break every LLM call (negative timeout = already-expired context).
+
 func (c *RuntimeConfig) Validate() []string {
         var errs []string
         if c.InvestigatorTimeoutSec < 0 {
@@ -257,18 +263,17 @@ func countOverrides(c *RuntimeConfig) int {
 
 // Stores App credentials in runtime config + triggers the apply callback
 // so main.go's wiring code can reconfigure the live GitHub clients.
-
 // SetGitHubApp stores the App ID + private key + optional install ID +
 // webhook secret in runtime config, then triggers the apply callback.
 // The apply callback in main.go creates a githubapp.App from these
 // credentials and wires it into all 4 GitHub clients (PR opener, chatops,
 // auto-merge, prreview) live — no restart.
-//
 // Returns the App slug (used to construct the bot username: <slug>[bot]).
 // The slug isn't in the request — we fetch it lazily from the GitHub API
 // via the apply callback, but for the response we return a placeholder
 // ("sentinel") since the actual slug isn't known until the App is queried.
 // Sentinelctl app status will display the real slug after the App is queried.
+
 func (m *Manager) SetGitHubApp(appID, privateKey, installID, webhookSecret string) (string, error) {
         cfg := m.Get().Clone()
         cfg.GitHubAppID = appID
@@ -281,15 +286,18 @@ func (m *Manager) SetGitHubApp(appID, privateKey, installID, webhookSecret strin
         // for it because webhook secrets are typically set at install time, not
         // at runtime). For now, we ignore webhookSecret here — it's expected to
         // be set via Helm/env vars at deploy time. Future: add a runtime field.
+
         if err := m.Save(&cfg); err != nil {
                 return "", err
         }
         // The slug is unknown until we query the GitHub API. Return a placeholder.
         // sentinelctl app status will show the real slug after the App is queried.
+
         return "sentinel", nil
 }
 
 // SetGitHubAppInstall sets just the installation ID.
+
 func (m *Manager) SetGitHubAppInstall(installID string) error {
         cfg := m.Get().Clone()
         cfg.GitHubAppInstallID = installID
@@ -298,6 +306,7 @@ func (m *Manager) SetGitHubAppInstall(installID string) error {
 
 // GetGitHubAppStatus returns the current App config.
 // Returns api.GitHubAppStatus so the Manager satisfies api.GitHubAppManager.
+
 func (m *Manager) GetGitHubAppStatus() api.GitHubAppStatus {
         cfg := m.Get()
         if cfg.GitHubAppID == "" || cfg.GitHubAppPrivateKey == "" {
@@ -309,11 +318,13 @@ func (m *Manager) GetGitHubAppStatus() api.GitHubAppStatus {
                 InstallID:  cfg.GitHubAppInstallID,
                 // Slug is fetched lazily — we don't store it. Sentinelctl app status
                 // can fetch it from the GitHub API if needed. For now, return empty.
+
                 Slug: "",
         }
 }
 
 // RemoveGitHubApp clears the App config (falls back to PAT).
+
 func (m *Manager) RemoveGitHubApp() error {
         cfg := m.Get().Clone()
         cfg.GitHubAppID = ""
@@ -326,3 +337,4 @@ func (m *Manager) RemoveGitHubApp() error {
 // api.GitHubAppStatus from GetGitHubAppStatus() so the types match exactly.
 // (No type alias needed — runtimecfg imports api transitively via the
 // GitHubAppManager interface in main.go.)
+

@@ -1,11 +1,9 @@
 // Package detection implements the autonomous detection layer for Sentinel.
-//
 // Two live watchers running continuously:
 //   1. Log Stream Manager — streams logs from every pod with sentinel.io/repo
 //      annotation, scans for error patterns in real-time, auto-triggers incidents
 //   2. Pod Status Watcher — watches pod status changes, auto-triggers on
 //      CrashLoopBackOff, OOMKilled, ImagePullBackOff
-//
 // Both are live (streaming, not polling). Both feed into the existing pipeline.
 package detection
 
@@ -27,30 +25,38 @@ import (
 )
 
 // ErrorPattern matches error lines in pod logs across languages.
+
 var errorPatterns = []*regexp.Regexp{
         // Python
+
         regexp.MustCompile(`Traceback \(most recent call last\)`),
         regexp.MustCompile(`^\w+Error:`),
         regexp.MustCompile(`^\w+Exception:`),
         // Go
+
         regexp.MustCompile(`panic:`),
         regexp.MustCompile(`fatal error:`),
         regexp.MustCompile(`goroutine \d+ \[running\]:`),
         // Node.js / JavaScript
+
         regexp.MustCompile(`TypeError:`),
         regexp.MustCompile(`ReferenceError:`),
         regexp.MustCompile(`UnhandledPromiseRejection`),
         regexp.MustCompile(`SyntaxError:`),
         // Java
+
         regexp.MustCompile(`java\.lang\.\w+Exception`),
         regexp.MustCompile(`NullPointerException`),
         regexp.MustCompile(`StackOverflowError`),
         // Rust
+
         regexp.MustCompile(`thread '.*' panicked`),
         regexp.MustCompile(`panic!`),
         // Ruby
+
         regexp.MustCompile(`\.rb:\d+:.*Error`),
         // Generic
+
         regexp.MustCompile(`FATAL`),
         regexp.MustCompile(`SEGFAULT`),
         regexp.MustCompile(`OOMKilled`),
@@ -63,10 +69,12 @@ var errorPatterns = []*regexp.Regexp{
 // line of every streamed log — measurable CPU waste on chatty pods (the
 // regexes were re-compiled N times per pod-log-line, where N is the number
 // of patterns). Pre-compiling once at init moves the cost to startup.
+
 var extractErrorTypePatterns = []struct {
         re      *regexp.Regexp
         // fallback is returned when the regex matches but has no capture group
         // (e.g. "panic:" matches but doesn't capture an error-type name).
+
         fallback string
 }{
         {regexp.MustCompile(`(\w+Error):`), ""},
@@ -79,6 +87,7 @@ var extractErrorTypePatterns = []struct {
 }
 
 // ErrorFingerprint uniquely identifies an error for deduplication.
+
 type ErrorFingerprint struct {
         Service   string
         Namespace string
@@ -86,9 +95,11 @@ type ErrorFingerprint struct {
 }
 
 // IncidentHandler is called when an error is detected.
+
 type IncidentHandler func(service, namespace, reason, podLogs string)
 
 // Detector is the autonomous detection layer.
+
 type Detector struct {
         clientset *kubernetes.Clientset
         handler   IncidentHandler
@@ -101,27 +112,32 @@ type Detector struct {
         streamsMu sync.Mutex
 
         // log spam when the watch fires repeatedly for the same pod.
+
         discoveredPods map[string]time.Time
         discoveredMu   sync.Mutex
 
         // 5*time.Minute + 100 in shouldTrigger + streamPodLogs.
+
         cooldown   time.Duration
         tailLines  int64
 
         // kube-system/kube-public/kube-node-lease.
+
         skipNamespaces map[string]bool
 }
 
 // New creates a Detector.
+
 func New(clientset *kubernetes.Clientset, handler IncidentHandler, alertURL string) *Detector {
         return NewWithConfig(clientset, handler, alertURL, 5*time.Minute, 100, nil)
 }
 
 // NewWithConfig creates a Detector with configurable cooldown, tail lines,
 // and namespace skip list. v3.11.0: Replaces the hardcoded values in
-// shouldTrigger + streamPodLogs + watchPodsInNamespace (audit #9 + #11).
+// shouldTrigger + streamPodLogs + watchPodsInNamespace ( + #11).
 // Pass cooldown=0 / tailLines=0 to keep defaults (5min / 100).
 // Pass nil skipNamespaces to keep the default skip list.
+
 func NewWithConfig(clientset *kubernetes.Clientset, handler IncidentHandler, alertURL string, cooldown time.Duration, tailLines int64, skipNamespaces []string) *Detector {
         if cooldown <= 0 {
                 cooldown = 5 * time.Minute
@@ -136,6 +152,7 @@ func NewWithConfig(clientset *kubernetes.Clientset, handler IncidentHandler, ale
                 }
         } else {
                 // Default skip list — common system namespaces that don't have user code.
+
                 for _, ns := range []string{
                         "kube-system", "kube-public", "kube-node-lease",
                 } {
@@ -156,6 +173,7 @@ func NewWithConfig(clientset *kubernetes.Clientset, handler IncidentHandler, ale
 }
 
 // Run starts the detection layer. Blocks until ctx is cancelled.
+
 func (d *Detector) Run(ctx context.Context) {
         log.Printf("[detection] starting autonomous detection layer")
 
@@ -207,11 +225,13 @@ func (d *Detector) watchPodsInNamespace(ctx context.Context, namespace string) {
 
         // kube-system/kube-public/kube-node-lease, missing common system
         // namespaces like calico-system, cert-manager, ingress-nginx, monitoring.
+
         if d.skipNamespaces[namespace] {
                 return
         }
 
         // (Claude's review noted the goto was unusual and would confuse contributors.)
+
 watchLoop:
         for {
                 select {
@@ -255,8 +275,8 @@ watchLoop:
                                 }
 
                                 // goroutine doesn't retry forever against a non-existent pod.
-
                                 // a permanent 5s-tick goroutine per deleted pod.
+
                                 if event.Type == watch.Deleted {
                                         d.stopLogStream(string(pod.UID))
                                         continue
@@ -276,6 +296,7 @@ func (d *Detector) handlePod(ctx context.Context, pod *corev1.Pod) {
 
         // Deployment/StatefulSet/DaemonSet. Users often put annotations on the
         // Deployment metadata instead of the pod template metadata.
+
         if !hasRepo {
                 repo = d.lookupRepoFromOwner(ctx, pod)
                 if repo != "" {
@@ -289,10 +310,12 @@ func (d *Detector) handlePod(ctx context.Context, pod *corev1.Pod) {
 
         // The watch fires on every status change, which can be 10+ times per second
         // during startup. This was flooding the logs.
+
         d.discoveredMu.Lock()
         podUID := string(pod.UID)
         if _, seen := d.discoveredPods[podUID]; seen {
                 // Already logged this pod — skip the discovery log but still check status
+
                 d.discoveredMu.Unlock()
         } else {
                 d.discoveredPods[podUID] = time.Now()
@@ -311,28 +334,32 @@ func (d *Detector) handlePod(ctx context.Context, pod *corev1.Pod) {
 // lookupRepoFromOwner checks the pod's owner (Deployment/StatefulSet/ReplicaSet)
 // for the sentinel.io/repo annotation. v3.5.2: This handles the common case
 // where users annotate the Deployment instead of the pod template.
-//
 // K8s ownership chain: Deployment → ReplicaSet → Pod
 // So we need to handle ReplicaSet by walking up to the Deployment.
+
 func (d *Detector) lookupRepoFromOwner(ctx context.Context, pod *corev1.Pod) string {
         for _, ownerRef := range pod.OwnerReferences {
                 switch ownerRef.Kind {
                 case "ReplicaSet":
                         // Pod → ReplicaSet → Deployment
+
                         rs, err := d.clientset.AppsV1().ReplicaSets(pod.Namespace).Get(ctx, ownerRef.Name, metav1.GetOptions{})
                         if err != nil {
                                 log.Printf("[detection] failed to get ReplicaSet %s/%s: %v", pod.Namespace, ownerRef.Name, err)
                                 continue
                         }
                         // Check ReplicaSet annotations
+
                         if repo, ok := rs.Annotations["sentinel.io/repo"]; ok {
                                 return repo
                         }
                         // Check ReplicaSet's pod template annotations
+
                         if repo, ok := rs.Spec.Template.Annotations["sentinel.io/repo"]; ok {
                                 return repo
                         }
                         // Walk up to the Deployment that owns this ReplicaSet
+
                         for _, rsOwner := range rs.OwnerReferences {
                                 if rsOwner.Kind == "Deployment" {
                                         if repo := d.getDeploymentRepo(ctx, pod.Namespace, rsOwner.Name); repo != "" {
@@ -361,6 +388,7 @@ func (d *Detector) lookupRepoFromOwner(ctx context.Context, pod *corev1.Pod) str
 
 // getDeploymentRepo fetches a Deployment and checks both its metadata
 // annotations and pod template annotations for sentinel.io/repo.
+
 func (d *Detector) getDeploymentRepo(ctx context.Context, namespace, name string) string {
         deploy, err := d.clientset.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
         if err != nil {
@@ -378,6 +406,7 @@ func (d *Detector) getDeploymentRepo(ctx context.Context, namespace, name string
 func (d *Detector) checkPodStatus(ctx context.Context, pod *corev1.Pod, repo string) {
         for _, cs := range pod.Status.ContainerStatuses {
                 // CrashLoopBackOff — the classic crash loop
+
                 if cs.State.Waiting != nil && cs.State.Waiting.Reason == "CrashLoopBackOff" {
                         if d.shouldTrigger(pod.Namespace, d.getServiceFromPod(pod), "CrashLoopBackOff") {
                                 log.Printf("[detection] CrashLoopBackOff: %s/%s", pod.Namespace, pod.Name)
@@ -391,6 +420,7 @@ func (d *Detector) checkPodStatus(ctx context.Context, pod *corev1.Pod, repo str
                 // When a container crashes, K8s sets LastTerminationState.Terminated with the
                 // exit code. The pod goes through Error → (restart) → Error → ... → CrashLoopBackOff.
                 // Without this check, Sentinel waits 2-3 minutes for CrashLoopBackOff before reacting.
+
                 if cs.LastTerminationState.Terminated != nil && cs.LastTerminationState.Terminated.ExitCode != 0 {
                         reason := cs.LastTerminationState.Terminated.Reason
                         if reason == "" {
@@ -438,6 +468,7 @@ func (d *Detector) startLogStream(ctx context.Context, pod *corev1.Pod, repo str
         go func() {
 
                 // goroutine silently, leaving the pod unmonitored until restart.
+
                 defer func() {
                         if r := recover(); r != nil {
                                 log.Printf("[panic] log stream %s/%s recovered: %v", pod.Namespace, pod.Name, r)
@@ -454,8 +485,8 @@ func (d *Detector) startLogStream(ctx context.Context, pod *corev1.Pod, repo str
 }
 
 // stopLogStream cancels the log stream goroutine for a pod UID.
-
 // goroutine per deleted pod (the retry loop hit "pod not found" forever).
+
 func (d *Detector) stopLogStream(podUID string) {
         d.streamsMu.Lock()
         cancel, ok := d.streams[podUID]
@@ -470,8 +501,8 @@ func (d *Detector) stopLogStream(podUID string) {
 }
 
 // StopAllLogStreams cancels every active log stream. Called on shutdown.
-
 // raced with store.Close() and could panic on a closed SQLite handle.
+
 func (d *Detector) StopAllLogStreams() {
         d.streamsMu.Lock()
         defer d.streamsMu.Unlock()
@@ -522,6 +553,7 @@ func (d *Detector) streamPodLogs(ctx context.Context, pod *corev1.Pod, repo stri
 
                 // This prevents firing with "unknown_error" when the actual error type
                 // (e.g. KeyError) is at the end of a 40-line traceback.
+
                 var tracebackBuffer strings.Builder
                 var inTraceback bool
                 var tracebackLines int
@@ -537,6 +569,7 @@ func (d *Detector) streamPodLogs(ctx context.Context, pod *corev1.Pod, repo stri
                         line := scanner.Text()
 
                         // Detect start of a Python traceback
+
                         if strings.Contains(line, "Traceback (most recent call last)") {
                                 inTraceback = true
                                 tracebackBuffer.Reset()
@@ -552,12 +585,15 @@ func (d *Detector) streamPodLogs(ctx context.Context, pod *corev1.Pod, repo stri
 
                                 // Check if this line is the error type (end of traceback)
                                 // e.g. "KeyError: 'DATABASE_URLL'" or "ValueError: invalid"
+
                                 errorType := d.extractErrorType(line)
                                                                 isEndOfTraceback := errorType != "unknown_error" && errorType != ""
 
                                                                 // Also check for Go panics, Java exceptions, etc.
+
                                                                 if !isEndOfTraceback {
                                                                         // Check for non-indented line that looks like an error
+
                                                                         if !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "\t") &&
                                                                                 (strings.Contains(line, "Error") || strings.Contains(line, "Exception") ||
                                                                                  strings.Contains(line, "panic") || strings.Contains(line, "fatal")) {
@@ -568,6 +604,7 @@ func (d *Detector) streamPodLogs(ctx context.Context, pod *corev1.Pod, repo stri
 
                                                                 if isEndOfTraceback || tracebackLines > 50 {
                                                                         // End of traceback (or buffer overflow) — fire with the correct error type
+
                                                                         inTraceback = false
                                                                         logs := tracebackBuffer.String()
                                                                         tracebackBuffer.Reset()
@@ -583,12 +620,14 @@ func (d *Detector) streamPodLogs(ctx context.Context, pod *corev1.Pod, repo stri
                         }
 
                         // Non-traceback error detection (Go panics, generic errors)
+
                         if d.isErrorLine(line) {
                                 errorType := d.extractErrorType(line)
                                 service := d.getServiceFromPod(pod)
 
                                 if d.shouldTrigger(pod.Namespace, service, errorType) {
                                         // Capture next 20 lines for context
+
                                         var buf strings.Builder
                                         buf.WriteString(line + "\n")
                                         for i := 0; i < 20 && scanner.Scan(); i++ {
@@ -626,6 +665,7 @@ func (d *Detector) extractErrorType(line string) string {
 
         // of re-compiling regexes on every call. For a pod emitting 1000 log
         // lines, this avoids 7000 regexp.MustCompile calls per detection pass.
+
         for _, p := range extractErrorTypePatterns {
                 if m := p.re.FindStringSubmatch(line); len(m) > 1 {
                         return m[1]
@@ -633,10 +673,12 @@ func (d *Detector) extractErrorType(line string) string {
                         // Regex matched but had no capture group — return the fallback
                         // (e.g. "panic" for the "panic:" regex) instead of the regex
                         // pattern string itself.
+
                         if p.fallback != "" {
                                 return p.fallback
                         }
                         // No fallback defined — return a generic name based on the regex.
+
                         return "error"
                 }
         }

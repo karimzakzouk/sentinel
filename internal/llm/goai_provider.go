@@ -3,19 +3,17 @@ package llm
 // goai_provider.go maps Sentinel's cfg.LLMProvider string to GoAI's
 // provider-specific packages. Each provider handles its own auth scheme,
 // request format, and response parsing — no proxy needed.
-//
 // Replaces the previous OpenAI-only HTTP router with GoAI
 // (github.com/zendev-sh/goai), a pure-Go SDK with 25+ native providers.
 // This adds native support for Anthropic (/v1/messages + x-api-key),
 // AWS Bedrock (SigV4), Azure OpenAI (api-key + api-version), Google
 // Vertex/Gemini, and 20+ others — all in a single binary, no Python,
 // no sidecar, no proxy.
-//
 // Binary size impact: +6MB (GoAI + deps, stdlib-only).
-//
 // The existing Router public API (FrontierJSON, FastJSON, FrontierText,
 // FastText, Update, Snapshot, SetRetryConfig) is preserved — the agent
 // pipeline doesn't change at all.
+
 
 import (
 	"strings"
@@ -43,6 +41,7 @@ import (
 
 // providerConfig holds the GoAI model + options for a specific LLM provider.
 // Built once per Router config change, used for every LLM call.
+
 type providerConfig struct {
 	providerType string
 	baseURL      string
@@ -53,11 +52,13 @@ type providerConfig struct {
 // The provider string maps to GoAI's provider packages. For OpenAI-compatible
 // providers (zai, custom, litellm, ollama, vllm), we use the openai provider
 // package with a custom base URL — they all speak the same API surface.
+
 func (r *Router) buildGoAIModel(modelName string) provider.LanguageModel {
 	pc := r.providerSnapshot()
 
 	switch strings.ToLower(pc.providerType) {
 	// --- Native providers (not OpenAI-compatible) ---
+
 	case "anthropic":
 		return anthropic.Chat(modelName, anthropic.WithAPIKey(pc.apiKey))
 	case "bedrock":
@@ -77,10 +78,12 @@ func (r *Router) buildGoAIModel(modelName string) provider.LanguageModel {
 		return vertex.Chat(modelName, vertex.WithAPIKey(pc.apiKey))
 
 	// --- OpenAI-compatible providers (use openai package with custom base URL) ---
+
 	case "openai":
 		return openai.Chat(modelName, openai.WithAPIKey(pc.apiKey))
 	case "zai":
 		// z.ai speaks OpenAI-compatible API at https://api.z.ai/api/paas/v4
+
 		baseURL := pc.baseURL
 		if baseURL == "" {
 			baseURL = "https://api.z.ai/api/paas/v4"
@@ -115,6 +118,7 @@ func (r *Router) buildGoAIModel(modelName string) provider.LanguageModel {
 		return vllm.Chat(modelName, vllm.WithAPIKey(pc.apiKey), vllm.WithBaseURL(pc.baseURL))
 
 	// --- Custom / unknown: treat as OpenAI-compatible with custom base URL ---
+
 	case "custom", "litellm", "":
 		opts := []openai.Option{openai.WithAPIKey(pc.apiKey)}
 		if pc.baseURL != "" {
@@ -125,6 +129,7 @@ func (r *Router) buildGoAIModel(modelName string) provider.LanguageModel {
 	default:
 		// Unknown provider — fall back to OpenAI-compatible with custom base URL.
 		// This is the safest default since most LLM providers expose an OpenAI-compat endpoint.
+
 		opts := []openai.Option{openai.WithAPIKey(pc.apiKey)}
 		if pc.baseURL != "" {
 			opts = append(opts, openai.WithBaseURL(pc.baseURL))
@@ -132,4 +137,3 @@ func (r *Router) buildGoAIModel(modelName string) provider.LanguageModel {
 		return openai.Chat(modelName, opts...)
 	}
 }
-

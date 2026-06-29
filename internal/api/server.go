@@ -14,17 +14,20 @@ import (
 )
 
 // ServerEvent is pushed to SSE clients.
+
 type ServerEvent struct {
         Type string      `json:"type"`
         Data interface{} `json:"data"`
 }
 
 // RuntimeCfgSaver saves runtime config (implemented by runtimecfg.Manager).
+
 type RuntimeCfgSaver interface {
         SaveFromJSON(jsonBytes []byte) error
 }
 
 // Server is the HTTP API server.
+
 type Server struct {
         store           Store
         settings        SettingsGetter
@@ -41,6 +44,7 @@ type Server struct {
         // pull_request events for predictive PR review). If webhookHandler doesn't
         // claim the event (returns 200 without writing), the chatops handler runs
         // (handles issue_comment events for /sentinel commands).
+
         chatopsHandler http.Handler
 
         providersStatus ProvidersStatusGetter
@@ -58,17 +62,19 @@ type Server struct {
         // every request to /admin/* or POST /settings must carry
         // 'Authorization: Bearer <token>'. Health/readiness/metrics/SSE/web UI
         // remain unauthenticated so dashboards and probes still work.
+
         apiToken string
 
         // Prevents brute-force token attacks and webhook flood DoS.
+
         rateLimiter *ipRateLimiter
 }
 
 // ipRateLimiter is a simple per-IP token bucket rate limiter.
-
 // allowing brute-force token attacks at line speed despite constant-time compare.
 // 10 requests per minute per IP — generous enough for legitimate use
 // (a human clicking buttons) but blocks scripted attacks.
+
 type ipRateLimiter struct {
         mu       sync.Mutex
         visitors map[string]*visitorBucket
@@ -88,6 +94,7 @@ func newIPRateLimiter(rate int, window time.Duration) *ipRateLimiter {
                 window:   window,
         }
         // Background cleanup of stale buckets every 5 minutes
+
         go func() {
                 defer func() { if r := recover(); r != nil { log.Printf("[api] rate-limiter cleanup panic recovered: %v", r) } }()
                 ticker := time.NewTicker(5 * time.Minute)
@@ -108,13 +115,16 @@ func newIPRateLimiter(rate int, window time.Duration) *ipRateLimiter {
 
 // Allow returns true if the IP is under the rate limit, false otherwise.
 // Extracts the IP from addr (strips port).
+
 func (rl *ipRateLimiter) Allow(addr string) bool {
         // Strip port from addr (e.g. "1.2.3.4:5678" → "1.2.3.4")
+
         ip := addr
         if idx := strings.LastIndex(addr, ":"); idx >= 0 {
                 ip = addr[:idx]
         }
         // Handle IPv6 addresses with brackets
+
         ip = strings.TrimPrefix(strings.TrimSuffix(ip, "]"), "[")
 
         rl.mu.Lock()
@@ -141,6 +151,7 @@ type Store interface {
         // this, `incidents get <8-char-id>` fails because GetIncident requires
         // a full UUID. Returns nil (no error) if no match; prefix must be ≥4
         // chars to prevent accidental collisions.
+
         FindIncidentByPrefix(ctx context.Context, prefix string) (any, error)
 }
 
@@ -155,6 +166,7 @@ type PauseController interface {
 }
 
 // New creates a new API server.
+
 func New(addr string, store Store, settings SettingsGetter, investigate InvestigateFunc, ready ReadyChecker) *Server {
         s := &Server{
                 store:        store,
@@ -177,6 +189,7 @@ func New(addr string, store Store, settings SettingsGetter, investigate Investig
         // pprof endpoints for production profiling. Mounted at /debug/pprof/
         // so they're discoverable by Go tooling. Protected by the apiToken
         // auth middleware (if set) — same as /admin/* endpoints.
+
         mux.HandleFunc("/debug/pprof/", s.handlePprof)
         mux.HandleFunc("/debug/pprof/cmdline", s.handlePprof)
         mux.HandleFunc("/debug/pprof/profile", s.handlePprof)
@@ -201,6 +214,7 @@ func New(addr string, store Store, settings SettingsGetter, investigate Investig
         // on a bearer token. The middleware is a no-op when apiToken is empty
         // (set via SetAPIToken), but we still register it so the wrapping order
         // is consistent.
+
         s.http = &http.Server{
                 Addr:         addr,
                 Handler:      s.authMiddleware(mux),
@@ -211,15 +225,16 @@ func New(addr string, store Store, settings SettingsGetter, investigate Investig
                 // WriteTimeout is intentionally 0 (infinite) so SSE /events can stream
                 // indefinitely. Non-SSE routes are wrapped in http.TimeoutHandler where
                 // appropriate (admin operations get a 60s hard cap).
+
         }
         return s
 }
 
 // SetAPIToken enables bearer-token auth on admin endpoints. Empty = disabled.
-
 // 'Authorization: Bearer <token>'. Mismatched or missing tokens get a 401.
 // Health/readiness/metrics/SSE/web UI remain unauthenticated so dashboards
 // and probes still work.
+
 func (s *Server) SetAPIToken(token string) {
         s.apiToken = token
         if token == "" {
@@ -232,22 +247,20 @@ func (s *Server) SetAPIToken(token string) {
 // authMiddleware wraps the inner handler with bearer-token auth for admin
 // endpoints. Non-admin endpoints pass through unchanged. When apiToken is
 // empty, all requests pass through (with a startup warning logged).
-//
 // Admin endpoints (require auth when apiToken is set):
 //   - /admin/investigate (POST)
 //   - /admin/pause        (POST)
 //   - /admin/resume       (POST)
 //   - /settings           (POST only — GET is read-only)
-//
 // Webhook and Slack endpoints do their own signature verification and are
 // not gated by this middleware.
-//
-
 // (10 req/min) to prevent brute-force token attacks and webhook flood DoS.
+
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
         return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 
                 // Health/metrics/incidents reads are not rate-limited (kubelet + Prometheus scrape frequently).
+
                 if strings.HasPrefix(r.URL.Path, "/admin/") ||
                         r.URL.Path == "/webhook/github" ||
                         r.URL.Path == "/webhook/alertmanager" ||
@@ -269,8 +282,9 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 				strings.HasPrefix(r.URL.Path, "/debug/pprof/")
                 isSettingsWrite := r.URL.Path == "/settings" && r.Method == http.MethodPost
 
-                // repo, branch, PR URL) is sensitive. Was: anyone with cluster network
+                // repo, branch, PR URL) is sensitive.
                 // access could read every incident.
+
                 isIncidentsRead := strings.HasPrefix(r.URL.Path, "/incidents")
 
                 if !isAdmin && !isSettingsWrite && !isIncidentsRead {
@@ -279,6 +293,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
                 }
 
                 // Require bearer token.
+
                 authHeader := r.Header.Get("Authorization")
                 const prefix = "Bearer "
                 if !strings.HasPrefix(authHeader, prefix) {
@@ -289,6 +304,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
                 }
                 provided := authHeader[len(prefix):]
                 // Constant-time comparison to prevent timing attacks on the token.
+
                 if !secureCompare(provided, s.apiToken) {
                         writeJSON(w, 401, map[string]string{"error": "invalid token"})
                         return
@@ -303,6 +319,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 // crypto/subtle.ConstantTimeCompare, returning false on length mismatch
 // (which is technically a length leak but not a content leak — acceptable
 // for bearer tokens where the length is already obvious from the header).
+
 func secureCompare(a, b string) bool {
         if len(a) != len(b) {
                 return false
@@ -321,23 +338,29 @@ func (s *Server) SetRuntimeCfgSaver(r RuntimeCfgSaver)  { s.rtCfgSaver = r }
 // When set, /webhook/github events are dispatched to BOTH the prreview
 // handler (pull_request events) and the chatops handler (issue_comment
 // events). Each handler ignores event types it doesn't care about.
+
 func (s *Server) SetChatopsHandler(h http.Handler)      { s.chatopsHandler = h }
 
 // GitHubAppManager is implemented by the runtimecfg manager. v4.1.0.
 // Used by /settings/github-app to store + apply App credentials live.
+
 type GitHubAppManager interface {
         // SetGitHubApp stores the App ID + private key + optional install ID +
         // webhook secret in runtime config, then applies them to all live GitHub
         // clients (no restart). Returns the new App slug.
+
         SetGitHubApp(appID, privateKey, installID, webhookSecret string) (slug string, err error)
         // SetGitHubAppInstall sets just the installation ID (called separately
         // after the user installs the App on their repo).
+
         SetGitHubAppInstall(installID string) error
         // GetGitHubAppStatus returns the current App config (configured, app_id,
         // slug, install_id). slug is fetched lazily from the GitHub API on first
         // call after credentials are set.
+
         GetGitHubAppStatus() GitHubAppStatus
         // RemoveGitHubApp clears the App config (falls back to PAT).
+
         RemoveGitHubApp() error
 }
 
@@ -347,6 +370,7 @@ type GitHubAppManager interface {
 // runtimecfg returns this type directly (no conversion needed because
 // the api package doesn't import runtimecfg — runtimecfg imports api
 // via the GitHubAppManager interface satisfaction).
+
 type GitHubAppStatus struct {
         Configured bool   `json:"configured"`
         AppID      string `json:"app_id"`
@@ -355,35 +379,41 @@ type GitHubAppStatus struct {
 }
 
 // SetGitHubAppManager wires the GitHub App manager. v4.1.0.
+
 func (s *Server) SetGitHubAppManager(m GitHubAppManager) {
         s.githubAppManager = m
 }
 
 // SetProvidersStatusGetter wires the LLM provider pool status getter. v4.0.0.
 // Used by /providers to expose pool health (tripped breakers, failover counts).
+
 func (s *Server) SetProvidersStatusGetter(g ProvidersStatusGetter) {
         s.providersStatus = g
 }
 
 // SetAutoMergeStatusGetter wires the auto-merge policy status getter. v4.0.0.
 // Used by /automerge to expose policy state (rate limit, cooldown, tracked PRs).
+
 func (s *Server) SetAutoMergeStatusGetter(g AutoMergeStatusGetter) {
         s.autoMergeStatus = g
 }
 
 // ProvidersStatusGetter returns the LLM provider pool status. Implemented by
 // a wrapper around *llm.Pool in main.go.
+
 type ProvidersStatusGetter interface {
         ProviderStatuses() []any
 }
 
 // AutoMergeStatusGetter returns the auto-merge policy status + tracked PRs.
 // Implemented by a wrapper around *automerge.Policy + *automerge.Merger.
+
 type AutoMergeStatusGetter interface {
         AutoMergeStatus() any
 }
 
 // BroadcastEvent pushes an event to all connected SSE clients.
+
 func (s *Server) BroadcastEvent(eventType string, data interface{}) {
         s.eventSubsMu.Lock()
         defer s.eventSubsMu.Unlock()

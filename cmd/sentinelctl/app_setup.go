@@ -1,12 +1,8 @@
 // Package main — sentinelctl `app` subcommand.
-//
-
 // auto-provisioning flow.
-//
 // Usage:
 //   sentinelctl app setup --server http://sentinel:8000 [--token <api-token>] \
 //     [--github-host github.com] [--webhook-url <sentinel-webhook-url>]
-//
 // What it does:
 //   1. Spins up a localhost HTTP server on a random port.
 //   2. Builds a GitHub App manifest with all permissions pre-configured.
@@ -20,9 +16,7 @@
 //      install ID from the install URL.
 //  10. CLI POSTs the App ID + PEM + install ID to Sentinel's /settings/github-app
 //      endpoint, which wires the App into all GitHub clients live (no restart).
-//
 // Total user effort: 2 clicks + 1 copy-paste. Total time: ~30 seconds.
-//
 // Why the install ID is a separate step: GitHub's manifest flow doesn't
 // auto-install the App. The user has to visit the install URL, pick a repo,
 // and the install ID is in the URL after install. We could auto-detect this
@@ -112,6 +106,7 @@ falls back to the PAT (SENTINEL_GITHUB_TOKEN).
 // 4. Exchange code for App credentials
 // 5. POST credentials to Sentinel
 // 6. Open the install URL in the browser
+
 func (c *client) handleAppSetup(args []string) {
         githubHost := "github.com"
         webhookURL := ""
@@ -141,6 +136,7 @@ func (c *client) handleAppSetup(args []string) {
         }
 
         // Find a free port for the localhost callback server.
+
         listener, err := net.Listen("tcp", "127.0.0.1:0")
         if err != nil {
                 fmt.Fprintf(os.Stderr, "Failed to start localhost callback server: %v\n", err)
@@ -159,13 +155,12 @@ func (c *client) handleAppSetup(args []string) {
         // In a Codespace browser editor, `http://localhost:<port>` is unreachable
         // from the user's browser (localhost = the laptop, not the Codespace).
         // GitHub's manifest redirect fails silently.
-        //
         // Fix: when CODESPACES=true, use the Codespace port-forwarding URL:
         //   https://<CODESPACE_NAME>-<PORT>.<GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN>/callback
-        //
         // The port must be set to "public" visibility, otherwise Codespaces
         // 302-redirects to GitHub login and breaks the flow. We use `gh` if
         // available, otherwise print instructions for the user.
+
         codespacesRedirectURL := ""
         if os.Getenv("CODESPACES") == "true" {
                 codespaceName := os.Getenv("CODESPACE_NAME")
@@ -176,6 +171,7 @@ func (c *client) handleAppSetup(args []string) {
                         fmt.Println()
                         // Try to make the port public (requires `gh` CLI + auth).
                         // If it fails, we print instructions below.
+
                         makePortPublicCmd := exec.Command("gh", "codespace", "ports", "visibility",
                                 fmt.Sprintf("%d:public", port), "-c", codespaceName)
                         if err := makePortPublicCmd.Run(); err != nil {
@@ -220,11 +216,13 @@ func (c *client) handleAppSetup(args []string) {
         fmt.Println()
 
         // Open the browser.
+
         openBrowser(createURL)
 
         // already opened (to find a free port) — no ListenAndServe (which
         // defaults to :80 and fails with permission denied).
         // Declare channels first so the handler closure can capture them.
+
         codeCh := make(chan string, 1)
         errCh := make(chan error, 1)
         srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -239,6 +237,7 @@ func (c *client) handleAppSetup(args []string) {
                         return
                 }
                 // Show a success page to the user.
+
                 w.Header().Set("Content-Type", "text/html")
                 w.WriteHeader(http.StatusOK)
                 fmt.Fprintln(w, `<html><body style="font-family:monospace;padding:40px;background:#0A0A0B;color:#06B6D4"><h1>✓ App created</h1><p>Sentinel received the App credentials. You can close this tab and return to your terminal.</p></body></html>`)
@@ -246,6 +245,7 @@ func (c *client) handleAppSetup(args []string) {
         })}
 
         // Re-listen on the same port (we closed the listener above to find a free port).
+
         listener, err = net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
         if err != nil {
                 fmt.Fprintf(os.Stderr, "Failed to bind callback port: %v\n", err)
@@ -263,6 +263,7 @@ func (c *client) handleAppSetup(args []string) {
         }()
 
         // Wait for the callback (timeout 5 min).
+
         select {
         case code := <-codeCh:
                 fmt.Println("✓ Received code from GitHub")
@@ -287,6 +288,7 @@ func (c *client) handleAppSetup(args []string) {
                 fmt.Println()
 
                 // Now open the install URL so the user can install the App on their repo.
+
                 installURL := fmt.Sprintf("https://%s/apps/%s/installations/new", githubHost, appCreds.Slug)
                 fmt.Println("Next step: install the App on your repo.")
                 fmt.Println()
@@ -311,6 +313,7 @@ func (c *client) handleAppSetup(args []string) {
 
 // exchangeCodeForApp POSTs the code to GitHub's /app-manifests/{code}/conversions
 // endpoint and returns the App credentials.
+
 func exchangeCodeForApp(githubHost, code string) (*appprovision.CodeExchangeResponse, error) {
         apiURL := fmt.Sprintf("https://%s/app-manifests/%s/conversions", githubHost, url.PathEscape(code))
         req, err := http.NewRequest("POST", apiURL, nil)
@@ -338,6 +341,7 @@ func exchangeCodeForApp(githubHost, code string) (*appprovision.CodeExchangeResp
 }
 
 // postAppCredentials POSTs the App credentials to Sentinel's /settings/github-app endpoint.
+
 func (c *client) postAppCredentials(creds *appprovision.CodeExchangeResponse, webhookURL string) error {
         payload := map[string]any{
                 "app_id":          fmt.Sprintf("%d", creds.ID),
@@ -345,6 +349,7 @@ func (c *client) postAppCredentials(creds *appprovision.CodeExchangeResponse, we
                 "webhook_secret":  creds.WebhookSecret,
                 "webhook_url":     webhookURL,
                 // install_id is set later via `sentinelctl app set-install`
+
         }
         body, _ := json.Marshal(payload)
         req, err := http.NewRequest("POST", c.baseURL+"/settings/github-app", bytes.NewReader(body))
@@ -373,6 +378,7 @@ func (c *client) postAppCredentials(creds *appprovision.CodeExchangeResponse, we
 // handleAppSetInstall sets the installation ID after the user installs the App.
 // The install ID is in the URL after install:
 //   https://github.com/settings/installations/<ID>
+
 func (c *client) handleAppSetInstall(args []string) {
         if len(args) == 0 {
                 fmt.Fprintln(os.Stderr, "Usage: sentinelctl app set-install <install-id>")
@@ -411,6 +417,7 @@ func (c *client) handleAppSetInstall(args []string) {
 }
 
 // handleAppStatus shows whether the GitHub App is configured.
+
 func (c *client) handleAppStatus() {
         req, err := http.NewRequest("GET", c.baseURL+"/settings/github-app", nil)
         if err != nil {
@@ -459,6 +466,7 @@ func (c *client) handleAppStatus() {
 }
 
 // handleAppRemove removes the GitHub App config (falls back to PAT).
+
 func (c *client) handleAppRemove() {
         req, err := http.NewRequest("DELETE", c.baseURL+"/settings/github-app", nil)
         if err != nil {
@@ -483,6 +491,7 @@ func (c *client) handleAppRemove() {
 }
 
 // openBrowser opens the default browser to the given URL.
+
 func openBrowser(url string) {
         var cmd *exec.Cmd
         switch runtime.GOOS {
@@ -492,6 +501,7 @@ func openBrowser(url string) {
                 cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
         default: // linux, etc.
                 // Try xdg-open, fall back silently if it's not installed.
+
                 if _, err := exec.LookPath("xdg-open"); err == nil {
                         cmd = exec.Command("xdg-open", url)
                 } else if _, err := exec.LookPath("wslview"); err == nil {
@@ -504,3 +514,4 @@ func openBrowser(url string) {
 }
 
 // version import guard
+

@@ -1,8 +1,6 @@
 // Package agents implements the 4-agent reasoning pipeline.
-//
 // Pipeline:
 //   Investigator → EvidenceGatherer → Analyst → FixProposer
-//
 // Any agent can raise a RewindEvent which wipes hypotheses and returns
 // control to the Investigator (max 5 iterations).
 package agents
@@ -21,6 +19,7 @@ import (
 
 // Pipeline runs all 4 agents in sequence with rewind support.
 // Returns the final AgentState.
+
 type Pipeline struct {
         investigator     *Investigator
         evidenceGatherer *EvidenceGatherer
@@ -39,12 +38,14 @@ type Pipeline struct {
         generateTests bool
 
         // Used as a fallback when the test generator fails or the repo has no test framework.
+
         generateReproducer bool
 
         maxIterations int
 }
 
 // NewPipeline creates a Pipeline with optional vector store for memory loop.
+
 func NewPipeline(router *llm.Router, k8sClient *k8s.Client, gitHubToken string, betaStore BetaStore, vectorStore VectorStore) *Pipeline {
         return &Pipeline{
                 investigator:                NewInvestigator(router, k8sClient, gitHubToken, vectorStore),
@@ -66,6 +67,7 @@ func NewPipeline(router *llm.Router, k8sClient *k8s.Client, gitHubToken string, 
 
 // SetConfig sets configurable pipeline parameters.
 
+
 func (p *Pipeline) SetConfig(invTimeout, evTimeout, anTimeout, fpTimeout int, confLoopBack float64) {
         if invTimeout > 0 {
                 p.investigatorTimeoutSec = invTimeout
@@ -85,23 +87,23 @@ func (p *Pipeline) SetConfig(invTimeout, evTimeout, anTimeout, fpTimeout int, co
 }
 
 // SetPrometheusURL wires the Prometheus backend into the evidence gatherer.
-
 // a real Prometheus instance. No-op if URL is empty (backward compatible).
+
 func (p *Pipeline) SetPrometheusURL(url string) {
         p.evidenceGatherer.SetPrometheusURL(url)
 }
 
 // SetAllowedRepos propagates the GitHub repo allowlist to the Investigator.
-
 // referenced by the sentinel.io/repo pod annotation. See
 // Config.IsRepoAllowed for the matching config-level helper.
+
 func (p *Pipeline) SetAllowedRepos(repos []string) {
         p.investigator.SetAllowedRepos(repos)
 }
 
 // SetGitHost propagates the git host to the Investigator + FixProposer.
+//. Enables GitHub Enterprise / GitLab / Bitbucket.
 
-// (CRITICAL audit #2). Enables GitHub Enterprise / GitLab / Bitbucket.
 func (p *Pipeline) SetGitHost(host string) {
         p.investigator.SetGitHost(host)
         p.fixProposer.SetGitHost(host)
@@ -109,7 +111,8 @@ func (p *Pipeline) SetGitHost(host string) {
 
 // SetDefaultBranch propagates the default branch fallback to the
 // Investigator + FixProposer. v3.11.0: Replaces hardcoded "main" in
-// cloner.go + branch_resolver.go + fix_proposer.go (CRITICAL audit #6).
+// cloner.go + branch_resolver.go + fix_proposer.go.
+
 func (p *Pipeline) SetDefaultBranch(branch string) {
         p.investigator.SetDefaultBranch(branch)
         p.investigator.cloner.WithDefaultBranch(branch)
@@ -118,18 +121,20 @@ func (p *Pipeline) SetDefaultBranch(branch string) {
 
 // SetLLMPriorWeight propagates the LLM prior weight to the Analyst.
 
+
 func (p *Pipeline) SetLLMPriorWeight(w float64) {
         p.analyst.SetLLMPriorWeight(w)
 }
 
 // SetMaxIterations sets the max pipeline iterations. v3.11.0: Replaces
-// the hardcoded 5 in schemas/types.go NewAgentState (audit #9). The
+// the hardcoded 5 in schemas/types.go NewAgentState. The
 // pipeline's Run loop uses state.MaxIterations, so we set it on the state
 // before each Run via this setter (stored on the pipeline).
 // NOTE: This is a soft setter — the state's MaxIterations is set in
 // schemas.NewAgentState. To override, call SetMaxIterations BEFORE the
 // pipeline runs and the pipeline will rewrite state.MaxIterations at
 // the start of Run.
+
 func (p *Pipeline) SetMaxIterations(n int) {
         if n > 0 {
                 p.maxIterations = n
@@ -137,11 +142,11 @@ func (p *Pipeline) SetMaxIterations(n int) {
 }
 
 // RetryFixProposal re-runs ONLY the fix proposer with the current state.
-
 // sets state.SandboxFeedback with the failure details before calling this.
 // The fix proposer sees the feedback in its user message and generates a
 // new, corrected fix. Does NOT re-run the investigator/evidence/analyst —
 // those are expensive and the root cause hasn't changed.
+
 func (p *Pipeline) RetryFixProposal(ctx context.Context, state *schemas.AgentState) error {
         fpCtx, fpCancel := context.WithTimeout(ctx, time.Duration(p.fixProposerTimeoutSec)*time.Second)
         defer fpCancel()
@@ -152,14 +157,15 @@ func (p *Pipeline) RetryFixProposal(ctx context.Context, state *schemas.AgentSta
 }
 
 // Run executes the full pipeline on the given state. Handles rewinds.
-
 // already has high confidence (>= 0.7). Evidence gathering adds ~90s of LLM +
 // K8s API latency; for obvious errors like KeyError with the key name in the
 // traceback, it's unnecessary.
+
 func (p *Pipeline) Run(ctx context.Context, state *schemas.AgentState) error {
         defer recoverPanic("pipeline")
 
-        // value (audit #9). Was hardcoded 5 in schemas.NewAgentState.
+        // value.NewAgentState.
+
         if p.maxIterations > 0 {
                 state.MaxIterations = p.maxIterations
         }
@@ -168,6 +174,7 @@ func (p *Pipeline) Run(ctx context.Context, state *schemas.AgentState) error {
                 state.Iterations++
 
                 // 1. Investigator
+
                 invCtx, invCancel := context.WithTimeout(ctx, time.Duration(p.investigatorTimeoutSec)*time.Second)
                 if err := p.investigator.Run(invCtx, state); err != nil {
                         invCancel()
@@ -181,6 +188,7 @@ func (p *Pipeline) Run(ctx context.Context, state *schemas.AgentState) error {
                 // high-confidence. This saves ~90s (LLM + K8s API calls) for obvious
                 // errors like KeyError: 'DATABASE_URLL' where the traceback has all
                 // the info we need.
+
                 topConfidence := float64(0)
                 for _, h := range state.Hypotheses {
                         if h.Confidence > topConfidence {
@@ -191,6 +199,7 @@ func (p *Pipeline) Run(ctx context.Context, state *schemas.AgentState) error {
                         log.Printf("[pipeline] top hypothesis confidence %.2f >= 0.7 — skipping evidence gathering (fast path)", topConfidence)
                 } else {
                         // 2. Evidence Gatherer
+
                         evCtx, evCancel := context.WithTimeout(ctx, time.Duration(p.evidenceGathererTimeoutSec)*time.Second)
                         if err := p.evidenceGatherer.Run(evCtx, state); err != nil {
                                 evCancel()
@@ -206,6 +215,7 @@ func (p *Pipeline) Run(ctx context.Context, state *schemas.AgentState) error {
                 }
 
                 // 3. Analyst (pure math — fast)
+
                 anCtx, anCancel := context.WithTimeout(ctx, time.Duration(p.analystTimeoutSec)*time.Second)
                 if err := p.analyst.Run(anCtx, state, p.betaStore); err != nil {
                         anCancel()
@@ -223,6 +233,7 @@ func (p *Pipeline) Run(ctx context.Context, state *schemas.AgentState) error {
                 }
 
                 // Confidence routing
+
                 if state.RootCause.Confidence < p.confidenceLoopBackThreshold && state.Iterations < 3 {
                         log.Printf("[pipeline] confidence %.2f < %.2f — looping back to investigator (iteration %d)",
                                 state.RootCause.Confidence, p.confidenceLoopBackThreshold, state.Iterations)
@@ -233,6 +244,7 @@ func (p *Pipeline) Run(ctx context.Context, state *schemas.AgentState) error {
                 }
 
                 // 4. Fix Proposer
+
                 fpCtx, fpCancel := context.WithTimeout(ctx, time.Duration(p.fixProposerTimeoutSec)*time.Second)
                 if err := p.fixProposer.Run(fpCtx, state); err != nil {
                         fpCancel()
@@ -244,6 +256,7 @@ func (p *Pipeline) Run(ctx context.Context, state *schemas.AgentState) error {
                 // the LLM that wrote the fix does NOT write the test. This prevents
                 // the LLM from gaming its own test.
                 // The test runs in the sandbox as Level 4 (test gate).
+
                 if p.generateTests && state.FixProposal != nil {
                         testCtx, testCancel := context.WithTimeout(ctx, 60*time.Second)
                         test, err := p.testGenerator.Generate(testCtx, state)
@@ -253,6 +266,7 @@ func (p *Pipeline) Run(ctx context.Context, state *schemas.AgentState) error {
                         } else if test != nil {
                                 // Store the test in the agent state for the sandbox to run.
                                 // We store it as a special event so it persists + is visible in the trace.
+
                                 testJSON, _ := json.Marshal(test)
                                 state.AgentTrace = append(state.AgentTrace, map[string]any{
                                         "agent":         "test_generator",
@@ -265,6 +279,7 @@ func (p *Pipeline) Run(ctx context.Context, state *schemas.AgentState) error {
                                 // Store the test in a special state field for the sandbox.
                                 // We reuse the RetrievedIncidents field (it's a []map[string]any)
                                 // to avoid a schema change. The sandbox looks for a key "regression_test".
+
                                 if state.RetrievedIncidents == nil {
                                         state.RetrievedIncidents = []map[string]any{}
                                 }
@@ -303,6 +318,7 @@ func (p *Pipeline) Run(ctx context.Context, state *schemas.AgentState) error {
                 // Runs AFTER the fix is generated but BEFORE the pipeline returns.
                 // If the security check fails, the fix is marked as requiring human review
                 // (status = governance_review) and the security findings are stored.
+
                 if state.FixProposal != nil {
                         secCtx, secCancel := context.WithTimeout(ctx, 30*time.Second)
                         secResult := RunSecurityCheck(secCtx, p.investigator.router, state)
@@ -320,17 +336,20 @@ func (p *Pipeline) Run(ctx context.Context, state *schemas.AgentState) error {
                                 log.Printf("[pipeline] SECURITY CHECK FAILED: %s", secResult.Summary)
                                 // Store the security findings in the error field so the PR body
                                 // (if opened) shows them, and the safety policy can block auto-merge.
+
                                 secDetail := secResult.Summary
                                 for _, f := range secResult.Findings {
                                         secDetail += fmt.Sprintf("\n  - [%s] %s: %s (%s)", f.Severity, f.Rule, f.Message, f.File)
                                 }
                                 // Mark as governance review — the safety policy will block auto-merge
+
                                 state.Status = schemas.StatusGovernanceReview
                                 s := fmt.Sprintf("security_check_failed: %s", secDetail)
                                 state.Error = &s
                                 // Still return nil (not an error) — the pipeline completed, but the
                                 // fix needs human review. The handler in main.go will see the status
                                 // and skip auto-merge.
+
                                 return nil
                         }
                         log.Printf("[pipeline] security check PASSED: %s", secResult.Summary)

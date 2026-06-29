@@ -16,7 +16,6 @@ import (
 )
 
 // OutcomeWatcher monitors a service after a fix is applied (PR opened).
-//
 // Two-phase watching:
 //   Phase 1 (10 min): polls pod health every 30s. If pods recover → success.
 //                     If still failing after 10 min → failure.
@@ -25,14 +24,12 @@ import (
 //                     reappears. If it does → the fix failed in production
 //                     → update Beta prior with a failure (overrides the
 //                     Phase 1 success if any).
-//
-
 // Sentinel marked a fix as "successful" if the pod was Running+Ready 10
 // minutes after the PR opened. But if the same error reappeared 2 hours
 // later (common for flaky fixes, race conditions, load-dependent bugs),
 // the Beta prior was never corrected. The system "learned" from sandbox
 // results, not real outcomes.
-//
+
 
 type OutcomeWatcher struct {
         clientset *kubernetes.Clientset
@@ -45,10 +42,12 @@ type OutcomeWatcher struct {
 
         // for the same incident because both the merger + the investigation handler
         // called WatchWithDetails).
+
         activeWatches sync.Map // key: "service/namespace/incidentID" → bool
 }
 
 // NewOutcomeWatcher creates an OutcomeWatcher with default durations.
+
 func NewOutcomeWatcher(clientset *kubernetes.Clientset, store *Store) *OutcomeWatcher {
         return &OutcomeWatcher{
                 clientset:          clientset,
@@ -61,6 +60,7 @@ func NewOutcomeWatcher(clientset *kubernetes.Clientset, store *Store) *OutcomeWa
 }
 
 // SetDurations configures both Phase 1 and Phase 2 durations.
+
 
 func (w *OutcomeWatcher) SetDurations(shortWatch, shortInterval, longWatch, longInterval time.Duration) {
         if shortWatch > 0 {
@@ -79,23 +79,26 @@ func (w *OutcomeWatcher) SetDurations(shortWatch, shortInterval, longWatch, long
 
 // Watch monitors the service for 10 minutes after a fix (Phase 1 only).
 
+
 func (w *OutcomeWatcher) Watch(ctx context.Context, service, namespace, incidentID string, prOpened bool) {
         w.WatchWithFixType(ctx, service, namespace, incidentID, prOpened, "code_fix")
 }
 
 // WatchWithFixType is the Phase 1 watcher that records the actual fix type.
+
 func (w *OutcomeWatcher) WatchWithFixType(ctx context.Context, service, namespace, incidentID string, prOpened bool, fixType string) {
         w.WatchWithDetails(ctx, service, namespace, incidentID, prOpened, fixType, "")
 }
 
 // WatchWithDetails is the full watcher (Phase 1 + Phase 2).
-
 // "panic", "NullPointerException"). If non-empty, Phase 2 will watch for
 // its re-occurrence in pod logs over 24h. If empty, Phase 2 is skipped.
+
 func (w *OutcomeWatcher) WatchWithDetails(ctx context.Context, service, namespace, incidentID string, prOpened bool, fixType, errorFingerprint string) {
 
         // not in the goroutine's defer (runs when the watch finishes). Now the key
         // stays active until the goroutine completes.
+
         watchKey := fmt.Sprintf("%s/%s/%s", service, namespace, incidentID)
         if _, alreadyWatching := w.activeWatches.LoadOrStore(watchKey, true); alreadyWatching {
                 log.Printf("[outcome] %s/%s — watch already running, skipping duplicate (incident %s)", service, namespace, incidentID)
@@ -104,7 +107,8 @@ func (w *OutcomeWatcher) WatchWithDetails(ctx context.Context, service, namespac
 
         go func() {
 
-                // the function returns. Was: defer in the function body → deleted immediately.
+                // the function returns.
+
                 defer w.activeWatches.Delete(watchKey)
                 defer func() {
                         if r := recover(); r != nil {
@@ -113,12 +117,13 @@ func (w *OutcomeWatcher) WatchWithDetails(ctx context.Context, service, namespac
                 }()
 
                 // === Phase 1: Short-term recovery (10 min) ===
+
                 recovered := w.runPhase1(ctx, service, namespace, incidentID, fixType)
 
                 // === Phase 2: Long-term re-occurrence watch (24h) ===
-
                 // recovered in Phase 1 (if it didn't recover, we already recorded
                 // failure — no point watching for re-occurrence).
+
                 if recovered && errorFingerprint != "" {
                         w.runPhase2(ctx, service, namespace, incidentID, fixType, errorFingerprint)
                 }
@@ -126,6 +131,7 @@ func (w *OutcomeWatcher) WatchWithDetails(ctx context.Context, service, namespac
 }
 
 // runPhase1 polls pod health for shortWatchDuration. Returns true if recovered.
+
 func (w *OutcomeWatcher) runPhase1(ctx context.Context, service, namespace, incidentID, fixType string) bool {
         ticker := time.NewTicker(w.shortCheckInterval)
         defer ticker.Stop()
@@ -155,9 +161,9 @@ func (w *OutcomeWatcher) runPhase1(ctx context.Context, service, namespace, inci
 }
 
 // runPhase2 watches for error re-occurrence over 24h.
-
 // original error fingerprint reappears. If it does → fix failed in prod →
 // record a failure (overriding the Phase 1 success).
+
 func (w *OutcomeWatcher) runPhase2(ctx context.Context, service, namespace, incidentID, fixType, errorFingerprint string) {
         log.Printf("[outcome] %s/%s — Phase 2 started: watching for '%s' re-occurrence over %v",
                 namespace, service, errorFingerprint, w.longWatchDuration)
@@ -195,6 +201,7 @@ func (w *OutcomeWatcher) runPhase2(ctx context.Context, service, namespace, inci
 // logs with a 100-line tail. The fingerprint match is case-insensitive
 // substring search — good enough for error types like "KeyError", "panic",
 // "NullPointerException".
+
 func (w *OutcomeWatcher) checkErrorRecurrence(ctx context.Context, service, namespace, errorFingerprint string) bool {
         logs := w.fetchPodLogs(ctx, service, namespace)
         if logs == "" {
@@ -204,8 +211,10 @@ func (w *OutcomeWatcher) checkErrorRecurrence(ctx context.Context, service, name
 }
 
 // fetchPodLogs fetches current pod logs (100-line tail) for the service.
+
 func (w *OutcomeWatcher) fetchPodLogs(ctx context.Context, service, namespace string) string {
         // Find pods for the service
+
         pods, err := w.clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
                 LabelSelector: fmt.Sprintf("app.kubernetes.io/name=%s", service),
         })
@@ -219,6 +228,7 @@ func (w *OutcomeWatcher) fetchPodLogs(ctx context.Context, service, namespace st
         }
 
         // Fetch logs from the first pod (good enough for re-occurrence check)
+
         pod := &pods.Items[0]
         containerName := ""
         if len(pod.Spec.Containers) > 0 {
@@ -244,24 +254,32 @@ func (w *OutcomeWatcher) fetchPodLogs(ctx context.Context, service, namespace st
 }
 
 // extractErrorFingerprint extracts the error type from an incident's pod logs.
-
 // Returns the first matching error type, or "" if none found.
+
 func ExtractErrorFingerprint(podLogs string) string {
         // Common error type patterns across languages
+
         patterns := []string{
                 // Python
+
                 `(\w+Error):`, `(\w+Exception):`,
                 // Go
+
                 `panic:\s*(.+)`,
                 // Java
+
                 `java\.lang\.(\w+(?:Error|Exception))`,
                 // JavaScript
+
                 `TypeError:`, `ReferenceError:`, `SyntaxError:`,
                 // Rust
+
                 `panicked at`,
                 // Ruby
+
                 `(\w+Error)`,
                 // Signals
+
                 `(SIGSEGV|SIGABRT|SIGBUS)`,
         }
         for _, p := range patterns {
@@ -276,12 +294,14 @@ func ExtractErrorFingerprint(podLogs string) string {
 func ptr(i int64) *int64 { return &i }
 
 // checkService checks if the service's pods are healthy.
+
 func (w *OutcomeWatcher) checkService(ctx context.Context, service, namespace string) bool {
         pods, err := w.clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
                 LabelSelector: fmt.Sprintf("app.kubernetes.io/name=%s", service),
         })
         if err != nil || len(pods.Items) == 0 {
                 // Try app label
+
                 pods, err = w.clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
                         LabelSelector: fmt.Sprintf("app=%s", service),
                 })
@@ -292,10 +312,12 @@ func (w *OutcomeWatcher) checkService(ctx context.Context, service, namespace st
 
         for _, pod := range pods.Items {
                 // Check pod phase
+
                 if pod.Status.Phase != corev1.PodRunning {
                         return false
                 }
                 // Check container statuses
+
                 for _, cs := range pod.Status.ContainerStatuses {
                         if cs.State.Waiting != nil {
                                 if cs.State.Waiting.Reason == "CrashLoopBackOff" ||
@@ -314,19 +336,21 @@ func (w *OutcomeWatcher) checkService(ctx context.Context, service, namespace st
 }
 
 // recordOutcome writes the outcome to the Beta tracker + vector store.
-
 // overrides the first (success → failure). This is correct: the Beta prior
 // should reflect the REAL outcome, not the sandbox outcome.
+
 func (w *OutcomeWatcher) recordOutcome(incidentID, service, namespace string, success bool, detail string, fixType string) {
         ctx := context.Background()
 
         // Update Beta tracker
+
         _, _, err := w.store.RecordBetaOutcome(ctx, service, fixType, success)
         if err != nil {
                 log.Printf("[outcome] failed to record beta outcome: %v", err)
         }
 
         // Update the incident's outcome in the vector store
+
         _, err = w.store.db.ExecContext(ctx,
                 `UPDATE incident_vectors SET outcome_verified = 1, outcome_success = ? WHERE incident_id = ?`,
                 boolToInt(success), incidentID)

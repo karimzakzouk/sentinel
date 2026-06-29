@@ -1,12 +1,9 @@
 // Package executors — test runner. v4.2.0 Tier 3.
-//
 // Runs the LLM-generated regression test against the fixed code in the
 // sandbox. Implements the SWE-bench FAIL_TO_PASS + PASS_TO_PASS pattern:
-//
 //   FAIL_TO_PASS: the test must FAIL on the original code (reproduces the bug)
 //                  and PASS on the fixed code (verifies the fix)
 //   PASS_TO_PASS: existing tests must still PASS on the fixed code (no regression)
-//
 // The test runs in the sandbox namespace alongside the canary pod. It uses
 // a temporary pod with the canary image + the test file injected via ConfigMap.
 package executors
@@ -27,29 +24,37 @@ import (
 )
 
 // TestRunner runs LLM-generated tests in the sandbox. v4.2.0.
+
 type TestRunner struct {
         clientset *kubernetes.Clientset
 }
 
 // NewTestRunner creates a TestRunner.
+
 func NewTestRunner(clientset *kubernetes.Clientset) *TestRunner {
         return &TestRunner{clientset: clientset}
 }
 
 // TestResult is the outcome of running a test.
+
 type TestResult struct {
         // F2P = FAIL_TO_PASS: test fails on original, passes on fixed
+
         F2PResult TestRunResult
         // P2P = PASS_TO_PASS: existing tests still pass on fixed
+
         P2PResult TestRunResult
         // Overall: true if F2P passed (test reproduces bug + fix works)
         // AND P2P passed (no regression) — or P2P was skipped (no existing tests)
+
         Overall bool
         // Summary for the sandbox result + PR body
+
         Summary string
 }
 
 // TestRunResult is the output of running a single test command.
+
 type TestRunResult struct {
         Passed  bool
         Output  string
@@ -59,10 +64,10 @@ type TestRunResult struct {
 // RunTest executes the LLM-generated test in the sandbox namespace.
 // It creates a temporary pod with the canary image, injects the test file,
 // runs the test command, and returns the result.
-//
 // fixCanaryImage is the canary image with the fix applied (already built by Kaniko).
 // test is the LLM-generated test to run.
 // sandboxNS is the sandbox namespace (already created by the sandbox runner).
+
 func (r *TestRunner) RunTest(ctx context.Context, fixCanaryImage, sandboxNS string, test *schemas.GeneratedTest) (*TestResult, error) {
         if test == nil || test.TestContent == "" {
                 return &TestResult{
@@ -77,6 +82,7 @@ func (r *TestRunner) RunTest(ctx context.Context, fixCanaryImage, sandboxNS stri
         // 1. Create a ConfigMap with the test file content.
         // ConfigMap keys can't contain "/" — use just the filename (last path segment).
         // The full path is preserved in the pod by creating subdirectories.
+
         cmKey := test.TestFile
         if idx := strings.LastIndex(cmKey, "/"); idx >= 0 {
                 cmKey = cmKey[idx+1:]
@@ -105,9 +111,11 @@ func (r *TestRunner) RunTest(ctx context.Context, fixCanaryImage, sandboxNS stri
         // 2. Create a pod that runs the test command
         // The pod uses the canary image (which has the fix applied) + the test file
         // mounted from the ConfigMap.
+
         testPodName := fmt.Sprintf("test-runner-%d", time.Now().Unix())
 
         // Determine the test command based on language/framework if not specified
+
         testCmd := test.TestCommand
         if testCmd == "" {
                 testCmd = defaultTestCommand(test.TestLanguage, test.TestFramework, test.TestFile)
@@ -118,6 +126,7 @@ func (r *TestRunner) RunTest(ctx context.Context, fixCanaryImage, sandboxNS stri
         //   1. Mounts the test file from the ConfigMap to /app/<test_file>
         //   2. Runs the test command
         //   3. Exits (we capture the logs)
+
         testPod := &corev1.Pod{
                 ObjectMeta: metav1.ObjectMeta{
                         Name:      testPodName,
@@ -176,6 +185,7 @@ func (r *TestRunner) RunTest(ctx context.Context, fixCanaryImage, sandboxNS stri
         }()
 
         // 3. Wait for the pod to complete (timeout 120s)
+
         podOutput, err := r.waitForPodCompletion(ctx, sandboxNS, testPodName, "test-runner", 120*time.Second)
         if err != nil {
                 return &TestResult{
@@ -186,6 +196,7 @@ func (r *TestRunner) RunTest(ctx context.Context, fixCanaryImage, sandboxNS stri
 
         // 4. Determine if the test passed
         // Heuristic: look for common pass/fail indicators in the output
+
         passed := interpretTestOutput(podOutput, test.TestFramework)
 
         result := &TestResult{
@@ -210,6 +221,7 @@ func (r *TestRunner) RunTest(ctx context.Context, fixCanaryImage, sandboxNS stri
 // Returns the pod's logs. v4.3.2: containerName parameter added — was
 // hardcoded to "test-runner" which broke when the reproducer runner used
 // "repro-runner" as its container name.
+
 func (r *TestRunner) waitForPodCompletion(ctx context.Context, ns, name, containerName string, timeout time.Duration) (string, error) {
         deadline := time.Now().Add(timeout)
         for time.Now().Before(deadline) {
@@ -225,6 +237,7 @@ func (r *TestRunner) waitForPodCompletion(ctx context.Context, ns, name, contain
                 }
                 if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
                         // Pod completed — fetch logs
+
                         req := r.clientset.CoreV1().Pods(ns).GetLogs(name, &corev1.PodLogOptions{
                                 Container: containerName, // v4.3.2: was hardcoded "test-runner"
                         })
@@ -245,6 +258,7 @@ func (r *TestRunner) waitForPodCompletion(ctx context.Context, ns, name, contain
 // RunReproducer executes the LLM-generated reproducer script in the sandbox. v4.2.0 Tier 4.
 // The reproducer is a standalone script (no test framework) that calls the
 // buggy function + exits 0 if OK, 1 if crash.
+
 func (r *TestRunner) RunReproducer(ctx context.Context, canaryImage, sandboxNS string, reproducer *schemas.GeneratedReproducer) (*TestResult, error) {
         if reproducer == nil || reproducer.ScriptContent == "" {
                 return &TestResult{
@@ -257,6 +271,7 @@ func (r *TestRunner) RunReproducer(ctx context.Context, canaryImage, sandboxNS s
                 reproducer.ScriptFile, sandboxNS, reproducer.ScriptLanguage)
 
         // 1. Create a ConfigMap with the script content
+
         cmName := fmt.Sprintf("repro-%d", time.Now().Unix())
         reproCM := &corev1.ConfigMap{
                 ObjectMeta: metav1.ObjectMeta{
@@ -277,6 +292,7 @@ func (r *TestRunner) RunReproducer(ctx context.Context, canaryImage, sandboxNS s
         }()
 
         // 2. Create a pod that runs the reproducer
+
         reproPodName := fmt.Sprintf("repro-runner-%d", time.Now().Unix())
         runCmd := reproducer.RunCommand
         if runCmd == "" {
@@ -333,6 +349,7 @@ func (r *TestRunner) RunReproducer(ctx context.Context, canaryImage, sandboxNS s
         }()
 
         // 3. Wait for completion
+
         podOutput, err := r.waitForPodCompletion(ctx, sandboxNS, reproPodName, "repro-runner", 120*time.Second) // v4.3.2: was missing container name
         if err != nil {
                 return &TestResult{
@@ -343,6 +360,7 @@ func (r *TestRunner) RunReproducer(ctx context.Context, canaryImage, sandboxNS s
 
         // 4. The reproducer exits 0 on success, 1 on crash.
         // We check the pod phase: Succeeded = exit 0, Failed = exit non-zero.
+
         pod, _ := r.clientset.CoreV1().Pods(sandboxNS).Get(ctx, reproPodName, metav1.GetOptions{})
         passed := false
         if pod != nil && pod.Status.Phase == corev1.PodSucceeded {
@@ -350,6 +368,7 @@ func (r *TestRunner) RunReproducer(ctx context.Context, canaryImage, sandboxNS s
         }
 
         // Also check the output for crash indicators
+
         lowerOutput := strings.ToLower(podOutput)
         if strings.Contains(lowerOutput, "traceback") || strings.Contains(lowerOutput, "panic:") ||
                 strings.Contains(lowerOutput, "crash") || strings.Contains(lowerOutput, "error:") {
@@ -369,6 +388,7 @@ func (r *TestRunner) RunReproducer(ctx context.Context, canaryImage, sandboxNS s
 }
 
 // defaultReproducerCommand returns a default run command for the given language.
+
 func defaultReproducerCommand(language, scriptFile string) string {
         switch strings.ToLower(language) {
         case "python":
@@ -385,6 +405,7 @@ func defaultReproducerCommand(language, scriptFile string) string {
 }
 
 // defaultTestCommand returns a default test command for the given language/framework.
+
 func defaultTestCommand(language, framework, testFile string) string {
         switch strings.ToLower(language) {
         case "python":
@@ -412,15 +433,18 @@ func defaultTestCommand(language, framework, testFile string) string {
 
 // interpretTestOutput heuristically determines if a test passed based on output.
 // Different frameworks have different success/failure indicators.
+
 func interpretTestOutput(output, framework string) bool {
         lower := strings.ToLower(output)
         // Failure indicators (any of these = FAIL)
+
         failureIndicators := []string{
                 "failed", "failure", "error", "traceback", "assertionerror",
                 "panic:", "not ok", "✗", "0 passing", "0 passed",
                 "tests failed", "test failed", "failures:", "failed tests",
         }
         // Success indicators (any of these = PASS, overrides failure if present)
+
         successIndicators := []string{
                 "passed", "passing", "ok", "all tests passed", "tests passed",
                 "✓", "1 passing", "1 passed", "no errors",
@@ -428,15 +452,18 @@ func interpretTestOutput(output, framework string) bool {
         }
 
         // First check for explicit failures
+
         for _, ind := range failureIndicators {
                 if strings.Contains(lower, ind) {
                         // But check if there's also a success indicator that overrides
+
                         for _, success := range successIndicators {
                                 if strings.Contains(lower, success) {
                                         // Both present — check counts
                                         // "1 passed, 0 failed" = pass
                                         // "0 passed, 1 failed" = fail
                                         // Simple heuristic: if "0 failed" or "0 failing" is present, pass
+
                                         if strings.Contains(lower, "0 failed") || strings.Contains(lower, "0 failing") || strings.Contains(lower, "0 failures") {
                                                 return true
                                         }
@@ -448,6 +475,7 @@ func interpretTestOutput(output, framework string) bool {
         }
 
         // No failure indicators — check for success
+
         for _, ind := range successIndicators {
                 if strings.Contains(lower, ind) {
                         return true
@@ -456,5 +484,6 @@ func interpretTestOutput(output, framework string) bool {
 
         // No clear indicators — assume pass if exit code was 0 (pod succeeded)
         // This is a fallback; the pod's Phase=Succeeded is checked by the caller
+
         return true
 }

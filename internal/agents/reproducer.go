@@ -1,14 +1,11 @@
 // Package agents — reproducer generator. v4.2.0 Tier 4.
-//
 // Generates a standalone reproducer script that reproduces the original error.
 // Unlike the test generator (Tier 3), this doesn't require a test framework —
 // it's a plain script that calls the buggy function + asserts it doesn't crash.
-//
 // Used as a fallback when:
 //   - The repo has no test framework (no pytest, no go test, no jest)
 //   - The test generator failed to produce a valid test
 //   - The error is non-HTTP (background task, startup) and can't be probed
-//
 // The reproducer runs against the canary image in the sandbox. If it exits 0
 // (no crash), the fix works. If it exits non-zero (crash), the fix didn't work.
 package agents
@@ -56,22 +53,25 @@ No prose before or after the JSON.`
 // GeneratedReproducer is an alias for schemas.GeneratedReproducer. Kept for
 // backwards compatibility — new code should use schemas.GeneratedReproducer
 // directly.
-//
 // The canonical type lives in internal/schemas so the executors package
 // doesn't have to import agents (fixes LEAK-1 from the architecture audit).
+
 type GeneratedReproducer = schemas.GeneratedReproducer
 
 // ReproducerGenerator generates standalone reproducer scripts.
+
 type ReproducerGenerator struct {
         router *llm.Router
 }
 
 // NewReproducerGenerator creates a ReproducerGenerator.
+
 func NewReproducerGenerator(router *llm.Router) *ReproducerGenerator {
         return &ReproducerGenerator{router: router}
 }
 
 // Generate produces a reproducer script for the given incident + fix.
+
 func (g *ReproducerGenerator) Generate(ctx context.Context, state *schemas.AgentState) (*GeneratedReproducer, error) {
         if state.RootCause == nil || state.FixProposal == nil {
                 return nil, fmt.Errorf("root cause and fix proposal are required")
@@ -113,6 +113,7 @@ func (g *ReproducerGenerator) buildUserMessage(state *schemas.AgentState) string
         parts = append(parts, "")
 
         // Error context — this is critical for the reproducer to use the right inputs
+
         parts = append(parts, "## Error Context (from pod logs — use these exact inputs)")
         for _, anomaly := range state.Cluster.Anomalies {
                 explanation := anomaly.Explanation
@@ -124,6 +125,7 @@ func (g *ReproducerGenerator) buildUserMessage(state *schemas.AgentState) string
         parts = append(parts, "")
 
         // Fixed source code
+
         parts = append(parts, "## Source Code (after fix is applied)")
         i := 0
         for path, content := range state.FetchedCode {
@@ -142,6 +144,7 @@ func (g *ReproducerGenerator) buildUserMessage(state *schemas.AgentState) string
         parts = append(parts, "")
 
         // Fix description
+
         if state.FixProposal.Description != "" {
                 parts = append(parts, "## Fix Description")
                 parts = append(parts, state.FixProposal.Description)
@@ -149,6 +152,7 @@ func (g *ReproducerGenerator) buildUserMessage(state *schemas.AgentState) string
         }
 
         // Language hint
+
         if lang := detectLanguageFromState(state); lang != "" {
                 parts = append(parts, fmt.Sprintf("## Detected Language: %s", lang))
         }
@@ -164,3 +168,4 @@ func (g *ReproducerGenerator) buildUserMessage(state *schemas.AgentState) string
 
 // (MarshalJSON removed — the struct's json: tags produce identical output.
 // The method was redundant and prevented moving the type to schemas.)
+

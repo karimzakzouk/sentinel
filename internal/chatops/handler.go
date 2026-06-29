@@ -1,9 +1,7 @@
 // Package chatops — GitHub webhook handler for issue_comment events.
-//
 // Wired into api/server.go via SetChatopsHandler. Receives all incoming
 // /webhook/github events, dispatches to chatops.Dispatch when the event is
 // an issue_comment on a PR containing a /sentinel command.
-//
 // Coexists with prreview.Reviewer (which handles pull_request events for
 // predictive PR review). Both handlers run on the same webhook endpoint —
 // the event type determines which one fires.
@@ -23,6 +21,7 @@ import (
 )
 
 // WebhookHandler is the HTTP handler for /webhook/github.
+
 type WebhookHandler struct {
         deps          *Deps
         webhookSecret string // optional HMAC-SHA256 secret for signature verification
@@ -31,6 +30,7 @@ type WebhookHandler struct {
 // NewWebhookHandler creates a webhook handler.
 // deps is the dependency bag (must be fully wired before this is called).
 // webhookSecret is the GitHub webhook secret (empty = skip signature check).
+
 func NewWebhookHandler(deps *Deps, webhookSecret string) *WebhookHandler {
         return &WebhookHandler{
                 deps:          deps,
@@ -39,6 +39,7 @@ func NewWebhookHandler(deps *Deps, webhookSecret string) *WebhookHandler {
 }
 
 // ServeHTTP receives a GitHub webhook event.
+
 func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
         if r.Method != http.MethodPost {
                 http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -46,6 +47,7 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
         }
 
         // Read body (capped at 1MB — webhook payloads are small).
+
         body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
         if err != nil {
                 http.Error(w, "read body failed", http.StatusBadRequest)
@@ -53,6 +55,7 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
         }
 
         // Verify signature if a secret is configured.
+
         if h.webhookSecret != "" {
                 sig := r.Header.Get("X-Hub-Signature-256")
                 if !h.verifySignature(body, sig) {
@@ -67,13 +70,16 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
         // Only issue_comment events are interesting to chatops.
         // (pull_request events are handled by prreview.Reviewer.)
+
         if eventType != "issue_comment" {
                 // Not ours — return 200 so GitHub doesn't retry.
+
                 w.WriteHeader(http.StatusOK)
                 return
         }
 
         // Parse the webhook payload.
+
         var event struct {
                 Action  string `json:"action"`
                 Comment struct {
@@ -100,6 +106,7 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
         }
 
         // Only "created" actions matter (we don't process edits/deletes — too risky).
+
         if event.Action != "created" {
                 w.WriteHeader(http.StatusOK)
                 return
@@ -107,12 +114,14 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
         // Only PR comments, not issue comments. If pull_request.url is empty,
         // the comment was on an issue, not a PR — skip.
+
         if event.Issue.PullRequest.URL == "" {
                 w.WriteHeader(http.StatusOK)
                 return
         }
 
         // Skip bot's own comments (prevents infinite loops).
+
         if strings.Contains(strings.ToLower(event.Comment.User.Login), "sentinel") ||
                 strings.Contains(event.Comment.User.Login, "[bot]") {
                 w.WriteHeader(http.StatusOK)
@@ -121,12 +130,14 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
         // Skip our own status comment (shouldn't happen — ParseCommand handles it —
         // but defense in depth).
+
         if strings.Contains(event.Comment.Body, "[SENTINELSTATUS]") {
                 w.WriteHeader(http.StatusOK)
                 return
         }
 
         // Parse the comment for /sentinel commands.
+
         commands := ParseCommand(
                 event.Comment.Body,
                 event.Comment.User.Login,
@@ -145,6 +156,7 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
         // Dispatch in a goroutine so we return 200 immediately — GitHub times out
         // webhooks after 10s. Long-running commands (retry-sandbox takes minutes)
         // must run async.
+
         go func() {
                 defer func() { if r := recover(); r != nil { log.Printf("[chatops] dispatch panic recovered: %v", r) } }()
                 ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
@@ -158,6 +170,7 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // verifySignature checks the X-Hub-Signature-256 header against the body.
+
 func (h *WebhookHandler) verifySignature(body []byte, sig string) bool {
         if sig == "" {
                 return false
@@ -177,3 +190,4 @@ func (h *WebhookHandler) verifySignature(body []byte, sig string) bool {
 }
 
 // missing time import fix
+

@@ -1,5 +1,4 @@
 // Package repo provides repository cloning + local search for the agent pipeline.
-//
 // The flow mirrors SWE-agent / OpenHands / Aider:
 //   1. Clone the repo (shallow, --depth 1) to a temp dir using go-git (pure Go)
 //   2. Walk the file tree, filter noise (node_modules, vendor, .git, etc.)
@@ -29,7 +28,8 @@ import (
 )
 
 // Cloner clones a GitHub repo to a local temp dir using go-git (pure Go, no CGO).
-// Respects cfg.GitHost (CRITICAL audit #2 — was hardcoded to github.com in 2 sites).
+// Respects cfg.GitHost ( —com in 2 sites).
+
 type Cloner struct {
         githubToken string
         gitHost     string
@@ -37,6 +37,7 @@ type Cloner struct {
 }
 
 // NewCloner creates a Cloner.
+
 func NewCloner(githubToken string) *Cloner {
         return &Cloner{
                 githubToken:   githubToken,
@@ -46,7 +47,8 @@ func NewCloner(githubToken string) *Cloner {
 }
 
 // WithGitHost sets the git host for clone URLs. v3.11.0: Replaces the
-// hardcoded "github.com" (CRITICAL audit #2).
+// hardcoded "github.com".
+
 func (c *Cloner) WithGitHost(host string) *Cloner {
         if host != "" {
                 c.gitHost = host
@@ -55,7 +57,8 @@ func (c *Cloner) WithGitHost(host string) *Cloner {
 }
 
 // WithDefaultBranch sets the default branch fallback. v3.11.0: Replaces the
-// hardcoded "main" (CRITICAL audit #6).
+// hardcoded "main".
+
 func (c *Cloner) WithDefaultBranch(branch string) *Cloner {
         if branch != "" {
                 c.defaultBranch = branch
@@ -68,34 +71,40 @@ func (c *Cloner) WithDefaultBranch(branch string) *Cloner {
 //   - a branch name (e.g. "main", "bug/crashloop-typo")
 //   - a tag name (e.g. "v1.2.3")
 //   - a commit SHA (e.g. "abc123...") — 40 hex chars
-//
 // Uses --depth 1 for speed (we don't need history, just the current state).
 // The clone is written to /data/repos/ (the mounted PVC) because /tmp is
 // read-only in the distroless image (readOnlyRootFilesystem: true).
+
 func (c *Cloner) Clone(ctx context.Context, repo, ref string) (string, error) {
         if ref == "" {
                 ref = c.defaultBranch
         }
 
         // Use /data/repos/ (the mounted PVC) instead of /tmp (read-only in distroless)
+
         cloneDir := "/data/repos"
         if err := os.MkdirAll(cloneDir, 0755); err != nil {
                 // Fallback to /tmp if /data isn't writable (e.g. running locally without PVC)
+
                 cloneDir = os.TempDir()
         }
 
         // do a git fetch (only downloads new commits) instead of a full clone.
         // Saves 2-5s on re-investigations of the same service.
+
         safeRepo := strings.ReplaceAll(repo, "/", "-")
         // Look for an existing clone (without the random suffix)
+
         pattern := fmt.Sprintf("sentinel-repo-%s-%s-*", safeRepo, ref)
         matches, _ := filepath.Glob(filepath.Join(cloneDir, pattern))
         if len(matches) > 0 {
                 // Found an existing clone — try to fetch updates
+
                 existingDir := matches[0]
                 log.Printf("[cloner] found existing clone at %s, fetching updates", existingDir)
 
                 // Use a token-free URL + Auth option on the fetch.
+
                 fetchURL := fmt.Sprintf("https://%s/%s.git", c.gitHost, repo)
                 fetchAuth := c.gitAuth()
 
@@ -103,6 +112,7 @@ func (c *Cloner) Clone(ctx context.Context, repo, ref string) (string, error) {
                 defer fetchCancel()
 
                 // Open the existing repo and fetch
+
                 existingRepo, err := git.PlainOpen(existingDir)
                 if err == nil {
                         err = existingRepo.FetchContext(fetchCtx, &git.FetchOptions{
@@ -123,16 +133,20 @@ func (c *Cloner) Clone(ctx context.Context, repo, ref string) (string, error) {
                 }
                 // If fetch failed, fall through to full clone below
                 // Clean up the old clone to avoid confusion
+
                 _ = os.RemoveAll(existingDir)
         }
 
         // Sanitize repo name for directory naming
+
         dirName := fmt.Sprintf("sentinel-repo-%s-%s", safeRepo, ref)
         if len(dirName) > 60 {
                 // Truncate long names + add a short random suffix
+
                 dirName = dirName[:60]
         }
         // Add random suffix to avoid collisions
+
         dirName = fmt.Sprintf("%s-%d", dirName, time.Now().UnixNano())
 
         tmpDir := filepath.Join(cloneDir, dirName)
@@ -142,6 +156,7 @@ func (c *Cloner) Clone(ctx context.Context, repo, ref string) (string, error) {
 
         // itself (go-git error messages include the URL, leaking the token to logs).
         // Instead, use a token-free URL + the Auth option on CloneOptions.
+
         cloneURL := fmt.Sprintf("https://%s/%s.git", c.gitHost, repo)
         cloneAuth := c.gitAuth()
 
@@ -149,12 +164,14 @@ func (c *Cloner) Clone(ctx context.Context, repo, ref string) (string, error) {
         defer cancel()
 
         // Detect if ref is a commit SHA (40 hex chars) or a branch/tag name
+
         isCommitSHA := len(ref) == 40 && isHex(ref)
 
         if isCommitSHA {
                 // Clone the full repo (shallow clone of a specific commit is tricky with go-git),
                 // then checkout the commit. We use depth 1 + the commit's branch if known,
                 // but for arbitrary commits we need a fuller clone. Cap at depth 50 to keep it fast.
+
                 r, err := git.PlainCloneContext(cloneCtx, tmpDir, false, &git.CloneOptions{
                         URL:   cloneURL,
                         Depth: 50,
@@ -165,6 +182,7 @@ func (c *Cloner) Clone(ctx context.Context, repo, ref string) (string, error) {
                         return "", fmt.Errorf("clone %s@%s: %w", repo, ref, c.sanitizeErr(err))
                 }
                 // Checkout the specific commit
+
                 w, err := r.Worktree()
                 if err != nil {
                         _ = os.RemoveAll(tmpDir)
@@ -179,6 +197,7 @@ func (c *Cloner) Clone(ctx context.Context, repo, ref string) (string, error) {
         }
 
         // Branch or tag — try as branch first, then as tag, then full clone
+
         _, err := git.PlainCloneContext(cloneCtx, tmpDir, false, &git.CloneOptions{
                 URL:           cloneURL,
                 Depth:         1,
@@ -188,6 +207,7 @@ func (c *Cloner) Clone(ctx context.Context, repo, ref string) (string, error) {
         })
         if err != nil {
                 // Try as a tag
+
                 _, err = git.PlainCloneContext(cloneCtx, tmpDir, false, &git.CloneOptions{
                         URL:           cloneURL,
                         Depth:         1,
@@ -197,6 +217,7 @@ func (c *Cloner) Clone(ctx context.Context, repo, ref string) (string, error) {
                 })
                 if err != nil {
                         // Last resort: full shallow clone (works for any ref)
+
                         _, err = git.PlainCloneContext(cloneCtx, tmpDir, false, &git.CloneOptions{
                                 URL:   cloneURL,
                                 Depth: 1,
@@ -214,6 +235,7 @@ func (c *Cloner) Clone(ctx context.Context, repo, ref string) (string, error) {
 
 // gitAuth returns an HTTP basic-auth object for go-git, or nil if no token is set.
 
+
 func (c *Cloner) gitAuth() *githttpprovider.BasicAuth {
         if c.githubToken == "" {
                 return nil
@@ -227,6 +249,7 @@ func (c *Cloner) gitAuth() *githttpprovider.BasicAuth {
 // sanitizeErr strips any embedded token from an error message before it is
 // logged or returned. v3.18.0: defense-in-depth — even though we no longer
 // embed the token in URLs, go-git might still leak it via other paths.
+
 func (c *Cloner) sanitizeErr(err error) error {
         if err == nil || c.githubToken == "" {
                 return err
@@ -235,6 +258,7 @@ func (c *Cloner) sanitizeErr(err error) error {
 }
 
 // isHex returns true if s contains only hexadecimal characters.
+
 func isHex(s string) bool {
         for _, c := range s {
                 if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
@@ -245,8 +269,8 @@ func isHex(s string) bool {
 }
 
 // Cleanup removes the cloned repo.
-
 // slow PVC disk leak when clones contained read-only files).
+
 func (c *Cloner) Cleanup(path string) {
         if err := os.RemoveAll(path); err != nil {
                 log.Printf("[cloner] cleanup failed for %s: %v", path, err)
@@ -256,6 +280,7 @@ func (c *Cloner) Cleanup(path string) {
 // WalkTree returns the file paths in the cloned repo, filtered + capped.
 // Filters out: .git/, node_modules/, vendor/, dist/, build/, __pycache__/,
 // *.pyc, *.lock, etc. Caps at maxFiles to avoid huge repos.
+
 func WalkTree(root string, maxFiles int) ([]string, error) {
         if maxFiles <= 0 {
                 maxFiles = 500
@@ -317,6 +342,7 @@ func WalkTree(root string, maxFiles int) ([]string, error) {
 }
 
 // SearchResult is one match from a local search query.
+
 type SearchResult struct {
         Path    string `json:"path"`
         Line    int    `json:"line"`
@@ -327,6 +353,7 @@ type SearchResult struct {
 
 // Search runs a regexp search over the cloned repo. Returns up to maxResults
 // matches across all files. Searches file contents (not just names).
+
 func Search(root string, pattern string, maxResults int) ([]SearchResult, error) {
         if maxResults <= 0 {
                 maxResults = 50
@@ -391,8 +418,6 @@ func Search(root string, pattern string, maxResults int) ([]SearchResult, error)
 }
 
 // ReadFile reads a file from the cloned repo.
-//
-
 // (the investigator asks the LLM which files to read, and the LLM returns
 // arbitrary strings). The previous implementation called
 // filepath.Join(root, relPath) with no validation, so an LLM that returned
@@ -402,7 +427,6 @@ func Search(root string, pattern string, maxResults int) ([]SearchResult, error)
 // "../../data/runtime-config.json" would exfiltrate the GitHub App private
 // key + LLM API key into the prompt and from there into the SQLite incident
 // store and PR body.
-//
 // We now:
 //  1. Reject absolute paths (anything starting with '/')
 //  2. Clean the path with filepath.Clean
@@ -410,12 +434,13 @@ func Search(root string, pattern string, maxResults int) ([]SearchResult, error)
 //  4. Reject if the relative path starts with ".." (escapes root)
 //  5. Reject if the cleaned path equals "." (the root itself)
 //  6. Reject if the file is a symlink that escapes root (open with O_NOFOLLOW)
-//
 // These checks are defense-in-depth — the LLM should never return such
 // paths in normal operation, but a prompt-injection attack (see H4 in the
 // security review) could coax it into doing so.
+
 func ReadFile(root, relPath string) (string, error) {
         // Reject absolute paths — they cannot be relative to root by definition.
+
         if filepath.IsAbs(relPath) {
                 return "", fmt.Errorf("refusing to read absolute path %q (must be relative to repo root)", relPath)
         }
@@ -423,6 +448,7 @@ func ReadFile(root, relPath string) (string, error) {
         // Clean both sides so the under-root check is robust against "./" and "//"
         // padding. filepath.Join already cleans, but we want to inspect the
         // cleaned relPath before joining.
+
         cleanRel := filepath.Clean(relPath)
         if cleanRel == "." {
                 return "", fmt.Errorf("refusing to read repo root itself")
@@ -437,6 +463,7 @@ func ReadFile(root, relPath string) (string, error) {
         // catches symlinks inside the repo that point outside it (e.g. a
         // maliciously crafted repo could contain a symlink 'foo' -> '/etc/passwd'
         // and the LLM could ask us to read 'foo').
+
         relAfter, err := filepath.Rel(root, fullPath)
         if err != nil {
                 return "", fmt.Errorf("resolve %q under %q: %w", relPath, root, err)
@@ -448,12 +475,14 @@ func ReadFile(root, relPath string) (string, error) {
         // Verify the file is a regular file (not a symlink to outside root, not
         // a device file, not a directory). os.ReadFile follows symlinks, so we
         // open with O_NOFOLLOW via os.Stat first.
+
         info, err := os.Lstat(fullPath)
         if err != nil {
                 return "", err
         }
         if info.Mode()&os.ModeSymlink != 0 {
                 // Symlink inside the repo. Resolve and re-check it's still under root.
+
                 target, err := os.Readlink(fullPath)
                 if err != nil {
                         return "", fmt.Errorf("read symlink %q: %w", relPath, err)

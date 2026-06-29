@@ -1,11 +1,9 @@
 // Package executors — auto-remediation controller. v4.2.0 Phase 4.
-//
 // Detects and auto-remediates infrastructure issues that don't require code changes:
 //   - Disk full → prune old container images / logs
 //   - Pod stuck in CrashLoopBackOff (with no code fix possible) → restart pod
 //   - Certificate expiring → alert (can't auto-renew without cert-manager integration)
 //   - Node not ready → cordon + drain
-//
 // This runs as a background goroutine alongside the detection layer. It's
 // opt-in via SENTINEL_AUTO_REMEDIATION_ENABLED (default false).
 package executors
@@ -22,15 +20,19 @@ import (
 )
 
 // RemediationController detects and auto-remediates infra issues.
+
 type RemediationController struct {
         clientset *kubernetes.Clientset
         // namespaces to skip (system namespaces)
+
         skipNamespaces map[string]bool
         // actions taken (for metrics + logging)
+
         actionsTaken int
 }
 
 // NewRemediationController creates a controller.
+
 func NewRemediationController(clientset *kubernetes.Clientset, skipNamespaces []string) *RemediationController {
         skip := map[string]bool{}
         for _, ns := range skipNamespaces {
@@ -44,6 +46,7 @@ func NewRemediationController(clientset *kubernetes.Clientset, skipNamespaces []
 
 // Run starts the remediation loop. Polls every pollInterval for issues.
 // Blocks until ctx is cancelled.
+
 func (r *RemediationController) Run(ctx context.Context, pollInterval time.Duration) {
         if pollInterval <= 0 {
                 pollInterval = 5 * time.Minute
@@ -65,18 +68,23 @@ func (r *RemediationController) Run(ctx context.Context, pollInterval time.Durat
 }
 
 // tick runs one remediation pass.
+
 func (r *RemediationController) tick(ctx context.Context) {
         // 1. Check for disk pressure on nodes
+
         r.checkDiskPressure(ctx)
 
         // 2. Check for pods stuck in CrashLoopBackOff with high restart counts
+
         r.checkCrashLoop(ctx)
 
         // 3. Check for pending pods (unschedulable)
+
         r.checkPendingPods(ctx)
 }
 
 // checkDiskPressure checks for nodes with DiskPressure condition and attempts cleanup.
+
 func (r *RemediationController) checkDiskPressure(ctx context.Context) {
         nodes, err := r.clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
         if err != nil {
@@ -98,8 +106,10 @@ func (r *RemediationController) checkDiskPressure(ctx context.Context) {
 // In a distroless environment we can't run `crictl rmi` directly, so we
 // log the issue and recommend manual intervention. In a full K8s environment
 // with SSH access, we could run the cleanup remotely.
+
 func (r *RemediationController) cleanNodeDisk(ctx context.Context, nodeName string) {
         // Check for pods that are Evicted (they hold references to images)
+
         pods, err := r.clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{
                 FieldSelector: fmt.Sprintf("spec.nodeName=%s,status.phase=Failed", nodeName),
         })
@@ -109,6 +119,7 @@ func (r *RemediationController) cleanNodeDisk(ctx context.Context, nodeName stri
         }
 
         // Delete evicted pods (they're already dead, but their specs hold image refs)
+
         deleted := 0
         for _, pod := range pods.Items {
                 if pod.Status.Phase == corev1.PodFailed && pod.Status.Reason == "Evicted" {
@@ -131,6 +142,7 @@ func (r *RemediationController) cleanNodeDisk(ctx context.Context, nodeName stri
 // If a pod has > 10 restarts and Sentinel hasn't investigated it (no sentinel.io/repo
 // annotation), it's likely an infra issue (bad config, missing secret, etc.).
 // We restart the pod by deleting it (the Deployment will recreate it).
+
 func (r *RemediationController) checkCrashLoop(ctx context.Context) {
         pods, err := r.clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{})
         if err != nil {
@@ -148,6 +160,7 @@ func (r *RemediationController) checkCrashLoop(ctx context.Context) {
                                 // Only auto-restart if restart count is very high (>20) AND
                                 // the pod doesn't have a sentinel.io/repo annotation
                                 // (if it has the annotation, Sentinel will investigate it as a code issue)
+
                                 if cs.RestartCount > 20 {
                                         if _, hasRepo := pod.Annotations["sentinel.io/repo"]; !hasRepo {
                                                 log.Printf("[remediation] pod %s/%s in CrashLoopBackOff (%d restarts, no sentinel annotation) — restarting",
@@ -166,6 +179,7 @@ func (r *RemediationController) checkCrashLoop(ctx context.Context) {
 // checkPendingPods finds pods stuck in Pending state for > 10 minutes.
 // These are usually unschedulable (not enough resources, no matching node).
 // We log them + alert (can't auto-fix scheduling issues without scaling nodes).
+
 func (r *RemediationController) checkPendingPods(ctx context.Context) {
         pods, err := r.clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{
                 FieldSelector: "status.phase=Pending",
@@ -181,12 +195,14 @@ func (r *RemediationController) checkPendingPods(ctx context.Context) {
                 }
 
                 // Check how long the pod has been pending
+
                 if pod.Status.StartTime == nil {
                         continue
                 }
                 pendingDuration := time.Since(pod.Status.StartTime.Time)
                 if pendingDuration > 10*time.Minute {
                         // Get the scheduling failure reason
+
                         schedulingReason := "unknown"
                         for _, cond := range pod.Status.Conditions {
                                 if cond.Type == corev1.PodScheduled && cond.Status == corev1.ConditionFalse {
@@ -199,16 +215,19 @@ func (r *RemediationController) checkPendingPods(ctx context.Context) {
 
                         // If it's a resource issue, we could auto-scale (future feature)
                         // For now, just log + alert
+
                 }
         }
 }
 
 // ActionsTaken returns the total number of remediation actions taken.
+
 func (r *RemediationController) ActionsTaken() int {
         return r.actionsTaken
 }
 
 // RemediationStatus is the public state of the remediation controller.
+
 type RemediationStatus struct {
         Enabled       bool `json:"enabled"`
         ActionsTaken  int  `json:"actions_taken"`
@@ -217,6 +236,7 @@ type RemediationStatus struct {
 }
 
 // Status returns the current remediation state.
+
 func (r *RemediationController) Status() RemediationStatus {
         return RemediationStatus{
                 Enabled:      true,
@@ -225,3 +245,4 @@ func (r *RemediationController) Status() RemediationStatus {
 }
 
 // Guard against unused import warning if strings is not used elsewhere.
+

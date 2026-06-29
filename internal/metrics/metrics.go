@@ -1,5 +1,4 @@
 // Package metrics provides Prometheus instrumentation for Sentinel.
-//
 // Exports real counters/histograms/gauges so Sentinel's own health is
 // observable in Prometheus/Grafana. The metricSet is mutated from multiple
 // goroutines (3 concurrent investigations + N LLM calls + SSE broadcaster),
@@ -7,27 +6,21 @@
 // A single sync.Mutex protects every field; the critical sections are tiny
 // (a map increment or a float64 add) so contention is negligible for a
 // single-pod system.
-//
 // Metrics exported:
-//
 //      Counters (monotonically increasing):
 //        sentinel_incidents_total{status="verified|failed|escalated"}
 //        sentinel_investigations_started_total
 //        sentinel_prs_opened_total
 //        sentinel_sandbox_verifications_total{verified="true|false"}
 //        sentinel_llm_calls_total{model, status="success|error|rate_limited"}
-//
 //      Histograms (duration distributions):
 //        sentinel_investigation_duration_seconds{status}
 //        sentinel_llm_call_duration_seconds{model}
 //        sentinel_sandbox_duration_seconds
-//
 //      Gauges (point-in-time values):
 //        sentinel_active_incidents
 //        sentinel_llm_in_flight_calls
-//
 // Usage:
-//
 //      metrics.RecordInvestigationStart()
 //      defer metrics.RecordInvestigationComplete("verified", time.Since(start))
 package metrics
@@ -44,19 +37,18 @@ import (
 // want to add a new dependency (the project prides itself on minimal deps).
 // Instead we implement a minimal Prometheus exposition format by hand — it's
 // just text, and we control all the metric definitions.
-//
 // This keeps the binary small and avoids the prometheus/client_golang dependency
 // tree (which is ~2MB compiled). The tradeoff is we lose client-side histogram
 // bucketing — but for a single-pod system, server-side aggregation is fine.
-
 // metricSet holds all our metric values. Single source of truth for /metrics.
-
 // the lock for the duration of their read-modify-write. The render() function
 // takes a read lock so it sees a consistent snapshot.
+
 type metricSet struct {
         mu sync.Mutex
 
         // Counters
+
         incidentsTotal        map[string]float64 // by status
         investigationsStarted float64
         prsOpened             float64
@@ -71,6 +63,7 @@ type metricSet struct {
         sandboxRetryCount    map[string]int // by attempt index
 
         // Histograms (simplified — we track count + sum, server computes avg)
+
         investigationDurationCount float64
         investigationDurationSum   float64
         llmCallDurationCount       float64
@@ -79,18 +72,21 @@ type metricSet struct {
         sandboxDurationSum         float64
 
         // Gauges
+
         activeIncidents float64
         llmInFlight     float64
 
         // Each bucket counts investigations/LLM calls/sandbox runs that took
         // <= the bucket's upper bound. Prometheus can compute quantiles from
         // these via histogram_quantile().
+
         investigationBuckets map[string]float64 // key: bucket upper bound (e.g. "30", "60", "120", "300", "+Inf")
         llmCallBuckets       map[string]float64
         sandboxBuckets       map[string]float64
 }
 
 // Standard bucket boundaries (seconds).
+
 
 var (
         investBuckets = []float64{30, 60, 120, 180, 300, 600, 1200, 1800}
@@ -114,6 +110,7 @@ var metrics = &metricSet{
 
 // RecordInvestigationStart increments the investigations_started counter
 // and bumps the active_incidents gauge.
+
 func RecordInvestigationStart() {
         metrics.mu.Lock()
         defer metrics.mu.Unlock()
@@ -123,6 +120,7 @@ func RecordInvestigationStart() {
 
 // RecordInvestigationComplete records the investigation duration and
 // increments the incidents_total counter by status. Decrements active_incidents.
+
 func RecordInvestigationComplete(status string, duration time.Duration) {
         metrics.mu.Lock()
         defer metrics.mu.Unlock()
@@ -135,6 +133,7 @@ func RecordInvestigationComplete(status string, duration time.Duration) {
 }
 
 // RecordPROpened increments the prs_opened counter.
+
 func RecordPROpened() {
         metrics.mu.Lock()
         defer metrics.mu.Unlock()
@@ -142,6 +141,7 @@ func RecordPROpened() {
 }
 
 // RecordSandboxVerification records a sandbox verification result + duration.
+
 func RecordSandboxVerification(verified bool, duration time.Duration) {
         key := "false"
         if verified {
@@ -159,6 +159,7 @@ func RecordSandboxVerification(verified bool, duration time.Duration) {
 // bumpBucket increments all buckets whose upper bound is >= the value.
 // This produces a cumulative histogram (each bucket includes counts from
 // all smaller buckets, as Prometheus expects).
+
 func bumpBucket(buckets map[string]float64, bounds []float64, value float64) {
         for _, b := range bounds {
                 if value <= b {
@@ -169,6 +170,7 @@ func bumpBucket(buckets map[string]float64, bounds []float64, value float64) {
 }
 
 // RecordLLMCall records an LLM API call: model, status (success/error/rate_limited), duration.
+
 func RecordLLMCall(model, status string, duration time.Duration) {
         key := model + ":" + status
         metrics.mu.Lock()
@@ -181,9 +183,9 @@ func RecordLLMCall(model, status string, duration time.Duration) {
 }
 
 // RecordLLMTokens records token usage + estimated cost for an LLM call.
-
 // Pricing is approximate (per 1M tokens, USD) and based on public list prices as of 2024-12.
 // Real production cost tracking should use the provider's billing API.
+
 func RecordLLMTokens(model string, inputTokens, outputTokens int) {
         metrics.mu.Lock()
         defer metrics.mu.Unlock()
@@ -195,10 +197,12 @@ func RecordLLMTokens(model string, inputTokens, outputTokens int) {
 // estimateCostUSD returns an approximate cost in USD for a single LLM call.
 // Prices are per 1M tokens, from public provider pricing pages.
 // Returns 0 for unknown models (operator should add their pricing here).
+
 func estimateCostUSD(model string, inputTokens, outputTokens int) float64 {
         type pricing struct{ in, out float64 } // USD per 1M tokens
         prices := map[string]pricing{
                 // OpenAI
+
                 "gpt-4o":              {2.50, 10.00},
                 "gpt-4o-mini":         {0.15, 0.60},
                 "gpt-4-turbo":         {10.00, 30.00},
@@ -206,14 +210,17 @@ func estimateCostUSD(model string, inputTokens, outputTokens int) float64 {
                 "o1-mini":             {3.00, 12.00},
                 "o3-mini":             {3.00, 12.00},
                 // Anthropic
+
                 "claude-3-5-sonnet-latest":  {3.00, 15.00},
                 "claude-3-5-haiku-latest":   {0.80, 4.00},
                 "claude-3-opus-latest":      {15.00, 75.00},
                 // Google
+
                 "gemini-1.5-pro":      {1.25, 5.00},
                 "gemini-1.5-flash":    {0.075, 0.30},
                 "gemini-2.0-flash":    {0.10, 0.40},
                 // z.ai
+
                 "glm-4.5":             {2.00, 8.00},
                 "glm-4-flash":         {0.50, 0.50},
                 "glm-4-air":           {0.50, 0.50},
@@ -221,12 +228,14 @@ func estimateCostUSD(model string, inputTokens, outputTokens int) float64 {
         p, ok := prices[model]
         if !ok {
                 // Fall back to a conservative estimate (use gpt-4o-mini pricing).
+
                 p = pricing{0.15, 0.60}
         }
         return float64(inputTokens)/1_000_000*p.in + float64(outputTokens)/1_000_000*p.out
 }
 
 // RecordSandboxLevelFailure records which sandbox verification level failed.
+
 
 func RecordSandboxLevelFailure(level int) {
         metrics.mu.Lock()
@@ -236,6 +245,7 @@ func RecordSandboxLevelFailure(level int) {
 
 // RecordSandboxRetry records which sandbox retry attempt was used.
 
+
 func RecordSandboxRetry(attempt int) {
         metrics.mu.Lock()
         defer metrics.mu.Unlock()
@@ -243,6 +253,7 @@ func RecordSandboxRetry(attempt int) {
 }
 
 // LLMCallStart increments the in-flight gauge. Call LLMCallEnd when done.
+
 func LLMCallStart() {
         metrics.mu.Lock()
         defer metrics.mu.Unlock()
@@ -250,6 +261,7 @@ func LLMCallStart() {
 }
 
 // LLMCallEnd decrements the in-flight gauge.
+
 func LLMCallEnd() {
         metrics.mu.Lock()
         defer metrics.mu.Unlock()
@@ -257,6 +269,7 @@ func LLMCallEnd() {
 }
 
 // Handler returns an http.HandlerFunc that writes Prometheus-format metrics.
+
 func Handler() http.HandlerFunc {
         return func(w http.ResponseWriter, r *http.Request) {
                 w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
@@ -266,6 +279,7 @@ func Handler() http.HandlerFunc {
 
 // render produces the Prometheus text exposition format.
 // We emit HELP/TYPE lines for each metric, then the values.
+
 func render() string {
         metrics.mu.Lock()
         defer metrics.mu.Unlock()
@@ -274,6 +288,7 @@ func render() string {
         // touch the shared state. Maps can't be safely read while another goroutine
         // is writing even if we hold the lock here, because the builder runs after
         // we return — so copy now.
+
         incidentsTotal := mapClone(metrics.incidentsTotal)
         sandboxVerifications := mapClone(metrics.sandboxVerifications)
         llmCallsTotal := mapClone(metrics.llmCallsTotal)
@@ -298,6 +313,7 @@ func render() string {
         var b builder
 
         // Counters
+
         b.help("sentinel_incidents_total", "Total incidents processed by final status")
         b.typ("sentinel_incidents_total", "counter")
         for _, status := range sortedKeys(incidentsTotal) {
@@ -356,6 +372,7 @@ func render() string {
         }
 
         // Histograms (simplified — count + sum, no buckets)
+
         b.help("sentinel_investigation_duration_seconds_count", "Investigation duration count")
         b.typ("sentinel_investigation_duration_seconds_count", "counter")
         b.metric("sentinel_investigation_duration_seconds_count", investigationDurationCount)
@@ -381,6 +398,7 @@ func render() string {
         b.metric("sentinel_sandbox_duration_seconds_sum", sandboxDurationSum)
 
         // histogram_quantile() in Prometheus.
+
         b.help("sentinel_investigation_duration_seconds_bucket", "Investigation duration histogram (cumulative buckets)")
         b.typ("sentinel_investigation_duration_seconds_bucket", "histogram")
         for _, bound := range investBuckets {
@@ -403,6 +421,7 @@ func render() string {
         b.metric("sentinel_sandbox_duration_seconds_bucket", metrics.sandboxBuckets["+Inf"], "le", "+Inf")
 
         // Gauges
+
         b.help("sentinel_active_incidents", "Currently active investigations")
         b.typ("sentinel_active_incidents", "gauge")
         b.metric("sentinel_active_incidents", activeIncidents)
@@ -416,6 +435,7 @@ func render() string {
 
 // mapClone returns a shallow copy of m. Used by render() to snapshot map
 // state under the lock so the builder can iterate without holding the lock.
+
 func mapClone(m map[string]float64) map[string]float64 {
         out := make(map[string]float64, len(m))
         for k, v := range m {
@@ -425,6 +445,7 @@ func mapClone(m map[string]float64) map[string]float64 {
 }
 
 // splitModelStatus splits "model:status" back into two parts.
+
 func splitModelStatus(key string) (model, status string) {
         for i := len(key) - 1; i >= 0; i-- {
                 if key[i] == ':' {
@@ -437,6 +458,7 @@ func splitModelStatus(key string) (model, status string) {
 // sortedKeys returns the keys of a map in sorted order (deterministic output).
 // We sort to make test assertions stable — Prometheus doesn't require sorting
 // but it makes /metrics output reproducible.
+
 func sortedKeys(m map[string]float64) []string {
         keys := make([]string, 0, len(m))
         for k := range m {
@@ -476,6 +498,7 @@ func sortedKeysFloat(m map[string]float64) []string {
 }
 
 // builder is a string builder for Prometheus text format.
+
 type builder struct {
         buf []byte
 }
@@ -522,3 +545,4 @@ func (b *builder) String() string {
 }
 
 // _ keeps strings imported (used in splitModelStatus).
+

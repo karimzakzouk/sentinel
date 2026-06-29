@@ -1,12 +1,10 @@
 // Package githubapp provides GitHub App authentication.
-//
 // Replaces personal access tokens with GitHub App installation tokens.
 // This enables:
 //   - One-click install from the GitHub Marketplace
 //   - Verified "Sentinel" bot identity on PR review comments
 //   - Automatic webhook registration on every repo in the org
 //   - No token expiration management (installation tokens auto-refresh)
-//
 // Flow:
 //   1. User creates a GitHub App (manual, one-time)
 //   2. User installs it on their org/repos
@@ -35,6 +33,7 @@ import (
 )
 
 // App handles GitHub App authentication.
+
 type App struct {
         appID         string
         privateKey    *rsa.PrivateKey
@@ -43,6 +42,7 @@ type App struct {
         apiURL        string // v3.11.0: base API URL (default "https://api.github.com")
 
         // Cached installation token
+
         tokenMu       sync.Mutex
         cachedToken   string
         tokenExpiry   time.Time
@@ -51,13 +51,15 @@ type App struct {
 // New creates a GitHub App from the app ID, private key (PEM), and installation ID.
 // ApiURL is the base API URL (default "https://api.github.com"). For
 // GitHub Enterprise, pass "https://gh.mycorp.internal/api/v3". Empty defaults
-// to the public GitHub API. CRITICAL audit #2.
+// to the public GitHub API..
+
 func New(appID, privateKeyPEM, installID string) (*App, error) {
         return NewWithAPIURL(appID, privateKeyPEM, installID, "https://api.github.com")
 }
 
 // NewWithAPIURL creates a GitHub App with a custom API base URL. v3.11.0:
 // For GitHub Enterprise / GitLab (GitHub-compat API) support.
+
 func NewWithAPIURL(appID, privateKeyPEM, installID, apiURL string) (*App, error) {
         block, _ := pem.Decode([]byte(privateKeyPEM))
         if block == nil {
@@ -85,6 +87,7 @@ func NewWithAPIURL(appID, privateKeyPEM, installID, apiURL string) (*App, error)
 
 // generateJWT creates a signed JWT for GitHub App authentication.
 // GitHub requires RS256 algorithm, issued at time, and expiration (max 10 min).
+
 func (a *App) generateJWT() (string, error) {
         now := time.Now()
         claims := jwt.MapClaims{
@@ -98,11 +101,13 @@ func (a *App) generateJWT() (string, error) {
 
 // GetInstallToken returns a valid installation token, refreshing if needed.
 // Installation tokens expire after 1 hour. We cache and refresh at 50 min.
+
 func (a *App) GetInstallToken(ctx context.Context) (string, error) {
         a.tokenMu.Lock()
         defer a.tokenMu.Unlock()
 
         // Return cached token if still valid (with 10 min buffer)
+
         if a.cachedToken != "" && time.Now().Before(a.tokenExpiry.Add(-10*time.Minute)) {
                 return a.cachedToken, nil
         }
@@ -148,6 +153,7 @@ func (a *App) GetInstallToken(ctx context.Context) (string, error) {
 
 // PostReviewComment posts a PR review comment using the app's installation token.
 // The comment appears as the verified "Sentinel" bot.
+
 func (a *App) PostReviewComment(ctx context.Context, owner, repo string, prNumber int, body string) error {
         token, err := a.GetInstallToken(ctx)
         if err != nil {
@@ -187,6 +193,7 @@ func (a *App) PostReviewComment(ctx context.Context, owner, repo string, prNumbe
 // SECURITY — diffURL is validated to be under api.github.com (or the
 // configured GitHub Enterprise URL). Caller-supplied URLs from webhook bodies
 // are an SSRF + token-exfiltration vector.
+
 func (a *App) FetchPRDiff(ctx context.Context, diffURL string) (string, error) {
         if err := validateGitHubURL(diffURL, a.apiURL); err != nil {
                 return "", fmt.Errorf("refusing to fetch diff: %w", err)
@@ -222,6 +229,7 @@ func (a *App) FetchPRDiff(ctx context.Context, diffURL string) (string, error) {
 
 // validateGitHubURL refuses any URL whose host is not the expected GitHub host.
 // This blocks SSRF attacks where a webhook payload supplies an attacker-controlled URL.
+
 func validateGitHubURL(rawURL, expectedBase string) error {
         if expectedBase == "" {
                 expectedBase = "https://api.github.com"
@@ -245,6 +253,7 @@ func validateGitHubURL(rawURL, expectedBase string) error {
 
 // RegisterWebhook registers a webhook on a repo using the app's installation token.
 // Called when the app is installed, so every repo gets PR review automatically.
+
 func (a *App) RegisterWebhook(ctx context.Context, owner, repo, webhookURL, secret string) error {
         token, err := a.GetInstallToken(ctx)
         if err != nil {
@@ -289,6 +298,7 @@ func (a *App) RegisterWebhook(ctx context.Context, owner, repo, webhookURL, secr
 // HandleInstallationEvent processes a GitHub App installation webhook.
 // When the app is installed on an org, this auto-registers webhooks
 // on every repo.
+
 func (a *App) HandleInstallationEvent(ctx context.Context, payload []byte, webhookURL, secret string) error {
         var event struct {
                 Action string `json:"action"`
@@ -313,6 +323,7 @@ func (a *App) HandleInstallationEvent(ctx context.Context, payload []byte, webho
         }
 
         // Register webhook on each repo
+
         for _, repo := range event.Repositories {
                 owner := event.Installation.Account.Login
                 repoName := repo.Name
@@ -325,4 +336,3 @@ func (a *App) HandleInstallationEvent(ctx context.Context, payload []byte, webho
 
         return nil
 }
-

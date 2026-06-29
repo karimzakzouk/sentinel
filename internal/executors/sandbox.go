@@ -16,12 +16,14 @@ import (
 
 // sandboxHTTPClient is the shared HTTP client for sandbox Level 2 + 3 probes.
 // A package-level shared client reuses TCP+TLS connections to the canary
-// Service, cutting probe latency ~50% (previously: a new http.Client was
+// Service, cutting probe latency ~50% (Client was
 // created on every call, 2-3 per incident, defeating connection pooling).
+
 var sandboxHTTPClient = &http.Client{Timeout: 5 * time.Second}
 
 // SandboxResult is the outcome of a sandbox run. Carries per-level failure
 // details (was a one-line Summary, making the retry loop ineffective).
+
 type SandboxResult struct {
         Verified      bool
         Summary       string
@@ -33,9 +35,11 @@ type SandboxResult struct {
         // (e.g. RBAC denied, image pull failure, namespace creation failed).
         // When true, the retry loop should NOT feed the error back to the LLM —
         // the LLM can't fix a permissions issue.
+
         InfrastructureError bool
 
         // the LLM can actually diagnose + fix the issue.
+
         PodLogs      string   // last N bytes of canary pod logs (Level 1 failure)
         ProbeResults []string // per-probe outcome (Level 2/3 failure)
 }
@@ -45,11 +49,9 @@ type SandboxResult struct {
 //   - Level 1: Canary pod becomes Ready AND stays Ready for sustainedWindow (startup crash fixed)
 //   - Level 2: All configured endpoints return 2xx/3xx (app starts + serves traffic)
 //   - Level 3: Original error is gone (reproduce the crash conditions)
-//
 // Probe paths are configurable via SENTINEL_SANDBOX_PROBE_PATHS. Defaults to
 // /,/healthz,/readyz. For app-specific paths (e.g. /pay?amount=0), set the
 // env var.
-//
 // Safety guarantees:
 //   - waitForReady requires ReadyReplicas >= 1 sustained for sustainedWindow
 //     (default 30s) before passing Level 1. A pod that goes Ready then
@@ -63,7 +65,8 @@ type SandboxResult struct {
 //   - createNamespace also creates a default-deny NetworkPolicy on the
 //     sandbox namespace so the canary can't reach arbitrary services.
 //   - The sandbox NetworkPolicy ingress rule allows probes from the actual
-//     Sentinel namespace (audit #8 fix).
+//     Sentinel namespace ( fix).
+
 type SandboxRunner struct {
         clientset        *kubernetes.Clientset
         sandboxPrefix    string
@@ -73,10 +76,12 @@ type SandboxRunner struct {
         sentinelNamespace string
 
         // Run() is invoked on the shared instance from multiple investigation goroutines.
+
         probePathsMu sync.RWMutex
 }
 
 // NewSandbox creates a SandboxRunner.
+
 func NewSandbox(clientset *kubernetes.Clientset, sandboxPrefix string, enableMirroring bool) *SandboxRunner {
         return &SandboxRunner{
                 clientset:        clientset,
@@ -90,6 +95,7 @@ func NewSandbox(clientset *kubernetes.Clientset, sandboxPrefix string, enableMir
 
 // WithProbePaths sets custom probe paths for Level 2 + 3 verification.
 
+
 func (s *SandboxRunner) WithProbePaths(paths []string) *SandboxRunner {
         if len(paths) > 0 {
                 s.probePaths = paths
@@ -98,9 +104,9 @@ func (s *SandboxRunner) WithProbePaths(paths []string) *SandboxRunner {
 }
 
 // WithSustainedReady overrides the default 30s sustained-ready window.
-
 // crash-after-ready detection. Set to 0 to disable (NOT recommended —
 // reintroduces the crash-after-ready false positive).
+
 func (s *SandboxRunner) WithSustainedReady(d time.Duration) *SandboxRunner {
         s.sustainedWindow = d
         return s
@@ -108,10 +114,11 @@ func (s *SandboxRunner) WithSustainedReady(d time.Duration) *SandboxRunner {
 
 // WithSentinelNamespace sets the namespace Sentinel itself runs in, used by
 // the sandbox NetworkPolicy ingress allow-list. v3.11.0: Replaces the
-// hardcoded "sentinel" literal (audit #8). When Sentinel is installed via
+// hardcoded "sentinel" literal. When Sentinel is installed via
 // `helm install sre-bot sentinel/sentinel`, the sandbox NetworkPolicy was
 // denying probes from the sre-bot namespace → Level 2 verification always
 // failed on connection errors.
+
 func (s *SandboxRunner) WithSentinelNamespace(ns string) *SandboxRunner {
         if ns != "" {
                 s.sentinelNamespace = ns
@@ -120,6 +127,7 @@ func (s *SandboxRunner) WithSentinelNamespace(ns string) *SandboxRunner {
 }
 
 // Run creates a sandbox, deploys the fix, verifies it, returns the verdict.
+
 func (s *SandboxRunner) Run(ctx context.Context, inc *schemas.Incident) SandboxResult {
         fp := inc.State.FixProposal
         if fp == nil {
@@ -129,20 +137,24 @@ func (s *SandboxRunner) Run(ctx context.Context, inc *schemas.Incident) SandboxR
         sandboxNS := fmt.Sprintf("%s-%s-%s", s.sandboxPrefix, fp.TargetService, fp.FixID.String()[:8])
 
         // 1. Create the sandbox namespace + NetworkPolicy
+
         if err := s.createNamespace(ctx, sandboxNS); err != nil {
                 return SandboxResult{Verified: false, Summary: fmt.Sprintf("create_namespace: %v", err), Namespace: sandboxNS}
         }
 
         // This is best-effort — if it fails, we log and continue (the namespace
         // itself is still isolated by virtue of being separate).
+
         if err := s.createSandboxNetworkPolicy(ctx, sandboxNS); err != nil {
                 log.Printf("[sandbox] WARNING: failed to create NetworkPolicy in %s: %v (canary will have unrestricted egress)", sandboxNS, err)
         }
 
         // Always clean up at the end
+
         defer s.cleanup(ctx, sandboxNS)
 
         // 2. Deploy the canary into the sandbox
+
         deployResult := s.deployCanary(ctx, inc, sandboxNS)
         if !deployResult.success {
                 return SandboxResult{
@@ -157,16 +169,17 @@ func (s *SandboxRunner) Run(ctx context.Context, inc *schemas.Incident) SandboxR
         // it fixed (wrong endpoint detection, 4xx on handled errors = false
         // failure). The primary oracle is now Level 3: scan canary logs for
         // the original error type. If the error is gone, the fix works.
-        //
         // Level 2 now only probes HEALTH endpoints (/, /healthz, /readyz).
         // 4xx on health = fail (app is broken). 4xx on trigger endpoints is
         // no longer checked — a 4xx on the trigger endpoint means the fix
         // correctly handles the error instead of crashing.
+
         healthProbePaths := s.getProbePaths() // defaults: /, /healthz, /readyz
 
         // 3. Level 1 — wait for canary pods to be Ready AND stay Ready for
         // sustainedWindow. During this window, we also stream canary logs to
         // check for the original error type (Level 3 primary oracle).
+
         log.Printf("[sandbox] Level 1: waiting for canary pod Ready + %s sustained window", s.sustainedWindow)
         ready, canaryLogs := s.waitForReadyWithLogs(ctx, sandboxNS, fp.TargetService, 240*time.Second)
         if !ready {
@@ -179,6 +192,7 @@ func (s *SandboxRunner) Run(ctx context.Context, inc *schemas.Incident) SandboxR
         log.Printf("[sandbox] Level 1 PASSED: canary pod is Ready and stayed Ready for %s", s.sustainedWindow)
 
         // 4. Level 2 — health endpoints only. 4xx/5xx = fail (app is broken).
+
         if !s.verifyEndpointsWithPaths(ctx, sandboxNS, fp.TargetService, healthProbePaths) {
                 return SandboxResult{Verified: false, Summary: "health_endpoints_failing (/, /healthz, /readyz returned 4xx/5xx — app is broken)", Namespace: sandboxNS}
         }
@@ -188,11 +202,11 @@ func (s *SandboxRunner) Run(ctx context.Context, inc *schemas.Incident) SandboxR
         // If the original error (TypeError, panic, IndexError, etc.) appears in the
         // canary's logs during the sustained window, the fix did NOT work.
         // If the error is gone, the fix worked. This is the error-gone oracle.
-        //
         // This is universal: works for HTTP errors, background task errors,
         // startup errors, OOMKills — any error that writes to logs.
         // Language-agnostic: uses the existing multi-language ParseError() which
         // already handles Python, Go, Java, JS, Rust, Ruby, C, signals.
+
         level3Result := s.verifyErrorGoneFromLogs(ctx, inc, canaryLogs)
         if !level3Result.passed {
                 return SandboxResult{
@@ -211,6 +225,7 @@ func (s *SandboxRunner) Run(ctx context.Context, inc *schemas.Incident) SandboxR
         // This is the SWE-bench FAIL_TO_PASS pattern.
         // Best-effort: if no test was generated or the test fails to run,
         // we don't block the sandbox (Level 3 is the primary oracle).
+
         if fp.CanaryImage != nil && *fp.CanaryImage != "" {
                 testResult := s.runRegressionTest(ctx, sandboxNS, inc, *fp.CanaryImage)
                 if testResult != nil {
@@ -233,9 +248,9 @@ func (s *SandboxRunner) Run(ctx context.Context, inc *schemas.Incident) SandboxR
         // The reproducer is a standalone script that calls the buggy function + exits 0 if OK.
         // Best-effort: if no reproducer was generated or it fails to run due to
         // infrastructure errors, don't block the PR (Levels 1-4 are the real gates).
-
         // (exit code != 0). Infrastructure errors (wrong container name, pod
         // creation failed, etc.) are non-blocking.
+
         if fp.CanaryImage != nil && *fp.CanaryImage != "" {
                 reproResult := s.runReproducer(ctx, sandboxNS, inc, *fp.CanaryImage)
                 if reproResult != nil {
@@ -269,4 +284,3 @@ func (s *SandboxRunner) Run(ctx context.Context, inc *schemas.Incident) SandboxR
                 Namespace: sandboxNS,
         }
 }
-

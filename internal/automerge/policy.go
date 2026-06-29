@@ -1,24 +1,19 @@
 // Package automerge implements the auto-merge feature for Sentinel v4.0.0.
-//
 // When a Sentinel-tracked PR passes all gates (sandbox verified + confidence
 // threshold + CI green), the merger can auto-merge it — closing the loop
 // from detection to deployment without human intervention.
-//
 // Three opt-in layers (all must be true to auto-merge):
 //   1. Global config: SENTINEL_AUTO_MERGE_ENABLED=true
 //   2. Namespace allowlist: SENTINEL_AUTO_MERGE_NAMESPACES=sim,staging
 //   3. Per-service annotation: sentinel.io/auto-merge: "true"
-//
 // Three gates (all must pass):
 //   1. Sandbox verified (hard requirement)
 //   2. Confidence >= 0.85 + safety policy allowed (hard)
 //   3. CI green (soft by default, hard in strict mode)
-//
 // Safety valves:
 //   - Rate limit: max 3 auto-merges per hour (prevents cascade → many bad merges)
 //   - Cooldown: 1 hour pause after any regression detected
 //   - Escape hatch: /sentinel no-merge (chatops)
-//
 // Design informed by Prow+Tide: commands mutate labels, the merger watches
 // labels + gates and is the only thing that actually merges.
 package automerge
@@ -32,6 +27,7 @@ import (
 )
 
 // Config is the immutable auto-merge configuration.
+
 type Config struct {
         Enabled              bool
         Namespaces           []string // namespaces where auto-merge is allowed
@@ -44,6 +40,7 @@ type Config struct {
 
 // DefaultConfig returns sensible defaults. Auto-merge is OFF by default —
 // operators must explicitly enable it.
+
 func DefaultConfig() Config {
         return Config{
                 Enabled:              false,
@@ -59,6 +56,7 @@ func DefaultConfig() Config {
 // Policy evaluates whether a PR is eligible for auto-merge.
 // Returns a Decision with AutoMerge=true if all gates pass, plus a human-
 // readable Reason for the PR comment.
+
 type Policy struct {
         cfg          Config
         safetyChecker SafetyChecker
@@ -69,11 +67,13 @@ type Policy struct {
 
 // SafetyChecker is implemented by safety.Policy. Decoupled to avoid an
 // import cycle (safety package doesn't know about automerge).
+
 type SafetyChecker interface {
         IsAutoMergeAllowed(fixType string, hasSchemaMigration bool, isHighRisk bool) bool
 }
 
 // Decision is the result of Policy.Evaluate.
+
 type Decision struct {
         AutoMerge   bool
         Reason      string   // for the PR comment if skipped
@@ -82,6 +82,7 @@ type Decision struct {
 }
 
 // NewPolicy creates a Policy.
+
 func NewPolicy(cfg Config, safety SafetyChecker) *Policy {
         return &Policy{
                 cfg:          cfg,
@@ -92,6 +93,7 @@ func NewPolicy(cfg Config, safety SafetyChecker) *Policy {
 }
 
 // Input is the data Policy evaluates.
+
 type Input struct {
         IncidentID         string
         Service            string
@@ -110,6 +112,7 @@ type Input struct {
 }
 
 // CIStatus is the state of CI checks on the PR.
+
 type CIStatus struct {
         State    string // "pending", "success", "failure", "neutral", "unknown"
         Checks   int
@@ -119,6 +122,7 @@ type CIStatus struct {
 }
 
 // Evaluate runs all gates and returns a Decision.
+
 func (p *Policy) Evaluate(in Input) *Decision {
         p.mu.RLock()
         defer p.mu.RUnlock()
@@ -126,12 +130,14 @@ func (p *Policy) Evaluate(in Input) *Decision {
         d := &Decision{}
 
         // Gate 0: master switch
+
         if !p.cfg.Enabled {
                 d.Reason = "auto-merge is disabled globally (SENTINEL_AUTO_MERGE_ENABLED=false)"
                 return d
         }
 
         // Gate 0.5: hold / no-merge labels block immediately
+
         if in.NoMergeLabel {
                 d.Reason = "PR has `sentinel/no-merge` label — run `/sentinel no-merge cancel` to re-enable"
                 return d
@@ -142,6 +148,7 @@ func (p *Policy) Evaluate(in Input) *Decision {
         }
 
         // Gate 1: namespace allowlist
+
         if !p.namespaceAllowed(in.Namespace) {
                 d.Reason = fmt.Sprintf("namespace %q not in auto-merge allowlist %v", in.Namespace, p.cfg.Namespaces)
                 return d
@@ -149,6 +156,7 @@ func (p *Policy) Evaluate(in Input) *Decision {
         d.GatesPassed = append(d.GatesPassed, "namespace")
 
         // Gate 2: per-service annotation
+
         if !in.AutoMergeAnnotation {
                 d.Reason = "service lacks `sentinel.io/auto-merge: \"true\"` annotation"
                 return d
@@ -156,6 +164,7 @@ func (p *Policy) Evaluate(in Input) *Decision {
         d.GatesPassed = append(d.GatesPassed, "annotation")
 
         // Gate 3: sandbox verified (hard)
+
         if !in.SandboxVerified {
                 d.GatesFailed = append(d.GatesFailed, "sandbox")
                 d.Reason = "sandbox not verified — auto-merge requires sandbox verification"
@@ -164,6 +173,7 @@ func (p *Policy) Evaluate(in Input) *Decision {
         d.GatesPassed = append(d.GatesPassed, "sandbox")
 
         // Gate 4: confidence threshold (hard)
+
         if in.Confidence < p.cfg.MinConfidence {
                 d.GatesFailed = append(d.GatesFailed, "confidence")
                 d.Reason = fmt.Sprintf("confidence %.2f < threshold %.2f", in.Confidence, p.cfg.MinConfidence)
@@ -172,6 +182,7 @@ func (p *Policy) Evaluate(in Input) *Decision {
         d.GatesPassed = append(d.GatesPassed, "confidence")
 
         // Gate 5: safety policy verdict (hard)
+
         if in.PolicyVerdict == "deny" {
                 d.GatesFailed = append(d.GatesFailed, "safety")
                 d.Reason = "safety policy denied the fix"
@@ -185,6 +196,7 @@ func (p *Policy) Evaluate(in Input) *Decision {
         d.GatesPassed = append(d.GatesPassed, "safety")
 
         // Gate 6: schema migration (hard — never auto-merge schema migrations)
+
         if in.HasSchemaMigration {
                 d.GatesFailed = append(d.GatesFailed, "schema_migration")
                 d.Reason = "fix involves a schema migration — always requires human review"
@@ -192,6 +204,7 @@ func (p *Policy) Evaluate(in Input) *Decision {
         }
 
         // Gate 7: rollback (hard — never auto-merge rollbacks)
+
         if in.FixType == "rollback" {
                 d.GatesFailed = append(d.GatesFailed, "rollback")
                 d.Reason = "rollback fixes always require human review"
@@ -199,6 +212,7 @@ func (p *Policy) Evaluate(in Input) *Decision {
         }
 
         // Gate 8: high-risk service (hard — requires explicit /sentinel approve)
+
         if in.IsHighRisk && !in.ApprovedLabel {
                 d.GatesFailed = append(d.GatesFailed, "high_risk")
                 d.Reason = "high-risk service — run `/sentinel approve` to approve for auto-merge"
@@ -206,6 +220,7 @@ func (p *Policy) Evaluate(in Input) *Decision {
         }
 
         // Gate 9: CI green
+
         if p.cfg.RequireCIGreen {
                 switch in.CIStatus.State {
                 case "failure":
@@ -214,6 +229,7 @@ func (p *Policy) Evaluate(in Input) *Decision {
                         return d
                 case "pending":
                         // Don't fail — the merger will wait for CI to complete.
+
                         d.GatesPassed = append(d.GatesPassed, "ci_pending")
                 case "success":
                         d.GatesPassed = append(d.GatesPassed, "ci")
@@ -223,6 +239,7 @@ func (p *Policy) Evaluate(in Input) *Decision {
         }
 
         // Gate 10: rate limiter
+
         if !p.rateLimiter.Allow() {
                 d.GatesFailed = append(d.GatesFailed, "rate_limit")
                 d.Reason = fmt.Sprintf("rate limit reached (%d merges/hour) — safety pause to prevent cascade merges", p.cfg.MaxPerHour)
@@ -231,6 +248,7 @@ func (p *Policy) Evaluate(in Input) *Decision {
         d.GatesPassed = append(d.GatesPassed, "rate_limit")
 
         // Gate 11: cooldown
+
         if p.cooldown.IsPaused() {
                 d.GatesFailed = append(d.GatesFailed, "cooldown")
                 d.Reason = fmt.Sprintf("auto-merge paused due to recent regression — resumes at %s", p.cooldown.PausedUntil().Format("15:04:05"))
@@ -245,6 +263,7 @@ func (p *Policy) Evaluate(in Input) *Decision {
 
 // namespaceAllowed returns true if the namespace is in the allowlist.
 // Empty allowlist = no namespaces allowed (fail closed).
+
 func (p *Policy) namespaceAllowed(ns string) bool {
         for _, allowed := range p.cfg.Namespaces {
                 if allowed == ns {
@@ -255,18 +274,21 @@ func (p *Policy) namespaceAllowed(ns string) bool {
 }
 
 // RecordMerge records a successful merge (decrements the rate limiter).
+
 func (p *Policy) RecordMerge() {
         p.rateLimiter.Record()
 }
 
 // RecordRegression triggers the cooldown (pause auto-merge for the configured duration).
 // Called by the outcome watcher when a regression is detected post-merge.
+
 func (p *Policy) RecordRegression(reason string) {
         p.cooldown.Trigger(reason)
         log.Printf("[automerge] regression detected — cooldown activated: %s", reason)
 }
 
 // Status returns the current rate-limiter + cooldown state for the web UI.
+
 func (p *Policy) Status() PolicyStatus {
         p.mu.RLock()
         defer p.mu.RUnlock()
@@ -284,6 +306,7 @@ func (p *Policy) Status() PolicyStatus {
 }
 
 // PolicyStatus is the public state of the auto-merge policy.
+
 type PolicyStatus struct {
         Enabled        bool      `json:"enabled"`
         Namespaces     []string  `json:"namespaces"`
@@ -297,6 +320,7 @@ type PolicyStatus struct {
 }
 
 // formatGatesList renders the gates list as a markdown list for PR comments.
+
 func formatGatesList(gates []string, passed bool) string {
         if len(gates) == 0 {
                 return "_(none)_"

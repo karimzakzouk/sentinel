@@ -1,11 +1,8 @@
 // Package alertmanager implements an Alertmanager webhook receiver.
-//
 // Alertmanager sends webhook notifications to a configured URL when an alert
 // fires. Sentinel receives these at POST /webhook/alertmanager and converts
 // them into internal Signals for the clusterer to deduplicate + group.
-//
 // Alertmanager webhook payload format (per https://prometheus.io/docs/alerting/latest/configuration/#webhook_config):
-//
 //      {
 //        "version": "4",
 //        "groupKey": "...",
@@ -25,14 +22,12 @@
 //          }
 //        ]
 //      }
-//
 // Sentinel extracts from each alert:
 //   - service: from labels.service (or labels.job)
 //   - namespace: from labels.namespace (defaults to "default")
 //   - reason: alertname + annotations.summary
 //   - repo: from labels.repo (optional — if absent, Sentinel looks it up via K8s annotations)
 //   - rawLogs: annotations.description + runbook_url
-//
 // Only "firing" alerts trigger investigation. "resolved" alerts are logged
 // but do not trigger (the original firing alert already started an
 // investigation; resolution is handled by the outcome watcher).
@@ -51,6 +46,7 @@ import (
 )
 
 // AlertmanagerPayload is the webhook payload format (v4).
+
 type AlertmanagerPayload struct {
         Version           string            `json:"version"`
         GroupKey          string            `json:"groupKey"`
@@ -64,6 +60,7 @@ type AlertmanagerPayload struct {
 }
 
 // Alert is a single alert in the Alertmanager payload.
+
 type Alert struct {
         Status      string            `json:"status"`
         Labels      map[string]string `json:"labels"`
@@ -75,12 +72,14 @@ type Alert struct {
 
 // SignalHandler is what the Alertmanager source calls when it receives a
 // firing alert. Typically the detection.Clusterer implements this.
+
 type SignalHandler interface {
         HandleAlert(service, namespace, reason, repo, description string, labels map[string]string)
 }
 
 // Receiver is the Alertmanager webhook receiver. It implements http.Handler
 // and should be wired to POST /webhook/alertmanager.
+
 type Receiver struct {
         handler  SignalHandler
         mu       sync.Mutex
@@ -89,10 +88,12 @@ type Receiver struct {
         // sharedSecret, if set, requires callers to send it in the
         // X-Sentinel-Webhook-Secret header. Prevents unauthorized alert
         // injection. Configure via SENTINEL_ALERTMANAGER_WEBHOOK_SECRET.
+
         sharedSecret string
 }
 
 // NewReceiver creates an Alertmanager webhook receiver.
+
 func NewReceiver(handler SignalHandler) *Receiver {
         return &Receiver{
                 handler:  handler,
@@ -103,12 +104,14 @@ func NewReceiver(handler SignalHandler) *Receiver {
 
 // WithSharedSecret requires callers to send the secret in the
 // X-Sentinel-Webhook-Secret header. Returns the receiver for chaining.
+
 func (r *Receiver) WithSharedSecret(secret string) *Receiver {
         r.sharedSecret = secret
         return r
 }
 
 // ServeHTTP handles POST /webhook/alertmanager.
+
 func (r *Receiver) ServeHTTP(w http.ResponseWriter, req *http.Request) {
         if req.Method != http.MethodPost {
                 http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -119,6 +122,7 @@ func (r *Receiver) ServeHTTP(w http.ResponseWriter, req *http.Request) {
         // If sharedSecret is set, callers MUST send it in the
         // X-Sentinel-Webhook-Secret header. Use crypto/subtle to avoid
         // timing attacks.
+
         if r.sharedSecret != "" {
                 sent := req.Header.Get("X-Sentinel-Webhook-Secret")
                 if subtle.ConstantTimeCompare([]byte(sent), []byte(r.sharedSecret)) != 1 {
@@ -245,6 +249,7 @@ func buildDescription(alert Alert) string {
 }
 
 // PurgeOldEntries removes dedup entries older than the cooldown window.
+
 func (r *Receiver) PurgeOldEntries() {
         r.mu.Lock()
         defer r.mu.Unlock()
@@ -258,6 +263,7 @@ func (r *Receiver) PurgeOldEntries() {
 
 // StartPurger launches a background goroutine that purges old dedup entries
 // every 5 minutes. Call once at startup.
+
 func (r *Receiver) StartPurger(ctx context.Context) {
         go func() {
                 defer func() { if r := recover(); r != nil { log.Printf("[alertmanager] purger panic recovered: %v", r) } }()

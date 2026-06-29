@@ -1,7 +1,5 @@
 // Package main is the sentinelctl CLI — a thin HTTP client for Sentinel's API.
-//
 // Usage:
-//
 //      sentinelctl incidents list [--status X] [--service Y] [--last 7d]
 //      sentinelctl incidents get <id>
 //      sentinelctl trigger <service> --namespace sim
@@ -11,15 +9,11 @@
 //      sentinelctl config view
 //      sentinelctl config set <json-file-or-inline>
 //      sentinelctl metrics
-//
 // Flags:
-//
 //      --server URL    Sentinel API URL (default: http://localhost:8000)
 //      --token T       Bearer token for admin endpoints (or SENTINEL_API_TOKEN env var)
 //      --json          Output raw JSON instead of tables
 //      --timeout D     HTTP timeout (default: 30s)
-//
-
 // The server now 401s /admin/* and POST /settings when SENTINEL_API_TOKEN
 // is set; without --token, those commands fail with a clear error message.
 // Also added HTTP timeouts (was none — a hung Sentinel pod hung the CLI
@@ -55,6 +49,7 @@ func main() {
         // where they appear — `sentinelctl trigger --help` should print help,
         // not trigger an investigation with service="--help" (which is what
         // happened before this fix — dangerous).
+
         for _, a := range os.Args[1:] {
                 switch a {
                 case "--help", "-h", "help":
@@ -67,6 +62,7 @@ func main() {
         }
 
         // Global flags with defaults from env vars.
+
         server := getenv("SENTINEL_SERVER", "http://localhost:8000")
         token := getenv("SENTINEL_API_TOKEN", "")
         jsonOut := false
@@ -75,6 +71,7 @@ func main() {
         // values so `sentinelctl --server URL trigger demo-app` finds `trigger`,
         // not `URL`. Then harvest global flags from everywhere (before and
         // after the subcommand) so users get kubectl-style flag-anywhere UX.
+
         cmd, rawArgs := findSubcommand(os.Args[1:])
         if cmd == "" {
                 printHelp()
@@ -83,6 +80,7 @@ func main() {
 
         // Remove the subcommand token (first occurrence) from the args so the
         // subcommand handler doesn't see it as a positional arg.
+
         filtered := make([]string, 0, len(rawArgs))
         subcmdRemoved := false
         for _, a := range rawArgs {
@@ -94,10 +92,12 @@ func main() {
         }
         // Extract global flags from the remaining args. Returns the positional
         // args + subcommand-specific flags.
+
         positional, server, token, jsonOut, timeout := extractGlobalFlags(filtered, server, token, jsonOut, timeout)
 
         // double-slash URLs like http://host//incidents. Most servers handle
         // it but it's sloppy and some strict proxies reject it.
+
         server = strings.TrimRight(server, "/")
 
         c := &client{
@@ -140,28 +140,30 @@ func main() {
 // value; --json does not). Returns the subcommand name and the full arg
 // slice (including flags before the subcommand) so global flags can be
 // harvested separately.
-//
-
 // treat `URL` as the subcommand because Go's flag package stops at the
 // first non-flag arg. We do our own scan to recognize the value-consuming
 // flags and skip their values.
+
 func findSubcommand(args []string) (cmd string, allArgs []string) {
         for i := 0; i < len(args); i++ {
                 a := args[i]
                 if a == "--" {
                         // Everything after -- is positional. The first one is the subcommand.
+
                         if i+1 < len(args) {
                                 return args[i+1], args
                         }
                         return "", args
                 }
                 // --flag=value form — single token, skip.
+
                 if strings.HasPrefix(a, "--") && strings.Contains(a, "=") {
                         continue
                 }
                 switch a {
                 case "--server", "--token", "--timeout":
                         // Consumes the next arg as a value.
+
                         i++
                         continue
                 case "--json":
@@ -169,6 +171,7 @@ func findSubcommand(args []string) (cmd string, allArgs []string) {
                 }
                 if strings.HasPrefix(a, "-") {
                         // Unknown flag — skip (assume no value).
+
                         continue
                 }
                 return a, args
@@ -180,12 +183,14 @@ func findSubcommand(args []string) (cmd string, allArgs []string) {
 // them, returning the positional remainder. Supports both --flag value
 // and --flag=value forms. Unknown flags are left in place for the
 // subcommand handler.
+
 func extractGlobalFlags(args []string, server, token string, jsonOut bool, timeout time.Duration) ([]string, string, string, bool, time.Duration) {
         out := make([]string, 0, len(args))
         for i := 0; i < len(args); i++ {
                 a := args[i]
 
                 // --flag=value form
+
                 if strings.HasPrefix(a, "--") && strings.Contains(a, "=") {
                         parts := strings.SplitN(a, "=", 2)
                         name, value := parts[0], parts[1]
@@ -208,6 +213,7 @@ func extractGlobalFlags(args []string, server, token string, jsonOut bool, timeo
                 }
 
                 // --flag value form
+
                 switch a {
                 case "--server":
                         if i+1 < len(args) {
@@ -240,6 +246,7 @@ func extractGlobalFlags(args []string, server, token string, jsonOut bool, timeo
 }
 
 // client wraps the HTTP calls to Sentinel's API.
+
 type client struct {
         baseURL string
         token   string
@@ -250,10 +257,9 @@ type client struct {
 // do sends an HTTP request and returns the response body. The authRequired
 // flag controls whether the bearer token is attached — admin endpoints
 // (/admin/*, POST /settings) need it; read endpoints don't.
-//
-
-// or SENTINEL_API_TOKEN. Previously a 401 produced a generic "API returned
+// or SENTINEL_API_TOKEN.
 // 401" message with no hint about the fix.
+
 func (c *client) do(method, path string, body io.Reader, authRequired bool) ([]byte, error) {
         req, err := http.NewRequest(method, c.baseURL+path, body)
         if err != nil {
@@ -300,6 +306,7 @@ func (c *client) get(path string) ([]byte, error) {
 // without (currently no POST endpoints are unauthenticated, but kept for
 // future use). v3.8.4: replaced the unused post() wrapper with this single
 // method — golangci-lint flagged the unused post() function.
+
 func (c *client) postAuth(path string, payload any, authRequired bool) ([]byte, error) {
         var body io.Reader
         if payload != nil {
@@ -310,6 +317,7 @@ func (c *client) postAuth(path string, payload any, authRequired bool) ([]byte, 
 }
 
 // --- Commands ---
+
 
 func (c *client) handleIncidents(args []string) {
         if len(args) == 0 {
@@ -327,6 +335,7 @@ func (c *client) handleIncidents(args []string) {
                 c.getIncident(args[1])
         default:
                 // Treat as incident ID
+
                 c.getIncident(args[0])
         }
 }
@@ -335,6 +344,7 @@ func (c *client) listIncidents(args []string) {
 
         // (always sent limit=20). Now actually honored. Supports both
         // --limit 50 and --limit=50 forms.
+
         limit := 20
         for i := 0; i < len(args); i++ {
                 a := args[i]
@@ -467,6 +477,7 @@ func (c *client) handleTrigger(args []string) {
         // — the meta-flag check in main() should catch --help/-h before we get here,
         // but if a future flag is added that isn't in the meta-flag list, we don't
         // want to accidentally trigger an investigation with service="--whatever".
+
         if strings.HasPrefix(service, "-") {
                 fmt.Fprintf(os.Stderr, "Error: service name must not start with '-' (got %q)\n", service)
                 fmt.Fprintln(os.Stderr, "Did you mean to pass a flag before the service name?")
@@ -477,6 +488,7 @@ func (c *client) handleTrigger(args []string) {
         // shorthand). Previous version only handled the space form, so
         // --namespace=sim was silently ignored and the request went to the
         // "default" namespace — confusing.
+
         for i := 0; i < len(args); i++ {
                 a := args[i]
                 if a == "--namespace" || a == "-n" {
@@ -511,6 +523,7 @@ func (c *client) handlePause(args []string) {
 
         // shorthand). Previous version only handled the space form, so
         // --duration=60 was silently ignored and pause always used 30 min.
+
         for i := 0; i < len(args); i++ {
                 a := args[i]
                 if a == "--duration" || a == "-d" {
@@ -567,18 +580,15 @@ func (c *client) handleStats() {
 }
 
 // handleConfig implements `sentinelctl config view` and `sentinelctl config set`.
-//
-
 // page. The server's POST /settings endpoint accepts a JSON body matching
 // the RuntimeConfig struct in internal/runtimecfg/runtimecfg.go. The
 // apply callback in main.go propagates the changes into the live LLM
 // router immediately — no restart needed.
-//
 // Usage:
-//
 //      sentinelctl config view                                      # GET /settings (no auth)
 //      sentinelctl config set '{"llm_fast_model":"glm-4-flash"}'    # inline JSON (auth)
 //      sentinelctl config set ./my-settings.json                    # from file (auth)
+
 func (c *client) handleConfig(args []string) {
         if len(args) == 0 {
                 c.viewConfig()
@@ -631,6 +641,7 @@ func (c *client) viewConfig() {
 
 // setConfig reads JSON from a literal string or a file path and POSTs it
 // to /settings. v3.8.4.
+
 func (c *client) setConfig(arg string) {
         var jsonBytes []byte
         if strings.HasPrefix(arg, "{") || strings.HasPrefix(arg, "[") {
@@ -644,6 +655,7 @@ func (c *client) setConfig(arg string) {
         }
 
         // Validate it parses as JSON before sending.
+
         var probe any
         if err := json.Unmarshal(jsonBytes, &probe); err != nil {
                 fail(fmt.Errorf("invalid JSON: %w", err))
@@ -675,6 +687,7 @@ func (c *client) handleMetrics() {
 }
 
 // --- Helpers ---
+
 
 func str(m map[string]any, key string) string {
         if m == nil {

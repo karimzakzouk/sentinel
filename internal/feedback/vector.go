@@ -14,14 +14,16 @@ import (
 )
 
 // VectorStore manages incident embeddings + similarity search.
+
 type VectorStore struct {
         index      *hnsw.Graph[uint64]
         mu         sync.RWMutex
         baseURL    string
         apiKey     string
         model      string
-        // Configurable embedding dimension for the hash fallback (audit #13).
-        // Was hardcoded 1536 in hashEmbedding() call sites. Default 1536.
+        // Configurable embedding dimension for the hash fallback.
+        // Default 1536.
+
         embeddingDim int
         httpClient *http.Client
         metadata   map[uint64]*VectorMetadata
@@ -29,17 +31,21 @@ type VectorStore struct {
         // Track whether we're using real embeddings or hash fallback.
         // When using hash fallback, the applyKnownFix fast path is disabled
         // because hash collisions can produce false high-similarity scores.
+
         usingHashFallback bool
         // When true, the hash fallback is permanent (no API configured)
         // and won't be cleared by a successful call. When false, the fallback
         // is transient and clears on the next successful API call.
+
         hashFallbackPermanent bool
         // Timestamp of the last transient fallback. Used for diagnostics
         // and to log recovery when the flag clears.
+
         lastHashFallbackAt time.Time
 }
 
 // VectorMetadata is the metadata stored alongside each vector.
+
 type VectorMetadata struct {
         IncidentID string `json:"incident_id"`
         Service    string `json:"service"`
@@ -51,17 +57,19 @@ type VectorMetadata struct {
 
 // NewVectorStore creates a new vector store.
 // When model is empty, the store uses hash fallback permanently
-// (audit #13). Previously, an empty model still triggered an API call to
+//.
 // /embeddings with model="", which would fail and silently fall back —
 // wasting a network round-trip per embedding. Now we short-circuit to hash
 // fallback when model is empty.
+
 func NewVectorStore(baseURL, apiKey, model string) *VectorStore {
         return NewVectorStoreWithDim(baseURL, apiKey, model, 1536)
 }
 
 // NewVectorStoreWithDim creates a new vector store with a configurable
-// embedding dimension for the hash fallback. v3.11.0: audit #13.
+// embedding dimension for the hash fallback. v3.11.0:.
 // Pass dim=0 to keep the default (1536).
+
 func NewVectorStoreWithDim(baseURL, apiKey, model string, dim int) *VectorStore {
         if dim <= 0 {
                 dim = 1536
@@ -78,26 +86,25 @@ func NewVectorStoreWithDim(baseURL, apiKey, model string, dim int) *VectorStore 
 }
 
 // GenerateEmbedding calls the LLM provider's embeddings API.
-//
 // The hash-fallback flag is now sticky per-call but recoverable.
-// Previously, the first failure flipped usingHashFallback=true and it never
 // flipped back, even after the API recovered. We now track a timestamp of
 // the last failure and clear the flag after a recovery window (5 minutes),
 // so transient API outages don't permanently degrade the memory loop.
-//
 // Failures are also distinguished:
 //   - No API key / base URL configured: permanent hash fallback (flag set
 //     permanently — there's no API to recover to). Logged once at startup.
 //   - Network error / non-200 / parse error: transient fallback (flag set
 //     with a recovery timestamp; cleared on next successful call).
+
 func (v *VectorStore) GenerateEmbedding(ctx context.Context, text string) ([]float32, error) {
         // Short-circuit to permanent hash fallback when no model is
-        // configured (audit #13). Previously, an empty model still triggered
+        // configured.
         // an API call to /embeddings with model="", which would fail with a
         // 400/422 from the provider and silently fall back — wasting a network
         // round-trip per embedding AND flooding the provider's error logs.
         // With the new empty default for cfg.LLMEmbeddingModel, this path is
         // the common case for default installs.
+
         if v.apiKey == "" || v.baseURL == "" || v.model == "" {
                 v.mu.Lock()
                 if !v.usingHashFallback {
@@ -154,6 +161,7 @@ func (v *VectorStore) GenerateEmbedding(ctx context.Context, text string) ([]flo
         }
 
         // Success — clear the transient hash fallback flag.
+
         v.mu.Lock()
         if v.usingHashFallback && !v.hashFallbackPermanent {
                 log.Printf("[vector] embeddings API recovered — clearing hash fallback flag")
@@ -169,6 +177,7 @@ func (v *VectorStore) GenerateEmbedding(ctx context.Context, text string) ([]flo
 // timestamp of the failure. The flag is cleared by the next successful call
 // to GenerateEmbedding (after the recovery window has passed, to avoid
 // flapping under intermittent failures).
+
 func (v *VectorStore) markTransientHashFallback() {
         v.mu.Lock()
         defer v.mu.Unlock()
@@ -177,6 +186,7 @@ func (v *VectorStore) markTransientHashFallback() {
 }
 
 // Add stores an incident vector in the HNSW index.
+
 func (v *VectorStore) Add(ctx context.Context, text string, meta *VectorMetadata) error {
         embedding, err := v.GenerateEmbedding(ctx, text)
         if err != nil {
@@ -196,11 +206,11 @@ func (v *VectorStore) Add(ctx context.Context, text string, meta *VectorMetadata
 // Search returns the top-K most similar incidents plus their cosine similarity scores
 // (range [0, 1], where 1 = identical). HNSW returns results sorted by ascending
 // distance, so scores are already in descending order.
-//
 // Returns REAL cosine similarities computed via hnsw.CosineDistance
-// (1 - distance). Previously this method returned no scores, which forced the
+// (1 - distance).
 // caller in main.go to synthesize fake scores — that broke the memory loop's
 // 0.85 threshold (it fired on every incident after the first success).
+
 func (v *VectorStore) Search(ctx context.Context, text string, k int) ([]*VectorMetadata, []float32, error) {
         queryVec, err := v.GenerateEmbedding(ctx, text)
         if err != nil {
@@ -226,9 +236,11 @@ func (v *VectorStore) Search(ctx context.Context, text string, k int) ([]*Vector
                 // Both queryVec and node.Value are L2-normalized (hashEmbedding normalizes;
                 // text-embedding-3-small returns normalized vectors), so cosine similarity
                 // is in [0, 1] for non-negative embeddings.
+
                 sim := float32(1.0) - hnsw.CosineDistance(queryVec, node.Value)
                 // Clamp to [0, 1] — small negative values can occur due to float rounding
                 // when vectors are nearly orthogonal.
+
                 if sim < 0 {
                         sim = 0
                 }
@@ -245,11 +257,13 @@ func (v *VectorStore) Search(ctx context.Context, text string, k int) ([]*Vector
 // When this returns true, the investigator should disable the
 // applyKnownFix fast path (high similarity > 0.85) because hash embeddings
 // can produce false high-similarity scores due to hash collisions.
+
 func (v *VectorStore) UsingHashFallback() bool {
         return v.usingHashFallback
 }
 
 // LoadFromDB rebuilds the HNSW index from stored vectors in SQLite.
+
 func (v *VectorStore) LoadFromDB(ctx context.Context, store *Store) error {
         rows, err := store.db.QueryContext(ctx,
                 `SELECT incident_id, service, root_cause_category, fix_type, fix_pattern, outcome_success, embedding_json FROM incident_vectors`)
@@ -317,6 +331,7 @@ func hashEmbedding(text string, dim int) []float32 {
 }
 
 // simpleHash32 is defined in store.go (shared between both files)
+
 
 func splitWords(s string) []string {
         var words []string

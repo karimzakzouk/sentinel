@@ -1,5 +1,4 @@
 // Package slackbot implements an interactive two-way Slack bot for Sentinel.
-//
 // The bot reports what it's doing as it works (investigation started, fix
 // proposed, PR opened) and accepts commands via @sentinel mentions or slash
 // commands:
@@ -8,9 +7,7 @@
 //   - "show me the last 5 incidents" — lists recent incidents
 //   - "status"                       — shows current autonomous mode status
 //   - "resume"                       — resumes autonomous mode
-//
 // Uses the Slack Events API (not RTM — simpler, webhook-based).
-//
 // Endpoints added to api/server.go:
 //   POST /slack/events — receives Slack Events API + slash command payloads
 package slackbot
@@ -34,6 +31,7 @@ import (
 )
 
 // Bot is the interactive Slack bot.
+
 type Bot struct {
         signingSecret  string
         botToken       string // OAuth bot token for posting replies (xoxb-...)
@@ -49,13 +47,16 @@ type Bot struct {
 
 // InvestigateFunc manually triggers an investigation.
 // Same signature as api.InvestigateFunc.
+
 type InvestigateFunc func(service, namespace, reason string) (string, error)
 
 // ListIncidentsFunc lists recent incidents.
 // Returns slice of maps with keys: incident_id, service, status, created_at.
+
 type ListIncidentsFunc func(ctx context.Context, limit int) ([]map[string]any, error)
 
 // New creates a Slack bot.
+
 func New(signingSecret, botUserID string, investigate InvestigateFunc, listIncidents ListIncidentsFunc) *Bot {
         return &Bot{
                 signingSecret: signingSecret,
@@ -67,16 +68,16 @@ func New(signingSecret, botUserID string, investigate InvestigateFunc, listIncid
 }
 
 // SetBotToken sets the Slack OAuth bot token (xoxb-...) for posting replies.
-
 // @mentions are logged but not posted back to Slack.
+
 func (b *Bot) SetBotToken(token string) {
         b.botToken = token
 }
 
 // IsPaused returns true if autonomous mode is paused.
-
 // (auto-resume). The old RLock→RUnlock→Lock→Unlock→RLock dance created a race
 // window where readers could see stale paused-but-expired state.
+
 func (b *Bot) IsPaused() bool {
         b.mu.Lock()
         defer b.mu.Unlock()
@@ -84,6 +85,7 @@ func (b *Bot) IsPaused() bool {
                 return true
         }
         // Auto-resume if pause expired
+
         if b.paused && time.Now().After(b.pausedUntil) {
                 b.paused = false
                 b.pauseReason = ""
@@ -92,6 +94,7 @@ func (b *Bot) IsPaused() bool {
 }
 
 // Pause pauses autonomous mode for the given duration.
+
 func (b *Bot) Pause(duration time.Duration, reason string) {
         b.mu.Lock()
         defer b.mu.Unlock()
@@ -102,6 +105,7 @@ func (b *Bot) Pause(duration time.Duration, reason string) {
 }
 
 // Resume resumes autonomous mode immediately.
+
 func (b *Bot) Resume() {
         b.mu.Lock()
         defer b.mu.Unlock()
@@ -112,6 +116,7 @@ func (b *Bot) Resume() {
 
 // HandleEvents is the HTTP handler for POST /slack/events.
 
+
 func (b *Bot) HandleEvents(w http.ResponseWriter, r *http.Request) {
         if r.Method != "POST" {
                 http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -119,6 +124,7 @@ func (b *Bot) HandleEvents(w http.ResponseWriter, r *http.Request) {
         }
 
         // unauthenticated DoS (10GB POST would OOM the 256Mi pod).
+
         r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB
         body, err := io.ReadAll(r.Body)
         if err != nil {
@@ -128,12 +134,13 @@ func (b *Bot) HandleEvents(w http.ResponseWriter, r *http.Request) {
 
         // Slack sends: X-Slack-Signature (HMAC of body using signing secret + timestamp)
         // and X-Slack-Request-Timestamp.
-
         // accepted, allowing unauthenticated pause/investigate commands).
         // URL verification challenges are still accepted without a secret so initial
         // Slack app setup works (the secret may not be configured yet at install time).
+
         if b.signingSecret == "" {
                 // Allow url_verification challenges (Slack sends these during app setup)
+
                 var probe struct {
                         Type string `json:"type"`
                 }
@@ -161,6 +168,7 @@ func (b *Bot) HandleEvents(w http.ResponseWriter, r *http.Request) {
         }
 
         // Parse as either a slash command or an event callback.
+
         contentType := r.Header.Get("Content-Type")
         if strings.Contains(contentType, "application/x-www-form-urlencoded") {
                 b.handleSlashCommand(w, r, body)
@@ -171,15 +179,13 @@ func (b *Bot) HandleEvents(w http.ResponseWriter, r *http.Request) {
 }
 
 // verifySlackSignature verifies the HMAC-SHA256 signature Slack sends.
-
-//
-
 // the check to "avoid clock skew issues in test environments" — that left
 // the bot vulnerable to indefinite replay attacks (a captured Slack request
 // could be re-sent forever to trigger investigations). The freshness window
 // is 5 minutes, matching Slack's own retry policy. Clock skew of more than
 // 5 minutes between Sentinel and Slack's servers is a real ops problem
 // worth surfacing, not papering over.
+
 func (b *Bot) verifySlackSignature(r *http.Request, body []byte) bool {
         timestamp := r.Header.Get("X-Slack-Request-Timestamp")
         sig := r.Header.Get("X-Slack-Signature")
@@ -191,6 +197,7 @@ func (b *Bot) verifySlackSignature(r *http.Request, body []byte) bool {
         // but a *successful* delivery followed by a replay attack is the threat
         // we're defending against — 5 minutes is generous enough for normal
         // network latency and tight enough to make replay impractical.
+
         ts, err := strconv.ParseInt(timestamp, 10, 64)
         if err != nil {
                 log.Printf("[slackbot] invalid X-Slack-Request-Timestamp %q: %v", timestamp, err)
@@ -202,12 +209,14 @@ func (b *Bot) verifySlackSignature(r *http.Request, body []byte) bool {
                 return false
         }
         // Also reject future timestamps (clock skew > 60s in the other direction).
+
         if age < -60 {
                 log.Printf("[slackbot] rejecting Slack request with future timestamp (age %ds) — clock skew or attack", age)
                 return false
         }
 
         // Compute: HMAC-SHA256(signingSecret, "v0:timestamp:body")
+
         base := "v0:" + timestamp + ":" + string(body)
         mac := hmac.New(sha256.New, []byte(b.signingSecret))
         mac.Write([]byte(base))
@@ -217,8 +226,10 @@ func (b *Bot) verifySlackSignature(r *http.Request, body []byte) bool {
 }
 
 // handleSlashCommand processes a slash command like /sentinel investigate api.
+
 func (b *Bot) handleSlashCommand(w http.ResponseWriter, r *http.Request, body []byte) {
         // Parse form data manually (we already read the body)
+
         values, err := parseFormBody(string(body))
         if err != nil {
                 http.Error(w, "parse form failed", http.StatusBadRequest)
@@ -238,6 +249,7 @@ func (b *Bot) handleSlashCommand(w http.ResponseWriter, r *http.Request, body []
 
 // handleEvent processes an Events API callback (app_mention).
 
+
 func (b *Bot) handleEvent(w http.ResponseWriter, r *http.Request, body []byte) {
         var event struct {
                 Type string `json:"type"`
@@ -254,6 +266,7 @@ func (b *Bot) handleEvent(w http.ResponseWriter, r *http.Request, body []byte) {
         }
 
         // Only respond to app_mention events (not message.bot_message, etc.)
+
         if event.Type != "event_callback" || event.Event.Type != "app_mention" {
                 w.WriteHeader(http.StatusOK)
                 return
@@ -261,6 +274,7 @@ func (b *Bot) handleEvent(w http.ResponseWriter, r *http.Request, body []byte) {
 
         text := event.Event.Text
         // Strip the @sentinel mention
+
         if b.botUserID != "" {
                 text = strings.ReplaceAll(text, "<@"+b.botUserID+">", "")
                 text = strings.ReplaceAll(text, "<@"+b.botUserID+"> ", "")
@@ -276,6 +290,7 @@ func (b *Bot) handleEvent(w http.ResponseWriter, r *http.Request, body []byte) {
                 }
         } else {
                 // No bot token — log the reply (dev mode)
+
                 log.Printf("[slackbot] reply to %s in %s (no bot token — not posted): %s",
                         userName, event.Event.Channel, response)
         }
@@ -284,6 +299,7 @@ func (b *Bot) handleEvent(w http.ResponseWriter, r *http.Request, body []byte) {
 }
 
 // postMessage posts a message to a Slack channel via chat.postMessage.
+
 
 func (b *Bot) postMessage(channel, text string) error {
         payload, _ := json.Marshal(map[string]string{
@@ -311,6 +327,7 @@ func (b *Bot) postMessage(channel, text string) error {
 }
 
 // dispatchCommand parses the command text and dispatches to the right handler.
+
 
 func (b *Bot) dispatchCommand(text, userName string) string {
         text = strings.TrimSpace(text)
@@ -340,8 +357,10 @@ func (b *Bot) dispatchCommand(text, userName string) string {
 }
 
 // handlePause parses "pause for X" / "pause for X minutes" / "pause Xmin".
+
 func (b *Bot) handlePause(text, userName string) string {
         // Extract duration from text like "pause for 30 minutes" or "pause 30m"
+
         lower := strings.ToLower(text)
         minutes := extractMinutes(lower)
         if minutes == 0 {
@@ -356,10 +375,13 @@ func (b *Bot) handlePause(text, userName string) string {
 
 // extractMinutes pulls a number from strings like "pause for 30 minutes",
 // "pause 30m", "pause 1 hour", "pause 2 hours".
+
 func extractMinutes(s string) int {
         // Look for "hour" or "hours"
+
         if strings.Contains(s, "hour") {
                 // Extract the number before "hour"
+
                 parts := strings.Fields(s)
                 for i, p := range parts {
                         if strings.Contains(p, "hour") && i > 0 {
@@ -370,6 +392,7 @@ func extractMinutes(s string) int {
                 }
         }
         // Look for "min", "minutes", or "m" (as a standalone token like "30m")
+
         parts := strings.Fields(s)
         for i, p := range parts {
                 if (strings.Contains(p, "min") || strings.Contains(p, "minute")) && i > 0 {
@@ -378,6 +401,7 @@ func extractMinutes(s string) int {
                         }
                 }
                 // Handle "30m" — extract the number before the 'm'
+
                 if len(p) > 1 && strings.HasSuffix(p, "m") {
                         if n, err := strconv.Atoi(strings.TrimSuffix(p, "m")); err == nil {
                                 return n
@@ -385,6 +409,7 @@ func extractMinutes(s string) int {
                 }
         }
         // Just a bare number
+
         for _, p := range parts {
                 if n, err := strconv.Atoi(p); err == nil && n > 0 && n < 10000 {
                         return n
@@ -394,8 +419,10 @@ func extractMinutes(s string) int {
 }
 
 // handleInvestigate parses "investigate <service>".
+
 func (b *Bot) handleInvestigate(text, userName string) string {
         // Strip "investigate" prefix
+
         service := strings.TrimSpace(strings.TrimPrefix(strings.ToLower(text), "investigate"))
         if service == "" {
                 return "Usage: `investigate <service>` — manually triggers an investigation."
@@ -412,11 +439,13 @@ func (b *Bot) handleInvestigate(text, userName string) string {
 }
 
 // handleList parses "show me the last 5 incidents" or "list incidents".
+
 func (b *Bot) handleList(text, userName string) string {
         if b.listIncidents == nil {
                 return "Incident listing not configured."
         }
         // Extract the number (default 5)
+
         limit := 5
         lower := strings.ToLower(text)
         parts := strings.Fields(lower)
@@ -445,6 +474,7 @@ func (b *Bot) handleList(text, userName string) string {
 }
 
 // handleStatus returns the current autonomous mode status.
+
 func (b *Bot) handleStatus() string {
         if b.IsPaused() {
                 remaining := time.Until(b.pausedUntil).Round(time.Minute)
@@ -455,6 +485,7 @@ func (b *Bot) handleStatus() string {
 }
 
 // helpText returns the help message.
+
 func (b *Bot) helpText() string {
         return "*Sentinel Slack Bot*\n\n" +
                 "Commands:\n" +
@@ -468,10 +499,10 @@ func (b *Bot) helpText() string {
 }
 
 // parseFormBody parses a URL-encoded form body into a map.
-
 // with stdlib url.ParseQuery. The old parser mis-parsed @mentions (%40),
 // paths (%2F), = (%3D), & (%26), and any other encoded char — corrupting
 // Slack commands that contained them.
+
 func parseFormBody(body string) (map[string]string, error) {
         result := map[string]string{}
         if body == "" {

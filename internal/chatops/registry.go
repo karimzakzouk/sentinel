@@ -1,11 +1,9 @@
 // Package chatops — command registry + dispatcher.
-//
 // Every /sentinel command self-registers via RegisterCommand. The registry
 // is the single source of truth for:
 //   - /sentinel help output (auto-generated, never out of sync — Prow pattern)
 //   - Permission checks (each command declares its required tier)
 //   - Dispatch (name → handler routing)
-//
 // To add a new command:
 //   1. Create commands/<name>.go with a Handler function
 //   2. Call RegisterCommand in an init() block
@@ -29,6 +27,7 @@ var (
 // RegisterCommand adds a command to the global registry.
 // Called from init() blocks in commands/*.go.
 // Panics on duplicate name (programming error, not runtime).
+
 func RegisterCommand(spec *CommandSpec) {
 	registryMu.Lock()
 	defer registryMu.Unlock()
@@ -40,6 +39,7 @@ func RegisterCommand(spec *CommandSpec) {
 }
 
 // LookupCommand returns the spec for a command name, or nil if not found.
+
 func LookupCommand(name string) *CommandSpec {
 	registryMu.RLock()
 	defer registryMu.RUnlock()
@@ -48,6 +48,7 @@ func LookupCommand(name string) *CommandSpec {
 
 // AllCommands returns a snapshot of all registered commands, sorted by
 // tier then name. Used by /sentinel help.
+
 func AllCommands() []*CommandSpec {
 	registryMu.RLock()
 	defer registryMu.RUnlock()
@@ -71,7 +72,6 @@ func AllCommands() []*CommandSpec {
 }
 
 // Dispatch executes one or more parsed commands from a single comment.
-//
 // For each command:
 //  1. ACK with 👍 reaction (Prow's #1 complaint was silence)
 //  2. Look up the command in the registry → 404 comment if unknown
@@ -80,15 +80,16 @@ func AllCommands() []*CommandSpec {
 //  5. Otherwise → execute the handler
 //  6. Swap reaction to ✅ on success or ❌ on failure
 //  7. Log to command_events audit table
-//
 // Dispatch is the only entry point called from the webhook handler.
 // It never returns an error for "soft" failures (unknown command, permission
 // denied, PR not tracked) — those are posted as comments. It only returns
 // an error for infrastructure failures (GitHub API down).
+
 func Dispatch(ctx context.Context, commands []*Command, deps *Deps) error {
 	for _, cmd := range commands {
 		if err := dispatchOne(ctx, cmd, deps); err != nil {
 			// Log + continue with the next command. Don't fail the whole batch.
+
 			log.Printf("[chatops] dispatch error for /sentinel %s by %s on %s#%d: %v",
 				cmd.Name, cmd.Author, cmd.PRRepo, cmd.PRNumber, err)
 		}
@@ -97,13 +98,16 @@ func Dispatch(ctx context.Context, commands []*Command, deps *Deps) error {
 }
 
 // dispatchOne executes a single command end-to-end.
+
 func dispatchOne(ctx context.Context, cmd *Command, deps *Deps) error {
 	// 1. Immediate ACK — 👍 reaction. Prow's #1 complaint was silence.
+
 	if deps.Reactions != nil {
 		_ = deps.Reactions.Ack(ctx, cmd.PRRepo, cmd.CommentID)
 	}
 
 	// 2. Look up command in registry.
+
 	spec := LookupCommand(cmd.Name)
 	if spec == nil {
 		body := fmt.Sprintf("Unknown command `/sentinel %s`. Run `/sentinel help` to see available commands.", cmd.Name)
@@ -116,9 +120,11 @@ func dispatchOne(ctx context.Context, cmd *Command, deps *Deps) error {
 	}
 
 	// 3. Check author permission on the repo.
+
 	perm, err := deps.GitHub.GetPermission(ctx, cmd.PRRepo, cmd.Author)
 	if err != nil {
 		// GitHub API failure — can't verify permission. Fail safe: deny.
+
 		body := fmt.Sprintf("⚠️ Could not verify @%s's permission on %s (GitHub API error: %v).\nRefusing to execute for safety. Try again in a minute.", cmd.Author, cmd.PRRepo, err)
 		_ = deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber, body)
 		if deps.Reactions != nil {
@@ -130,6 +136,7 @@ func dispatchOne(ctx context.Context, cmd *Command, deps *Deps) error {
 
 	if !hasPermission(spec.Permission, perm) {
 		// Actionable denial — say *why* and *what to do*. (Prow's #4 complaint fixed.)
+
 		body := actionablePermissionError(cmd, spec, perm)
 		_ = deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber, body)
 		if deps.Reactions != nil {
@@ -140,6 +147,7 @@ func dispatchOne(ctx context.Context, cmd *Command, deps *Deps) error {
 	}
 
 	// 4. Execute the handler.
+
 	err = spec.Handler(ctx, cmd, deps)
 	if err != nil {
 		if deps.Reactions != nil {
@@ -147,12 +155,14 @@ func dispatchOne(ctx context.Context, cmd *Command, deps *Deps) error {
 		}
 		_ = auditLog(ctx, deps, cmd, "error", err.Error())
 		// Post the error as a comment so the user sees it.
+
 		body := fmt.Sprintf("❌ `/sentinel %s` failed: %v", cmd.Name, err)
 		_ = deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber, body)
 		return nil
 	}
 
 	// 5. Success — swap reaction.
+
 	if deps.Reactions != nil {
 		_ = deps.Reactions.Success(ctx, cmd.PRRepo, cmd.CommentID)
 	}
@@ -162,6 +172,7 @@ func dispatchOne(ctx context.Context, cmd *Command, deps *Deps) error {
 
 // hasPermission returns true if the user's actual permission satisfies the
 // command's required permission.
+
 func hasPermission(required Permission, actual string) bool {
 	switch strings.ToLower(actual) {
 	case "admin":
@@ -178,6 +189,7 @@ func hasPermission(required Permission, actual string) bool {
 // actionablePermissionError builds a comment body that explains *why* the
 // user was denied and *what they can do about it*. Fixes Prow's #4 complaint
 // (silent or confusing permission denials).
+
 func actionablePermissionError(cmd *Command, spec *CommandSpec, has string) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("❌ @%s doesn't have the required permission to run `/sentinel %s`.\n\n", cmd.Author, cmd.Name))
@@ -203,11 +215,13 @@ func actionablePermissionError(cmd *Command, spec *CommandSpec, has string) stri
 }
 
 // auditLog writes a command event to the audit table (best-effort).
+
 func auditLog(ctx context.Context, deps *Deps, cmd *Command, result, detail string) error {
 	if deps.Store == nil {
 		return nil
 	}
 	// Look up the incident (best-effort — may not exist for unknown PRs).
+
 	incidentID := ""
 	if inc, _ := deps.Store.FindIncidentByPR(ctx, cmd.PRRepo, cmd.PRNumber); inc != nil {
 		incidentID = inc.ID
@@ -232,8 +246,8 @@ func auditLog(ctx context.Context, deps *Deps, cmd *Command, result, detail stri
 // their permission level). Prow shows all commands regardless of permission
 // — Sentinel only shows what the user can use, plus grayed-out 🔒 entries
 // for higher-tier commands they can't run (so they know what's possible).
-//
 // This fixes Prow's #5 complaint (command discovery is poor).
+
 func RenderHelp(author string, userPermission string) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("## Available commands for @%s on this PR\n\n", author))
@@ -269,6 +283,7 @@ func RenderHelp(author string, userPermission string) string {
 }
 
 // commandsInTier returns all registered commands in the given tier.
+
 func commandsInTier(tier string) []*CommandSpec {
 	all := AllCommands()
 	out := make([]*CommandSpec, 0)

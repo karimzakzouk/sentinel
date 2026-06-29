@@ -10,6 +10,7 @@ import (
 )
 
 // categoryKeywordMap maps hypothesis keywords to categories for Beta-prior lookup.
+
 var categoryKeywordMap = []struct {
         keyword, category string
 }{
@@ -36,14 +37,17 @@ var categoryKeywordMap = []struct {
 
 // Analyst kills falsified hypotheses, computes confidence via Bayes, picks survivor.
 // Does NOT use the LLM — pure math (Bayes + Beta priors).
+
 type Analyst struct {
         router *llm.Router // kept for future LLM-assisted analysis; not used in v3.0
-        // LLM prior weight in the Bayesian blend. Was hardcoded 0.4 (audit #9).
+        // LLM prior weight in the Bayesian blend.4.
         // Set via SetLLMPriorWeight from main.go using cfg.LLMPriorWeight.
+
         llmPriorWeight float64
 }
 
 // NewAnalyst creates an Analyst.
+
 func NewAnalyst(router *llm.Router) *Analyst {
         return &Analyst{
                 router:         router,
@@ -52,9 +56,10 @@ func NewAnalyst(router *llm.Router) *Analyst {
 }
 
 // SetLLMPriorWeight sets the weight given to the LLM's confidence vs the
-// Bayesian posterior. v3.11.0: Replaces the hardcoded 0.4 (audit #9).
+// Bayesian posterior. v3.11.0: Replaces the hardcoded 0.4.
 // Range [0, 1]: 0 = pure Bayesian (ignore LLM), 1 = pure LLM (ignore Bayes).
 // Default 0.4 (slight Bayesian lean — Bayes is more robust with few samples).
+
 func (a *Analyst) SetLLMPriorWeight(w float64) {
         if w > 0 && w < 1 {
                 a.llmPriorWeight = w
@@ -63,11 +68,13 @@ func (a *Analyst) SetLLMPriorWeight(w float64) {
 
 // BetaStore is the interface for Beta prior lookups + updates.
 // Satisfied by feedback.Store.
+
 type BetaStore interface {
         GetBetaPrior(ctx context.Context, service, fixType string) (alpha, beta float64, successes, failures int, err error)
 }
 
 // Run executes the analyst agent. Requires a BetaStore to look up priors.
+
 func (a *Analyst) Run(ctx context.Context, state *schemas.AgentState, betaStore BetaStore) error {
         if len(state.Hypotheses) == 0 {
                 state.Status = schemas.StatusFailed
@@ -77,6 +84,7 @@ func (a *Analyst) Run(ctx context.Context, state *schemas.AgentState, betaStore 
         }
 
         // 1. Falsify: any hypothesis with strong contradicting evidence is dead.
+
         for i := range state.Hypotheses {
                 h := &state.Hypotheses[i]
                 contradicting := []schemas.Evidence{}
@@ -118,6 +126,7 @@ func (a *Analyst) Run(ctx context.Context, state *schemas.AgentState, betaStore 
         }
 
         // 2. Pick survivor: highest non-falsified confidence
+
         var survivors []schemas.Hypothesis
         for _, h := range state.Hypotheses {
                 if !h.Falsified {
@@ -126,6 +135,7 @@ func (a *Analyst) Run(ctx context.Context, state *schemas.AgentState, betaStore 
         }
         if len(survivors) == 0 {
                 // All hypotheses falsified — rewind
+
                 state.RewindEvents = append(state.RewindEvents, schemas.RewindEvent{
                         RaisedBy:   "analyst",
                         Reason:     "all_hypotheses_falsified",
@@ -141,6 +151,7 @@ func (a *Analyst) Run(ctx context.Context, state *schemas.AgentState, betaStore 
         }
 
         // Sort survivors by confidence (highest first)
+
         for i := 0; i < len(survivors); i++ {
                 for j := i + 1; j < len(survivors); j++ {
                         if survivors[j].Confidence > survivors[i].Confidence {
@@ -151,6 +162,7 @@ func (a *Analyst) Run(ctx context.Context, state *schemas.AgentState, betaStore 
         survivor := survivors[0]
 
         // 3. Compute posterior via Beta prior + evidence likelihood
+
         category := classifyCategory(survivor.Statement)
         service := state.Cluster.Service
         var alpha, beta, priorMean float64
@@ -166,6 +178,7 @@ func (a *Analyst) Run(ctx context.Context, state *schemas.AgentState, betaStore 
         }
 
         // Count strong evidence for/against survivor
+
         nSupport := 0
         nContra := 0
         for _, e := range state.Evidence {
@@ -181,7 +194,8 @@ func (a *Analyst) Run(ctx context.Context, state *schemas.AgentState, betaStore 
         posteriorMean := postAlpha / (postAlpha + postBeta)
 
         // Combine LLM prior with Bayesian posterior (weighted average)
-        // Use a.llmPriorWeight instead of hardcoded 0.4 (audit #9).
+        // Use a.llmPriorWeight instead of hardcoded 0.4.
+
         w := a.llmPriorWeight
         if w <= 0 || w >= 1 {
                 w = 0.4 // safety net — should never fire
@@ -189,9 +203,11 @@ func (a *Analyst) Run(ctx context.Context, state *schemas.AgentState, betaStore 
         finalConfidence := w*survivor.Confidence + (1-w)*posteriorMean
 
         // 4. Detect schema migration
+
         hasSchemaMigration := detectSchemaMigration(survivor.Statement, state)
 
         // 5. Build the RootCause
+
         rootCause := &schemas.RootCause{
                 Statement:          survivor.Statement,
                 Confidence:         finalConfidence,
@@ -221,6 +237,7 @@ func (a *Analyst) Run(ctx context.Context, state *schemas.AgentState, betaStore 
 }
 
 // isStrongResult returns true if a query returned actual data (not just an error).
+
 func isStrongResult(result map[string]any) bool {
         if _, hasError := result["error"]; hasError {
                 return false

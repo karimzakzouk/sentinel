@@ -80,8 +80,8 @@ Do NOT make up evidence — only cite things that appear in the context.`
 // Investigator forms root cause hypotheses using a two-round agentic loop:
 //   Round 1: LLM sees logs + file tree → emits search queries
 //   Round 2: LLM sees logs + file tree + search results → emits hypotheses + files to read
-//
 // This is the same pattern SWE-agent and OpenHands use: search → reason → read.
+
 type Investigator struct {
         router      *llm.Router
         k8s         *k8s.Client
@@ -92,23 +92,28 @@ type Investigator struct {
         // Investigator is allowed to clone. Empty = allow all (legacy behavior,
         // not recommended for production). Set via SetAllowedRepos from main.go
         // using config.AllowedGitHubRepos.
+
         allowedRepos []string
 
         // "main" in branch_resolver.go:48. Set via SetDefaultBranch from main.go.
+
         defaultBranch string
 
         // cloner.go + branch_resolver.normalizeRepo. Set via SetGitHost from main.go.
+
         gitHost string
 }
 
 // SetAllowedRepos sets the GitHub repo allowlist. See Config.IsRepoAllowed.
+
 func (a *Investigator) SetAllowedRepos(repos []string) {
         a.allowedRepos = repos
 }
 
 // SetDefaultBranch sets the default branch fallback. v3.11.0: Replaces the
-// hardcoded "main" in branch_resolver.go (CRITICAL audit #6). Per-repo
+// hardcoded "main" in branch_resolver.go. Per-repo
 // override via sentinel.io/branch annotation takes precedence.
+
 func (a *Investigator) SetDefaultBranch(branch string) {
         if branch != "" {
                 a.defaultBranch = branch
@@ -116,7 +121,8 @@ func (a *Investigator) SetDefaultBranch(branch string) {
 }
 
 // SetGitHost propagates the git host to the cloner. v3.11.0: Replaces the
-// hardcoded "github.com" in cloner.go (CRITICAL audit #2).
+// hardcoded "github.com" in cloner.go.
+
 func (a *Investigator) SetGitHost(host string) {
         if host != "" {
                 a.gitHost = host
@@ -127,6 +133,7 @@ func (a *Investigator) SetGitHost(host string) {
 // isRepoAllowed matches Config.IsRepoAllowed but local to the Investigator
 // (which doesn't hold a *config.Config to avoid an import cycle). Empty
 // allowlist means allow all.
+
 func (a *Investigator) isRepoAllowed(repo string) bool {
         if len(a.allowedRepos) == 0 {
                 return true
@@ -144,14 +151,17 @@ func (a *Investigator) isRepoAllowed(repo string) bool {
 }
 
 // VectorStore is the interface for incident memory retrieval.
+
 type VectorStore interface {
         Search(ctx context.Context, text string, k int) ([]*VectorMetadata, []float32, error)
 
         // is disabled because hash embeddings can produce false high-similarity.
+
         UsingHashFallback() bool
 }
 
 // VectorMetadata is a past incident stored in the vector index.
+
 type VectorMetadata struct {
         IncidentID string
         Service    string
@@ -162,6 +172,7 @@ type VectorMetadata struct {
 }
 
 // NewInvestigator creates an Investigator with optional vector store for memory loop.
+
 func NewInvestigator(router *llm.Router, k8sClient *k8s.Client, gitHubToken string, vectorStore VectorStore) *Investigator {
         return &Investigator{
                 router:        router,
@@ -175,12 +186,13 @@ func NewInvestigator(router *llm.Router, k8sClient *k8s.Client, gitHubToken stri
 }
 
 // Run executes the investigator agent.
-
 //         If similarity > 0.85 → skip investigation, apply known fix directly.
+
 func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error {
         cluster := state.Cluster
 
         // 0. ALWAYS fetch full pod logs via K8s API (8KB, retry 3x).
+
         podLogs, _ := a.k8s.FetchCrashingPodLogs(ctx, cluster.Service, cluster.Namespace)
         if podLogs != "" {
                 log.Printf("[investigator] fetched %d chars of pod logs via K8s API", len(podLogs))
@@ -197,15 +209,16 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
         // 0.5 MEMORY LOOP — query HNSW for similar past incidents.
         // If we've seen this exact pattern before AND it was successfully fixed,
         // skip the full investigation and apply the known fix directly.
-
         // produce false high-similarity scores. Only use real embeddings for
         // the applyKnownFix fast path.
+
         if a.vectorStore != nil && podLogs != "" {
                 similar, scores, err := a.vectorStore.Search(ctx, podLogs, 5)
                 if err == nil && len(similar) > 0 {
                         log.Printf("[memory] found %d similar incidents (top score: %.3f)", len(similar), scores[0])
 
                         // High similarity + prior success → skip investigation, apply known fix
+
 
                         if scores[0] > 0.85 && similar[0].Outcome == "success" && !a.vectorStore.UsingHashFallback() {
                                 log.Printf("[memory] HIGH MATCH (score=%.3f) — applying known fix from incident %s", scores[0], similar[0].IncidentID)
@@ -215,6 +228,7 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
                         }
 
                         // Medium similarity → use as context for the LLM
+
                         if scores[0] > 0.5 {
                                 log.Printf("[memory] MEDIUM MATCH (score=%.3f) — using incident %s as context", scores[0], similar[0].IncidentID)
                                 state.RetrievedIncidents = []map[string]any{{
@@ -230,6 +244,7 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
         }
 
         // 1. Discover the GitHub repo from cluster annotations
+
         repoName := discoverRepo(state, a.gitHost)
         if repoName == "" {
                 log.Printf("[investigator] no repo discovered — skipping code fetch")
@@ -240,6 +255,7 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
         // permission can set. Without this check, a malicious user could
         // annotate their pod with an arbitrary repo and have Sentinel clone it
         // (sending the GitHub PAT to github.com for any repo the PAT can read).
+
         if !a.isRepoAllowed(repoName) {
                 log.Printf("[investigator] SECURITY: repo %q is not in the allowed list — refusing to clone. Set SENTINEL_ALLOWED_GITHUB_REPOS to allow it.", repoName)
                 return a.runWithoutRepo(ctx, state, podLogs)
@@ -247,6 +263,7 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
 
         // node_modules/, site-packages/). If so, redirect the investigation to
         // the library's repo instead of the service's repo.
+
         parsedError := ParseError(podLogs)
         if parsedError != nil && parsedError.SourceFile != "" {
                 slf := depanalysis.AnalyzeStackTrace(parsedError.SourceFile, podLogs)
@@ -254,11 +271,13 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
                         log.Printf("[investigator] shared library bug detected: dep=%s repo=%s (path: %s) — redirecting investigation to library repo",
                                 slf.DependencyName, slf.SourceRepo, slf.LibraryPath)
                         // Override the repo to clone with the library's repo
+
                         repoName = slf.SourceRepo
 
                         // A bug in a shared library could itself be a prompt-injection
                         // vector if the source-repo lookup is ever coerced into
                         // returning an arbitrary string.
+
                         if !a.isRepoAllowed(repoName) {
                                 log.Printf("[investigator] SECURITY: redirected library repo %q is not in the allowed list — refusing to clone.", repoName)
                                 return a.runWithoutRepo(ctx, state, podLogs)
@@ -270,10 +289,12 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
         }
 
         // 2. Resolve which branch/commit to clone.
+
         branch := a.resolveBranch(ctx, state, repoName)
         log.Printf("[investigator] cloning repo %s@%s", repoName, branch)
 
         // 3. Clone the repo locally
+
         repoPath, err := a.cloner.Clone(ctx, repoName, branch)
         if err != nil {
                 log.Printf("[investigator] clone failed: %v — falling back to no-repo mode", err)
@@ -283,6 +304,7 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
         log.Printf("[investigator] repo cloned to %s", repoPath)
 
         // 4. Walk the file tree
+
         fileTree, err := repo.WalkTree(repoPath, 500)
         if err != nil {
                 log.Printf("[investigator] walk tree failed: %v", err)
@@ -292,6 +314,7 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
 
         // 4. Round 1 — ask LLM what to search for
         // podLogs already fetched at the top of Run() via K8s API
+
         round1Msg := a.buildRound1Message(state, podLogs, fileTree)
         round1Result, err := a.router.FrontierJSON(ctx, investigatorRound1Prompt, round1Msg, 1000)
         if err != nil {
@@ -304,6 +327,7 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
 
                 // The error type (KeyError, ZeroDivisionError) and the variable name
                 // (DATABASE_URLL) are right there in the traceback.
+
                 log.Printf("[investigator] LLM returned no search queries — extracting from pod logs")
                 fallbackQueries := ExtractSearchQueriesUniversal(podLogs)
                 for _, q := range fallbackQueries {
@@ -316,6 +340,7 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
         }
 
         // 5. Run the searches locally (instant, no API calls)
+
         var allResults []repo.SearchResult
         seenPaths := map[string]bool{}
         for i, q := range searchQueries {
@@ -340,6 +365,7 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
         log.Printf("[investigator] search found %d unique files", len(allResults))
 
         // 6. Round 2 — ask LLM for hypotheses + files to read
+
         round2Msg := a.buildRound2Message(state, podLogs, fileTree, allResults)
         round2Result, err := a.router.FrontierJSON(ctx, investigatorRound2Prompt, round2Msg, 4000)
         if err != nil {
@@ -348,21 +374,25 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
         }
 
         // Debug: log what the LLM returned
+
         log.Printf("[investigator] round 2 LLM returned keys: %v", keysOfAny(round2Result))
 
         // 7. Parse hypotheses
+
         rawHyps, _ := round2Result["hypotheses"].([]any)
         log.Printf("[investigator] round 2 returned %d hypotheses", len(rawHyps))
 
         var newHyps []schemas.Hypothesis
 
         // generate hypotheses from the error context directly.
+
         if len(rawHyps) == 0 && podLogs != "" {
                 log.Printf("[investigator] LLM returned 0 hypotheses — generating from error context")
                 newHyps = GenerateHypothesesUniversal(podLogs, state)
         }
 
         // Parse LLM hypotheses if we got them
+
         if len(newHyps) == 0 {
                 for i, h := range rawHyps {
                         if i >= 5 {
@@ -392,6 +422,7 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
         }
 
         // 8. Read the files the LLM asked for
+
         filesToRead, _ := round2Result["files_to_read"].([]any)
         fetched := map[string]string{}
         for _, f := range filesToRead {
@@ -408,10 +439,12 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
         }
 
         // 9. FALLBACK: If the LLM returned 0 files, try files from the stack trace
+
         if len(fetched) == 0 {
                 log.Printf("[investigator] LLM returned 0 files — falling back to stack trace parsing")
                 stackFiles := k8s.ParseStackTrace(podLogs)
                 // Also try files from search results
+
                 for _, r := range allResults {
                         stackFiles = append(stackFiles, r.Path)
                 }
@@ -453,18 +486,22 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
 
 // runWithoutRepo is the fallback when we can't clone the repo (private repo,
 // network issue, etc.). Forms hypotheses from logs alone, no source code.
+
 func (a *Investigator) runWithoutRepo(ctx context.Context, state *schemas.AgentState, podLogs string) error {
         // If no podLogs passed, try to extract from cluster
+
         if podLogs == "" {
                 podLogs = a.extractPodLogs(state.Cluster)
         }
 
         // Parse stack traces from logs for source file hints
+
         sourceFiles := k8s.ParseStackTrace(podLogs)
         state.SourceFiles = sourceFiles
         state.FetchedCode = map[string]string{}
 
         // Build a simple prompt with just the logs
+
         msg := fmt.Sprintf("# Service: %s\n# Namespace: %s\n\n## Pod Logs\n%s\n\n## Your Task\nProduce up to 5 root cause hypotheses based on the logs above. Be specific.",
                 state.Cluster.Service, state.Cluster.Namespace, podLogs)
 
@@ -506,10 +543,12 @@ func (a *Investigator) runWithoutRepo(ctx context.Context, state *schemas.AgentS
 // past incident. This is the "second time, already fixed" feature.
 // It clones the repo, fetches the file that was fixed last time, and creates
 // a FixProposal directly — no LLM calls needed.
+
 func (a *Investigator) applyKnownFix(ctx context.Context, state *schemas.AgentState, meta *VectorMetadata, podLogs string) error {
         log.Printf("[memory] applying known fix: %s (type=%s)", meta.FixPattern, meta.FixType)
 
         // Parse the error from the current logs to get the source file
+
         parsed := ParseError(podLogs)
         srcFiles := []string{}
         if parsed != nil && parsed.SourceFile != "" {
@@ -517,6 +556,7 @@ func (a *Investigator) applyKnownFix(ctx context.Context, state *schemas.AgentSt
         }
 
         // Create a hypothesis directly from the memory match
+
         state.Hypotheses = []schemas.Hypothesis{{
                 HID:       "H1",
                 Statement: fmt.Sprintf("Known issue from incident %s: %s", meta.IncidentID, meta.RootCause),
@@ -530,6 +570,7 @@ func (a *Investigator) applyKnownFix(ctx context.Context, state *schemas.AgentSt
         state.Iterations = 1
 
         // Set the root cause directly
+
         state.RootCause = &schemas.RootCause{
                 Statement:  meta.RootCause,
                 Confidence: 0.9,
@@ -565,8 +606,9 @@ func (a *Investigator) buildRound1Message(state *schemas.AgentState, podLogs str
         parts = append(parts, state.Cluster.Summary)
         parts = append(parts, "")
 
-        // anchor on Python-only examples (audit #12). The parser already
+        // anchor on Python-only examples. The parser already
         // detects Python/Go/Java/JS/Rust/Ruby/C from the error logs.
+
         if lang := detectLanguageHint(podLogs); lang != "" {
                 parts = append(parts, fmt.Sprintf("## Detected Language: %s", lang))
                 parts = append(parts, "")
@@ -574,6 +616,7 @@ func (a *Investigator) buildRound1Message(state *schemas.AgentState, podLogs str
         parts = append(parts, "## Pod Logs")
         if podLogs != "" {
                 // Cap logs to 4KB for the LLM
+
                 if len(podLogs) > 4096 {
                         podLogs = podLogs[:4096]
                 }
@@ -584,6 +627,7 @@ func (a *Investigator) buildRound1Message(state *schemas.AgentState, podLogs str
         parts = append(parts, "")
         parts = append(parts, fmt.Sprintf("## Repository File Tree (%d files)", len(fileTree)))
         // Cap tree at 300 files for the prompt
+
         treeStr := strings.Join(fileTree[:min(300, len(fileTree))], "\n")
         parts = append(parts, treeStr)
         parts = append(parts, "")
@@ -617,6 +661,7 @@ func (a *Investigator) buildRound2Message(state *schemas.AgentState, podLogs str
         parts = append(parts, "")
         parts = append(parts, fmt.Sprintf("## Search Results (%d matches)", len(searchResults)))
         // Cap at 50 results for the prompt
+
         for i, r := range searchResults {
                 if i >= 50 {
                         break
@@ -630,8 +675,9 @@ func (a *Investigator) buildRound2Message(state *schemas.AgentState, podLogs str
 }
 
 // detectLanguageHint parses the pod logs for the error type + language and
-// returns a human-readable language hint for the LLM prompt. v3.11.0: audit #12.
+// returns a human-readable language hint for the LLM prompt. v3.11.0:.
 // Returns "" if no language can be detected.
+
 func detectLanguageHint(podLogs string) string {
         if podLogs == "" {
                 return ""
@@ -645,6 +691,7 @@ func detectLanguageHint(podLogs string) string {
         }
         // Map the parser's language codes to human-readable names with a
         // language-specific hint about the dominant error pattern.
+
         switch parsed.Language {
         case "python":
                 return "Python (idiomatic errors: KeyError, ValueError, TypeError, ImportError, ZeroDivisionError, AttributeError)"
@@ -676,6 +723,7 @@ func toStringSlice(in []any) []string {
 }
 
 // keysOfAny returns the keys of a map[string]any for debug logging.
+
 func keysOfAny(m map[string]any) []string {
         keys := make([]string, 0, len(m))
         for k := range m {

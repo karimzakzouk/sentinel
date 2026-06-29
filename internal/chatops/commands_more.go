@@ -1,7 +1,5 @@
 // Package chatops — additional command implementations for v4.0.0.
-//
 // 12 more commands beyond the 7 MVP in commands.go:
-//
 // Tier 2 (Operational — write access):
 //   /sentinel hold              + /sentinel hold cancel
 //   /sentinel approve           + /sentinel approve cancel
@@ -10,7 +8,6 @@
 //   /sentinel investigate
 //   /sentinel retest
 //   /sentinel verify <paths>    + /sentinel verify cancel
-//
 // Tier 3 (Destructive — admin access):
 //   /sentinel revert
 //   /sentinel rollback <deploy>
@@ -29,6 +26,7 @@ import (
 
 func init() {
         // Tier 2 — Operational
+
         RegisterCommand(&CommandSpec{
                 Name:        "hold",
                 Description: "Block auto-merge (keeps approval). Use when you want to review before merge.",
@@ -99,6 +97,7 @@ func init() {
         })
 
         // Tier 3 — Destructive
+
         RegisterCommand(&CommandSpec{
                 Name:        "revert",
                 Description: "Revert this PR (if merged). Calls kubectl rollout undo on the affected deployment.",
@@ -148,6 +147,7 @@ func init() {
 
 // cmdHold adds the sentinel/hold label, blocking auto-merge but keeping approval.
 // Prow's `hold` semantics — doesn't withdraw approval.
+
 func cmdHold(ctx context.Context, cmd *Command, deps *Deps) error {
         if cmd.Cancel {
                 if err := deps.GitHub.RemoveLabel(ctx, cmd.PRRepo, cmd.PRNumber, "sentinel/hold"); err != nil {
@@ -168,6 +168,7 @@ func cmdHold(ctx context.Context, cmd *Command, deps *Deps) error {
 // cmdApprove adds the sentinel/approved label. Required for auto-merge when
 // safety policy returned RequireHumanApproval, or for high-risk services.
 // Persists in command_events audit table (compliance trail).
+
 func cmdApprove(ctx context.Context, cmd *Command, deps *Deps) error {
         if cmd.Cancel {
                 if err := deps.GitHub.RemoveLabel(ctx, cmd.PRRepo, cmd.PRNumber, "sentinel/approved"); err != nil {
@@ -184,6 +185,7 @@ func cmdApprove(ctx context.Context, cmd *Command, deps *Deps) error {
         body := fmt.Sprintf("✅ Approved by @%s. Audit logged.\n\nThis PR is now eligible for auto-merge (subject to other gates).", cmd.Author)
         if deps.AutoMerge != nil {
                 // Force re-evaluation now that approval is in place.
+
                 deps.AutoMerge.EvaluateNow(ctx, cmd.PRRepo, cmd.PRNumber)
                 body += "\n\nAuto-merger re-evaluating now..."
         }
@@ -192,6 +194,7 @@ func cmdApprove(ctx context.Context, cmd *Command, deps *Deps) error {
 
 // cmdNoMerge adds the sentinel/no-merge label AND untracks from the merger.
 // Stronger than hold — use when "this looks wrong, don't touch it."
+
 func cmdNoMerge(ctx context.Context, cmd *Command, deps *Deps) error {
         if cmd.Cancel {
                 if err := deps.GitHub.RemoveLabel(ctx, cmd.PRRepo, cmd.PRNumber, "sentinel/no-merge"); err != nil {
@@ -199,6 +202,7 @@ func cmdNoMerge(ctx context.Context, cmd *Command, deps *Deps) error {
                                 fmt.Sprintf("⚠️ Could not remove `sentinel/no-merge` label: %v", err))
                 }
                 // Re-track if we have an incident
+
                 if deps.AutoMerge != nil {
                         if inc, _ := deps.Store.FindIncidentByPR(ctx, cmd.PRRepo, cmd.PRNumber); inc != nil {
                                 deps.AutoMerge.Track(inc.ID, cmd.PRRepo, cmd.PRNumber, inc.BaseBranch, AutoMergeInput{
@@ -231,9 +235,11 @@ func cmdNoMerge(ctx context.Context, cmd *Command, deps *Deps) error {
 // cmdMerge manually merges through Sentinel. Evaluates gates; if pass, merges
 // immediately and starts the outcome watcher. If CI pending, queues for
 // merge-on-green (becomes equivalent to auto-merge for this PR).
+
 func cmdMerge(ctx context.Context, cmd *Command, deps *Deps) error {
         if cmd.Cancel {
                 // Only valid while waiting for CI. Untrack.
+
                 if deps.AutoMerge != nil {
                         deps.AutoMerge.Untrack(cmd.PRRepo, cmd.PRNumber)
                 }
@@ -250,8 +256,10 @@ func cmdMerge(ctx context.Context, cmd *Command, deps *Deps) error {
         }
 
         // Evaluate gates via the auto-merge policy.
+
         if deps.AutoMerge == nil {
                 // No auto-merge policy — just merge directly.
+
                 return cmdMergeDirect(ctx, cmd, deps, inc)
         }
 
@@ -259,10 +267,12 @@ func cmdMerge(ctx context.Context, cmd *Command, deps *Deps) error {
         if !status.Enabled {
                 // Auto-merge is off, but /sentinel merge is the manual override.
                 // Merge directly with relaxed gates (human takes responsibility).
+
                 return cmdMergeDirect(ctx, cmd, deps, inc)
         }
 
         // Auto-merge is on — track this PR for merge-on-gates-pass.
+
         deps.AutoMerge.Track(inc.ID, cmd.PRRepo, cmd.PRNumber, inc.BaseBranch, AutoMergeInput{
                 IncidentID:         inc.ID,
                 Service:            inc.Service,
@@ -281,6 +291,7 @@ func cmdMerge(ctx context.Context, cmd *Command, deps *Deps) error {
 
 // cmdMergeDirect merges without going through the auto-merger (used when
 // auto-merge is disabled but the operator still wants /sentinel merge).
+
 func cmdMergeDirect(ctx context.Context, cmd *Command, deps *Deps, inc *Incident) error {
         if !inc.SandboxVerified {
                 return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
@@ -298,6 +309,7 @@ func cmdMergeDirect(ctx context.Context, cmd *Command, deps *Deps, inc *Incident
 
 // cmdInvestigate triggers a full re-investigation from scratch.
 // Wipes hypotheses, re-clones the repo, re-runs the pipeline.
+
 func cmdInvestigate(ctx context.Context, cmd *Command, deps *Deps) error {
         if deps.Pipeline == nil {
                 return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
@@ -328,6 +340,7 @@ func cmdInvestigate(ctx context.Context, cmd *Command, deps *Deps) error {
 
 // cmdRetest re-runs the LLM pipeline keeping the same root cause.
 // Use when the LLM got the cause right but the fix is bad.
+
 func cmdRetest(ctx context.Context, cmd *Command, deps *Deps) error {
         if deps.Pipeline == nil {
                 return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
@@ -358,11 +371,13 @@ func cmdRetest(ctx context.Context, cmd *Command, deps *Deps) error {
 
 // cmdVerify adds extra probe paths to sandbox verification.
 // E.g. /sentinel verify /pay /api/users
+
 func cmdVerify(ctx context.Context, cmd *Command, deps *Deps) error {
         if cmd.Cancel {
                 // Per-PR probe path persistence is not yet wired to the DB — the
                 // paths are stored in memory only. Clearing is a no-op until the
                 // store.UpdateProbePaths method lands. Be honest about it.
+
                 return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
                         "ℹ️ Per-PR probe path persistence is not yet implemented. Custom probe paths reset to defaults on Sentinel restart.")
         }
@@ -374,6 +389,7 @@ func cmdVerify(ctx context.Context, cmd *Command, deps *Deps) error {
         // store.UpdateProbePaths method lands. The paths ARE picked up by the
         // next /sentinel retry-sandbox within the current Sentinel process,
         // but they're lost on restart.
+
         paths := strings.Join(cmd.ArgList, ", ")
         return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
                 fmt.Sprintf("✅ Added probe paths for this PR: %s\n\nNext `/sentinel retry-sandbox` will probe these endpoints in addition to the defaults. Note: paths reset on Sentinel restart.", paths))
@@ -381,6 +397,7 @@ func cmdVerify(ctx context.Context, cmd *Command, deps *Deps) error {
 
 // cmdRevert reverts the PR if it's been merged. Calls kubectl rollout undo
 // on the affected deployment. Posts Slack alert.
+
 func cmdRevert(ctx context.Context, cmd *Command, deps *Deps) error {
         inc, err := deps.Store.FindIncidentByPR(ctx, cmd.PRRepo, cmd.PRNumber)
         if err != nil {
@@ -401,6 +418,7 @@ func cmdRevert(ctx context.Context, cmd *Command, deps *Deps) error {
                         fmt.Sprintf("❌ Rollback failed: %v", err))
         }
         // Record regression to trigger cooldown (prevents more auto-merges while we recover)
+
         if deps.AutoMerge != nil {
                 deps.AutoMerge.RecordRegression(fmt.Sprintf("manual revert by @%s on %s#%d", cmd.Author, cmd.PRRepo, cmd.PRNumber))
         }
@@ -410,6 +428,7 @@ func cmdRevert(ctx context.Context, cmd *Command, deps *Deps) error {
 
 // cmdRollback triggers kubectl rollout undo on a specific deployment.
 // E.g. /sentinel rollback payment-api --namespace prod
+
 func cmdRollback(ctx context.Context, cmd *Command, deps *Deps) error {
         if deps.Rollback == nil {
                 return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
@@ -441,6 +460,7 @@ func cmdRollback(ctx context.Context, cmd *Command, deps *Deps) error {
 }
 
 // cmdPause pauses Sentinel's autonomous mode globally. Default 60min.
+
 func cmdPause(ctx context.Context, cmd *Command, deps *Deps) error {
         if deps.PauseController == nil {
                 return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
@@ -459,6 +479,7 @@ func cmdPause(ctx context.Context, cmd *Command, deps *Deps) error {
 }
 
 // cmdResume resumes autonomous mode.
+
 func cmdResume(ctx context.Context, cmd *Command, deps *Deps) error {
         if deps.PauseController == nil {
                 return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
@@ -473,6 +494,7 @@ func cmdResume(ctx context.Context, cmd *Command, deps *Deps) error {
 // E.g. /sentinel override cooldown  (clears the cooldown)
 //      /sentinel override sandbox   (marks sandbox as verified for this PR)
 //      /sentinel override ci        (marks CI as green for this PR)
+
 func cmdOverride(ctx context.Context, cmd *Command, deps *Deps) error {
         if len(cmd.ArgList) == 0 {
                 return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
@@ -493,6 +515,7 @@ func cmdOverride(ctx context.Context, cmd *Command, deps *Deps) error {
                 // Persisting this in the incident record requires a store.UpdateSandboxOverride
                 // method (not yet implemented). The override is logged but not enforced
                 // until that lands; the auto-merger will still check sandbox_verified.
+
                 return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
                         fmt.Sprintf("⚠️ Sandbox override requested by @%s. **Audit logged.**\n\nThis PR will be treated as sandbox-verified for auto-merge purposes. Use with extreme caution — the fix was NOT actually verified by the 5-level sandbox suite.", cmd.Author))
         case "ci":
@@ -505,12 +528,15 @@ func cmdOverride(ctx context.Context, cmd *Command, deps *Deps) error {
 }
 
 // parseDuration parses a duration string like "30m", "2h", "1h30m".
+
 func parseDuration(s string) (time.Duration, error) {
         // Try Go's time.ParseDuration first.
+
         if d, err := time.ParseDuration(s); err == nil {
                 return d, nil
         }
         // Try plain integer = minutes.
+
         if n, err := strconv.Atoi(s); err == nil {
                 return time.Duration(n) * time.Minute, nil
         }

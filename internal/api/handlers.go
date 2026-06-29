@@ -1,5 +1,4 @@
 // Package api — HTTP handlers for the Sentinel API server.
-//
 // All handle* methods on Server. Routes are registered in server.go's
 // Start() method.
 package api
@@ -21,7 +20,6 @@ import (
         "github.com/karimzakzouk/sentinel/internal/metrics"
         "github.com/karimzakzouk/sentinel/internal/version"
 )
-
 
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
         writeJSON(w, 200, map[string]string{"status": "ok", "service": "core", "version": version.Version})
@@ -82,9 +80,11 @@ func (s *Server) handleIncident(w http.ResponseWriter, r *http.Request) {
 
         // truncated ID like "91cce5a5" from `incidents list` output), fall back
         // to prefix matching via FindIncidentByPrefix.
+
         id, err := uuid.Parse(idStr)
         if err == nil {
                 // Full UUID — direct lookup.
+
                 incident, err := s.store.GetIncident(r.Context(), id)
                 if err != nil {
                         writeJSON(w, 500, map[string]string{"error": err.Error()})
@@ -105,6 +105,7 @@ func (s *Server) handleIncident(w http.ResponseWriter, r *http.Request) {
         // Store interface (was a broken type assertion before — the assertion
         // targeted *feedback.Store but s.store is a *storeAdapter wrapper,
         // so it always failed with ok=false and returned 400).
+
         incident, err := s.store.FindIncidentByPrefix(r.Context(), idStr)
         if err != nil {
                 writeJSON(w, 500, map[string]string{"error": err.Error()})
@@ -223,6 +224,7 @@ func (s *Server) handleResume(w http.ResponseWriter, r *http.Request) {
 // + map entry (~10KB). 10K connections = ~100MB = OOM on the 256Mi pod.
 // 100 subscribers is generous for a single-pod dashboard (one operator = 1-3
 // browser tabs = 3-9 connections).
+
 const maxSSESubscribers = 100
 
 func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
@@ -277,12 +279,14 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 
         // (issue_comment events). Each handler ignores event types it doesn't
         // care about. We buffer the body so both handlers can read it.
+
         if s.webhookHandler == nil && s.chatopsHandler == nil {
                 writeJSON(w, 503, map[string]string{"error": "webhook handler not configured"})
                 return
         }
 
         // Read the body once, dispatch to both handlers via a fresh reader.
+
         bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, 1<<20)) // 1MB cap
         if err != nil {
                 writeJSON(w, 400, map[string]string{"error": "read body failed"})
@@ -290,9 +294,11 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
         }
 
         // Wrap the body for each handler so they can re-read it.
+
         multiReader := func() io.Reader { return bytes.NewReader(bodyBytes) }
 
         // 1. Dispatch to prreview (predictive PR review — handles pull_request events).
+
         if s.webhookHandler != nil {
                 req := r.Clone(r.Context())
                 req.Body = io.NopCloser(multiReader())
@@ -303,6 +309,7 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
         // Only run if chatops is wired AND the event is issue_comment (the chatops
         // handler checks this internally, but we short-circuit here to avoid
         // buffering + parsing for non-issue_comment events).
+
         if s.chatopsHandler != nil {
                 eventType := r.Header.Get("X-GitHub-Event")
                 if eventType == "issue_comment" {
@@ -324,6 +331,7 @@ func (s *Server) handleSlack(w http.ResponseWriter, r *http.Request) {
 // handleAlertmanager receives Alertmanager webhook notifications.
 // POST /webhook/alertmanager with Alertmanager v4 payload.
 // Only "firing" alerts trigger investigation; "resolved" alerts are logged.
+
 func (s *Server) handleAlertmanager(w http.ResponseWriter, r *http.Request) {
         if s.alertmanagerHandler == nil {
                 writeJSON(w, 503, map[string]string{"error": "alertmanager handler not configured"})
@@ -333,12 +341,11 @@ func (s *Server) handleAlertmanager(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleGitHubApp manages the GitHub App config. v4.1.0.
-//
 // GET  /settings/github-app        → status (configured? app_id? slug? install_id?)
 // POST /settings/github-app        → store App ID + PEM + optional install ID + webhook secret
 // DELETE /settings/github-app      → remove App config (fall back to PAT)
-//
 // Used by `sentinelctl app setup` + `sentinelctl app status` + `sentinelctl app remove`.
+
 func (s *Server) handleGitHubApp(w http.ResponseWriter, r *http.Request) {
         if s.githubAppManager == nil {
                 writeJSON(w, 503, map[string]string{"error": "github app manager not configured"})
@@ -396,6 +403,7 @@ func (s *Server) handleGitHubApp(w http.ResponseWriter, r *http.Request) {
 // Called separately from the App credentials because the install ID isn't
 // known until the user installs the App on their repo (which happens after
 // the App credentials are stored).
+
 func (s *Server) handleGitHubAppInstall(w http.ResponseWriter, r *http.Request) {
         if s.githubAppManager == nil {
                 writeJSON(w, 503, map[string]string{"error": "github app manager not configured"})
@@ -427,6 +435,7 @@ func (s *Server) handleGitHubAppInstall(w http.ResponseWriter, r *http.Request) 
 // handleProviders returns the LLM provider pool status. v4.0.0.
 // Shows each provider's health: tripped state, last failure, call counts.
 // Used by the web UI's "LLM Providers" panel.
+
 func (s *Server) handleProviders(w http.ResponseWriter, r *http.Request) {
         if s.providersStatus == nil {
                 writeJSON(w, 200, map[string]any{
@@ -445,6 +454,7 @@ func (s *Server) handleProviders(w http.ResponseWriter, r *http.Request) {
 
 // handleAutoMerge returns the auto-merge policy status. v4.0.0.
 // Shows: enabled, namespaces, rate limit usage, cooldown state, tracked PRs.
+
 func (s *Server) handleAutoMerge(w http.ResponseWriter, r *http.Request) {
         if s.autoMergeStatus == nil {
                 writeJSON(w, 200, map[string]any{
@@ -468,6 +478,7 @@ func (s *Server) handleWebUI(w http.ResponseWriter, r *http.Request) {
 // handlePprof delegates to net/http/pprof for production profiling.
 // Protected by the apiToken auth middleware (same as /admin/* endpoints).
 // Usage: `go tool pprof http://sentinel.sentinel.svc:8000/debug/pprof/heap`
+
 func (s *Server) handlePprof(w http.ResponseWriter, r *http.Request) {
 	pprof.Index(w, r)
 }

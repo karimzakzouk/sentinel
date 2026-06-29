@@ -15,11 +15,14 @@ import (
 
 // Config is the immutable-at-startup config. Runtime-mutable settings
 // (LLM key, namespaces, etc.) live in RuntimeSettings.
+
 type Config struct {
         // Storage
+
         SQLitePath string // path to the SQLite DB file
 
         // LLM
+
         LLMProvider     string
         LLMBaseURL      string
         LLMAPIKey       string
@@ -29,27 +32,31 @@ type Config struct {
         // "text-embedding-3-small" to "" (empty) — the previous default was
         // OpenAI-specific but the default LLM provider is "zai", so every
         // default install was calling a non-existent OpenAI embeddings endpoint
-        // and silently falling back to hash embeddings (audit #13). With empty
+        // and silently falling back to hash embeddings. With empty
         // default, the vector store uses hash fallback explicitly, which is
         // honest about what's happening. Operators who want real embeddings
         // must set both SENTINEL_LLM_EMBEDDING_MODEL and ensure their
         // LLMBaseURL/provider supports the /embeddings endpoint.
+
         LLMEmbeddingModel string
 
-        // (audit #13). Was hardcoded 1536 in feedback/vector.go hashEmbedding().
+        //.go hashEmbedding().
         // If an operator configures a real embedding model with a different dim
         // (e.g. 1024 for bge-large, 3072 for text-embedding-3-large), the hash
         // fallback's 1536-dim vectors were incompatible with real embeddings
-        // stored previously — silently corrupting the HNSW index. Now the dim
+        // stored Now the dim
         // is configurable and defaults to 1536 (backwards-compatible with
         // existing indexes built with the previous hash fallback).
+
         LLMEmbeddingDim int
 
         // Kubernetes
+
         Namespace   string // the namespace Sentinel runs in
         ReleaseName string // the helm release name
 
         // GitHub
+
         GitHubToken string
 
         GitHubWebhookSecret string
@@ -58,6 +65,7 @@ type Config struct {
         // POST /webhook/alertmanager to send it in the
         // X-Sentinel-Webhook-Secret header. Prevents unauthorized alert
         // injection. Empty = no auth (NOT recommended in production).
+
         AlertmanagerWebhookSecret string
 
         // is allowed to clone and open PRs against. Sourced from the
@@ -68,6 +76,7 @@ type Config struct {
         // compromised user annotating their own pod with an arbitrary repo
         // string and having Sentinel clone it (and exfiltrate the PAT to
         // github.com in the process).
+
         AllowedGitHubRepos []string
 
         // (/admin/*, /settings POST, /incidents POST, /pause, /resume).
@@ -75,13 +84,13 @@ type Config struct {
         // will log a loud warning at startup). When set, every admin
         // request must carry 'Authorization: Bearer <token>'. Health/readiness
         // and metrics endpoints remain unauthenticated.
+
         APIToken string
 
         // the GitHub App's installation token for ALL GitHub API calls (opening
         // PRs, posting comments, reacting, merging) instead of the PAT. This makes
         // PRs and comments appear as the verified "Sentinel" bot identity instead
         // of the PAT owner's personal account.
-        //
         // To create a GitHub App:
         //   1. Go to https://github.com/settings/apps/new (or org settings → Developer settings → GitHub Apps)
         //   2. Name: "Sentinel", Homepage URL: your repo
@@ -91,17 +100,18 @@ type Config struct {
         //      - Organization: Members (Read) — optional, for permission checks
         //   5. Generate a private key (.pem file) — set contents as SENTINEL_GITHUB_APP_PRIVATE_KEY
         //   6. Install the app on your repo/org → note the installation ID from the URL
-        //
         // When set, the PAT (GitHubToken) is used as a fallback if the App token call fails.
+
         GitHubAppID         string
         GitHubAppPrivateKey string
         GitHubAppInstallID  string
 
         // Docker Hub (for Kaniko sandbox image builder)
+
         DockerHubUsername string
         DockerHubToken    string
 
-        // Previously docker.io was hardcoded in 4 places (kaniko.go:106,255,
+        //iogo:106,255,
         // secrets.yaml:28, values.yaml:12), so ECR/GCR/ACR/Harbor/Quay users
         // got an invalid destination image:
         //   "docker.io/123456789.dkr.ecr.us-east-1.amazonaws.com/myapp:sentinel-..."
@@ -109,28 +119,30 @@ type Config struct {
         // --cache-repo use this value, and the chart's dockerconfigjson
         // Secret is templated against it.
         // Default: docker.io (backwards-compatible).
+
         KanikoRegistry string
 
-        // Previously github.com was hardcoded in 14+ sites across 6 files.
+        //com
         // Now the git host + API URL are configurable.
         // Default: github.com + https://api.github.com (backwards-compatible).
+
         GitHost      string // e.g. "github.com", "gh.mycorp.internal", "gitlab.com"
         GitHubAPIURL string // e.g. "https://api.github.com", "https://gh.mycorp.internal/api/v3"
 
-        // Previously "main" was hardcoded in 4 sites (github.go:64, cloner.go:51,
+        //go:51,
         // branch_resolver.go:48, fix_proposer.go:617), breaking repos whose
         // default branch is master/develop/trunk/release-X.Y.
         // Default: main (backwards-compatible). Per-repo override via
         // sentinel.io/branch annotation takes precedence.
+
         DefaultBranch string
 
-        // Previously the safety policy hardcoded payment-api/billing-api/auth-service
         // as high-risk and NewPolicy() could not override them. Now configurable.
         // Default: empty (no services are high-risk by default — demo values
         // should not leak into production installs).
+
         HighRiskServices []string
 
-        // Previously hardcoded to kube-system/kube-public/kube-node-lease, missing
         // common system namespaces like calico-system, cert-manager, ingress-nginx,
         // monitoring, etc. Sentinel would waste API QPS watching those.
         // Default: kube-system, kube-public, kube-node-lease, calico-system,
@@ -138,39 +150,48 @@ type Config struct {
         // metallb-system, longhorn-system, cattle-system, fleet-system,
         // gatekeeper-system, external-secrets, vault, argo-events, argo-rollouts,
         // tekton-pipelines, istio-system, knative-serving, kubernetes-dashboard.
+
         SkipNamespaces []string
 
-        // Previously hardcoded as unexported consts in kaniko.go.
+        //go.
         // Default: the previous pinned values (alpine/git:2.43.0,
         // gcr.io/kaniko-project/executor:v1.24.0).
+
         KanikoInitImage     string
         KanikoExecutorImage string
 
-        // Previously hardcoded to 3 in main.go:208.
+        //go:208.
         // Default: 3 (backwards-compatible).
+
         MaxConcurrentInvestigations int
 
         // RBAC
+
         ProductionNamespaces []string // namespaces treated as production
         WriteNamespaces      []string // namespaces Sentinel can apply fixes to
 
         // Confidence thresholds
+
         ConfidenceAutonomous   float64
         ConfidenceHumanReview  float64
 
         // Panic button thresholds
+
         PanicCPUThresholdPct     float64
         PanicConnectionsThreshold int
 
         // Sandbox
+
         EnableTrafficMirroring bool
         SandboxNamespacePrefix string
 
         // API
+
         APIHost string
         APIPort int
 
         // Investigation timeout (seconds)
+
         InvestigationTimeout int
 
         InvestigatorTimeoutSec  int
@@ -194,10 +215,10 @@ type Config struct {
         SandboxProbePaths []string
 
         // Default false — sandbox runs for all namespaces.
-
         // When SandboxEnabled=false, sandbox is skipped entirely (for all namespaces).
         // When SandboxEnabled=true + SkipSandboxNonProd=true, sandbox is skipped
         // for non-prod namespaces only.
+
         SkipSandboxNonProd bool
 
         // SandboxEnabled: should we run the sandbox at all?
@@ -209,6 +230,7 @@ type Config struct {
         // SandboxMaxRetries: how many times to retry on sandbox failure (Layer B).
         //   The sandbox failure details are fed back to the LLM which generates
         //   a new fix. 0 = no retry (fail once → open PR or block).
+
         SandboxEnabled    bool
         SandboxRequired   bool
         SandboxMaxRetries int
@@ -220,10 +242,10 @@ type Config struct {
         // and Sentinel will try them in priority order. If a provider fails, the
         // circuit breaker trips for that provider and subsequent calls skip it
         // until the reset window expires.
-        //
         // Loaded from SENTINEL_LLM_PROVIDERS env var (JSON array) — see
         // internal/llm/pool.go for the ProviderConfig schema. Empty = legacy
         // single-provider mode (uses LLMProvider + LLMAPIKey above).
+
         LLMProviders []llm.ProviderConfig
 
         AutoMergeEnabled        bool
@@ -235,6 +257,7 @@ type Config struct {
         AutoMergeCooldownMin    int
 
         // stuck pods, etc.) without code changes. Default false.
+
         AutoRemediationEnabled bool
 
         PrometheusURL string
@@ -252,6 +275,7 @@ type Config struct {
 
 // RuntimeSettings is the runtime-mutable subset of Config.
 // These can be changed via the API/CLI without restarting Sentinel.
+
 type RuntimeSettings struct {
         LLMProvider      string  `json:"llm_provider"`
         LLMAPIKey        string  `json:"llm_api_key"`
@@ -270,6 +294,7 @@ type RuntimeSettings struct {
 }
 
 // Load reads configuration from environment variables.
+
 func Load() *Config {
         return &Config{
                 SQLitePath:             getenv("SENTINEL_SQLITE_PATH", "/data/sentinel.db"),
@@ -279,12 +304,14 @@ func Load() *Config {
                 LLMFastModel:           getenv("SENTINEL_LLM_FAST_MODEL", "glm-4-flash"),
                 LLMFrontierModel:       getenv("SENTINEL_LLM_FRONTIER_MODEL", "glm-4.5"),
 
-                // to "" (audit #13). The previous default was OpenAI-specific but the
+                // to "". The previous default was OpenAI-specific but the
                 // default provider is "zai", so every default install silently fell back
                 // to hash embeddings. Empty default is honest about what's happening.
+
                 LLMEmbeddingModel:      getenv("SENTINEL_LLM_EMBEDDING_MODEL", ""),
 
                 // preserves backwards compat with existing indexes.
+
                 LLMEmbeddingDim:        getenvInt("SENTINEL_LLM_EMBEDDING_DIM", 1536),
                 Namespace:              getenv("SENTINEL_NAMESPACE", "sentinel"),
                 ReleaseName:            getenv("SENTINEL_RELEASE_NAME", "sentinel"),
@@ -295,6 +322,7 @@ func Load() *Config {
                 APIToken:               getenv("SENTINEL_API_TOKEN", ""),
 
                 // appear as the "Sentinel" bot instead of the PAT owner).
+
                 GitHubAppID:            getenv("SENTINEL_GITHUB_APP_ID", ""),
                 GitHubAppPrivateKey:    getenv("SENTINEL_GITHUB_APP_PRIVATE_KEY", ""),
                 GitHubAppInstallID:     getenv("SENTINEL_GITHUB_APP_INSTALL_ID", ""),
@@ -322,6 +350,7 @@ func Load() *Config {
                 // as production (stricter governance). Operators who actually use a
                 // "payments" namespace should set SENTINEL_PRODUCTION_NAMESPACES
                 // explicitly.
+
                 ProductionNamespaces:   splitCSV(getenv("SENTINEL_PRODUCTION_NAMESPACES", "prod,production")),
                 WriteNamespaces:        splitCSV(getenv("SENTINEL_WRITE_NAMESPACES", "")),
                 ConfidenceAutonomous:   getenvFloat("SENTINEL_CONFIDENCE_THRESHOLD_AUTONOMOUS", 0.92),
@@ -357,6 +386,7 @@ func Load() *Config {
                 // The sandbox verifies the fix actually works before opening a PR.
                 // Operators who want fast mode (skip sandbox for non-prod) can set
                 // SENTINEL_SKIP_SANDBOX_NON_PROD=true.
+
                 SkipSandboxNonProd: getenvBool("SENTINEL_SKIP_SANDBOX_NON_PROD", false),
 
                 SandboxEnabled:    getenvBool("SENTINEL_SANDBOX_ENABLED", true),
@@ -379,10 +409,12 @@ func Load() *Config {
                 LogLevel: getenv("SENTINEL_LOG_LEVEL", "INFO"),
 
                 // Empty = legacy single-provider mode (uses LLMProvider + LLMAPIKey).
+
                 LLMProviders: loadLLMProviders(),
 
                 // auto-merge is OFF by default, no namespaces allowed, requires
                 // explicit opt-in per service via annotation.
+
                 AutoMergeEnabled:       getenvBool("SENTINEL_AUTO_MERGE_ENABLED", false),
                 AutoMergeNamespaces:    splitCSV(getenv("SENTINEL_AUTO_MERGE_NAMESPACES", "")),
                 AutoMergeMinConfidence: getenvFloat("SENTINEL_AUTO_MERGE_MIN_CONFIDENCE", 0.85),
@@ -396,6 +428,7 @@ func Load() *Config {
 }
 
 // ResolvedBaseURL returns the actual LLM base URL, deriving from provider if needed.
+
 func (c *Config) ResolvedBaseURL() string {
         if c.LLMBaseURL != "" {
                 return c.LLMBaseURL
@@ -419,6 +452,7 @@ func (c *Config) ResolvedBaseURL() string {
 }
 
 // CanWriteTo returns true if Sentinel is allowed to apply fixes in this namespace.
+
 func (c *Config) CanWriteTo(namespace string) bool {
         if len(c.WriteNamespaces) == 0 {
                 return false
@@ -432,6 +466,7 @@ func (c *Config) CanWriteTo(namespace string) bool {
 }
 
 // IsProductionNamespace returns true if the namespace is in the production list.
+
 func (c *Config) IsProductionNamespace(namespace string) bool {
         for _, ns := range c.ProductionNamespaces {
                 if ns == namespace {
@@ -446,15 +481,13 @@ func (c *Config) IsProductionNamespace(namespace string) bool {
 // If the allowlist is empty, all repos are allowed (legacy behavior —
 // NOT recommended for production; set the allowlist via
 // SENTINEL_ALLOWED_GITHUB_REPOS=owner1/repo1,owner2/repo2).
-//
-
 // user with pod-edit permission annotates their pod with an arbitrary repo
 // string and Sentinel dutifully clones it (sending the GitHub PAT to
 // github.com for any repo the PAT can access). With the allowlist set, only
 // explicitly-listed repos can be cloned.
-//
 // Matching is case-insensitive (GitHub repo paths are case-insensitive).
 // A trailing ".git" on either side is stripped before comparison.
+
 func (c *Config) IsRepoAllowed(repo string) bool {
         if len(c.AllowedGitHubRepos) == 0 {
                 return true
@@ -471,10 +504,11 @@ func (c *Config) IsRepoAllowed(repo string) bool {
 // Validate checks the config for missing required fields, invalid values, and
 // insecure defaults. Returns a list of errors (empty if all checks pass) and
 // a list of warnings (non-blocking).
-
 // with empty required fields and failed 5-10 minutes later at the first LLM call.
+
 func (c *Config) Validate() (errors []string, warnings []string) {
         // Critical: LLM credentials
+
         if c.LLMAPIKey == "" {
                 errors = append(errors, "SENTINEL_LLM_API_KEY is empty — Sentinel cannot run without an LLM API key")
         }
@@ -492,17 +526,20 @@ func (c *Config) Validate() (errors []string, warnings []string) {
         }
 
         // Critical: GitHub credentials
+
         if c.GitHubToken == "" {
                 errors = append(errors, "SENTINEL_GITHUB_TOKEN is empty — Sentinel needs a GitHub PAT to clone repos and open PRs. "+
                         "(If using a GitHub App, configure it via runtime config or SENTINEL_GITHUB_APP_* env vars.)")
         }
 
         // Critical: namespace config
+
         if len(c.WriteNamespaces) == 0 {
                 warnings = append(warnings, "SENTINEL_WRITE_NAMESPACES is empty — Sentinel cannot write fixes to any namespace")
         }
 
         // High: API token (security)
+
         if c.APIToken == "" {
                 warnings = append(warnings, "SENTINEL_API_TOKEN is empty — admin API is unauthenticated. "+
                         "Anyone with cluster network access can trigger investigations, pause autonomous mode, "+
@@ -510,18 +547,21 @@ func (c *Config) Validate() (errors []string, warnings []string) {
         }
 
         // High: GitHub repo allowlist
+
         if len(c.AllowedGitHubRepos) == 0 && c.GitHubToken != "" {
                 warnings = append(warnings, "SENTINEL_ALLOWED_GITHUB_REPOS is empty — Sentinel will clone ANY repo "+
                         "annotated on a pod using the configured GitHub PAT. Set an explicit allowlist.")
         }
 
         // High: Slack signing secret
+
         if c.SlackBotToken != "" && c.SlackSigningSecret == "" {
                 warnings = append(warnings, "SENTINEL_SLACK_SIGNING_SECRET is empty but SLACK_BOT_TOKEN is set — "+
                         "Slack requests will be REJECTED (signature verification cannot run without the secret)")
         }
 
         // Range checks
+
         if c.SandboxMaxRetries < 0 {
                 warnings = append(warnings, fmt.Sprintf("SENTINEL_SANDBOX_MAX_RETRIES=%d (negative) — clamping to 0", c.SandboxMaxRetries))
                 c.SandboxMaxRetries = 0
@@ -549,6 +589,7 @@ func (c *Config) Validate() (errors []string, warnings []string) {
 // isKnownProvider returns true if the provider string is recognized by the
 // goai_provider mapping. This is a non-exhaustive list — unknown providers
 // are allowed (with a warning) because the user might be using a custom base URL.
+
 func isKnownProvider(p string) bool {
         switch p {
         case "openai", "anthropic", "zai", "openrouter", "gemini", "bedrock",
@@ -562,6 +603,7 @@ func isKnownProvider(p string) bool {
 
 // normalizeRepoForCompare lowercases the repo string and strips a trailing
 // ".git" so "Acme/App.git" matches "acme/app".
+
 func normalizeRepoForCompare(repo string) string {
         r := strings.ToLower(strings.TrimSpace(repo))
         r = strings.TrimSuffix(r, ".git")
@@ -625,12 +667,11 @@ func splitCSV(s string) []string {
 // loadLLMProviders loads the multi-provider pool config from the
 // SENTINEL_LLM_PROVIDERS env var. The value must be a JSON array of
 // ProviderConfig objects (see internal/llm/pool.go).
-//
 // Example env value (single line, escaped):
 //   SENTINEL_LLM_PROVIDERS='[{"id":"or-1","provider":"openrouter","apiKey":"sk-or-...","fastModel":"anthropic/claude-3.5-sonnet","frontierModel":"anthropic/claude-3.5-sonnet","priority":1},{"id":"groq-1","provider":"groq","apiKey":"gsk_...","fastModel":"llama-3.1-70b-versatile","frontierModel":"llama-3.1-70b-versatile","priority":2}]'
-//
 // For Helm, set via --set-json or a values file. Empty/unset = legacy
 // single-provider mode (uses LLMProvider + LLMAPIKey fields).
+
 func loadLLMProviders() []llm.ProviderConfig {
         raw := os.Getenv("SENTINEL_LLM_PROVIDERS")
         if raw == "" {
@@ -642,6 +683,7 @@ func loadLLMProviders() []llm.ProviderConfig {
                 return nil
         }
         // Validate: drop entries with no API key (unless ollama/vllm which don't need one)
+
         valid := make([]llm.ProviderConfig, 0, len(configs))
         for _, c := range configs {
                 if c.ProviderType == "" {

@@ -16,17 +16,20 @@ import (
 // Store is the single storage layer for Sentinel v3.
 // Replaces: IncidentStore (Postgres), EventStore (Postgres), BetaStore (Postgres),
 // WeaviateStore (Weaviate vector DB).
+
 type Store struct {
         db *sql.DB
         mu sync.RWMutex
 }
 
 // New opens (or creates) the SQLite database at path and initializes the schema.
+
 func New(path string) (*Store, error) {
         // modernc.org/sqlite uses _pragma= query params for pragmas.
         // WAL mode for concurrent reads + writes.
         // busy_timeout=10000ms to wait instead of returning SQLITE_BUSY immediately.
         // foreign_keys=on for referential integrity.
+
         dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=busy_timeout(10000)&_pragma=foreign_keys(on)", path)
         db, err := sql.Open("sqlite", dsn)
         if err != nil {
@@ -35,11 +38,13 @@ func New(path string) (*Store, error) {
 
         // SQLite only allows one writer at a time. Limit connections to avoid
         // "database is locked" errors under concurrent access.
+
         db.SetMaxOpenConns(1)
         db.SetMaxIdleConns(1)
         db.SetConnMaxLifetime(0) // keep connections open forever
 
         // Verify connection
+
         if err := db.Ping(); err != nil {
                 return nil, fmt.Errorf("ping sqlite: %w", err)
         }
@@ -52,6 +57,7 @@ func New(path string) (*Store, error) {
 }
 
 // Close closes the database.
+
 func (s *Store) Close() error {
         return s.db.Close()
 }
@@ -153,15 +159,17 @@ func (s *Store) initSchema() error {
 
         // SQLite doesn't support IF NOT EXISTS on ADD COLUMN, so we check the
         // schema first and skip columns that already exist.
+
         return s.migrateSchema()
 }
 
 // migrateSchema applies additive column migrations to the incidents table.
-
 // columns for chatops support. Idempotent — safe to run on every startup.
+
 func (s *Store) migrateSchema() error {
         // PRAGMA table_info returns one row per column. We check which columns
         // already exist before issuing ALTER TABLE statements.
+
         rows, err := s.db.Query(`PRAGMA table_info(incidents)`)
         if err != nil {
                 return fmt.Errorf("pragma table_info: %w", err)
@@ -205,6 +213,7 @@ func (s *Store) migrateSchema() error {
 
         // Add the (pr_repo, pr_number) index if it doesn't exist.
         // SQLite supports CREATE INDEX IF NOT EXISTS so we can do this unconditionally.
+
         if _, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_incidents_pr ON incidents(pr_repo, pr_number) WHERE pr_number IS NOT NULL`); err != nil {
                 log.Printf("[store] WARNING: could not create idx_incidents_pr: %v (continuing)", err)
         }
@@ -212,3 +221,4 @@ func (s *Store) migrateSchema() error {
 }
 
 // UpsertIncident stores or updates an incident.
+

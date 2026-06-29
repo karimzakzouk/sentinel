@@ -18,20 +18,24 @@ import (
 )
 
 // K8sExecutor applies K8s patches (restart, scale, rollback).
+
 type K8sExecutor struct {
         clientset *kubernetes.Clientset
 }
 
 // NewK8s creates a K8sExecutor.
+
 func NewK8s(clientset *kubernetes.Clientset) *K8sExecutor {
         return &K8sExecutor{clientset: clientset}
 }
 
 // Restart performs a rollout restart on the target Deployment.
+
 func (e *K8sExecutor) Restart(ctx context.Context, fp *schemas.FixProposal) error {
         dep, err := e.clientset.AppsV1().Deployments(fp.TargetNamespace).Get(ctx, fp.TargetService, metav1.GetOptions{})
         if err != nil {
                 // Try by label
+
                 deps, listErr := e.clientset.AppsV1().Deployments(fp.TargetNamespace).List(ctx, metav1.ListOptions{
                         LabelSelector: fmt.Sprintf("app.kubernetes.io/name=%s", fp.TargetService),
                 })
@@ -42,12 +46,14 @@ func (e *K8sExecutor) Restart(ctx context.Context, fp *schemas.FixProposal) erro
         }
 
         // Restart by patching the restart annotation
+
         patch := fmt.Sprintf(`{"spec":{"template":{"metadata":{"annotations":{"kubectl.kubernetes.io/restartedAt":"%s"}}}}}`, metav1.Now().Format("2006-01-02T15:04:05Z"))
         _, err = e.clientset.AppsV1().Deployments(fp.TargetNamespace).Patch(ctx, dep.Name, types.MergePatchType, []byte(patch), metav1.PatchOptions{})
         return err
 }
 
 // Scale patches the replica count on the target Deployment.
+
 func (e *K8sExecutor) Scale(ctx context.Context, fp *schemas.FixProposal, newReplicas int32) error {
         dep, err := e.clientset.AppsV1().Deployments(fp.TargetNamespace).Get(ctx, fp.TargetService, metav1.GetOptions{})
         if err != nil {
@@ -66,7 +72,6 @@ func (e *K8sExecutor) Scale(ctx context.Context, fp *schemas.FixProposal, newRep
 }
 
 // Rollback performs a kubectl rollout undo on the target Deployment.
-//
 // Previous implementation picked the "second-newest by
 // CreationTimestamp" ReplicaSet that was not the current revision. That is
 // wrong in two cases:
@@ -76,12 +81,12 @@ func (e *K8sExecutor) Scale(ctx context.Context, fp *schemas.FixProposal, newRep
 //     older one if revisions were pruned non-sequentially.
 //  2. During rapid rollouts multiple ReplicaSets can share a CreationTimestamp
 //     (second-resolution), making the pick non-deterministic.
-//
 // The correct algorithm — matching `kubectl rollout undo` — is to sort all
 // ReplicaSets for the deployment by the `deployment.kubernetes.io/revision`
 // annotation numerically (descending) and pick the highest revision that is
 // not equal to the deployment's current revision. That is the
 // immediately-previous revision.
+
 func (e *K8sExecutor) Rollback(ctx context.Context, fp *schemas.FixProposal) error {
         dep, err := e.clientset.AppsV1().Deployments(fp.TargetNamespace).Get(ctx, fp.TargetService, metav1.GetOptions{})
         if err != nil {
@@ -109,6 +114,7 @@ func (e *K8sExecutor) Rollback(ctx context.Context, fp *schemas.FixProposal) err
         // Collect all ReplicaSets that have a revision annotation and are not the
         // current revision. Skip any without the annotation (orphan RS / manually
         // created) — we can't reason about their order.
+
         type cand struct {
                 rs  *appsv1.ReplicaSet
                 rev int64
@@ -132,12 +138,14 @@ func (e *K8sExecutor) Rollback(ctx context.Context, fp *schemas.FixProposal) err
 
         // Sort by revision descending — the first element is the immediately
         // previous revision.
+
         sort.SliceStable(cands, func(i, j int) bool {
                 return cands[i].rev > cands[j].rev
         })
         prevRS := cands[0].rs
 
         // Patch the deployment's template to match the previous ReplicaSet.
+
         patch := fmt.Sprintf(`{"spec":{"template":%s}}`, mustJSON(prevRS.Spec.Template))
         _, err = e.clientset.AppsV1().Deployments(fp.TargetNamespace).Patch(ctx, dep.Name, types.StrategicMergePatchType, []byte(patch), metav1.PatchOptions{})
         return err
@@ -146,6 +154,7 @@ func (e *K8sExecutor) Rollback(ctx context.Context, fp *schemas.FixProposal) err
 // parseRevision parses the deployment.kubernetes.io/revision annotation.
 // Returns 0 if the value is missing or unparseable (treated as the oldest
 // possible revision so it sorts first in the candidate list).
+
 func parseRevision(s string) int64 {
         if s == "" {
                 return 0
@@ -159,15 +168,14 @@ func parseRevision(s string) int64 {
 
 // CopyConfigMapsAndSecrets copies ConfigMaps + Secrets referenced by a
 // deployment from srcNs to dstNs (used by the sandbox runner).
-//
 // Previous version silently swallowed every error — missing ConfigMap,
 // missing Secret, create conflict, anything. The sandbox canary would then
 // start with empty env vars and Level 1 verification would still pass (because
 // the pod can go Ready with broken config), masking the real failure.
-//
 // We now collect every error and return an aggregated error. Already-exists
 // (HTTP 409) is treated as success because the sandbox namespace may have
 // already been partially populated by a previous run.
+
 func CopyConfigMapsAndSecrets(ctx context.Context, clientset *kubernetes.Clientset, deploy *appsv1.Deployment, srcNs, dstNs string) error {
         cmNames := map[string]bool{}
         secretNames := map[string]bool{}
@@ -242,6 +250,7 @@ func CopyConfigMapsAndSecrets(ctx context.Context, clientset *kubernetes.Clients
 // status error. We use a string check to avoid importing
 // apierrors (which would pull in another package tree) — K8s errors
 // consistently contain the substring "already exists".
+
 func isAlreadyExistsErr(err error) bool {
         if err == nil {
                 return false
@@ -251,6 +260,7 @@ func isAlreadyExistsErr(err error) bool {
 }
 
 // contains is a tiny helper to avoid importing strings just for one call.
+
 func contains(s, sub string) bool {
         if len(sub) == 0 {
                 return true
@@ -264,6 +274,7 @@ func contains(s, sub string) bool {
 }
 
 // errAlreadyExists is a sentinel kept for future typed-error migration.
+
 var errAlreadyExists = errors.New("already exists")
 
 func mustJSON(v any) string {
@@ -275,6 +286,7 @@ func mustJSON(v any) string {
 // Used by chatops /sentinel rollback + /sentinel revert commands.
 // This is a thin wrapper around Rollback that constructs a synthetic
 // FixProposal so we don't have to refactor the existing method.
+
 func (e *K8sExecutor) RollbackByName(ctx context.Context, namespace, deploymentName string) error {
 	fp := &schemas.FixProposal{
 		FixType:         schemas.FixRollback,

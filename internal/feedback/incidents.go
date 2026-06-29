@@ -56,6 +56,7 @@ func (s *Store) UpsertIncident(ctx context.Context, inc *schemas.Incident) error
 }
 
 // GetIncident retrieves a single incident by ID.
+
 func (s *Store) GetIncident(ctx context.Context, id uuid.UUID) (*schemas.Incident, error) {
         s.mu.RLock()
         defer s.mu.RUnlock()
@@ -116,14 +117,12 @@ func (s *Store) GetIncident(ctx context.Context, id uuid.UUID) (*schemas.Inciden
 // FindIncidentByPrefix finds an incident whose UUID starts with the given
 // prefix. If multiple incidents match, returns the most recently updated one.
 // Returns nil (no error) if no match.
-//
-
 // in `incidents list` output. Without this, `sentinelctl incidents get
 // 91cce5a5` would fail with "invalid incident ID" because the server did
 // uuid.Parse("91cce5a5") which requires a full 36-char UUID.
-//
 // The prefix must be at least 4 chars to prevent accidental collisions on
 // short prefixes (a 1-char prefix would match ~1/16 of all UUIDs).
+
 func (s *Store) FindIncidentByPrefix(ctx context.Context, prefix string) (*schemas.Incident, error) {
         if len(prefix) < 4 {
                 return nil, nil
@@ -131,6 +130,7 @@ func (s *Store) FindIncidentByPrefix(ctx context.Context, prefix string) (*schem
         // Normalize: lowercase, strip hyphens so "91cce5a5" and "91cce5a5-1234"
         // both work against stored UUIDs (which are stored as lowercase strings
         // with hyphens).
+
         cleaned := strings.ToLower(strings.ReplaceAll(prefix, "-", ""))
         if len(cleaned) > 36 {
                 return nil, nil
@@ -144,6 +144,7 @@ func (s *Store) FindIncidentByPrefix(ctx context.Context, prefix string) (*schem
         // doesn't), and an index on incident_id won't help with prefix matches
         // anyway. 500 is plenty — if you have >500 recent incidents, use the
         // full UUID.
+
         rows, err := s.db.QueryContext(ctx, `
                 SELECT incident_id, created_at, updated_at, service, namespace, status, severity, cluster_json, state_json, beta_alpha, beta_beta, git_commit_at_resolution, postmortem
                 FROM incidents ORDER BY updated_at DESC LIMIT 500
@@ -163,6 +164,7 @@ func (s *Store) FindIncidentByPrefix(ctx context.Context, prefix string) (*schem
                 // Compare against the prefix. The stored incident_id is a full
                 // UUID string like "91cce5a5-1234-5678-9abc-def012345678".
                 // Strip its hyphens too for the comparison.
+
                 stored := strings.ReplaceAll(strings.ToLower(inc.IncidentID.String()), "-", "")
                 if strings.HasPrefix(stored, cleaned) {
                         if best == nil || updatedAt.After(bestUpdatedAt) {
@@ -177,6 +179,7 @@ func (s *Store) FindIncidentByPrefix(ctx context.Context, prefix string) (*schem
 // scanIncidentRow is the shared row-scan logic for GetIncident,
 // FindIncidentByPrefix, and ListRecentIncidents. Takes a sql.Rows (so it
 // works for both single-row QueryRow and multi-row Query).
+
 type rowScanner interface {
         Scan(dest ...any) error
 }
@@ -294,11 +297,13 @@ func (s *Store) ListRecentIncidents(ctx context.Context, limit int) ([]*schemas.
 
 // AppendEvent appends an audit event to the event log.
 
+
 func (s *Store) FindIncidentByPR(ctx context.Context, repo string, prNumber int) (*schemas.Incident, error) {
         s.mu.RLock()
         defer s.mu.RUnlock()
 
         // Try the dedicated pr_repo/pr_number columns first (v4.0.0 migration).
+
         row := s.db.QueryRowContext(ctx, `
                 SELECT incident_id, created_at, updated_at, service, namespace, status, severity, cluster_json, state_json, beta_alpha, beta_beta, git_commit_at_resolution, postmortem
                 FROM incidents
@@ -317,6 +322,7 @@ func (s *Store) FindIncidentByPR(ctx context.Context, repo string, prNumber int)
 
         // Fallback: scan state_json for matching PR info (older incidents
         // from before the v4.0.0 migration that haven't been updated).
+
         rows, err := s.db.QueryContext(ctx, `
                 SELECT incident_id, created_at, updated_at, service, namespace, status, severity, cluster_json, state_json, beta_alpha, beta_beta, git_commit_at_resolution, postmortem
                 FROM incidents
@@ -335,6 +341,7 @@ func (s *Store) FindIncidentByPR(ctx context.Context, repo string, prNumber int)
                         continue
                 }
                 // Check if this incident's PR matches
+
                 if inc.State.ExecutionResult != nil && inc.State.ExecutionResult.PRNumber != nil &&
                         *inc.State.ExecutionResult.PRNumber == prNumber {
                         if fp := inc.State.FixProposal; fp != nil && fp.Repo != nil {
@@ -349,6 +356,7 @@ func (s *Store) FindIncidentByPR(ctx context.Context, repo string, prNumber int)
 }
 
 // normalizeRepo lowercases + strips trailing .git for repo comparison.
+
 func normalizeRepo(r string) string {
         r = strings.ToLower(strings.TrimSpace(r))
         r = strings.TrimSuffix(r, ".git")
@@ -358,6 +366,7 @@ func normalizeRepo(r string) string {
 // UpdateIncidentPR associates an incident with a PR number + repo.
 // Called after the GitHub executor opens a PR, so chatops commands on that
 // PR can find the incident.
+
 func (s *Store) UpdateIncidentPR(ctx context.Context, incidentID uuid.UUID, repo string, prNumber int, prBranch, prURL string) error {
         s.mu.Lock()
         defer s.mu.Unlock()
@@ -370,6 +379,7 @@ func (s *Store) UpdateIncidentPR(ctx context.Context, incidentID uuid.UUID, repo
 
 // UpdateAutoMergeStatus sets the auto_merge_status column on an incident.
 // Values: "not_eligible", "pending_ci", "merged", "skipped:<reason>", "regressed".
+
 func (s *Store) UpdateAutoMergeStatus(ctx context.Context, incidentID uuid.UUID, status string) error {
         s.mu.Lock()
         defer s.mu.Unlock()
@@ -381,3 +391,4 @@ func (s *Store) UpdateAutoMergeStatus(ctx context.Context, incidentID uuid.UUID,
 }
 
 // LogCommandEvent writes a chatops command invocation to the audit log.
+

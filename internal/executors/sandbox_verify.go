@@ -1,5 +1,4 @@
 // Package executors — sandbox verification logic.
-//
 // Implements the 5-level verification suite:
 //   Level 1: canary pod Ready + sustained ready window
 //   Level 2: health endpoints return 2xx/3xx
@@ -43,12 +42,14 @@ func (s *SandboxRunner) waitForReadyWithLogs(ctx context.Context, ns, name strin
                                 log.Printf("[sandbox] Level 1: canary pod went Ready at %s — sustaining for %s", readySince.Format(time.RFC3339), s.sustainedWindow)
                         }
                         // Capture logs during the sustained window
+
                         if logs := s.fetchCanaryPodLogs(ctx, ns, name); logs != "" {
                                 canaryLogsBuf.Reset()
                                 canaryLogsBuf.WriteString(logs)
                         }
                         if time.Since(readySince) >= s.sustainedWindow {
                                 // Final log capture
+
                                 if logs := s.fetchCanaryPodLogs(ctx, ns, name); logs != "" {
                                         canaryLogsBuf.Reset()
                                         canaryLogsBuf.WriteString(logs)
@@ -71,25 +72,24 @@ func (s *SandboxRunner) waitForReadyWithLogs(ctx context.Context, ns, name strin
 }
 
 // verifyErrorGoneFromLogs is the PRIMARY ORACLE for sandbox verification. v4.2.0.
-//
 // It checks whether the original error type (TypeError, panic, IndexError,
 // NullPointerException, etc.) appears in the canary pod's logs during the
 // sustained Ready window. If the error is GONE, the fix worked. If the error
 // is STILL PRESENT, the fix did not work.
-//
 // This is universal:
 //   - Works for HTTP errors (TypeError on /format → TypeError gone from logs)
 //   - Works for background task errors (cron job crash → error gone)
 //   - Works for startup errors (ImportError on boot → error gone)
 //   - Works for OOMKills (OOMKilled → pod stays Ready)
 //   - Works for any language (ParseError handles Python/Go/Java/JS/Rust/Ruby/C)
-//
 // This replaces the old trigger-endpoint-probing approach which:
 //   - Picked the wrong endpoint (first 4xx in logs, not the crashing one)
 //   - Failed on 4xx responses (4xx = handled error, not a crash)
 //   - Didn't work for non-HTTP errors
+
 func (s *SandboxRunner) verifyErrorGoneFromLogs(ctx context.Context, inc *schemas.Incident, canaryLogs string) *level3Result {
         // Extract the original error from the incident's anomaly explanations
+
         explanation := ""
         for _, anomaly := range inc.Cluster.Anomalies {
                 explanation += anomaly.Explanation + "\n"
@@ -102,9 +102,11 @@ func (s *SandboxRunner) verifyErrorGoneFromLogs(ctx context.Context, inc *schema
         }
 
         // Parse the original error from the incident logs
+
         originalError := agents.ParseError(explanation)
         if originalError == nil {
                 // No recognizable error type — can't verify. Pass with a note.
+
                 return &level3Result{
                         passed: true,
                         detail: "no recognizable error type in original logs — cannot verify error is gone, passing (Level 1 + Level 2 passed)",
@@ -115,6 +117,7 @@ func (s *SandboxRunner) verifyErrorGoneFromLogs(ctx context.Context, inc *schema
         errorDetail := originalError.ErrorDetail
 
         // If canary logs are empty, we can't check. Pass (Level 1 + 2 already passed).
+
         if canaryLogs == "" {
                 return &level3Result{
                         passed: true,
@@ -124,12 +127,14 @@ func (s *SandboxRunner) verifyErrorGoneFromLogs(ctx context.Context, inc *schema
 
         // Check if the original error type appears in the canary logs
         // Use case-insensitive search for robustness
+
         canaryLower := strings.ToLower(canaryLogs)
         errorTypeLower := strings.ToLower(errorType)
 
         if strings.Contains(canaryLower, errorTypeLower) {
                 // The exact error type is still present — fix did not work
                 // Try to extract the context around the error for the LLM feedback
+
                 contextLines := extractErrorContext(canaryLogs, errorType, 3)
                 return &level3Result{
                         passed: false,
@@ -138,6 +143,7 @@ func (s *SandboxRunner) verifyErrorGoneFromLogs(ctx context.Context, inc *schema
         }
 
         // Also check for the error detail (e.g. "'DATABASE_URLL'" for KeyError)
+
         if errorDetail != "" {
                 errorDetailLower := strings.ToLower(strings.TrimSpace(errorDetail))
                 if len(errorDetailLower) > 3 && strings.Contains(canaryLower, errorDetailLower) {
@@ -151,6 +157,7 @@ func (s *SandboxRunner) verifyErrorGoneFromLogs(ctx context.Context, inc *schema
 
         // Check for generic crash patterns (Traceback, panic, Exception) even if
         // the specific error type isn't found — any crash in canary logs is bad
+
         crashPatterns := []string{"traceback (most recent call last)", "panic:", "fatal error:", "goroutine ", "exception in asgi application", "unhandled exception"}
         for _, pattern := range crashPatterns {
                 if strings.Contains(canaryLower, pattern) {
@@ -171,6 +178,7 @@ func (s *SandboxRunner) verifyErrorGoneFromLogs(ctx context.Context, inc *schema
 // extractErrorContext returns N lines of context around the first occurrence
 // of pattern in logs. Used to give the LLM actionable feedback when the
 // error is still present.
+
 func extractErrorContext(logs, pattern string, contextLines int) string {
         lines := strings.Split(logs, "\n")
         patternLower := strings.ToLower(pattern)
@@ -192,11 +200,12 @@ func extractErrorContext(logs, pattern string, contextLines int) string {
 
 // runRegressionTest extracts the LLM-generated test from the incident state
 // and runs it via the TestRunner. v4.2.0 Tier 3.
-//
 // Returns nil if no test was generated. Returns a TestResult otherwise.
+
 func (s *SandboxRunner) runRegressionTest(ctx context.Context, sandboxNS string, inc *schemas.Incident, canaryImage string) *TestResult {
         // Extract the test from the agent state's RetrievedIncidents field.
         // The pipeline stores it there as a JSON string under the "regression_test" key.
+
         var testJSON string
         for _, ri := range inc.State.RetrievedIncidents {
                 if raw, ok := ri["regression_test"]; ok {
@@ -214,6 +223,7 @@ func (s *SandboxRunner) runRegressionTest(ctx context.Context, sandboxNS string,
         }
 
         // Parse the test JSON
+
         test, err := parseGeneratedTest(testJSON)
         if err != nil {
                 log.Printf("[sandbox] Level 4: failed to parse test JSON: %v", err)
@@ -224,6 +234,7 @@ func (s *SandboxRunner) runRegressionTest(ctx context.Context, sandboxNS string,
         }
 
         // Run the test
+
         runner := NewTestRunner(s.clientset)
         result, err := runner.RunTest(ctx, canaryImage, sandboxNS, test)
         if err != nil {
@@ -237,6 +248,7 @@ func (s *SandboxRunner) runRegressionTest(ctx context.Context, sandboxNS string,
 }
 
 // parseGeneratedTest parses a JSON string into a GeneratedTest.
+
 func parseGeneratedTest(jsonStr string) (*schemas.GeneratedTest, error) {
         var raw map[string]string
         if err := json.Unmarshal([]byte(jsonStr), &raw); err != nil {
@@ -254,6 +266,7 @@ func parseGeneratedTest(jsonStr string) (*schemas.GeneratedTest, error) {
 
 // runReproducer extracts the LLM-generated reproducer from the incident state
 // and runs it via the TestRunner. v4.2.0 Tier 4.
+
 func (s *SandboxRunner) runReproducer(ctx context.Context, sandboxNS string, inc *schemas.Incident, canaryImage string) *TestResult {
         var reproJSON string
         for _, ri := range inc.State.RetrievedIncidents {
@@ -302,6 +315,7 @@ func (s *SandboxRunner) runReproducer(ctx context.Context, sandboxNS string, inc
 // fetchCanaryPodLogs retrieves the canary pod's logs for inclusion in
 // SandboxResult.PodLogs. v3.18.0: gives the LLM the actual error instead of
 // a generic "canary_pods_not_ready" summary.
+
 func (s *SandboxRunner) fetchCanaryPodLogs(ctx context.Context, ns, service string) string {
         pods, err := s.clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
                 LabelSelector: fmt.Sprintf("app=%s", service),
@@ -312,6 +326,7 @@ func (s *SandboxRunner) fetchCanaryPodLogs(ctx context.Context, ns, service stri
         }
         pod := pods.Items[0]
         // Pick the main container (first non-init container)
+
         if len(pod.Spec.Containers) == 0 {
                 return ""
         }
@@ -336,6 +351,7 @@ func newInt64(n int64) *int64 { return &n }
 
 // parsePathMethod splits a probe path entry like "POST /api/users" into
 // (method, path). Default method is GET (backwards-compatible).
+
 func parsePathMethod(entry string) (method, path string) {
         method = "GET"
         path = entry
@@ -353,12 +369,11 @@ func parsePathMethod(entry string) (method, path string) {
 // verifyEndpointsWithPaths probes each path on the canary Service and requires
 // every probe to return 2xx/3xx. v3.18.0: extracted from verifyEndpoints so the
 // caller passes a local slice (no shared state race).
-//
-
-//   1. 4xx responses now FAIL (was: only 5xx failed; 404/401/405 falsely passed).
+//   1. 4xx responses now FAIL (
 //   2. POST/DELETE/PATCH endpoints are now probed with the correct method (was:
 //      always GET, returning 405 on POST endpoints which falsely passed).
-//   3. consecutiveSuccesses now resets on failure (was: [success, fail, success] passed).
+//   3. consecutiveSuccesses now resets on failure (
+
 func (s *SandboxRunner) verifyEndpointsWithPaths(ctx context.Context, ns, service string, paths []string) bool {
         svc, err := s.clientset.CoreV1().Services(ns).Get(ctx, service, metav1.GetOptions{})
         if err != nil {
@@ -397,6 +412,7 @@ func (s *SandboxRunner) verifyEndpointsWithPaths(ctx context.Context, ns, servic
                                 if err != nil {
                                         consecutiveFailures++
                                         // Reset consecutive successes on failure — was NOT being reset (audit H4.8).
+
                                         consecutiveSuccesses = 0
                                         log.Printf("[sandbox] Level 2: probe %s %s attempt %d failed: %v", method, url, attempt+1, err)
                                         continue
@@ -431,8 +447,6 @@ type level3Result struct {
 
 // verifyOriginalErrorFixed checks whether the original error from the incident
 // has been resolved by the fix deployed in the sandbox.
-//
-
 // KeyError/ImportError/ValueError/TypeError/etc. — all Python builtins) with
 // agents.ParseError(), which is multi-language (Python, Go, Java, JS, Rust,
 // Ruby, C, signals). The previous implementation silently returned nil for
@@ -440,14 +454,12 @@ type level3Result struct {
 // sandbox Level 3 to silently pass even when the original error was NOT
 // fixed — the PR would ship with a "sandbox-verified" label. The
 // `startupErrors` map had the same Python-only bug.
-//
 // The startup-error auto-pass logic now keys off the parsed language +
 // error type: Python startup errors (KeyError/ImportError/ModuleNotFoundError/
 // FileNotFoundError/SyntaxError) AND Go panic + Java ExceptionInInitializerError
 // + JS startup SyntaxError all auto-pass Level 1 (the canary pod started and
 // stayed Ready for sustainedWindow — that's sufficient evidence the startup
 // error is gone).
-
 // verifyErrorGoneFromLogs which is the primary oracle — scans canary
 // logs for the original error type instead of probing HTTP endpoints).
 

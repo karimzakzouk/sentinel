@@ -23,7 +23,6 @@ import (
 // detectSandboxFailureLevel parses the sandbox summary to determine which
 // verification level failed. Used for per-Level metrics + level-specific LLM
 // feedback.
-//
 // Levels:
 //   1 = canary pod not Ready / not sustained (startup crash not fixed)
 //   2 = health endpoints failing (app starts but serves 4xx/5xx)
@@ -31,6 +30,7 @@ import (
 //   4 = regression test failed (LLM-generated test reproduces the bug, fix didn't fix it)
 //   5 = reproducer script crashed (strongest signal — fix didn't actually fix)
 //   0 = infrastructure error (RBAC, image pull, namespace creation) — LLM can't fix
+
 func detectSandboxFailureLevel(summary string) int {
         switch {
         case strings.Contains(summary, "canary_pods_not_ready"):
@@ -53,6 +53,7 @@ func detectSandboxFailureLevel(summary string) int {
 // on which sandbox level failed. This is critical for L4/L5 — without it,
 // the LLM just sees "sandbox failed" without knowing that its fix passed
 // Levels 1-3 but failed the regression test.
+
 func levelSpecificFeedback(summary string, fullSummary string) string {
         level := detectSandboxFailureLevel(summary)
         switch level {
@@ -110,6 +111,7 @@ func executeFix(
 // 2. Build canary image with Kaniko
 // 3. Run sandbox verification (3 levels)
 // 4. Open PR with sandbox result
+
 func executeCodeFix(
         ctx context.Context,
         incident *schemas.Incident,
@@ -124,6 +126,7 @@ func executeCodeFix(
         fp := incident.State.FixProposal
 
         // Phase 1: Prepare branch
+
         logging.Info("execution Phase 1: preparing fix branch", "fix_id", fp.FixID)
         branchInfo := ghExec.PrepareBranch(ctx, incident)
         if !branchInfo.Success {
@@ -134,14 +137,13 @@ func executeCodeFix(
         }
 
         // Phase 2 + 3: Build canary + sandbox verification
-
         //   SandboxEnabled — should we run the sandbox at all? (default: true)
         //   SandboxRequired — if sandbox fails, block the PR? (default: false = open with needs-review)
         //   SandboxMaxRetries — how many times to retry on sandbox failure (default: 2)
-        //
-        // Fix B: Kaniko build failures do NOT trigger the retry loop. The LLM
+// Kaniko build failures do NOT trigger the retry loop. The LLM
         // cannot fix a Kaniko permissions error. Only sandbox Level 1/2/3
         // failures (runtime errors in the canary) trigger retries.
+
         sandboxVerified := false
         sandboxSummary := "skipped (sandbox disabled)"
         sandboxRan := false
@@ -174,6 +176,7 @@ func executeCodeFix(
                         if sandboxAttempt > 0 {
 
                                 // Only sandbox Level 1-5 failures trigger retries (not Kaniko failures).
+
                                 logging.Info("sandbox retry: feeding level-specific failure back to fix proposer",
                                         "fix_id", fp.FixID, "attempt", sandboxAttempt+1, "max", maxRetries+1,
                                         "level", detectSandboxFailureLevel(sandboxSummary))
@@ -182,20 +185,23 @@ func executeCodeFix(
                                 incident.State.SandboxFeedback = &feedback
 
                                 // Re-run only the fix proposer (not the full pipeline — root cause hasn't changed)
+
                                 if err := pipeline.RetryFixProposal(ctx, &incident.State); err != nil {
                                         logging.Error("fix proposer retry failed", "error", err)
                                         break
                                 }
 
                                 // Update fp to the new fix proposal
+
                                 fp = incident.State.FixProposal
                                 if fp == nil {
                                         break
                                 }
 
-                                // Fix C: Fetch the CURRENT file content from the branch (which has
+// Fetch the CURRENT file content from the branch (which has
                                 // the previous fix applied) so the LLM generates search/replace blocks
                                 // against the current state, not the original.
+
                                 if stateFetchedCode := fetchCurrentBranchFiles(ctx, ghExec, branchInfo, incident); len(stateFetchedCode) > 0 {
                                         incident.State.FetchedCode = stateFetchedCode
                                         logging.Info("fetched current file state from branch for retry",
@@ -203,6 +209,7 @@ func executeCodeFix(
                                 }
 
                                 // Re-prepare the branch (updates files on the existing branch)
+
                                 logging.Info("re-preparing fix branch with corrected code", "fix_id", fp.FixID, "attempt", sandboxAttempt+1)
                                 branchInfo = ghExec.PrepareBranch(ctx, incident)
                                 if !branchInfo.Success {
@@ -212,6 +219,7 @@ func executeCodeFix(
                         }
 
                         // Phase 2: Build canary image
+
                         logging.Info("execution Phase 2: building canary image with Kaniko",
                                 "fix_id", fp.FixID, "attempt", sandboxAttempt+1, "max", maxRetries+1)
                         prodImage, err := k8sClient.GetProdImage(ctx, fp.TargetService, fp.TargetNamespace)
@@ -222,10 +230,11 @@ func executeCodeFix(
 
                         canaryImage, err := kaniko.BuildForIncident(ctx, incident, branchInfo, prodImage)
                         if err != nil {
-                                // Fix B: Kaniko build failure = infrastructure error, NOT a code issue.
+// Kaniko build failure = infrastructure error, NOT a code issue.
                                 // The LLM cannot fix "chown /etc/gshadow: operation not permitted".
                                 // Break immediately — don't retry. Open the PR with needs-review
                                 // (the code fix might still be correct, we just couldn't verify it).
+
                                 sandboxSummary = fmt.Sprintf("kaniko_error: %v", err)
                                 logging.Error("kaniko build failed — not retrying (infrastructure error, not a code issue)",
                                         "fix_id", fp.FixID, "error", err, "attempt", sandboxAttempt+1)
@@ -236,6 +245,7 @@ func executeCodeFix(
                         fp.CanaryImage = &canaryImage
 
                         // Phase 3: Sandbox verification
+
                         logging.Info("execution Phase 3: running sandbox verification", "fix_id", fp.FixID, "attempt", sandboxAttempt+1)
 
                         metrics.RecordSandboxRetry(sandboxAttempt + 1)
@@ -251,6 +261,7 @@ func executeCodeFix(
                         }
 
                         // (was a one-line Summary, making the retry loop ineffective).
+
                         if sb.PodLogs != "" {
                                 sandboxSummary += "\n\n--- POD LOGS ---\n" + sb.PodLogs
                         }
@@ -269,6 +280,7 @@ func executeCodeFix(
 
                         // namespace creation). The LLM can't fix these — only code issues
                         // (Level 1/2/3 failures) should trigger the feedback retry loop.
+
                         if sb.InfrastructureError {
                                 logging.Info("sandbox failed with infrastructure error — not retrying",
                                         "fix_id", fp.FixID, "summary", sandboxSummary)
@@ -289,9 +301,11 @@ func executeCodeFix(
         }
 
         // Phase 4: Open PR
+
         logging.Info("execution Phase 4: opening PR", "fix_id", fp.FixID)
 
         // Build the full professional PR body (includes sandbox verification + agent reasoning)
+
         canaryImg := ""
         if fp.CanaryImage != nil {
                 canaryImg = *fp.CanaryImage
@@ -336,6 +350,7 @@ func executeCodeFix(
 
         // can find the incident via FindIncidentByPR (uses the new pr_repo
         // + pr_number columns added by the v4.0.0 DB migration).
+
         repoName := ""
         if fp.Repo != nil {
                 repoName = *fp.Repo
@@ -347,10 +362,10 @@ func executeCodeFix(
         }
 
         // the state + available commands immediately when they open the PR.
-
         // and triggers the merge + onMerged callback which updates the status
         // comment. If we post the initial comment AFTER EvaluateNow, it overwrites
         // the merged status with "⏳ Queued".
+
         if chatopsStatusManager != nil && repoName != "" {
                 chatopsInc := &chatops.Incident{
                         ID:               incident.IncidentID.String(),
@@ -379,6 +394,7 @@ func executeCodeFix(
         // EvaluateNow is synchronous — it triggers the merge + onMerged callback
         // which updates the status comment to "✅ Merged". If we post the initial
         // comment after this, it overwrites "✅ Merged" with "⏳ Queued".
+
         if merger := getAutoMergeMerger(); merger != nil && repoName != "" && cfg.AutoMergeEnabled {
                 baseBranch := "main"
                 if fp.BaseBranch != nil {
@@ -410,6 +426,7 @@ func executeCodeFix(
                 }
 
                 // Was missing — defaulted to false, policy rejected every PR.
+
                 autoMergeAnnotation := false
                 if incident.Cluster.Annotations != nil {
                         if v, ok := incident.Cluster.Annotations["sentinel.io/auto-merge"]; ok && v == "true" {
@@ -451,14 +468,17 @@ func executeCodeFix(
                         "sandbox_verified", sandboxVerified,
                 )
                 // Force immediate evaluation — don't wait for the 30s poll.
+
                 merger.EvaluateNow(ctx, repoName, prResult.PRNumber)
         }
 
         // The onMerged callback updates it to "✅ Merged" if the merge succeeds.
+
         return nil
 }
 
 // recordBetaOutcome updates the Beta prior for this fix pattern.
+
 func recordBetaOutcome(ctx context.Context, store *feedback.Store, incident schemas.Incident, success bool) (float64, float64) {
         if incident.State.FixProposal == nil {
                 return 1.0, 1.0
@@ -478,6 +498,7 @@ func recordBetaOutcome(ctx context.Context, store *feedback.Store, incident sche
 // extractPodLogsFromIncident pulls the pod logs from the incident's anomaly
 // explanations. v3.5.0: Used to extract the error fingerprint for the 24h
 // re-occurrence watcher.
+
 func extractPodLogsFromIncident(incident *schemas.Incident) string {
         var logs string
         for _, anomaly := range incident.Cluster.Anomalies {
@@ -489,10 +510,10 @@ func extractPodLogsFromIncident(incident *schemas.Incident) string {
 // fetchCurrentBranchFiles fetches the current file content from the fix branch
 // (which has the previous fix applied) so the LLM generates search/replace blocks
 // against the CURRENT state, not the original code. v3.14.0: Fix C.
-//
 // Without this, the retry loop fails because the LLM's search text references
 // the original code (e.g. "item = items[index]") which no longer exists — the
 // previous fix already replaced it with a bounds check.
+
 func fetchCurrentBranchFiles(ctx context.Context, ghExec *executors.GitHubExecutor, branchInfo executors.BranchInfo, incident *schemas.Incident) map[string]string {
         fp := incident.State.FixProposal
         if fp == nil || branchInfo.Repo == "" || branchInfo.BranchName == "" {

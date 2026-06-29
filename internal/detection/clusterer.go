@@ -9,6 +9,7 @@ import (
 )
 
 // SignalType is what kind of detector produced this signal.
+
 type SignalType string
 
 const (
@@ -19,6 +20,7 @@ const (
 
 // Signal is what detectors send to the clusterer. The signal is just the
 // alarm bell — the investigator fetches full logs via K8s API.
+
 type Signal struct {
         Type      SignalType
         Service   string
@@ -31,6 +33,7 @@ type Signal struct {
 // Clusterer groups signals by service within a time window and emits
 // ONE trigger per service per window. Does NOT fetch logs — that's the
 // investigator's job.
+
 type Clusterer struct {
         handler IncidentHandler
         tracker *ActiveTracker
@@ -40,11 +43,13 @@ type Clusterer struct {
         window  time.Duration
 
         // skips emitting triggers (autonomous mode paused via Slack bot).
+
         pauseChecker PauseChecker
 }
 
 // PauseChecker returns true if autonomous mode is paused. Used to skip
 // emitting triggers without restarting Sentinel.
+
 type PauseChecker interface {
         IsPaused() bool
 }
@@ -56,6 +61,7 @@ type pendingCluster struct {
 }
 
 // NewClusterer creates a Clusterer (no K8s client needed — no log fetching).
+
 func NewClusterer(handler IncidentHandler, tracker *ActiveTracker) *Clusterer {
         return &Clusterer{
                 handler: handler,
@@ -66,10 +72,9 @@ func NewClusterer(handler IncidentHandler, tracker *ActiveTracker) *Clusterer {
 }
 
 // SetPauseChecker wires in a pause checker (e.g. the Slack bot).
-
 // If paused, signals are silently dropped (not buffered).
-
 // goroutine's read at emit() (interface assignment is not atomic).
+
 func (c *Clusterer) SetPauseChecker(pc PauseChecker) {
         c.mu.Lock()
         c.pauseChecker = pc
@@ -77,6 +82,7 @@ func (c *Clusterer) SetPauseChecker(pc PauseChecker) {
 }
 
 // Send sends a signal to the clusterer.
+
 func (c *Clusterer) Send(ctx context.Context, sig Signal) {
         key := sig.Service + "/" + sig.Namespace
 
@@ -85,6 +91,7 @@ func (c *Clusterer) Send(ctx context.Context, sig Signal) {
 
         if pending, exists := c.pending[key]; exists {
                 // Merge into existing cluster — keep the most descriptive reason
+
                 pending.signals = append(pending.signals, sig)
                 if len(sig.Reason) > len(pending.signals[0].Reason) {
                         pending.signals[0].Reason = sig.Reason
@@ -102,6 +109,7 @@ func (c *Clusterer) Send(ctx context.Context, sig Signal) {
 
                 // Without this, a panic in the handler chain would kill the
                 // detection layer's timer thread and silently stop clustering.
+
                 defer func() {
                         if r := recover(); r != nil {
                                 log.Printf("[panic] clusterer.emit recovered: %v", r)
@@ -113,8 +121,8 @@ func (c *Clusterer) Send(ctx context.Context, sig Signal) {
 
 // Stop cancels all pending cluster timers. Call on shutdown so pending timers
 // don't fire after the parent context is cancelled.
-
 // post-shutdown, spawning handler goroutines against a cancelled ctx.
+
 func (c *Clusterer) Stop() {
         c.mu.Lock()
         defer c.mu.Unlock()
@@ -128,8 +136,8 @@ func (c *Clusterer) Stop() {
 }
 
 // emit fires the cluster after the grouping window closes.
-
 // The investigator fetches full logs via K8s API.
+
 func (c *Clusterer) emit(key string) {
         c.mu.Lock()
         pending, exists := c.pending[key]
@@ -163,8 +171,8 @@ func (c *Clusterer) emit(key string) {
                 key, strings.Join(signalTypes, "+"))
 
         // This is the industry pattern: detection triggers, investigation fetches context.
-
         // chain killed the process).
+
         if c.handler != nil {
                 go func() {
                         defer func() {

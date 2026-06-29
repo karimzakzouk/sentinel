@@ -29,9 +29,11 @@ var sentinelIncidentGVR = schema.GroupVersionResource{
 // Handler is called for every new SentinelIncident CR. It receives the
 // synthetic anomaly cluster (with real pod logs attached) and should run
 // the reasoning pipeline.
+
 type Handler func(ctx context.Context, cluster schemas.AnomalyCluster, crName, crNamespace string)
 
 // Watcher watches SentinelIncident CRs and calls the Handler for new ones.
+
 type Watcher struct {
         k8s     *k8s.Client
         dynamic dynamic.Interface
@@ -39,6 +41,7 @@ type Watcher struct {
 }
 
 // New creates a Watcher.
+
 func New(k8sClient *k8s.Client, handler Handler) (*Watcher, error) {
         return &Watcher{
                 k8s:     k8sClient,
@@ -49,6 +52,7 @@ func New(k8sClient *k8s.Client, handler Handler) (*Watcher, error) {
 
 // Run starts the watch loop. Blocks until ctx is cancelled.
 // Uses a real Watch() stream; falls back to polling on stream errors.
+
 func (w *Watcher) Run(ctx context.Context) {
         for {
                 select {
@@ -67,6 +71,7 @@ func (w *Watcher) Run(ctx context.Context) {
 
 func (w *Watcher) watchStream(ctx context.Context) error {
         // List with resourceVersion="" to get the current state first, then watch.
+
         list, err := w.dynamic.Resource(sentinelIncidentGVR).List(ctx, metav1.ListOptions{})
         if err != nil {
                 return fmt.Errorf("list CRs: %w", err)
@@ -77,6 +82,7 @@ func (w *Watcher) watchStream(ctx context.Context) error {
         for i := range list.Items {
                 item := &list.Items[i]
                 // On startup, skip CRs that already have a status.phase (already processed)
+
                 status, _, _ := unstructured.NestedString(item.Object, "status", "phase")
                 if status != "" {
                         continue
@@ -85,6 +91,7 @@ func (w *Watcher) watchStream(ctx context.Context) error {
         }
 
         // Now watch for new events
+
         watcher, err := w.dynamic.Resource(sentinelIncidentGVR).Watch(ctx, metav1.ListOptions{
                 ResourceVersion: resourceVersion,
         })
@@ -109,6 +116,7 @@ func (w *Watcher) watchStream(ctx context.Context) error {
                                 continue
                         }
                         // Only handle CRs without status.phase (new)
+
                         status, _, _ := unstructured.NestedString(item.Object, "status", "phase")
                         if status != "" {
                                 continue
@@ -141,19 +149,22 @@ func (w *Watcher) handleItem(ctx context.Context, item *unstructured.Unstructure
 
         // Patch CR status to "investigating" so we don't re-trigger.
         // This is the only synchronous K8s API call in the watch loop — fast.
+
         if err := w.k8s.PatchCRStatus(ctx, name, namespace, "investigating"); err != nil {
                 log.Printf("[watcher] could not patch CR status: %v", err)
         }
 
-        // goroutine so the watch loop isn't blocked for ~10s per CR. Previously,
+        // goroutine so the watch loop isn't blocked for ~10s per CR.
         // LookupWorkloadAnnotations (5 sequential K8s API calls) + FetchCrashingPodLogs
         // (3 retries × 2s = up to 6s) ran synchronously before spawning the handler.
         // Under a burst of CRs (cascade), the watch fell behind and missed events.
         // Also pass ctx (not context.Background()) so in-flight handlers stop on SIGTERM.
+
         if w.handler != nil {
                 go func() {
                         defer func() { if r := recover(); r != nil { log.Printf("[watcher] handler panic recovered: %v", r) } }()
                         // Discover sentinel.io/* annotations from the affected workload
+
                         annotations, _ := w.k8s.LookupWorkloadAnnotations(ctx, service, svcNs)
                         if repoFromSpec != "" {
                                 if annotations == nil {
@@ -168,12 +179,14 @@ func (w *Watcher) handleItem(ctx context.Context, item *unstructured.Unstructure
                         }
 
                         // Fetch REAL pod logs from the crashing pods
+
                         podLogs, _ := w.k8s.FetchCrashingPodLogs(ctx, service, svcNs)
                         if podLogs != "" {
                                 log.Printf("[watcher] fetched %d chars of pod logs for %s", len(podLogs), service)
                         }
 
                         // Build the synthetic anomaly cluster
+
                         explanation := fmt.Sprintf("SentinelIncident CR: %s", reason)
                         if podLogs != "" {
                                 explanation += fmt.Sprintf("\n\n## Pod Logs (last 4KB)\n%s", podLogs)

@@ -17,13 +17,10 @@ import (
 )
 
 // validateFilePath validates a file path returned by the LLM for a code fix.
-//
-
 // which in turn was influenced by pod-log content (attacker-controllable).
 // Without validation, an LLM that returned "../../../etc/passwd" or
 // ".github/workflows/ci.yml" (allowing a malicious CI workflow to be
 // smuggled into the PR) would have those paths accepted.
-//
 // Rules:
 //  1. Reject empty paths
 //  2. Reject absolute paths (anything starting with '/')
@@ -38,10 +35,10 @@ import (
 //     - .gitlab-ci.yml, .circleci/config.yml, Jenkinsfile, etc.
 //  6. Reject paths with control characters or null bytes
 //  7. Cap path length at 500 chars
-//
 // Returns the cleaned path on success, or "" if rejected. Callers should
 // skip files with empty return values (do not abort the whole proposal —
 // one bad path shouldn't kill a fix that has other valid files).
+
 func validateFilePath(path string) string {
         if path == "" {
                 return ""
@@ -52,6 +49,7 @@ func validateFilePath(path string) string {
         }
 
         // Reject control chars and null bytes.
+
         for _, r := range path {
                 if r < 0x20 || r == 0x7f {
                         log.Printf("[fix_proposer] SECURITY: rejecting path (control char): %q", path)
@@ -60,6 +58,7 @@ func validateFilePath(path string) string {
         }
 
         // Reject absolute paths.
+
         if filepath.IsAbs(path) {
                 log.Printf("[fix_proposer] SECURITY: rejecting absolute path: %q", path)
                 return ""
@@ -77,6 +76,7 @@ func validateFilePath(path string) string {
 
         // Reject sensitive paths. Use filepath.ToSlash so the check works on
         // Windows-style paths too (LLMs sometimes return backslashes).
+
         cleanSlash := filepath.ToSlash(clean)
         sensitive := false
         sensitiveReason := ""
@@ -97,6 +97,7 @@ func validateFilePath(path string) string {
         // always claimed these were blocked, but the switch missed them).
         // These let an LLM (potentially prompt-injected via pod logs) add
         // backdoor RUN commands or postinstall hooks.
+
         case cleanSlash == "Dockerfile" || strings.HasPrefix(cleanSlash, "Dockerfile."),
                 strings.HasPrefix(cleanSlash, "docker-compose.yml"),
                 strings.HasPrefix(cleanSlash, "docker-compose.yaml"),
@@ -189,17 +190,20 @@ app/main.py
 >>>>>>> REPLACE`
 
 // FixProposer translates a root cause into a concrete FixProposal.
+
 type FixProposer struct {
         router      *llm.Router
         k8s         *k8s.Client
         gitHubToken string
 
         // "github.com" in branch_resolver.normalizeRepo. Set via SetGitHost.
+
         gitHost       string
         defaultBranch string
 }
 
 // NewFixProposer creates a FixProposer.
+
 func NewFixProposer(router *llm.Router, k8sClient *k8s.Client, gitHubToken string) *FixProposer {
         return &FixProposer{
                 router:        router,
@@ -211,7 +215,8 @@ func NewFixProposer(router *llm.Router, k8sClient *k8s.Client, gitHubToken strin
 }
 
 // SetGitHost sets the git host for repo normalization. v3.11.0: Replaces
-// the hardcoded "github.com" in normalizeRepo (CRITICAL audit #2).
+// the hardcoded "github.com" in normalizeRepo.
+
 func (a *FixProposer) SetGitHost(host string) {
         if host != "" {
                 a.gitHost = host
@@ -219,7 +224,8 @@ func (a *FixProposer) SetGitHost(host string) {
 }
 
 // SetDefaultBranch sets the default branch fallback. v3.11.0: Replaces the
-// hardcoded "main" in resolveBaseBranch (CRITICAL audit #6).
+// hardcoded "main" in resolveBaseBranch.
+
 func (a *FixProposer) SetDefaultBranch(branch string) {
         if branch != "" {
                 a.defaultBranch = branch
@@ -227,6 +233,7 @@ func (a *FixProposer) SetDefaultBranch(branch string) {
 }
 
 // Run executes the fix proposer agent.
+
 func (a *FixProposer) Run(ctx context.Context, state *schemas.AgentState) error {
         if state.RootCause == nil {
                 state.Status = schemas.StatusFailed
@@ -239,6 +246,7 @@ func (a *FixProposer) Run(ctx context.Context, state *schemas.AgentState) error 
 
         // 0. FALLBACK: If we have no source code, propose restart.
         // Don't ask the LLM to write code it can't see — it'll hallucinate.
+
         if len(state.FetchedCode) == 0 {
                 log.Printf("[fix_proposer] no source code fetched — proposing restart fallback")
                 proposal := &schemas.FixProposal{
@@ -258,6 +266,7 @@ func (a *FixProposer) Run(ctx context.Context, state *schemas.AgentState) error 
         }
 
         // 1. If schema migration is involved, FORCE roll_forward
+
         if rc.HasSchemaMigration && (rc.Category == "bad_deploy" || rc.Category == "schema_migration") {
                 proposal := &schemas.FixProposal{
                         FixID:           uuid.New(),
@@ -272,16 +281,17 @@ func (a *FixProposer) Run(ctx context.Context, state *schemas.AgentState) error 
                         ProposedConfidence: rc.Confidence,
                 }
                 // Still call LLM to generate the actual code fix
+
                 a.llmCodeFix(ctx, state, proposal)
                 a.finalizeProposal(state, proposal)
                 return nil
         }
 
         // 2. Ask LLM for the fix — with adaptive retry loop.
-
         // The LLM outputs metadata JSON (small) + SEARCH/REPLACE blocks (plain text).
         // We parse the blocks, apply them with layered matching (exact → fuzzy),
         // and feed actionable errors back on failure (Aider's pattern).
+
         userMsg := a.buildUserMessage(state)
         var files []schemas.FileChange
         var fixType schemas.FixType
@@ -310,6 +320,7 @@ func (a *FixProposer) Run(ctx context.Context, state *schemas.AgentState) error 
 
                 // Parse metadata JSON from the first line(s)
                 // The LLM outputs {"fix_type":"code_fix",...} before the SEARCH/REPLACE blocks
+
                 metadata := extractMetadataJSON(rawOutput)
                 fixTypeStr, _ := metadata["fix_type"].(string)
                 if fixTypeStr == "" {
@@ -337,24 +348,29 @@ func (a *FixProposer) Run(ctx context.Context, state *schemas.AgentState) error 
                 }
 
                 // Parse SEARCH/REPLACE blocks from the output
+
                 blocks := ParseEditBlocks(rawOutput)
 
                 if len(blocks) > 0 {
                         // We have SEARCH/REPLACE blocks — apply them to the source code
+
                         log.Printf("[fix_proposer] attempt %d: parsed %d SEARCH/REPLACE block(s)", attempt+1, len(blocks))
 
                         // Group blocks by file path
+
                         blocksByFile := make(map[string][]EditBlock)
                         for _, b := range blocks {
                                 path := b.FilePath
                                 if path == "" {
                                         // Use the first fetched file as default
+
                                         for p := range state.FetchedCode {
                                                 path = p
                                                 break
                                         }
                                 }
                                 // Normalize path against fetched code keys
+
                                 path = normalizeFilePath(path, state.FetchedCode)
                                 blocksByFile[path] = append(blocksByFile[path], EditBlock{
                                         FilePath: path,
@@ -364,6 +380,7 @@ func (a *FixProposer) Run(ctx context.Context, state *schemas.AgentState) error 
                         }
 
                         // Apply blocks to each file
+
                         allApplied := true
                         files = []schemas.FileChange{}
                         for filePath, fileBlocks := range blocksByFile {
@@ -383,6 +400,7 @@ func (a *FixProposer) Run(ctx context.Context, state *schemas.AgentState) error 
 
                                 // Build FileChange from the result — use Changes (search/replace)
                                 // so the GitHub executor can apply them to the branch
+
                                 var changes []schemas.SearchReplace
                                 for _, b := range fileBlocks {
                                         changes = append(changes, schemas.SearchReplace{
@@ -406,6 +424,7 @@ func (a *FixProposer) Run(ctx context.Context, state *schemas.AgentState) error 
                 }
 
                 // No SEARCH/REPLACE blocks found — try whole-file replacement fallback
+
                 if filePath, content := ParseWholeFileReplacement(rawOutput); filePath != "" && content != "" {
                         filePath = normalizeFilePath(filePath, state.FetchedCode)
                         log.Printf("[fix_proposer] attempt %d: using whole-file replacement for %s (%d chars)", attempt+1, filePath, len(content))
@@ -426,6 +445,7 @@ func (a *FixProposer) Run(ctx context.Context, state *schemas.AgentState) error 
         }
 
         // Build the proposal from the successful attempt
+
         if prBody == "" {
                 prBody = buildPRBody(state, rc, string(fixType))
         }
@@ -459,6 +479,7 @@ func (a *FixProposer) buildUserMessage(state *schemas.AgentState) string {
         // "generate → verify → feed error back → retry" loop used by Aider,
         // OpenHands, and SWE-agent. The LLM gets the exact runtime error from the
         // sandbox and can fix the specific bug.
+
         if state.SandboxFeedback != nil && *state.SandboxFeedback != "" {
                 parts = append(parts, "## ⚠️ Previous Fix Failed Sandbox Verification")
                 parts = append(parts, "")
@@ -474,6 +495,7 @@ func (a *FixProposer) buildUserMessage(state *schemas.AgentState) string {
         // The FixProposer doesn't have direct access to podLogs, but the
         // anomaly explanations contain the original error logs. We concatenate
         // them and run the parser to detect the language.
+
         if lang := a.detectLanguageHint(state); lang != "" {
                 parts = append(parts, fmt.Sprintf("## Detected Language: %s", lang))
                 parts = append(parts, "")
@@ -523,8 +545,9 @@ func (a *FixProposer) buildUserMessage(state *schemas.AgentState) string {
 }
 
 // detectLanguageHint concatenates the anomaly explanations (which contain the
-// original pod logs) and runs ParseError to detect the language. v3.11.0: audit #12.
+// original pod logs) and runs ParseError to detect the language. v3.11.0:.
 // Returns "" if no language can be detected.
+
 func (a *FixProposer) detectLanguageHint(state *schemas.AgentState) string {
         var logs string
         for _, anomaly := range state.Cluster.Anomalies {
@@ -561,6 +584,7 @@ func (a *FixProposer) detectLanguageHint(state *schemas.AgentState) string {
 }
 
 // llmCodeFix is used for roll_forward cases where we still need an LLM-generated patch.
+
 func (a *FixProposer) llmCodeFix(ctx context.Context, state *schemas.AgentState, proposal *schemas.FixProposal) {
         userMsg := a.buildUserMessage(state)
         result, err := a.router.FrontierJSON(ctx, fixProposerSystemPrompt, userMsg, 16000)
@@ -594,6 +618,7 @@ func (a *FixProposer) finalizeProposal(state *schemas.AgentState, proposal *sche
         // hardcoding "main". If the service is deployed from "release-1.2", the
         // PR should target "release-1.2", not "main". Falls back to "main" if no
         // annotation is set (same as the investigator's clone behavior).
+
         proposal.BaseBranch = strPtr(a.resolveBaseBranch(state))
 
         state.FixProposal = proposal
@@ -610,8 +635,8 @@ func (a *FixProposer) finalizeProposal(state *schemas.AgentState, proposal *sche
 // Priority: sentinel.io/branch annotation > configured default branch.
 // This mirrors the investigator's resolveBranch logic but WITHOUT the
 // git-commit case (PRs target branches, not commits).
+// so it can use the FixProposer's configurable defaultBranch.
 
-// so it can use the FixProposer's configurable defaultBranch (CRITICAL audit #6).
 func (a *FixProposer) resolveBaseBranch(state *schemas.AgentState) string {
         if branch, ok := state.Cluster.Annotations["sentinel.io/branch"]; ok && branch != "" {
                 return branch
@@ -666,6 +691,7 @@ func buildPRBody(state *schemas.AgentState, rc *schemas.RootCause, fixType strin
         // with 1% mirrored production traffic") was a hardcoded lie that
         // would persist in the PR if the execution path failed before
         // reaching BuildPRBody.
+
         parts = append(parts, "_Sandbox verification status will be appended by the execution layer._")
         parts = append(parts, "")
         parts = append(parts, "---")
@@ -686,16 +712,18 @@ func strPtr(s string) *string { return &s }
 
 // extractMetadataJSON extracts the small JSON metadata object from the LLM output.
 // The LLM outputs {"fix_type":"code_fix",...} before the SEARCH/REPLACE blocks.
-
 //   - markdown fences (```json...```)
 //   - bare JSON objects ({...})
 //   - prose around JSON
 //   - truncated JSON repair
+
 func extractMetadataJSON(rawOutput string) map[string]any {
         // The metadata JSON is the FIRST JSON object in the output (before the SEARCH/REPLACE blocks)
         // If the output starts with SEARCH/REPLACE blocks (no JSON), return empty map
+
         if strings.Contains(rawOutput, "<<<<<<< SEARCH") {
                 // Find the JSON before the first SEARCH block
+
                 idx := strings.Index(rawOutput, "<<<<<<< SEARCH")
                 if idx > 0 {
                         beforeBlocks := rawOutput[:idx]
@@ -703,24 +731,29 @@ func extractMetadataJSON(rawOutput string) map[string]any {
                 }
         }
         // No SEARCH blocks — try the whole output
+
         return llm.ExtractJSON(rawOutput)
 }
 
 // normalizeFilePath matches the LLM-provided file path against the keys in
 // FetchedCode. LLMs often use container paths (e.g. /app/app/main.py) or
 // add/remove leading directories. This function finds the best match.
+
 func normalizeFilePath(path string, fetchedCode map[string]string) string {
         // Exact match
+
         if _, ok := fetchedCode[path]; ok {
                 return path
         }
         // Try: path is a suffix of a fetched key (LLM used /app/app/main.py, key is app/main.py)
+
         for key := range fetchedCode {
                 if strings.HasSuffix(key, path) || strings.HasSuffix(path, key) {
                         return key
                 }
         }
         // Try: strip leading directories from path
+
         parts := strings.Split(path, "/")
         for i := 0; i < len(parts); i++ {
                 shortPath := strings.Join(parts[i:], "/")
@@ -729,5 +762,6 @@ func normalizeFilePath(path string, fetchedCode map[string]string) string {
                 }
         }
         // No match — return as-is (the apply step will fail with a clear error)
+
         return path
 }

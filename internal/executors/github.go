@@ -19,15 +19,12 @@ import (
 )
 
 // GitHubExecutor opens Pull Requests via the GitHub REST API.
-
-//
-
-// cfg.GitHost + cfg.GitHubAPIURL (CRITICAL audit #2). Was hardcoded to
+// cfg.GitHost + cfg.GitHubAPIURL.
 // https://api.github.com in 8 sites within this file.
-
 // TokenProvider returns a fresh GitHub API token for GitHub App auth.
 // Implemented by githubapp.App — when wired, PRs + comments appear as
 // the "Sentinel" bot instead of the PAT owner. v4.0.0.
+
 type TokenProvider interface {
         GetInstallToken(ctx context.Context) (string, error)
 }
@@ -41,10 +38,12 @@ type GitHubExecutor struct {
 
         // over the static token — every API call fetches a fresh installation token
         // (cached internally by the App). Falls back to the static token on error.
+
         tokenProvider TokenProvider
 }
 
 // NewGitHub creates a GitHubExecutor.
+
 func NewGitHub(token string) *GitHubExecutor {
         return &GitHubExecutor{
                 token:         token,
@@ -59,6 +58,7 @@ func NewGitHub(token string) *GitHubExecutor {
 // When set, all GitHub API calls use the App's installation token, making
 // PRs + comments appear as the "Sentinel" bot identity. Falls back to the
 // PAT on error.
+
 func (e *GitHubExecutor) WithTokenProvider(tp TokenProvider) *GitHubExecutor {
         e.tokenProvider = tp
         return e
@@ -67,6 +67,7 @@ func (e *GitHubExecutor) WithTokenProvider(tp TokenProvider) *GitHubExecutor {
 // authToken returns the token to use for an API call. v4.0.0.
 // Prefers the GitHub App installation token (verified bot identity) when
 // configured, falls back to the PAT.
+
 func (e *GitHubExecutor) authToken(ctx context.Context) string {
         if e.tokenProvider != nil {
                 if token, err := e.tokenProvider.GetInstallToken(ctx); err == nil && token != "" {
@@ -77,9 +78,10 @@ func (e *GitHubExecutor) authToken(ctx context.Context) string {
 }
 
 // WithAPIURL sets the GitHub API base URL. v3.11.0: Replaces the hardcoded
-// "https://api.github.com" in 8 sites within this file (CRITICAL audit #2).
+// "https://api.github.com" in 8 sites within this file.
 // For GitHub Enterprise: "https://gh.mycorp.internal/api/v3".
 // For GitLab (GitHub-compat API): "https://gitlab.com/api/v4".
+
 func (e *GitHubExecutor) WithAPIURL(url string) *GitHubExecutor {
         if url != "" {
                 e.apiURL = strings.TrimRight(url, "/")
@@ -88,8 +90,9 @@ func (e *GitHubExecutor) WithAPIURL(url string) *GitHubExecutor {
 }
 
 // WithGitHost sets the git host for clone URLs. v3.11.0: Replaces the
-// hardcoded "github.com" (CRITICAL audit #2). For GitHub Enterprise:
+// hardcoded "github.com". For GitHub Enterprise:
 // "gh.mycorp.internal". For GitLab: "gitlab.com".
+
 func (e *GitHubExecutor) WithGitHost(host string) *GitHubExecutor {
         if host != "" {
                 e.gitHost = host
@@ -98,9 +101,10 @@ func (e *GitHubExecutor) WithGitHost(host string) *GitHubExecutor {
 }
 
 // WithDefaultBranch sets the default branch fallback. v3.11.0: Replaces the
-// hardcoded "main" in PrepareBranch (CRITICAL audit #6). For repos whose
+// hardcoded "main" in PrepareBranch. For repos whose
 // default branch is master/develop/trunk, set this accordingly. Per-repo
 // override via sentinel.io/branch annotation takes precedence.
+
 func (e *GitHubExecutor) WithDefaultBranch(branch string) *GitHubExecutor {
         if branch != "" {
                 e.defaultBranch = branch
@@ -109,6 +113,7 @@ func (e *GitHubExecutor) WithDefaultBranch(branch string) *GitHubExecutor {
 }
 
 // BranchInfo is the result of PrepareBranch.
+
 type BranchInfo struct {
         Success     bool   `json:"success"`
         BranchName  string `json:"branch_name"`
@@ -120,6 +125,7 @@ type BranchInfo struct {
 
 // PrepareBranch creates a new Git branch from the base branch and pushes the
 // fix's file changes to that branch.
+
 func (e *GitHubExecutor) PrepareBranch(ctx context.Context, inc *schemas.Incident) BranchInfo {
         fp := inc.State.FixProposal
         if fp == nil || e.token == "" {
@@ -131,6 +137,7 @@ func (e *GitHubExecutor) PrepareBranch(ctx context.Context, inc *schemas.Inciden
         repo := *fp.Repo
 
         // 1. Get the base branch's latest commit SHA
+
         baseBranch := e.defaultBranch
         if fp.BaseBranch != nil && *fp.BaseBranch != "" {
                 baseBranch = *fp.BaseBranch
@@ -141,18 +148,21 @@ func (e *GitHubExecutor) PrepareBranch(ctx context.Context, inc *schemas.Inciden
         }
 
         // 2. Create a new branch from base
+
         branchName := fmt.Sprintf("sentinel/%s-%s", fp.TargetService, fp.FixID.String()[:8])
         if fp.BranchName != nil && *fp.BranchName != "" {
                 branchName = *fp.BranchName
         }
         if err := e.createBranch(ctx, repo, branchName, baseSHA); err != nil {
                 // 422 = branch already exists, that's fine — reuse it
+
                 if !strings.Contains(err.Error(), "422") {
                         return BranchInfo{Success: false, Error: fmt.Sprintf("create_branch: %v", err)}
                 }
         }
 
         // 3. Write each file to the new branch
+
         filesChanged := 0
         for _, fc := range fp.FilesToChange {
                 if fc.Path == "" {
@@ -162,6 +172,7 @@ func (e *GitHubExecutor) PrepareBranch(ctx context.Context, inc *schemas.Inciden
                 // current file content, apply the blocks, then write the result.
                 // This produces minimal, surgical diffs instead of rewriting the
                 // entire file.
+
                 if len(fc.Changes) > 0 {
                         newContent, err := e.applySearchReplace(ctx, repo, branchName, fc.Path, fc.Changes)
                         if err != nil {
@@ -174,6 +185,7 @@ func (e *GitHubExecutor) PrepareBranch(ctx context.Context, inc *schemas.Inciden
                         continue
                 }
                 // Legacy: full file replacement via NewContent
+
                 if fc.NewContent != "" {
                         if err := e.upsertFile(ctx, repo, branchName, fc.Path, fc.NewContent); err != nil {
                                 return BranchInfo{Success: false, Error: fmt.Sprintf("upsert_file %s: %v", fc.Path, err)}
@@ -192,6 +204,7 @@ func (e *GitHubExecutor) PrepareBranch(ctx context.Context, inc *schemas.Inciden
 }
 
 // PRResult is the result of OpenPR.
+
 type PRResult struct {
         Success          bool
         PRURL            string
@@ -204,6 +217,7 @@ type PRResult struct {
 
 // OpenPR opens a Pull Request from the fix branch.
 // Called AFTER the sandbox has verified (or failed to verify) the canary.
+
 func (e *GitHubExecutor) OpenPR(ctx context.Context, inc *schemas.Incident, branch BranchInfo, sandboxVerified bool, sandboxSummary string) *PRResult {
         fp := inc.State.FixProposal
         if !branch.Success {
@@ -214,6 +228,7 @@ func (e *GitHubExecutor) OpenPR(ctx context.Context, inc *schemas.Incident, bran
         }
 
         // PR body is pre-built by the execution phase (includes sandbox verification)
+
         prBody := ""
         if fp.PRBody != nil {
                 prBody = *fp.PRBody
@@ -225,12 +240,14 @@ func (e *GitHubExecutor) OpenPR(ctx context.Context, inc *schemas.Incident, bran
         }
 
         // Open the PR
+
         prNumber, prURL, err := e.createPR(ctx, branch.Repo, prTitle, prBody, branch.BranchName, branch.BaseBranch)
         if err != nil {
                 return &PRResult{Success: false, Error: fmt.Sprintf("create_pr: %v", err)}
         }
 
         // Add labels
+
         labels := []string{"sentinel", "automated"}
         if sandboxVerified {
                 labels = append(labels, "sandbox-verified")
@@ -250,6 +267,7 @@ func (e *GitHubExecutor) OpenPR(ctx context.Context, inc *schemas.Incident, bran
 }
 
 // --- GitHub API helpers ---
+
 
 func (e *GitHubExecutor) getBranchSHA(ctx context.Context, repo, branch string) (string, error) {
         url := fmt.Sprintf("%s/repos/%s/branches/%s", e.apiURL, repo, branch)
@@ -275,6 +293,7 @@ func (e *GitHubExecutor) createBranch(ctx context.Context, repo, branch, sha str
 
 func (e *GitHubExecutor) upsertFile(ctx context.Context, repo, branch, path, content string) error {
         // Try to get existing file's SHA (for update). Ignore error — file may not exist yet.
+
         existingSHA, _ := e.getFileSHA(ctx, repo, path, branch)
 
         url := fmt.Sprintf("%s/repos/%s/contents/%s", e.apiURL, repo, path)
@@ -305,12 +324,11 @@ func (e *GitHubExecutor) getFileSHA(ctx context.Context, repo, path, ref string)
 }
 
 // getFileContent fetches the decoded content of a file from a GitHub repo.
-
 // search/replace blocks.
 // GetFileContent fetches the decoded content of a file from a GitHub repo.
-
 // file state from the branch so the LLM generates search/replace blocks against
 // the current code, not the original.
+
 func (e *GitHubExecutor) GetFileContent(ctx context.Context, repo, path, ref string) (string, error) {
         url := fmt.Sprintf("%s/repos/%s/contents/%s?ref=%s", e.apiURL, repo, path, ref)
         var resp struct {
@@ -337,18 +355,15 @@ func (e *GitHubExecutor) GetFileContent(ctx context.Context, repo, path, ref str
 // applySearchReplace fetches the current file content from the repo, applies
 // each search/replace block using multiple matching strategies, validates
 // the result is syntactically correct, and returns the modified content.
-//
-
 //  1. Exact match — search text must match character-for-character
 //  2. Whitespace-insensitive match — strip leading/trailing whitespace per line
 //  3. Fuzzy match — Levenshtein distance >80% similarity
 //  4. If ALL strategies fail — return error with context for retry loop
-//
 // Also: reject useless partial fixes. If only an import block matched but the
 // actual fix block didn't, don't ship a PR with just an unused import.
-
 // implementation, which silently returned nil in distroless (no binaries)
 // AND swallowed os.CreateTemp errors. See syntax_validate.go for details.
+
 
 func (e *GitHubExecutor) createPR(ctx context.Context, repo, title, body, head, base string) (int, string, error) {
         url := fmt.Sprintf("%s/repos/%s/pulls", e.apiURL, repo)
@@ -378,13 +393,16 @@ func (e *GitHubExecutor) do(ctx context.Context, method, url string, body any, o
 
         // investigations × ~10 GitHub calls each, the secondary rate limit triggered and
         // all subsequent GitHub operations failed permanently.
+
         const maxRetries = 3
         var lastErr error
         for attempt := 0; attempt <= maxRetries; attempt++ {
                 if attempt > 0 {
                         // Parse Retry-After header if present, else exponential backoff with jitter.
+
                         backoff := time.Duration(1<<uint(attempt-1)) * time.Second // 1s, 2s, 4s
                         // Add up to 500ms jitter to avoid thundering herd
+
                         backoff += time.Duration(time.Now().UnixNano()%500) * time.Millisecond
                         select {
                         case <-ctx.Done():
@@ -420,6 +438,7 @@ func (e *GitHubExecutor) do(ctx context.Context, method, url string, body any, o
                 }
 
                 // Retry on rate limit
+
                 if resp.StatusCode == 429 || (resp.StatusCode == 403 && isGitHubRateLimit(resp)) {
                         resp.Body.Close()
                         lastErr = fmt.Errorf("GitHub API %d: rate limited (attempt %d/%d)", resp.StatusCode, attempt+1, maxRetries+1)
@@ -455,13 +474,16 @@ func (e *GitHubExecutor) do(ctx context.Context, method, url string, body any, o
 // isGitHubRateLimit checks if a 403 response is due to rate limiting.
 // GitHub sends a X-RateLimit-Remaining: 0 header on primary rate limit,
 // and includes "secondary rate limit" or "abuse detection" in the body on secondary.
+
 func isGitHubRateLimit(resp *http.Response) bool {
         if resp.Header.Get("X-RateLimit-Remaining") == "0" {
                 return true
         }
         // Peek at the body to check for secondary rate limit message
+
         body, _ := io.ReadAll(io.LimitReader(resp.Body, 500))
         // Restore the body for the caller
+
         resp.Body = io.NopCloser(bytes.NewReader(body))
         bodyStr := string(body)
         return strings.Contains(bodyStr, "secondary rate limit") ||
@@ -471,8 +493,10 @@ func isGitHubRateLimit(resp *http.Response) bool {
 
 // base64Decode decodes a base64-encoded string (used for GitHub Contents API
 // file content). v3.9.0.
+
 func base64Decode(s string) (string, error) {
         // GitHub returns base64 with newlines every 76 chars — strip them
+
         s = strings.ReplaceAll(s, "\n", "")
         decoded, err := base64.StdEncoding.DecodeString(s)
         if err != nil {

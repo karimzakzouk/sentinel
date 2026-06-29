@@ -30,6 +30,7 @@ func (s *Store) AppendEvent(ctx context.Context, incidentID uuid.UUID, layer, ev
 
 // GetBetaPrior returns the Beta distribution prior (alpha, beta, successes, failures)
 // for a given service + fix_type. Returns (1.0, 1.0, 0, 0) if no prior data.
+
 func (s *Store) GetBetaPrior(ctx context.Context, service, fixType string) (alpha, beta float64, successes, failures int, err error) {
         s.mu.RLock()
         defer s.mu.RUnlock()
@@ -47,6 +48,7 @@ func (s *Store) GetBetaPrior(ctx context.Context, service, fixType string) (alph
 
 // RecordBetaOutcome updates the Beta prior for a service + fix_type after a
 // fix succeeds or fails. Returns the new (alpha, beta).
+
 func (s *Store) RecordBetaOutcome(ctx context.Context, service, fixType string, success bool) (alpha, beta float64, err error) {
         s.mu.Lock()
         defer s.mu.Unlock()
@@ -88,6 +90,7 @@ func (s *Store) RecordBetaOutcome(ctx context.Context, service, fixType string, 
 // The embedding is computed from the cluster summary + root cause + fix pattern.
 // In v3 we use a simple bag-of-words embedding (no external model required).
 // This is replaced by a real embedding model in v3.1 if needed.
+
 func (s *Store) StoreIncidentVector(ctx context.Context, inc *schemas.Incident, outcomeSuccess bool) error {
         s.mu.Lock()
         defer s.mu.Unlock()
@@ -97,6 +100,7 @@ func (s *Store) StoreIncidentVector(ctx context.Context, inc *schemas.Incident, 
         }
 
         // Build the text signature for embedding
+
         summary := inc.Cluster.Summary
         rootCause := inc.State.RootCause.Statement
         fixPattern := inc.State.FixProposal.Description
@@ -140,8 +144,7 @@ func (s *Store) StoreIncidentVector(ctx context.Context, inc *schemas.Incident, 
 }
 
 // computeEmbedding produces a bag-of-words vector from text.
-
-// by the runtime VectorStore) instead of strings.Fields(). Previously,
+// by the runtime VectorStore) instead of strings.Fields().
 // computeEmbedding used strings.Fields+ToLower (which keeps punctuation in
 // words: "KeyError:" → "keyerror:") while hashEmbedding used splitWords
 // (which strips punctuation: "KeyError:" → "KeyError", no lowercasing).
@@ -150,6 +153,7 @@ func (s *Store) StoreIncidentVector(ctx context.Context, inc *schemas.Incident, 
 // hashEmbedding — cosine similarity was near-zero for all stored incidents.
 // The entire memory loop (applyKnownFix, similar-incident retrieval) was
 // silently broken across restarts. Now both use the same tokenizer.
+
 func computeEmbedding(text string) []float32 {
         return hashEmbedding(text, 1536)
 }
@@ -187,8 +191,8 @@ func boolToInt(b bool) int {
 // FindIncidentByPR looks up an incident by its associated PR number + repo.
 // Used by chatops command handlers to resolve "/sentinel <cmd>" on a PR
 // comment to the underlying incident. Returns nil if no incident matches.
-
 // Used for compliance + analytics. Every /sentinel command is recorded.
+
 func (s *Store) LogCommandEvent(ctx context.Context, ev *CommandEvent) error {
         s.mu.Lock()
         defer s.mu.Unlock()
@@ -204,6 +208,7 @@ func (s *Store) LogCommandEvent(ctx context.Context, ev *CommandEvent) error {
 }
 
 // CommandEvent is one row in the command_events audit log.
+
 type CommandEvent struct {
         EventID          int64     `json:"event_id"`
         IncidentID       string    `json:"incident_id,omitempty"`
@@ -220,6 +225,7 @@ type CommandEvent struct {
 
 // ListCommandEvents returns recent command events for analytics.
 // If repo is non-empty, filters to that repo. Limit defaults to 100.
+
 func (s *Store) ListCommandEvents(ctx context.Context, repo string, limit int) ([]*CommandEvent, error) {
         s.mu.RLock()
         defer s.mu.RUnlock()

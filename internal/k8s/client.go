@@ -22,6 +22,7 @@ import (
 )
 
 // Sentinel annotation keys we recognize on workloads.
+
 var sentinelAnnotationKeys = map[string]bool{
         "sentinel.io/repo":         true,
         "sentinel.io/branch":       true,
@@ -37,6 +38,7 @@ var sentinelAnnotationKeys = map[string]bool{
 }
 
 // Client wraps the K8s clientset with the helpers Sentinel needs.
+
 type Client struct {
         clientset *kubernetes.Clientset
         dynamic   dynamic.Interface
@@ -45,23 +47,23 @@ type Client struct {
 
 // New creates a Client using in-cluster config, with fallback to the local
 // kubeconfig for dev/testing.
-//
-// Previously only tried rest.InClusterConfig() and hard-crashed
+//InClusterConfig() and hard-crashed
 // (log.Fatalf in main.go) when not running inside a pod. That made local
 // testing impossible — the server wouldn't even start without
 // KUBERNETES_SERVICE_HOST being set. Now tries in-cluster first, then
 // falls back to ~/.kube/config (or $KUBECONFIG), matching the behavior
 // of every other K8s tool (kubectl, helm, client-go examples).
-//
 // If neither works, returns an error so main.go can decide whether to
 // fatal (production) or log-and-continue (local dev — run with a local
 // kubeconfig pointing at a kind cluster).
+
 func New() (*Client, error) {
         config, err := rest.InClusterConfig()
         if err != nil {
                 // Fall back to local kubeconfig for dev/testing.
                 // Use client-go's clientcmd loading rules which respect
                 // KUBECONFIG env var and default to ~/.kube/config.
+
                 loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
                 configOverrides := &clientcmd.ConfigOverrides{}
                 clientConfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, configOverrides)
@@ -83,11 +85,13 @@ func New() (*Client, error) {
 }
 
 // Clientset returns the underlying kubernetes clientset (for sandbox + executors).
+
 func (c *Client) Clientset() *kubernetes.Clientset {
         return c.clientset
 }
 
 // DynamicClient returns the dynamic interface (for CRD operations).
+
 func (c *Client) DynamicClient() dynamic.Interface {
         return c.dynamic
 }
@@ -95,10 +99,12 @@ func (c *Client) DynamicClient() dynamic.Interface {
 // LookupWorkloadAnnotations finds sentinel.io/* annotations on the workload
 // matching `service` in `namespace`. Tries Deployment by name → by label →
 // StatefulSet → Pod.
+
 func (c *Client) LookupWorkloadAnnotations(ctx context.Context, service, namespace string) (map[string]string, error) {
         annotations := map[string]string{}
 
         // 1. Try Deployment by exact name
+
         if dep, err := c.clientset.AppsV1().Deployments(namespace).Get(ctx, service, metav1.GetOptions{}); err == nil {
                 mergeAnnotations(annotations, dep.Annotations, dep.Spec.Template.Annotations)
                 if len(annotations) > 0 {
@@ -107,6 +113,7 @@ func (c *Client) LookupWorkloadAnnotations(ctx context.Context, service, namespa
         }
 
         // 2. Try Deployment by label app.kubernetes.io/name=service
+
         if deps, err := c.clientset.AppsV1().Deployments(namespace).List(ctx, metav1.ListOptions{
                 LabelSelector: fmt.Sprintf("app.kubernetes.io/name=%s", service),
         }); err == nil && len(deps.Items) > 0 {
@@ -118,6 +125,7 @@ func (c *Client) LookupWorkloadAnnotations(ctx context.Context, service, namespa
         }
 
         // 3. Try Deployment by label app=service (older convention)
+
         if deps, err := c.clientset.AppsV1().Deployments(namespace).List(ctx, metav1.ListOptions{
                 LabelSelector: fmt.Sprintf("app=%s", service),
         }); err == nil && len(deps.Items) > 0 {
@@ -129,6 +137,7 @@ func (c *Client) LookupWorkloadAnnotations(ctx context.Context, service, namespa
         }
 
         // 4. Try StatefulSet by exact name
+
         if sts, err := c.clientset.AppsV1().StatefulSets(namespace).Get(ctx, service, metav1.GetOptions{}); err == nil {
                 mergeAnnotations(annotations, sts.Annotations, sts.Spec.Template.Annotations)
                 if len(annotations) > 0 {
@@ -137,6 +146,7 @@ func (c *Client) LookupWorkloadAnnotations(ctx context.Context, service, namespa
         }
 
         // 5. Try Pods by label
+
         if pods, err := c.clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
                 LabelSelector: fmt.Sprintf("app.kubernetes.io/name=%s", service),
         }); err == nil && len(pods.Items) > 0 {
@@ -153,16 +163,18 @@ func (c *Client) LookupWorkloadAnnotations(ctx context.Context, service, namespa
 // matching `service` in `namespace`. Retries up to 3 times with delays because
 // K8s sometimes returns "unable to retrieve container logs for containerd://..."
 // when the container just restarted and logs aren't available yet.
-//
 // Tries previous container logs first (the crash output), then current logs.
 // Returns the first non-empty, non-error log content.
+
 func (c *Client) FetchCrashingPodLogs(ctx context.Context, service, namespace string) (string, error) {
         // Find pods matching the service label
+
         pods, err := c.clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
                 LabelSelector: fmt.Sprintf("app.kubernetes.io/name=%s", service),
         })
         if err != nil || len(pods.Items) == 0 {
                 // Try app=service label
+
                 pods, err = c.clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
                         LabelSelector: fmt.Sprintf("app=%s", service),
                 })
@@ -172,6 +184,7 @@ func (c *Client) FetchCrashingPodLogs(ctx context.Context, service, namespace st
         }
 
         // Pick the worst pod: prefer CrashLoopBackOff, else most restarts
+
         var worstPod *corev1.Pod
         worstRestarts := -1
         for i := range pods.Items {
@@ -201,9 +214,11 @@ func (c *Client) FetchCrashingPodLogs(ctx context.Context, service, namespace st
         // Retry log fetching up to 3 times with 2s delays.
         // K8s sometimes returns "unable to retrieve container logs for containerd://..."
         // immediately after a restart; waiting 2s usually fixes it.
+
         limitBytes := int64(8192) // 8KB — enough for a full stack trace
         for attempt := 0; attempt < 3; attempt++ {
                 // Try previous container logs first (the crash output)
+
                 opts := &corev1.PodLogOptions{
                         Previous:   true,
                         LimitBytes: &limitBytes,
@@ -216,6 +231,7 @@ func (c *Client) FetchCrashingPodLogs(ctx context.Context, service, namespace st
                 }
 
                 // Fall back to current logs
+
                 opts.Previous = false
                 if logs, err := c.clientset.CoreV1().Pods(namespace).GetLogs(worstPod.Name, opts).Do(ctx).Raw(); err == nil {
                         s := string(logs)
@@ -225,6 +241,7 @@ func (c *Client) FetchCrashingPodLogs(ctx context.Context, service, namespace st
                 }
 
                 // Wait before retrying
+
                 if attempt < 2 {
                         select {
                         case <-ctx.Done():
@@ -240,14 +257,17 @@ func (c *Client) FetchCrashingPodLogs(ctx context.Context, service, namespace st
 // isValidLogContent returns false if the log content is empty or is just the
 // K8s error message "unable to retrieve container logs for containerd://...".
 // This happens when the container just restarted and logs aren't available yet.
+
 func isValidLogContent(s string) bool {
         if strings.TrimSpace(s) == "" {
                 return false
         }
         // K8s returns this error string when containerd logs aren't ready yet
+
         if strings.Contains(s, "unable to retrieve container logs for containerd://") {
                 // But it's still valid if there's other content after the error
                 // (some runtimes prefix the error then include the actual logs)
+
                 lines := strings.Split(s, "\n")
                 realContent := 0
                 for _, line := range lines {
@@ -264,8 +284,10 @@ func isValidLogContent(s string) bool {
 
 // GetProdImage returns the current production image for a service by looking
 // up its Deployment's first container image.
+
 func (c *Client) GetProdImage(ctx context.Context, service, namespace string) (string, error) {
         // Try by label
+
         if deps, err := c.clientset.AppsV1().Deployments(namespace).List(ctx, metav1.ListOptions{
                 LabelSelector: fmt.Sprintf("app.kubernetes.io/name=%s", service),
         }); err == nil && len(deps.Items) > 0 {
@@ -276,6 +298,7 @@ func (c *Client) GetProdImage(ctx context.Context, service, namespace string) (s
         }
 
         // Try by exact name
+
         if dep, err := c.clientset.AppsV1().Deployments(namespace).Get(ctx, service, metav1.GetOptions{}); err == nil {
                 containers := dep.Spec.Template.Spec.Containers
                 if len(containers) > 0 {
@@ -293,17 +316,20 @@ func (c *Client) GetProdImage(ctx context.Context, service, namespace string) (s
 // the end of every auto-detected investigation.
 // M4 — delegates to PatchCRStatusFull so callers that pass extra
 // fields (incidentId, rootCause, confidence, prUrl) populate the CRD status
-// columns. Was: only phase + lastUpdated were written, leaving kubectl get si
+// columns.
 // showing empty Confidence/PR columns.
+
 func (c *Client) PatchCRStatus(ctx context.Context, name, namespace, phase string) error {
         return c.PatchCRStatusFull(ctx, name, namespace, phase, "", "", 0, "")
 }
 
 // PatchCRStatusFull patches all status fields of a SentinelIncident CR.
 // M4 — was missing; CRD declared 6 status fields but code only wrote 2.
+
 func (c *Client) PatchCRStatusFull(ctx context.Context, name, namespace, phase, incidentID, rootCause string, confidence float64, prURL string) error {
         // Skip patching for fake CR names from auto/manual/slack triggers.
         // Only real CRD-watcher triggers pass a valid CR name.
+
         if name == "" || name == "auto-detected" || name == "manual" || name == "slack" {
                 return nil
         }
@@ -320,6 +346,7 @@ func (c *Client) PatchCRStatusFull(ctx context.Context, name, namespace, phase, 
         }
         // Only include non-zero values so we don't overwrite a real
         // incidentId with "" on a status-only update.
+
         if incidentID != "" {
                 status["incidentId"] = incidentID
         }
@@ -347,6 +374,7 @@ func (c *Client) PatchCRStatusFull(ctx context.Context, name, namespace, phase, 
 
 // ParseStackTrace extracts source file paths from a stack trace or log line.
 // Filters out URLs, image extensions, and stdlib paths.
+
 func ParseStackTrace(text string) []string {
         fileRe := regexp.MustCompile(`[a-zA-Z0-9_./-]+\.[a-zA-Z]{1,5}`)
         candidates := fileRe.FindAllString(text, -1)
@@ -356,11 +384,13 @@ func ParseStackTrace(text string) []string {
         for _, c := range candidates {
                 c = strings.Trim(c, "'\"`")
                 // Skip URLs
+
                 lower := strings.ToLower(c)
                 if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
                         continue
                 }
                 // Skip asset extensions
+
                 skip := false
                 for _, ext := range []string{".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico",
                         ".css", ".html", ".json", ".yaml", ".yml", ".toml", ".md", ".txt", ".lock"} {
@@ -373,16 +403,19 @@ func ParseStackTrace(text string) []string {
                         continue
                 }
                 // Skip stdlib paths
+
                 if strings.Contains(c, "/site-packages/") || strings.Contains(c, "/dist-packages/") ||
                         strings.HasPrefix(c, "/usr/local/lib/") || strings.HasPrefix(c, "/usr/lib/") ||
                         strings.HasPrefix(c, "/lib/") || strings.HasPrefix(c, "/opt/") {
                         continue
                 }
                 // Strip leading slash
+
                 if strings.HasPrefix(c, "/") && !strings.HasPrefix(c, "//") {
                         c = c[1:]
                 }
                 // Require either a slash or 2+ dots (Java class file)
+
                 if !strings.Contains(c, "/") && strings.Count(c, ".") < 2 {
                         continue
                 }
@@ -395,6 +428,7 @@ func ParseStackTrace(text string) []string {
 }
 
 // SortedKeys returns the keys of a map, sorted (for deterministic output).
+
 func SortedKeys(m map[string]string) []string {
         keys := make([]string, 0, len(m))
         for k := range m {

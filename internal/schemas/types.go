@@ -1,7 +1,6 @@
 // Package schemas defines the canonical types that flow between every layer
 // of Sentinel. These are the Go equivalents of the Python Pydantic models in
 // services/common/sentinel_common/schemas.py.
-//
 // Every layer reads from and writes to these types. Validation happens at
 // JSON unmarshal time via struct tags.
 package schemas
@@ -13,6 +12,7 @@ import (
 )
 
 // SignalSource is the telemetry source a Signal came from.
+
 type SignalSource string
 
 const (
@@ -34,6 +34,7 @@ const (
 )
 
 // IncidentStatus is the lifecycle state of an incident.
+
 type IncidentStatus string
 
 const (
@@ -71,8 +72,8 @@ const (
 )
 
 // ---------- Layer 1: Ingestion ----------
-
 // Signal is the canonical cleaned/normalized telemetry event.
+
 type Signal struct {
         SignalID      uuid.UUID       `json:"signal_id"`
         Ts            time.Time       `json:"ts"`
@@ -88,8 +89,8 @@ type Signal struct {
 }
 
 // ---------- Layer 2: Detection ----------
-
 // Anomaly is a single anomalous observation flagged by a detector.
+
 type Anomaly struct {
         AnomalyID   uuid.UUID       `json:"anomaly_id"`
         Ts          time.Time       `json:"ts"`
@@ -104,6 +105,7 @@ type Anomaly struct {
 }
 
 // AnomalyCluster is a group of anomalies the detector decided belong together.
+
 type AnomalyCluster struct {
         ClusterID   uuid.UUID       `json:"cluster_id"`
         Ts          time.Time       `json:"ts"`
@@ -117,8 +119,8 @@ type AnomalyCluster struct {
 }
 
 // ---------- Layer 3: Reasoning ----------
-
 // Hypothesis is one candidate root cause proposed by the Investigator.
+
 type Hypothesis struct {
         HID                   string   `json:"h_id"`
         Statement             string   `json:"statement"`
@@ -130,6 +132,7 @@ type Hypothesis struct {
 }
 
 // Evidence is a piece of evidence the Evidence Gatherer collected.
+
 type Evidence struct {
         EID                    string         `json:"e_id"`
         Source                 string         `json:"source"`
@@ -141,6 +144,7 @@ type Evidence struct {
 }
 
 // RootCause is the survivor hypothesis after the Analyst's falsification round.
+
 type RootCause struct {
         Statement          string   `json:"statement"`
         Confidence         float64  `json:"confidence"`
@@ -152,7 +156,6 @@ type RootCause struct {
 }
 
 // FileChange is one file modification in a fix proposal.
-//
 // Supports BOTH approaches:
 //   - Search/Replace (preferred): LLM returns Changes (list of search→replace
 //     blocks). Sentinel finds the exact "search" text in the file and swaps it
@@ -160,9 +163,9 @@ type RootCause struct {
 //     search text isn't found, that change is skipped (no corruption).
 //   - Full file (legacy): LLM returns NewContent with the complete file.
 //     Sentinel replaces the entire file. Kept for backward compatibility.
-//
 // Search/Replace is the default — the fix proposer prompt asks for it.
 // If the LLM returns new_content instead, that path still works.
+
 type FileChange struct {
         Path       string        `json:"path"`
         NewContent string        `json:"new_content,omitempty"` // legacy: full file replacement
@@ -173,12 +176,14 @@ type FileChange struct {
 // with "replace". The search block must be unique enough to match exactly
 // one location in the file. If it matches zero or multiple locations, the
 // change is skipped.
+
 type SearchReplace struct {
         Search  string `json:"search"`
         Replace string `json:"replace"`
 }
 
 // FixProposal is the Fix Proposer's translation of a root cause into a concrete action.
+
 type FixProposal struct {
         FixID             uuid.UUID      `json:"fix_id"`
         FixType           FixType        `json:"fix_type"`
@@ -199,6 +204,7 @@ type FixProposal struct {
 }
 
 // RewindEvent is the recursive-reasoning escape hatch.
+
 type RewindEvent struct {
         RaisedBy   string         `json:"raised_by"`
         Reason     string         `json:"reason"`
@@ -207,8 +213,8 @@ type RewindEvent struct {
 }
 
 // ---------- Layer 4: Safety / Governance ----------
-
 // GovernanceDecision is the verdict for a proposed fix.
+
 type GovernanceDecision struct {
         Verdict                     GovernanceVerdict `json:"verdict"`
         ConfidenceAtDecision        float64           `json:"confidence_at_decision"`
@@ -221,8 +227,8 @@ type GovernanceDecision struct {
 }
 
 // ---------- Layer 5: Execution ----------
-
 // ExecutionResult is the outcome of executing a FixProposal.
+
 type ExecutionResult struct {
         FixID            uuid.UUID      `json:"fix_id"`
         FixType          FixType        `json:"fix_type"`
@@ -239,6 +245,7 @@ type ExecutionResult struct {
 }
 
 // AgentState is the structured object passed between agents in the state machine.
+
 type AgentState struct {
         IncidentID         uuid.UUID            `json:"incident_id"`
         Cluster            AnomalyCluster       `json:"cluster"`
@@ -262,12 +269,13 @@ type AgentState struct {
         // the failure details are stored here and fed back to the fix proposer on
         // the next retry. This implements the "generate → verify → feed error back
         // → retry" loop that Aider/OpenHands/SWE-agent all use.
+
         SandboxFeedback    *string              `json:"sandbox_feedback,omitempty"`
 }
 
 // ---------- Layer 6: Feedback ----------
-
 // Incident is the end-to-end incident record. One Incident == one full Sentinel run.
+
 type Incident struct {
         IncidentID          uuid.UUID      `json:"incident_id"`
         CreatedAt           time.Time      `json:"created_at"`
@@ -283,6 +291,7 @@ type Incident struct {
 }
 
 // NewAgentState returns a fresh AgentState with defaults.
+
 func NewAgentState(incidentID uuid.UUID, cluster AnomalyCluster) AgentState {
         return AgentState{
                 IncidentID:    incidentID,
@@ -293,6 +302,7 @@ func NewAgentState(incidentID uuid.UUID, cluster AnomalyCluster) AgentState {
 }
 
 // NewIncident returns a fresh Incident for a cluster.
+
 func NewIncident(cluster AnomalyCluster) Incident {
         id := uuid.New()
         now := time.Now().UTC()
@@ -309,40 +319,47 @@ func NewIncident(cluster AnomalyCluster) Incident {
 }
 
 // ─── Fix verification types ──────────────────────────────────────────────────
-// These were previously in internal/agents and imported by internal/executors
+// These were
 // (LEAK-1 from the architecture audit). Moved here so the executors package
 // doesn't have to import agents — outer adapter was reaching into inner
 // reasoning layer. The agents package keeps thin wrappers for back-compat.
-
 // ParsedError is the structured form of a runtime error extracted from logs.
 // Multi-language: works for Python, Go, Java, JavaScript, Rust.
+
 type ParsedError struct {
 	// ErrorType is the error class (e.g. "KeyError", "panic",
 	// "NullPointerException", "TypeError").
+
 	ErrorType string
 
 	// ErrorDetail is the error-specific detail (e.g. "'DATABASE_URL'",
 	// "runtime error: index out of range").
+
 	ErrorDetail string
 
 	// SourceFile is the file path from the stack trace (e.g.
 	// "app/main.py", "src/handler.go", "com/acme/Foo.java").
+
 	SourceFile string
 
 	// SourceLine is the line number as a string (e.g. "11", "42", "1337").
+
 	SourceLine string
 
 	// Language is the detected language: "python", "go", "java",
 	// "javascript", "rust", or "unknown".
+
 	Language string
 
 	// RawLine is the full original error line from the logs.
+
 	RawLine string
 }
 
 // GeneratedTest is an LLM-generated test that reproduces the original error.
 // Used by sandbox Level 4 verification — if the test fails against the
 // canary, the fix didn't actually fix the bug.
+
 type GeneratedTest struct {
 	TestFile      string `json:"test_file"`
 	TestFramework string `json:"test_framework"`
@@ -355,6 +372,7 @@ type GeneratedTest struct {
 // GeneratedReproducer is an LLM-generated reproducer script. Used by sandbox
 // Level 5 verification (strongest) — runs the script against the canary and
 // checks for non-zero exit.
+
 type GeneratedReproducer struct {
 	ScriptFile     string `json:"script_file"`
 	ScriptLanguage string `json:"script_language"`

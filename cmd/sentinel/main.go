@@ -43,12 +43,14 @@ import (
 )
 
 // API server, used by the investigation handler to push real-time updates.
+
 var broadcaster events.Broadcaster = events.Noop()
 
 // used by executeCodeFix to post the initial [SENTINELSTATUS] comment when
 // a PR is opened. Package-level (not passed through executeFix) because
 // executeCodeFix is called from a closure that doesn't have access to main's
 // local scope.
+
 var chatopsStatusManager chatops.StatusCommentManager
 
 // the runtimecfg apply callback (registered BEFORE these clients exist) to
@@ -59,8 +61,8 @@ var chatopsStatusManager chatops.StatusCommentManager
 // Package-level mutable vars (pkgGHExec, etc.) are now defined in
 // pkg_vars.go with RWMutex-protected accessors. Use getGHExec(),
 // getCfg(), etc. for reads and withPkgWriteLock(...) for writes.
-
 // Compile-time assertion: alertmanagerAdapter satisfies alertmanager.SignalHandler.
+
 var _ alertmanager.SignalHandler = (*alertmanagerAdapter)(nil)
 
 func main() {
@@ -79,8 +81,10 @@ func main() {
 
         // on missing required fields instead of crashing 5-10 minutes later
         // at the first LLM call.
+
         if errs, warns := cfg.Validate(); len(errs) > 0 || len(warns) > 0 {
                 // Initialize logger first so warnings are structured
+
                 logging.Init(cfg.LogLevel)
                 for _, w := range warns {
                         logging.Warn("config validation warning: " + w)
@@ -95,6 +99,7 @@ func main() {
         }
 
         // Falls back to stdlib log for any code not yet migrated to slog.
+
         logging.Init(cfg.LogLevel)
 
         logging.Info("Sentinel starting",
@@ -108,11 +113,11 @@ func main() {
         )
 
         // providers natively. The old "unsupported native provider" warning
-        // (v3.11.0 audit #16) is no longer needed — removed.
-
-        // a provider that supports embeddings (audit #13). Empty default is fine
+        // (v3.11.0) is no longer needed — removed.
+        // a provider that supports embeddings. Empty default is fine
         // (uses hash fallback) but if the operator set an LLM provider expecting
         // embeddings to work, they should know.
+
         if cfg.LLMEmbeddingModel == "" {
                 logging.Info("embedding model not configured — using hash fallback (similar-incident retrieval disabled). Set SENTINEL_LLM_EMBEDDING_MODEL to enable.",
                         "provider", cfg.LLMProvider,
@@ -120,10 +125,11 @@ func main() {
                 )
         }
 
-        // Was hardcoded to /data/runtime-config.json which doesn't exist when
+        //json which doesn't exist when
         // running locally (outside K8s). Defaults to /data/runtime-config.json
         // for in-cluster deployments, but operators running locally can set
         // SENTINEL_RUNTIME_CONFIG_PATH=/tmp/runtime-config.json or similar.
+
         runtimeCfgPath := os.Getenv("SENTINEL_RUNTIME_CONFIG_PATH")
         if runtimeCfgPath == "" {
                 runtimeCfgPath = "/data/runtime-config.json"
@@ -131,6 +137,7 @@ func main() {
         rtCfg := runtimecfg.New(runtimeCfgPath)
 
         // 1. Storage (SQLite replaces Postgres + Weaviate)
+
         store, err := feedback.New(cfg.SQLitePath)
         if err != nil {
                 log.Fatalf("storage init: %v", err)
@@ -138,12 +145,14 @@ func main() {
         defer store.Close()
 
         // 2. K8s client
+
         k8sClient, err := k8s.New()
         if err != nil {
                 log.Fatalf("k8s client: %v", err)
         }
 
         // 3. LLM router
+
 
         router := llm.NewWithProvider(cfg.LLMProvider, cfg.ResolvedBaseURL(), cfg.LLMAPIKey, cfg.LLMFastModel, cfg.LLMFrontierModel)
         router.SetRetryConfig(cfg.LLMMaxRetries, time.Duration(cfg.LLMRetryBaseDelayMs)*time.Millisecond)
@@ -153,6 +162,7 @@ func main() {
 
         // wire the pool into the router. Every LLM call then tries providers in
         // priority order with circuit-breaker failover.
+
         if len(cfg.LLMProviders) > 0 {
                 pool := llm.NewPool(cfg.LLMProviders)
                 pool.SetRetryConfig(cfg.LLMMaxRetries, time.Duration(cfg.LLMRetryBaseDelayMs)*time.Millisecond)
@@ -171,11 +181,13 @@ func main() {
         // saves settings via POST /settings, runtimecfg.Manager invokes
         // this callback, which propagates the new LLM provider / API key /
         // models into the live router. This is what makes the web UI's
-        // Settings page actually take effect — previously settings were
+        // Settings page actually take effect —
         // saved to disk but only read back at startup.
+
         rtCfg.SetApplyCallback(func(rc *runtimecfg.RuntimeConfig) {
                 // Resolve base URL: use override from runtime config if set,
                 // otherwise derive from provider, otherwise keep current.
+
                 baseURL := rc.LLMBaseURL
                 if baseURL == "" && rc.LLMProvider != "" {
                         // Save the current provider override and re-derive.
@@ -184,6 +196,7 @@ func main() {
                         // to keeping the current base URL if provider changed
                         // but no base URL is set — operators who change
                         // provider should also set base URL.
+
                         if rc.LLMProvider != cfg.LLMProvider {
                                 logging.Warn("LLM provider changed via runtime config but no base URL set — keeping current base URL. Set llm_base_url in settings.", "old_provider", cfg.LLMProvider, "new_provider", rc.LLMProvider)
                         }
@@ -207,6 +220,7 @@ func main() {
                         // Update keeps... no, Update sets it to empty. We
                         // need a different code path. Snapshot the current
                         // base URL and pass it back.
+
                         curBase, curKey, _, _ := router.Snapshot()
                         _ = curKey
                         router.Update(curBase, apiKey, fastModel, frontierModel)
@@ -216,6 +230,7 @@ func main() {
                         "api_key_set", apiKey != "", "base_url_changed", baseURL != "")
 
                 // silently dropped (the headline feature was dead code via the web UI).
+
                 if rc.SandboxEnabled != nil {
                         cfg.SandboxEnabled = *rc.SandboxEnabled
                         logging.Info("sandbox enabled reconfigured", "enabled", cfg.SandboxEnabled)
@@ -253,6 +268,7 @@ func main() {
                 // clients live (no restart). When cleared, fall back to PAT.
                 // Uses package-level vars (pkgGHExec etc.) because the apply callback
                 // is registered BEFORE the clients are created.
+
                 if rc.GitHubAppID != "" && rc.GitHubAppPrivateKey != "" && rc.GitHubAppInstallID != "" {
                         cfgSnapshot := getCfg()
                         app, err := githubapp.NewWithAPIURL(rc.GitHubAppID, rc.GitHubAppPrivateKey, rc.GitHubAppInstallID, cfgSnapshot.GitHubAPIURL)
@@ -262,6 +278,7 @@ func main() {
                                 // Hold the write lock while mutating all 4 clients.
                                 // Prevents investigation/chatops/automerge goroutines
                                 // from reading a half-mutated client.
+
                                 withPkgWriteLock(func() {
                                         if pkgGHExec != nil {
                                                 pkgGHExec.WithTokenProvider(app)
@@ -293,12 +310,13 @@ func main() {
         llm.SetInFlightHooks(metrics.LLMCallStart, metrics.LLMCallEnd)
 
         // 3.5 Vector store (HNSW + LLM embeddings) — created before pipeline for memory loop
-
-        // vector store uses permanent hash fallback (audit #13). Also wire the
+        // vector store uses permanent hash fallback. Also wire the
         // configurable hash-fallback dim (cfg.LLMLLMEmbeddingDim, default 1536).
+
         vectorStore := feedback.NewVectorStoreWithDim(cfg.ResolvedBaseURL(), cfg.LLMAPIKey, cfg.LLMEmbeddingModel, cfg.LLMEmbeddingDim)
 
         // 4. Agent pipeline (with vector store for memory loop)
+
         pipeline := agents.NewPipeline(router, k8sClient, cfg.GitHubToken, store, &vectorStoreAdapter{vs: vectorStore})
 
         pipeline.SetConfig(
@@ -315,26 +333,28 @@ func main() {
 
         // When non-empty, the investigator refuses to clone repos outside
         // this list — primary defense against the pod-annotation SSRF.
+
         pipeline.SetAllowedRepos(cfg.AllowedGitHubRepos)
 
         pipeline.SetGitHost(cfg.GitHost)
         pipeline.SetDefaultBranch(cfg.DefaultBranch)
 
         // Were hardcoded 0.4 + 5 in analyst.go + schemas/types.go.
+
         pipeline.SetLLMPriorWeight(cfg.LLMPriorWeight)
         pipeline.SetMaxIterations(cfg.MaxPipelineIterations)
 
         // 5. Safety policy (embedded, replaces OPA sidecar)
-
         // payment-api/billing-api/auth-service leaked into every install because
         // NewPolicy couldn't override HighRiskServices.
+
         policy := safety.NewPolicy(cfg.ProductionNamespaces, cfg.ConfidenceAutonomous, cfg.ConfidenceHumanReview).
                 WithHighRiskServices(cfg.HighRiskServices)
 
         // 6. Executors
-
-        // the GitHub executor (CRITICAL audit #2 + #6). Was hardcoded to
+        // the GitHub executor ( + #6).
         // github.com + https://api.github.com + "main" in 14+ sites.
+
         ghExec := executors.NewGitHub(cfg.GitHubToken).
                 WithAPIURL(cfg.GitHubAPIURL).
                 WithGitHost(cfg.GitHost).
@@ -358,15 +378,18 @@ func main() {
                 WithGitHubToken(cfg.GitHubToken)
 
         // background goroutine. Was a plain bool (race detector failure). Use atomic.
+
         var ready atomic.Bool
 
         // Active incident tracker (per-service dedup)
+
         tracker := detection.NewActiveTracker()
         // Slack alerts (graceful degradation if no webhook)
+
         alertSender := agents.NewAlertSender(cfg.SlackWebhook)
         // Outcome watcher (monitors service post-fix)
-
         // 10min watch / 30s interval in feedback/outcome.go NewOutcomeWatcher.
+
         outcomeWatcher := feedback.NewOutcomeWatcher(k8sClient.Clientset(), store)
         if cfg.OutcomeWatchDurationMin > 0 || cfg.OutcomeCheckIntervalSec > 0 {
                 outcomeWatcher.SetDurations(
@@ -377,6 +400,7 @@ func main() {
                 )
         }
         // Load existing vectors from SQLite into HNSW index on startup (delay 2s for DB to be ready)
+
         go func() {
                 defer recoverPanic("vector store loader")
                 time.Sleep(2 * time.Second)
@@ -388,7 +412,7 @@ func main() {
 
         // LLM API quota exhaustion during incident storms (Claude's review).
 
-        // Was hardcoded to 3.
+
         maxConcurrent := cfg.MaxConcurrentInvestigations
         if maxConcurrent <= 0 {
                 maxConcurrent = 3
@@ -396,9 +420,11 @@ func main() {
         invSem := make(chan struct{}, maxConcurrent)
 
         // can wait for them to finish (with a deadline) before closing the SQLite store.
+
         var invWG sync.WaitGroup
 
         // 7. The full investigation handler — runs the agent pipeline + execution
+
         handler := func(ctx context.Context, cluster schemas.AnomalyCluster, crName, crNamespace string) {
 
                 invWG.Add(1)
@@ -419,6 +445,7 @@ func main() {
                 }()
 
                 // Panic recovery — never let an agent bug kill Sentinel
+
                 defer func() {
                         if r := recover(); r != nil {
                                 logging.Error("investigation panic recovered",
@@ -438,6 +465,7 @@ func main() {
                 )
 
                 // Create + save incident
+
                 incident := schemas.NewIncident(cluster)
                 incident.Status = schemas.StatusInvestigating
                 if err := store.UpsertIncident(ctx, &incident); err != nil {
@@ -457,12 +485,14 @@ func main() {
                 })
 
                 // from this handler can be correlated in Datadog/Loki.
+
                 invCtx := logging.WithIncidentID(ctx, incident.IncidentID.String())
 
                 _ = store.AppendEvent(ctx, incident.IncidentID, "reasoning", "investigation_started", nil,
                         map[string]any{"cluster_summary": cluster.Summary})
 
                 // === REASONING PHASE ===
+
                 broadcaster.BroadcastEvent("pipeline", map[string]any{
                         "incident_id": incident.IncidentID.String(),
                         "phase": "investigation", "status": "running",
@@ -520,6 +550,7 @@ func main() {
                 }
 
                 // === SAFETY PHASE (embedded policy, no OPA) ===
+
                 fp := incident.State.FixProposal
 
                 broadcaster.BroadcastEvent("pipeline", map[string]any{
@@ -569,6 +600,7 @@ func main() {
 
                 // === EXECUTION PHASE ===
                 // RBAC check
+
                 broadcaster.BroadcastEvent("pipeline", map[string]any{
                         "incident_id": incident.IncidentID.String(),
                         "phase": "execution", "status": "running",
@@ -604,6 +636,7 @@ func main() {
                 }
 
                 // === FEEDBACK PHASE ===
+
                 success := incident.Status == schemas.StatusVerified
                 alpha, beta := recordBetaOutcome(ctx, store, incident, success)
                 incident.BetaAlpha = alpha
@@ -613,6 +646,7 @@ func main() {
                 }
 
                 // Add to HNSW vector index for future RAG retrieval
+
                 if incident.State.RootCause != nil && incident.State.FixProposal != nil {
                         vectorText := incident.Cluster.Summary + " " + incident.State.RootCause.Statement + " " + incident.State.FixProposal.Description
                         if err := vectorStore.Add(ctx, vectorText, &feedback.VectorMetadata{
@@ -646,18 +680,20 @@ func main() {
                 })
 
                 // Mark resolved in tracker (triggers 30-min cooldown)
+
                 tracker.MarkResolved(incident.Cluster.Service, incident.Cluster.Namespace, success)
 
                 // Send Slack alert with PR URL if available
+
                 if incident.State.ExecutionResult != nil && incident.State.ExecutionResult.PRURL != nil {
                         prURL = *incident.State.ExecutionResult.PRURL
                 }
                 alertSender.SendAlert(incident.Cluster.Service, incident.Cluster.Namespace, incident.Cluster.Summary, prURL)
 
                 // Start outcome watcher (monitors service recovery for 10 min)
-
                 // Phase 2 (24h re-occurrence watch). Phase 2 corrects the Beta prior
                 // if the same error reappears after the initial recovery.
+
                 if success && prURL != "" {
                         fingerprint := feedback.ExtractErrorFingerprint(extractPodLogsFromIncident(&incident))
                         fixType := "code_fix"
@@ -696,6 +732,7 @@ func main() {
                         confidence = incident.State.RootCause.Confidence
                 }
                 // prURL is already in scope (declared above in the resolved path).
+
                 if err := k8sClient.PatchCRStatusFull(ctx, crName, crNamespace, string(incident.Status),
                         incident.IncidentID.String(), rootCause, confidence, prURL); err != nil {
                         logging.ErrorCtx(invCtx, "patch CR status (resolved) failed", "error", err)
@@ -703,6 +740,7 @@ func main() {
         }
 
         // 8. Start the CRD watcher
+
         w, err := watcher.New(k8sClient, handler)
         if err != nil {
                 log.Fatalf("watcher init: %v", err)
@@ -722,11 +760,13 @@ func main() {
         // This goroutine runs every 5 minutes and deletes any sandbox namespace
         // older than 30 minutes (a sandbox run takes <5 min, so 30 min is a safe
         // cutoff that won't interrupt active runs).
+
         go func() {
                 defer recoverPanic("sandbox reaper")
                 ticker := time.NewTicker(5 * time.Minute)
                 defer ticker.Stop()
                 // Run once at startup to clean up leaks from a previous run.
+
                 sandbox.ReapStaleSandboxNamespaces(ctx, 30*time.Minute)
                 for {
                         select {
@@ -741,6 +781,7 @@ func main() {
         // Detects cascading failures (3+ services failing within 60s) and
         // identifies the most-recently-deployed service as the likely cause.
         // Declared BEFORE clustererHandler so the closure can capture it.
+
         correlator := correlation.New(func(event correlation.CorrelationEvent) {
                 logging.Warn("cascade event detected",
                         "services", event.Services,
@@ -748,6 +789,7 @@ func main() {
                         "incident_count", event.IncidentCount,
                 )
                 // Send a Slack alert about the cascade
+
                 alertSender.SendAlert(
                         event.LikelyCause,
                         "cascade",
@@ -759,8 +801,10 @@ func main() {
         // 9. Start the autonomous detection layer (live log streaming + pod status)
         // All detectors send signals to the clusterer, which groups them
         // and emits ONE incident per service per time window.
+
         clustererHandler := func(service, namespace, reason, podLogs string) {
                 // Look up workload annotations for repo + branch
+
                 annotations, _ := k8sClient.LookupWorkloadAnnotations(ctx, service, namespace)
                 if annotations == nil {
                         annotations = map[string]string{}
@@ -771,6 +815,7 @@ func main() {
                 // detected (3+ services failing simultaneously), the correlator emits
                 // an event and we skip the individual investigation — the cascade
                 // handler will trigger a rollback instead.
+
                 if correlator.RegisterIncident(service, namespace, time.Now()) {
                         logging.Info("cascade detected — skipping individual investigation",
                                 "service", service,
@@ -807,17 +852,21 @@ func main() {
                 }
 
                 // Send initial alert
+
                 alertSender.SendAlert(service, namespace, reason, "")
 
                 // Run the full pipeline
+
                 handler(ctx, cluster, "auto-detected", namespace)
                 _ = repo
         }
 
         // Clusterer groups signals, tracker prevents duplicates
+
         clusterer := detection.NewClusterer(clustererHandler, tracker)
 
         // The detector sends signals to the clusterer instead of triggering directly
+
         detectionHandler := func(service, namespace, reason, podLogs string) {
                 logging.Info("detection signal",
                         "namespace", namespace,
@@ -826,6 +875,7 @@ func main() {
                 )
 
                 // Look up repo annotation
+
                 annotations, _ := k8sClient.LookupWorkloadAnnotations(ctx, service, namespace)
                 repo := ""
                 if annotations != nil {
@@ -833,6 +883,7 @@ func main() {
                 }
 
                 // Send to clusterer — it will group + dedup + emit one trigger
+
 
                 clusterer.Send(ctx, detection.Signal{
                         Type:      detection.SignalLogError,
@@ -860,6 +911,7 @@ func main() {
         // into detection Signals and feeds them to the clusterer. Unblocks
         // "Sentinel doesn't accept alerts from Prometheus/Alertmanager" gap.
         // Wired up after apiServer is created (see below).
+
         amReceiver := alertmanager.NewReceiver(&alertmanagerAdapter{
                 clusterer: clusterer,
                 k8sClient: k8sClient,
@@ -879,6 +931,7 @@ func main() {
         }()
 
         // 9. HTTP API
+
         apiServer := api.New(
                 listenAddr,
                 &storeAdapter{store: store},
@@ -903,6 +956,7 @@ func main() {
                         // which broke when the Helm release wasn't named "sentinel" — the
                         // SentinelIncident CR would be created in a nonexistent namespace
                         // and RBAC would deny it.
+
                         go handler(ctx, cluster, "manual", cfg.Namespace)
                         return cluster.ClusterID.String(), nil
                 },
@@ -914,6 +968,7 @@ func main() {
         // investigations, pause autonomous mode, or change runtime config.
         // Log a loud warning. Health/readiness/metrics endpoints remain open
         // regardless so kubelet probes + Prometheus still work.
+
         if cfg.APIToken == "" {
                 logging.Warn("SENTINEL_API_TOKEN is empty — admin API endpoints (/admin/*, /settings, /incidents, /debug/pprof) are UNAUTHENTICATED. Set SENTINEL_API_TOKEN in production to prevent unauthorized access.")
         } else {
@@ -924,9 +979,11 @@ func main() {
         // compiled into the binary via go:embed (internal/web/out/). Without
         // this call, the API server serves a placeholder "Web UI not built"
         // page even though the UI is embedded in the binary.
+
         apiServer.SetWebUIHandler(web.Handler())
 
         // verified bot identity + auto-webhook registration.
+
 
         prReviewer := prreview.New(cfg.GitHubToken, cfg.GitHubWebhookSecret, &prReviewVectorAdapter{vs: vectorStore}).
                 WithAPIURL(cfg.GitHubAPIURL)
@@ -939,6 +996,7 @@ func main() {
         // status comment manager, and webhook handler. All wired into the
         // API server via SetChatopsHandler. The webhook handler dispatches
         // to both prreview (pull_request events) and chatops (issue_comment).
+
         chatopsGHClient := chatops.NewGitHubClient(cfg.GitHubToken, cfg.GitHubAPIURL)
         withPkgWriteLock(func() { pkgChatopsGH = chatopsGHClient })
         chatopsReactions := chatops.NewReactionsClient(chatopsGHClient)
@@ -946,6 +1004,7 @@ func main() {
         chatopsStatusManager = chatopsStatus // assign to package var for executeCodeFix
 
         // Created before chatopsDeps so the deps bag can reference the merger.
+
         autoMergeGH := automerge.NewGitHubClient(cfg.GitHubToken, cfg.GitHubAPIURL)
         withPkgWriteLock(func() { pkgAutoMergeGH = autoMergeGH })
         autoMergeCfg := automerge.Config{
@@ -961,7 +1020,8 @@ func main() {
         autoMergeMerger := automerge.NewMerger(autoMergePolicy, autoMergeGH, &autoMergeStoreAdapter{store: store}, &autoMergeOutcomeAdapter{watcher: outcomeWatcher, policy: autoMergePolicy})
         withPkgWriteLock(func() { pkgAutoMergeMerger = autoMergeMerger })
 
-        // after merge/skip. Was: the status comment said "(not configured)" forever.
+        // after merge/skip.
+
         autoMergeMerger.SetOnMerged(func(repo string, prNumber int) {
                 if chatopsStatusManager != nil {
                         inc := &chatops.Incident{
@@ -994,6 +1054,7 @@ func main() {
                 Rollback:      k8sExec,
                 // Pipeline + Sandbox adapters are wired below (they reference
                 // the pipeline + sandbox instances which are created above).
+
                 Pipeline:      &chatopsPipelineAdapter{pipeline: pipeline, store: store},
                 Sandbox:       &chatopsSandboxAdapter{sandbox: sandbox, k8sClient: k8sClient, store: store, ghExec: ghExec, kaniko: kaniko, cfg: cfg},
         }
@@ -1001,6 +1062,7 @@ func main() {
         apiServer.SetChatopsHandler(chatopsHandler)
 
         // so /providers and /automerge endpoints work.
+
         apiServer.SetProvidersStatusGetter(&providersStatusAdapter{router: router})
         apiServer.SetAutoMergeStatusGetter(&autoMergeStatusAdapter{policy: autoMergePolicy, merger: autoMergeMerger})
 
@@ -1029,9 +1091,9 @@ func main() {
         }
 
         // appear as the verified "Sentinel" bot instead of the PAT user.
-
         // reactions), and autoMergeGH (merge API). When configured, ALL GitHub
         // operations appear as "Sentinel[bot]" instead of the PAT owner.
+
 
         var ghApp *githubapp.App
         rtConfig := rtCfg.Get()
@@ -1069,6 +1131,7 @@ func main() {
 
         // Accepts: pause, resume, investigate, list, status, help.
         // The bot's IsPaused() is checked by the detection layer before triggering.
+
         slackBot := slackbot.New(cfg.SlackSigningSecret, cfg.SlackBotUserID,
                 func(service, namespace, reason string) (string, error) {
                         cluster := schemas.AnomalyCluster{
@@ -1111,25 +1174,28 @@ func main() {
         }
 
         // /sentinel pause + /sentinel resume can pause autonomous mode.
+
         chatopsDeps.PauseController = slackBot
 
         // When autonomous mode is paused via Slack, the clusterer skips emitting
         // triggers — no new investigations start until resumed.
+
         clusterer.SetPauseChecker(slackBot)
 
         go func() {
                 defer recoverPanic("API server")
                 if err := apiServer.Start(); err != nil && err != http.ErrServerClosed {
 
-                        // Previously, the error was just logged and Sentinel continued running
                         // with no API — kubelet readiness probe fails, pod gets restarted,
                         // but the watcher + detector keep running against a dead API.
+
                         logging.Error("API server failed — exiting", "error", err)
                         log.Fatalf("API server failed: %v", err)
                 }
         }()
 
         // 10. Wait for shutdown
+
         sigCh := make(chan os.Signal, 1)
         signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
         <-sigCh
@@ -1141,8 +1207,9 @@ func main() {
 
         cancel()
 
-        // before closing the SQLite store. Was: process could os.Exit mid-LLM-call,
+        // before closing the SQLite store.Exit mid-LLM-call,
         // leaving half-written incidents and half-applied branches.
+
         done := make(chan struct{})
         go func() {
                 defer recoverPanic("shutdown waiter")
@@ -1161,4 +1228,3 @@ func main() {
         _ = apiServer.Shutdown(shutdownCtx)
         logging.Info("stopped")
 }
-

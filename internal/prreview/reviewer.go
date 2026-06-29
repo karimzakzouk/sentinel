@@ -1,6 +1,5 @@
 // Package prreview implements predictive PR review — the "prevent before it
 // happens" feature.
-//
 // When a developer opens a PR, GitHub sends a webhook to Sentinel. Sentinel:
 //   1. Verifies the webhook signature (HMAC-SHA256 with a shared secret)
 //   2. Fetches the PR diff via the GitHub API
@@ -9,10 +8,8 @@
 //      past incidents (especially ones with outcome=failure)
 //   5. If similarity > threshold, posts a review comment warning the developer:
 //      "This change resembles incident #3 which caused a KeyError CrashLoopBackOff."
-//
 // This is the differentiator feature — Sentinel doesn't just fix incidents,
 // it prevents them.
-//
 // Endpoint: POST /webhook/github — receives GitHub webhook events.
 package prreview
 
@@ -34,6 +31,7 @@ import (
 )
 
 // Reviewer scores PR diffs against the HNSW incident memory.
+
 type Reviewer struct {
         githubToken    string
         githubApp      GitHubAppTokenProvider
@@ -44,6 +42,7 @@ type Reviewer struct {
         apiURL         string
 
         // prevent duplicate processing on GitHub redelivery.
+
         deliveryMu      sync.Mutex
         deliverySeen    map[string]time.Time // deliveryID → first-seen timestamp
         deliveryMaxSize int                  // max entries before LRU eviction (default 1000)
@@ -53,16 +52,17 @@ type Reviewer struct {
 // the Reviewer uses the App's installation token for API calls (verified bot
 // identity) instead of the PAT. The PAT is used as a fallback if the App
 // token call fails.
+
 type GitHubAppTokenProvider interface {
         GetInstallToken(ctx context.Context) (string, error)
 }
 
 // WithGitHubApp wires a GitHub App for verified-bot-identity PR comments.
-
 // passed to the Reviewer, so PR comments were always posted as the PAT user.
 // When set, the Reviewer calls GetInstallToken() before each API call and
 // uses the installation token (which makes comments appear as the verified
 // "Sentinel" bot). Falls back to the PAT on error.
+
 func (r *Reviewer) WithGitHubApp(app GitHubAppTokenProvider) *Reviewer {
         r.githubApp = app
         return r
@@ -71,17 +71,20 @@ func (r *Reviewer) WithGitHubApp(app GitHubAppTokenProvider) *Reviewer {
 // authToken returns the token to use for GitHub API calls. v3.13.0.
 // Prefers the GitHub App installation token (verified bot identity) when
 // configured, falls back to the PAT.
+
 func (r *Reviewer) authToken(ctx context.Context) string {
         if r.githubApp != nil {
                 if token, err := r.githubApp.GetInstallToken(ctx); err == nil && token != "" {
                         return token
                 }
                 // Fall back to PAT on error — better to post as PAT than not at all.
+
         }
         return r.githubToken
 }
 
 // Warning represents a chunk of the PR diff that resembles a past incident.
+
 type Warning struct {
         Chunk    string
         Sim      float32
@@ -90,12 +93,14 @@ type Warning struct {
 
 // VectorStore is the interface for incident memory retrieval.
 // Satisfied by feedback.VectorStore (via an adapter in main.go).
+
 type VectorStore interface {
         Search(ctx context.Context, text string, k int) ([]*VectorMetadata, []float32, error)
         UsingHashFallback() bool
 }
 
 // VectorMetadata is a past incident stored in the vector index.
+
 type VectorMetadata struct {
         IncidentID string
         Service    string
@@ -106,6 +111,7 @@ type VectorMetadata struct {
 }
 
 // New creates a Reviewer.
+
 func New(githubToken, webhookSecret string, vs VectorStore) *Reviewer {
         return &Reviewer{
                 githubToken:         githubToken,
@@ -121,15 +127,16 @@ func New(githubToken, webhookSecret string, vs VectorStore) *Reviewer {
 }
 
 // isDuplicateDelivery returns true if the delivery ID has been seen recently.
-
 // Entries expire after 1 hour (GitHub's max redelivery window is 24h, but
 // 1h covers the typical 3-retry burst). LRU eviction when map exceeds deliveryMaxSize.
+
 func (r *Reviewer) isDuplicateDelivery(deliveryID string) bool {
         r.deliveryMu.Lock()
         defer r.deliveryMu.Unlock()
 
         now := time.Now()
         // Evict entries older than 1 hour
+
         cutoff := now.Add(-1 * time.Hour)
         for id, ts := range r.deliverySeen {
                 if ts.Before(cutoff) {
@@ -137,14 +144,17 @@ func (r *Reviewer) isDuplicateDelivery(deliveryID string) bool {
                 }
         }
         // Hard cap: if map is still too big, clear oldest entries
+
         if len(r.deliverySeen) >= r.deliveryMaxSize {
                 // Evict ~25% of entries (oldest by timestamp)
+
                 type kv struct{ k string; v time.Time }
                 var entries []kv
                 for k, v := range r.deliverySeen {
                         entries = append(entries, kv{k, v})
                 }
                 // Sort by timestamp (oldest first)
+
                 for i := 0; i < len(entries)/4; i++ {
                         delete(r.deliverySeen, entries[i].k)
                 }
@@ -158,8 +168,9 @@ func (r *Reviewer) isDuplicateDelivery(deliveryID string) bool {
 }
 
 // WithAPIURL sets the GitHub API base URL. v3.11.0: Replaces the hardcoded
-// "https://api.github.com" (CRITICAL audit #2). For GitHub Enterprise:
+// "https://api.github.com". For GitHub Enterprise:
 // "https://gh.mycorp.internal/api/v3".
+
 func (r *Reviewer) WithAPIURL(url string) *Reviewer {
         if url != "" {
                 r.apiURL = strings.TrimRight(url, "/")
@@ -169,6 +180,7 @@ func (r *Reviewer) WithAPIURL(url string) *Reviewer {
 
 // SetSimilarityThreshold configures the threshold above which a review
 // comment is posted. Default 0.75. Lower = more sensitive (more comments).
+
 func (r *Reviewer) SetSimilarityThreshold(t float32) {
         r.similarityThreshold = t
 }
@@ -176,22 +188,23 @@ func (r *Reviewer) SetSimilarityThreshold(t float32) {
 // VerifySignature verifies the GitHub webhook HMAC-SHA256 signature.
 // Returns true if the signature matches, false otherwise.
 // GitHub sends: X-Hub-Signature-256: sha256=<hex-hmac>
-//
-
 // instead of true (skip verification). The previous behavior allowed
 // forged webhooks to drive Sentinel into fetching arbitrary diff_url
 // values with the GitHub PAT attached — a forced-PR-comment vector.
 // Operators who want webhook review must set sentinel.githubWebhookSecret.
 // The handler returns 401 in this case so the misconfiguration is loud.
+
 func (r *Reviewer) VerifySignature(payload []byte, signature string) bool {
         if r.webhookSecret == "" {
                 // No secret configured — refuse to verify. The webhook is
                 // unauthenticated and must not be trusted.
+
                 log.Printf("[prreview] SECURITY: no webhook secret configured — refusing to verify signature. Set sentinel.githubWebhookSecret to enable PR review.")
                 return false
         }
 
         // Strip "sha256=" prefix
+
         sig := strings.TrimPrefix(signature, "sha256=")
 
         mac := hmac.New(sha256.New, []byte(r.webhookSecret))
@@ -203,6 +216,7 @@ func (r *Reviewer) VerifySignature(payload []byte, signature string) bool {
 
 // HandleWebhook is the HTTP handler for POST /webhook/github.
 // It parses the event, dispatches to the right handler, and returns 200.
+
 func (r *Reviewer) HandleWebhook(w http.ResponseWriter, req *http.Request) {
         if req.Method != "POST" {
                 http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -210,6 +224,7 @@ func (r *Reviewer) HandleWebhook(w http.ResponseWriter, req *http.Request) {
         }
 
         // unauthenticated DoS (10GB POST would OOM the 256Mi pod).
+
         req.Body = http.MaxBytesReader(w, req.Body, 1<<20) // 1MB
         payload, err := io.ReadAll(req.Body)
         if err != nil {
@@ -218,6 +233,7 @@ func (r *Reviewer) HandleWebhook(w http.ResponseWriter, req *http.Request) {
         }
 
         // Verify signature
+
         sig := req.Header.Get("X-Hub-Signature-256")
         if !r.VerifySignature(payload, sig) {
                 log.Printf("[prreview] signature verification failed")
@@ -228,6 +244,7 @@ func (r *Reviewer) HandleWebhook(w http.ResponseWriter, req *http.Request) {
         // (default 3 retries over 24h). Without dedup, each redelivery posts a
         // duplicate PR review comment. We track X-GitHub-Delivery IDs in-memory
         // (last 1000, LRU eviction) and silently ack duplicates.
+
         deliveryID := req.Header.Get("X-GitHub-Delivery")
         if deliveryID != "" {
                 if r.isDuplicateDelivery(deliveryID) {
@@ -245,6 +262,7 @@ func (r *Reviewer) HandleWebhook(w http.ResponseWriter, req *http.Request) {
                 log.Printf("[prreview] received ping event")
         default:
                 // Ignore other events
+
         }
 
         w.WriteHeader(http.StatusOK)
@@ -252,8 +270,8 @@ func (r *Reviewer) HandleWebhook(w http.ResponseWriter, req *http.Request) {
 }
 
 // handlePullRequest processes a pull_request webhook event.
-
 // against incident memory, and posts a review comment if similarity is high.
+
 func (r *Reviewer) handlePullRequest(ctx context.Context, payload []byte) {
         var event struct {
                 Action string `json:"action"`
@@ -289,6 +307,7 @@ func (r *Reviewer) handlePullRequest(ctx context.Context, payload []byte) {
         }
 
         // Only review on opened or synchronize (new commits pushed)
+
         if event.Action != "opened" && event.Action != "synchronize" {
                 return
         }
@@ -300,6 +319,7 @@ func (r *Reviewer) handlePullRequest(ctx context.Context, payload []byte) {
         log.Printf("[prreview] reviewing PR #%d in %s (action=%s)", prNumber, repo, event.Action)
 
         // Rebuild the diff URL from the trusted apiURL + repo + PR number.
+
         diffURLOverride := r.apiURL + "/repos/" + repo + "/pulls/" + fmt.Sprintf("%d", prNumber)
         diff, err := r.fetchPRDiff(ctx, diffURLOverride)
         if err != nil {
@@ -308,6 +328,7 @@ func (r *Reviewer) handlePullRequest(ctx context.Context, payload []byte) {
         }
 
         // Chunk the diff by file
+
         chunks := ChunkDiff(diff)
         if len(chunks) == 0 {
                 log.Printf("[prreview] no chunks in PR #%d diff", prNumber)
@@ -315,6 +336,7 @@ func (r *Reviewer) handlePullRequest(ctx context.Context, payload []byte) {
         }
 
         // Score each chunk against incident memory
+
         var warnings []Warning
 
         for _, chunk := range chunks {
@@ -323,9 +345,11 @@ func (r *Reviewer) handlePullRequest(ctx context.Context, payload []byte) {
                         continue
                 }
                 // Look for high-similarity matches, especially failures
+
                 for i, meta := range metas {
                         if scores[i] >= r.similarityThreshold {
                                 // Prioritize failures (they're the ones we want to prevent)
+
                                 if meta.Outcome == "failure" || i == 0 {
                                         warnings = append(warnings, Warning{
                                                 Chunk:    chunk,
@@ -344,6 +368,7 @@ func (r *Reviewer) handlePullRequest(ctx context.Context, payload []byte) {
         }
 
         // Post a review comment
+
         comment := r.buildReviewComment(warnings)
         if err := r.postReviewComment(ctx, repo, prNumber, headSHA, comment); err != nil {
                 log.Printf("[prreview] failed to post review comment on PR #%d: %v", prNumber, err)
@@ -354,9 +379,9 @@ func (r *Reviewer) handlePullRequest(ctx context.Context, payload []byte) {
 }
 
 // fetchPRDiff fetches the PR diff text via the GitHub API.
-
 // the diff_url field from the webhook body, which is an SSRF + PAT exfil
 // vector (an attacker who can send a webhook can substitute their own URL).
+
 func (r *Reviewer) fetchPRDiff(ctx context.Context, diffURL string) (string, error) {
         req, err := http.NewRequestWithContext(ctx, "GET", diffURL, nil)
         if err != nil {
@@ -383,12 +408,13 @@ func (r *Reviewer) fetchPRDiff(ctx context.Context, diffURL string) (string, err
 }
 
 // diffFileHeaderRe matches the start of a new file section in a unified diff.
+
 var diffFileHeaderRe = regexp.MustCompile(`^diff --git a/(.+) b/(.+)$`)
 
 // ChunkDiff splits a unified diff into per-file chunks.
 // Each chunk starts with "diff --git" and includes all hunks for that file.
-
 // are usually coherent enough for semantic similarity matching.
+
 func ChunkDiff(diff string) []string {
         if diff == "" {
                 return nil
@@ -401,6 +427,7 @@ func ChunkDiff(diff string) []string {
         for _, line := range lines {
                 if diffFileHeaderRe.MatchString(line) {
                         // Start of a new file — flush the previous chunk
+
                         if len(current) > 0 {
                                 chunks = append(chunks, strings.Join(current, "\n"))
                         }
@@ -408,12 +435,14 @@ func ChunkDiff(diff string) []string {
                 } else {
                         if len(current) == 0 {
                                 // Preamble before the first "diff --git" — skip
+
                                 continue
                         }
                         current = append(current, line)
                 }
         }
         // Flush the last chunk
+
         if len(current) > 0 {
                 chunks = append(chunks, strings.Join(current, "\n"))
         }
@@ -422,6 +451,7 @@ func ChunkDiff(diff string) []string {
 }
 
 // buildReviewComment constructs the Markdown review body from the warnings.
+
 func (r *Reviewer) buildReviewComment(warnings []Warning) string {
         var b strings.Builder
         b.WriteString("## Sentinel Predictive Review\n\n")
@@ -430,6 +460,7 @@ func (r *Reviewer) buildReviewComment(warnings []Warning) string {
 
         for i, w := range warnings {
                 // Truncate the chunk for readability
+
                 chunkPreview := w.Chunk
                 if len(chunkPreview) > 300 {
                         chunkPreview = chunkPreview[:300] + "..."
@@ -459,8 +490,10 @@ func (r *Reviewer) buildReviewComment(warnings []Warning) string {
 
 // postReviewComment posts a review comment on the PR via the GitHub API.
 // Uses POST /repos/{owner}/{repo}/pulls/{pr_number}/reviews with event=COMMENT.
+
 func (r *Reviewer) postReviewComment(ctx context.Context, repo string, prNumber int, headSHA, body string) error {
         // Parse repo into owner/repo
+
         parts := strings.Split(repo, "/")
         if len(parts) != 2 {
                 return fmt.Errorf("invalid repo format: %s", repo)
@@ -499,4 +532,3 @@ func (r *Reviewer) postReviewComment(ctx context.Context, repo string, prNumber 
         }
         return nil
 }
-

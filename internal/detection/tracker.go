@@ -9,10 +9,10 @@ import (
 // ActiveTracker prevents duplicate incidents for the same service.
 // Once an incident is active for a service, all new signals are skipped
 // until the incident is resolved.
-//
 // After resolution:
 //   - If PR opened: 30-minute cooldown (don't re-trigger for the same bug)
 //   - If failed: clear immediately (allow retry)
+
 type ActiveTracker struct {
         mu      sync.Mutex
         active  map[string]*incidentState // service+namespace → state
@@ -34,6 +34,7 @@ func NewActiveTracker() *ActiveTracker {
 }
 
 // IsActive returns true if the service has an active or recently-resolved incident.
+
 func (t *ActiveTracker) IsActive(service, namespace string) bool {
         key := service + "/" + namespace
         t.mu.Lock()
@@ -46,26 +47,32 @@ func (t *ActiveTracker) IsActive(service, namespace string) bool {
 
         if !state.resolved {
                 // Still active
+
                 return true
         }
 
         // Resolved — check cooldown
+
         if state.success {
                 // PR was opened — 30-min cooldown
+
                 if time.Since(state.resolvedAt) < t.cooldown {
                         return true
                 }
                 // Cooldown expired — clean up
+
                 delete(t.active, key)
                 return false
         }
 
         // Failed — allow retry immediately
+
         delete(t.active, key)
         return false
 }
 
 // MarkActive marks a service as having an active incident.
+
 func (t *ActiveTracker) MarkActive(service, namespace string) {
         key := service + "/" + namespace
         t.mu.Lock()
@@ -77,6 +84,7 @@ func (t *ActiveTracker) MarkActive(service, namespace string) {
 }
 
 // MarkResolved marks a service's incident as resolved.
+
 func (t *ActiveTracker) MarkResolved(service, namespace string, success bool) {
         key := service + "/" + namespace
         t.mu.Lock()

@@ -11,12 +11,14 @@ import (
 
 // AlertSender sends Slack-formatted alerts.
 // If no webhook URL is configured, alerts are logged instead (graceful degradation).
+
 type AlertSender struct {
         webhookURL string
         httpClient *http.Client
 }
 
 // NewAlertSender creates an AlertSender.
+
 func NewAlertSender(webhookURL string) *AlertSender {
         return &AlertSender{
                 webhookURL: webhookURL,
@@ -25,6 +27,7 @@ func NewAlertSender(webhookURL string) *AlertSender {
 }
 
 // SendAlert sends a Slack alert about a detected incident.
+
 func (a *AlertSender) SendAlert(service, namespace, reason, prURL string) {
         if a.webhookURL == "" {
                 log.Printf("[alert] %s/%s — %s", namespace, service, reason)

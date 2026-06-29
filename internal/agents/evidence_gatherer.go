@@ -47,6 +47,7 @@ Respond with a JSON object of shape:
 Set "rewind" ONLY if you discover a brand-new fact that invalidates the entire hypothesis set (e.g. a hard upstream dependency is down). Leave it null 99% of the time.`
 
 // EvidenceGatherer generates queries, executes them, and attaches evidence to each hypothesis.
+
 type EvidenceGatherer struct {
         router        *llm.Router
         k8s           *k8s.Client
@@ -55,6 +56,7 @@ type EvidenceGatherer struct {
 }
 
 // NewEvidenceGatherer creates an EvidenceGatherer.
+
 func NewEvidenceGatherer(router *llm.Router, k8sClient *k8s.Client) *EvidenceGatherer {
         return &EvidenceGatherer{
                 router:     router,
@@ -67,11 +69,13 @@ func NewEvidenceGatherer(router *llm.Router, k8sClient *k8s.Client) *EvidenceGat
 // When set, evidence queries of type "prometheus" are executed against
 // this URL. When empty, prometheus queries return an "not configured" error
 // (same behavior as v3.3.x).
+
 func (a *EvidenceGatherer) SetPrometheusURL(url string) {
         a.prometheusURL = url
 }
 
 // Run executes the evidence gatherer agent.
+
 func (a *EvidenceGatherer) Run(ctx context.Context, state *schemas.AgentState) error {
         if len(state.Hypotheses) == 0 {
                 return nil
@@ -82,6 +86,7 @@ func (a *EvidenceGatherer) Run(ctx context.Context, state *schemas.AgentState) e
         if err != nil {
                 // Don't fail the whole investigation — continue with no evidence.
                 // The Analyst will pick the top hypothesis by prior confidence.
+
                 state.Evidence = nil
                 state.AgentTrace = append(state.AgentTrace, map[string]any{
                         "agent":  "evidence_gatherer",
@@ -92,6 +97,7 @@ func (a *EvidenceGatherer) Run(ctx context.Context, state *schemas.AgentState) e
         }
 
         // Check for rewind
+
         if rewind, ok := result["rewind"].(map[string]any); ok && len(rewind) > 0 {
                 reason, _ := rewind["reason"].(string)
                 newCtx, _ := rewind["new_context"].(map[string]any)
@@ -112,6 +118,7 @@ func (a *EvidenceGatherer) Run(ctx context.Context, state *schemas.AgentState) e
         }
 
         // Execute all queries in parallel (with per-query timeout)
+
         queries, _ := result["evidence_queries"].([]any)
         var (
                 mu       sync.Mutex
@@ -188,6 +195,7 @@ func (a *EvidenceGatherer) runSingleQuery(ctx context.Context, idx int, q map[st
         }
 
         // Execute with 15s timeout
+
         queryCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
         defer cancel()
 
@@ -199,6 +207,7 @@ func (a *EvidenceGatherer) runSingleQuery(ctx context.Context, idx int, q map[st
 // executeQuery dispatches to the right backend based on query type.
 // Prometheus backend now implemented (was returning "not configured").
 // Loki and Jaeger remain stubs — they need their own query languages.
+
 func (a *EvidenceGatherer) executeQuery(ctx context.Context, query map[string]any) map[string]any {
         qtype, _ := query["type"].(string)
         q, _ := query["query"].(string)
@@ -208,10 +217,12 @@ func (a *EvidenceGatherer) executeQuery(ctx context.Context, query map[string]an
                 return a.queryK8s(ctx, q)
         case "prometheus":
                 // Real Prometheus query execution.
+
                 return a.queryPrometheus(ctx, q)
         case "loki", "jaeger":
                 // Still not implemented — these need their own query languages.
                 // Loki uses LogQL, Jaeger has its own trace query API.
+
                 return map[string]any{"error": fmt.Sprintf("%s_url not configured", qtype)}
         default:
                 return map[string]any{"error": fmt.Sprintf("unknown query type: %s", qtype)}
@@ -222,14 +233,15 @@ func (a *EvidenceGatherer) executeQuery(ctx context.Context, query map[string]an
 // Uses the /api/v1/query endpoint (instant query). Returns the result
 // as a simplified map — the LLM analyst doesn't need the full Prometheus
 // response format, just the values.
-//
 // If prometheusURL is not set, returns "not configured" (backward compatible).
+
 func (a *EvidenceGatherer) queryPrometheus(ctx context.Context, promql string) map[string]any {
         if a.prometheusURL == "" {
                 return map[string]any{"error": "prometheus_url not configured"}
         }
 
         // Build the query URL: http://prometheus:9090/api/v1/query?query=...
+
         u := strings.TrimRight(a.prometheusURL, "/") + "/api/v1/query"
         req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
         if err != nil {
@@ -258,6 +270,7 @@ func (a *EvidenceGatherer) queryPrometheus(ctx context.Context, promql string) m
         }
 
         // Parse Prometheus response: {"status":"success","data":{"resultType":"vector","result":[{...}]}}
+
         var promResp struct {
                 Status string `json:"status"`
                 Error  string `json:"error"`
@@ -280,6 +293,7 @@ func (a *EvidenceGatherer) queryPrometheus(ctx context.Context, promql string) m
         }
 
         // Simplify the result for the LLM: just metric labels + values.
+
         results := make([]map[string]any, 0, len(promResp.Data.Result))
         for _, r := range promResp.Data.Result {
                 entry := map[string]any{
@@ -287,6 +301,7 @@ func (a *EvidenceGatherer) queryPrometheus(ctx context.Context, promql string) m
                 }
                 if len(r.Value) >= 2 {
                         // r.Value[1] is a string like "123.456"
+
                         if v, ok := r.Value[1].(string); ok {
                                 if f, err := strconv.ParseFloat(v, 64); err == nil {
                                         entry["value"] = f
@@ -307,10 +322,11 @@ func (a *EvidenceGatherer) queryPrometheus(ctx context.Context, promql string) m
 
 // _ keeps the url import alive (used implicitly by http.NewRequestWithContext
 // when parsing the URL, but Go's import checker is conservative).
-
 // queryK8s queries the K8s API for events, pods, deployments, or logs.
+
 func (a *EvidenceGatherer) queryK8s(ctx context.Context, query string) map[string]any {
         // Parse the query: "namespace:N kind:K [labelSelector:K=V] [fieldSelector:K=V] [limit:N]"
+
         parts := parseQueryParts(query)
         namespace := parts["namespace"]
         if namespace == "" {
@@ -321,6 +337,7 @@ func (a *EvidenceGatherer) queryK8s(ctx context.Context, query string) map[strin
         if l, ok := parts["limit"]; ok {
                 if _, err := fmt.Sscanf(l, "%d", &limit); err != nil {
                         // invalid limit — keep default 50
+
                         limit = 50
                 }
         }
@@ -405,6 +422,7 @@ func (a *EvidenceGatherer) queryK8s(ctx context.Context, query string) map[strin
 }
 
 // parseQueryParts parses "key:value key:value" pairs into a map.
+
 func parseQueryParts(s string) map[string]string {
         out := map[string]string{}
         for _, part := range strings.Fields(s) {

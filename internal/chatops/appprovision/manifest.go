@@ -1,12 +1,10 @@
 // Package appprovision implements the GitHub App auto-provisioning flow.
-//
 // Implements the "manifest flow" — a one-command setup that creates
 // a GitHub App in the user's account with all permissions pre-configured.
 // The user clicks one button on GitHub, GitHub redirects back with a code,
 // Sentinel exchanges the code for the App's PEM + ID + webhook secret, and
 // stores everything in runtime config. No manual App creation, no PEM file
 // management, no permission dropdowns.
-//
 // Fixed manifest not pre-filling the GitHub form. The issue was:
 //   - hook_attributes.url was empty when no --webhook-url was passed
 //   - GitHub silently rejects manifests with empty hook_attributes.url
@@ -23,8 +21,8 @@ import (
 // Manifest is the GitHub App manifest submitted via the
 // https://github.com/settings/apps/new?manifest=<base64> URL.
 // GitHub pre-fills the "Create GitHub App" form with these values.
-//
 // Docs: https://docs.github.com/en/apps/sharing-github-apps/sharing-your-github-app-with-other-users
+
 type Manifest struct {
 	Name               string             `json:"name"`
 	URL                string             `json:"url"`
@@ -39,6 +37,7 @@ type Manifest struct {
 }
 
 // HookAttributes configures the webhook endpoint.
+
 type HookAttributes struct {
 	URL         string `json:"url"`
 	Active      bool   `json:"active"`
@@ -46,11 +45,11 @@ type HookAttributes struct {
 }
 
 // DefaultManifest returns the manifest for Sentinel.
-//
 // If webhookURL is empty, we use appURL as a placeholder for
 // hook_attributes.url. GitHub REQUIRES a valid http(s) URL — an empty
 // string makes GitHub silently reject the manifest and show a blank form.
 // The user can change the webhook URL later in App settings.
+
 func DefaultManifest(webhookURL, redirectURL, setupURL, appURL string) Manifest {
 	if webhookURL == "" {
 		webhookURL = appURL
@@ -95,6 +94,7 @@ func DefaultManifest(webhookURL, redirectURL, setupURL, appURL string) Manifest 
 
 // EncodeManifest returns the base64-encoded JSON manifest for the GitHub URL.
 // The URL format is: https://github.com/settings/apps/new?manifest=<base64>
+
 func EncodeManifest(m Manifest) (string, error) {
 	jsonBytes, err := json.Marshal(m)
 	if err != nil {
@@ -105,6 +105,7 @@ func EncodeManifest(m Manifest) (string, error) {
 
 // CreateAppURL returns the GitHub URL the user visits to create the App.
 // host defaults to "github.com"; for GitHub Enterprise, pass "github.example.com".
+
 func CreateAppURL(host string, manifest Manifest) (string, error) {
 	if host == "" {
 		host = "github.com"
@@ -118,6 +119,7 @@ func CreateAppURL(host string, manifest Manifest) (string, error) {
 
 // CodeExchangeResponse is what GitHub returns after POSTing the code to
 // /app-manifests/{code}/conversions.
+
 type CodeExchangeResponse struct {
 	ID             int64  `json:"id"`
 	Slug           string `json:"slug"`

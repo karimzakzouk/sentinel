@@ -1,29 +1,22 @@
 // Package logging provides structured logging for Sentinel.
-//
 // Replaces the stdlib log.Printf("[component] message") pattern with
 // log/slog structured JSON logging. This enables:
 //   - Level filtering (Debug/Info/Warn/Error)
 //   - Structured fields (incident_id, service, namespace, etc.)
 //   - JSON output for ingestion by Datadog/Loki/ELK
 //   - Correlation of log lines by incident ID across components
-//
 // The package provides a global default logger (JSON handler to stdout) and
 // context-aware helpers that attach incident IDs to log lines.
-//
 // Migration pattern:
-//
 //      // OLD
 //      log.Printf("[investigation] %s/%s — service=%s", crNamespace, crName, cluster.Service)
-//
 //      // NEW
 //      logging.Info("investigation started",
 //          "namespace", crNamespace,
 //          "cr_name", crName,
 //          "service", cluster.Service,
 //      )
-//
 // Or with context (for incident_id correlation):
-//
 //      ctx = logging.WithIncidentID(ctx, incident.IncidentID.String())
 //      logging.InfoCtx(ctx, "pipeline started")
 //      // → {"level":"INFO","msg":"pipeline started","incident_id":"abc-123"}
@@ -37,6 +30,7 @@ import (
 )
 
 // contextKey is unexported so callers can't construct their own keys.
+
 type contextKey int
 
 const (
@@ -52,8 +46,8 @@ var (
 // Init initializes the default logger. v3.18.0: NO LONGER uses sync.Once —
 // allows log level to be hot-reloaded via runtime config (H22).
 // Safe to call multiple times.
-//
 // If level is empty, defaults to INFO. Set SENTINEL_LOG_LEVEL=DEBUG for verbose.
+
 func Init(level string) {
         mu.Lock()
         defer mu.Unlock()
@@ -75,6 +69,7 @@ func Init(level string) {
                 // these patterns is replaced with "***" so a future contributor who
                 // writes `logging.Info("configured", "api_key", cfg.LLMAPIKey)` doesn't
                 // leak the key to stdout/Loki/Datadog.
+
                 ReplaceAttr: redactSecrets,
         })
         defaultLogger = slog.New(handler)
@@ -82,6 +77,7 @@ func Init(level string) {
 }
 
 // secretKeyPatterns are case-insensitive substrings that mark a field as sensitive.
+
 var secretKeyPatterns = []string{
         "api_key", "apikey", "token", "secret", "password", "passwd", "pwd",
         "private_key", "privatekey", "credential", "webhook", "auth",
@@ -89,6 +85,7 @@ var secretKeyPatterns = []string{
 }
 
 // redactSecrets is a slog.ReplaceAttr hook that redacts values of sensitive keys.
+
 func redactSecrets(groups []string, a slog.Attr) slog.Attr {
         if a.Key == "" {
                 return a
@@ -132,6 +129,7 @@ func contains(s, sub string) bool {
 }
 
 // L returns the default logger. Initializes with INFO level if not yet initialized.
+
 func L() *slog.Logger {
         if defaultLogger == nil {
                 Init("")
@@ -141,17 +139,20 @@ func L() *slog.Logger {
 
 // WithIncidentID attaches an incident ID to the context. All log calls using
 // this context will include "incident_id" as a field.
+
 func WithIncidentID(ctx context.Context, incidentID string) context.Context {
         return context.WithValue(ctx, incidentIDKey, incidentID)
 }
 
 // WithComponent attaches a component name to the context. All log calls using
 // this context will include "component" as a field.
+
 func WithComponent(ctx context.Context, component string) context.Context {
         return context.WithValue(ctx, componentKey, component)
 }
 
 // incidentIDFrom extracts the incident ID from context, if present.
+
 func incidentIDFrom(ctx context.Context) string {
         if ctx == nil {
                 return ""
@@ -173,6 +174,7 @@ func componentFrom(ctx context.Context) string {
 }
 
 // argsFromCtx builds slog args for fields stored in the context.
+
 func argsFromCtx(ctx context.Context) []any {
         var args []any
         if id := incidentIDFrom(ctx); id != "" {
@@ -186,12 +188,14 @@ func argsFromCtx(ctx context.Context) []any {
 
 // Convenience functions — these mirror slog's API but auto-attach context fields.
 
+
 func Debug(msg string, args ...any) { L().Debug(msg, args...) }
 func Info(msg string, args ...any)  { L().Info(msg, args...) }
 func Warn(msg string, args ...any)  { L().Warn(msg, args...) }
 func Error(msg string, args ...any) { L().Error(msg, args...) }
 
 // DebugCtx / InfoCtx / WarnCtx / ErrorCtx include context-derived fields.
+
 func DebugCtx(ctx context.Context, msg string, args ...any) {
         L().Debug(msg, append(argsFromCtx(ctx), args...)...)
 }

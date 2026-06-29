@@ -1,5 +1,4 @@
 // Package chatops — GitHub API client implementation.
-//
 // Wraps the GitHub REST API for the operations chatops needs. Uses the same
 // PAT or GitHub App token as the rest of Sentinel (passed in via the
 // GitHubToken field). No SDK — direct net/http, same pattern as
@@ -18,6 +17,7 @@ import (
 )
 
 // GitHubClientImpl is the default GitHubClient implementation.
+
 type GitHubClientImpl struct {
         token   string
         apiURL  string // default "https://api.github.com"
@@ -25,11 +25,13 @@ type GitHubClientImpl struct {
         // Optional GitHub App token provider. When set, all API calls
         // (comments, reactions, labels, merges) use the App's installation token,
         // making them appear as the "Sentinel" bot identity.
+
         tokenProvider TokenProvider
 }
 
 // TokenProvider returns a fresh GitHub API token. v4.0.0.
 // Implemented by githubapp.App.
+
 type TokenProvider interface {
         GetInstallToken(ctx context.Context) (string, error)
 }
@@ -38,6 +40,7 @@ type TokenProvider interface {
 // token: PAT or GitHub App installation token.
 // apiURL: base API URL (default "https://api.github.com"). For GitHub
 // Enterprise, set to "https://gh.mycorp.internal/api/v3".
+
 func NewGitHubClient(token, apiURL string) *GitHubClientImpl {
         if apiURL == "" {
                 apiURL = "https://api.github.com"
@@ -53,12 +56,14 @@ func NewGitHubClient(token, apiURL string) *GitHubClientImpl {
 // WithTokenProvider wires a GitHub App token provider. v4.0.0.
 // When set, all chatops GitHub API calls (comments, reactions, labels,
 // merges) use the App's installation token, appearing as "Sentinel[bot]".
+
 func (g *GitHubClientImpl) WithTokenProvider(tp TokenProvider) *GitHubClientImpl {
         g.tokenProvider = tp
         return g
 }
 
 // authToken returns the token to use for an API call. v4.0.0.
+
 func (g *GitHubClientImpl) authToken(ctx context.Context) string {
         if g.tokenProvider != nil {
                 if token, err := g.tokenProvider.GetInstallToken(ctx); err == nil && token != "" {
@@ -71,6 +76,7 @@ func (g *GitHubClientImpl) authToken(ctx context.Context) string {
 // ReactComment adds an emoji reaction to a PR comment.
 // GitHub dedupes reactions from the same user — calling this twice with the
 // same reaction is a no-op (doesn't error).
+
 func (g *GitHubClientImpl) ReactComment(ctx context.Context, repo string, commentID int64, reaction string) error {
         body, _ := json.Marshal(map[string]string{"content": reaction})
         req, err := http.NewRequestWithContext(ctx, "POST",
@@ -86,6 +92,7 @@ func (g *GitHubClientImpl) ReactComment(ctx context.Context, repo string, commen
         }
         defer resp.Body.Close()
         // 200 = created, 201 = also created, 422 = already reacted (ignore)
+
         if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated && resp.StatusCode != 422 {
                 body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
                 return fmt.Errorf("github reaction %q failed: %d %s", reaction, resp.StatusCode, string(body))
@@ -95,8 +102,10 @@ func (g *GitHubClientImpl) ReactComment(ctx context.Context, repo string, commen
 
 // RemoveReaction removes a reaction by ID. We need to list reactions first
 // to find the one owned by the bot, then DELETE it.
+
 func (g *GitHubClientImpl) RemoveReaction(ctx context.Context, repo string, commentID int64, reaction string) error {
         // List reactions on the comment to find ours.
+
         req, err := http.NewRequestWithContext(ctx, "GET",
                 fmt.Sprintf("%s/repos/%s/issues/comments/%d/reactions", g.apiURL, repo, commentID), nil)
         if err != nil {
@@ -128,6 +137,7 @@ func (g *GitHubClientImpl) RemoveReaction(ctx context.Context, repo string, comm
         // we're using — we don't know its login without a /user call. Instead,
         // just delete the first reaction of this type (best-effort — if multiple
         // users reacted +1, we might delete theirs, but that's a minor UX issue).
+
         for _, r := range reactions {
                 if r.Content == reaction {
                         delReq, _ := http.NewRequestWithContext(ctx, "DELETE",
@@ -148,12 +158,14 @@ func (g *GitHubClientImpl) RemoveReaction(ctx context.Context, repo string, comm
 }
 
 // PostComment posts a new comment on a PR.
+
 func (g *GitHubClientImpl) PostComment(ctx context.Context, repo string, prNumber int, body string) error {
         _, err := g.PostCommentWithID(ctx, repo, prNumber, body)
         return err
 }
 
 // PostCommentWithID posts a comment and returns its ID (for follow-up reactions).
+
 func (g *GitHubClientImpl) PostCommentWithID(ctx context.Context, repo string, prNumber int, body string) (int64, error) {
         payload, _ := json.Marshal(map[string]string{"body": body})
         req, err := http.NewRequestWithContext(ctx, "POST",
@@ -184,6 +196,7 @@ func (g *GitHubClientImpl) PostCommentWithID(ctx context.Context, repo string, p
 // FindStatusComment returns the ID + body of the [SENTINELSTATUS] comment
 // on this PR, or 0 if not found. We list all PR comments and look for one
 // containing the [SENTINELSTATUS] marker.
+
 func (g *GitHubClientImpl) FindStatusComment(ctx context.Context, repo string, prNumber int) (int64, string, error) {
         req, err := http.NewRequestWithContext(ctx, "GET",
                 fmt.Sprintf("%s/repos/%s/issues/%d/comments?per_page=100", g.apiURL, repo, prNumber), nil)
@@ -218,6 +231,7 @@ func (g *GitHubClientImpl) FindStatusComment(ctx context.Context, repo string, p
 }
 
 // UpdateComment edits an existing comment in place.
+
 func (g *GitHubClientImpl) UpdateComment(ctx context.Context, repo string, commentID int64, body string) error {
         payload, _ := json.Marshal(map[string]string{"body": body})
         req, err := http.NewRequestWithContext(ctx, "PATCH",
@@ -241,6 +255,7 @@ func (g *GitHubClientImpl) UpdateComment(ctx context.Context, repo string, comme
 
 // GetPermission returns the user's permission level on the repo.
 // Returns "read", "write", "admin", "maintain", "triage", or "none".
+
 func (g *GitHubClientImpl) GetPermission(ctx context.Context, repo, username string) (string, error) {
         req, err := http.NewRequestWithContext(ctx, "GET",
                 fmt.Sprintf("%s/repos/%s/collaborators/%s/permission", g.apiURL, repo, username), nil)
@@ -257,6 +272,7 @@ func (g *GitHubClientImpl) GetPermission(ctx context.Context, repo, username str
                 // User isn't a collaborator — they have "read" if the repo is public,
                 // "none" if private. We can't tell from here, so return "read" (most
                 // permissive — informational commands will work, operational won't).
+
                 return "read", nil
         }
         if resp.StatusCode != http.StatusOK {
@@ -274,6 +290,7 @@ func (g *GitHubClientImpl) GetPermission(ctx context.Context, repo, username str
 
 // setHeaders adds the standard GitHub API headers. v4.0.0: uses authToken()
 // which prefers the GitHub App installation token when configured.
+
 func (g *GitHubClientImpl) setHeaders(req *http.Request) {
         ctx := req.Context()
         req.Header.Set("Accept", "application/vnd.github+json")
@@ -284,6 +301,7 @@ func (g *GitHubClientImpl) setHeaders(req *http.Request) {
 
 // SetLabels adds labels to a PR (used by /sentinel approve, /sentinel hold).
 // v4.0.0.
+
 func (g *GitHubClientImpl) SetLabels(ctx context.Context, repo string, prNumber int, labels []string) error {
         payload, _ := json.Marshal(map[string][]string{"labels": labels})
         req, err := http.NewRequestWithContext(ctx, "POST",
@@ -306,6 +324,7 @@ func (g *GitHubClientImpl) SetLabels(ctx context.Context, repo string, prNumber 
 }
 
 // RemoveLabel removes a label from a PR. v4.0.0.
+
 func (g *GitHubClientImpl) RemoveLabel(ctx context.Context, repo string, prNumber int, label string) error {
         req, err := http.NewRequestWithContext(ctx, "DELETE",
                 fmt.Sprintf("%s/repos/%s/issues/%d/labels/%s", g.apiURL, repo, prNumber, label), nil)
@@ -319,6 +338,7 @@ func (g *GitHubClientImpl) RemoveLabel(ctx context.Context, repo string, prNumbe
         }
         defer resp.Body.Close()
         // 200 = removed, 404 = label wasn't there (treat as success)
+
         if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNotFound {
                 body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
                 return fmt.Errorf("remove label: %d %s", resp.StatusCode, string(body))
@@ -327,6 +347,7 @@ func (g *GitHubClientImpl) RemoveLabel(ctx context.Context, repo string, prNumbe
 }
 
 // GetLabels returns the labels on a PR. v4.0.0.
+
 func (g *GitHubClientImpl) GetLabels(ctx context.Context, repo string, prNumber int) ([]string, error) {
         req, err := http.NewRequestWithContext(ctx, "GET",
                 fmt.Sprintf("%s/repos/%s/issues/%d/labels?per_page=100", g.apiURL, repo, prNumber), nil)
@@ -358,6 +379,7 @@ func (g *GitHubClientImpl) GetLabels(ctx context.Context, repo string, prNumber 
 // Merge merges a PR via the GitHub API. v4.0.0.
 // Used by /sentinel merge (manual merge through Sentinel so the outcome
 // watcher attaches). The auto-merger uses its own GitHub client.
+
 func (g *GitHubClientImpl) Merge(ctx context.Context, repo string, prNumber int, commitMessage string) error {
         body, _ := json.Marshal(map[string]string{
                 "commit_message": commitMessage,
@@ -385,6 +407,7 @@ func (g *GitHubClientImpl) Merge(ctx context.Context, repo string, prNumber int,
 // FindCommentByMarker returns the body of the first PR comment containing
 // the given marker string. v4.0.0. Used by /sentinel apply to find the
 // [SENTINELALTERNATIVES] comment.
+
 func (g *GitHubClientImpl) FindCommentByMarker(ctx context.Context, repo string, prNumber int, marker string) (string, error) {
         req, err := http.NewRequestWithContext(ctx, "GET",
                 fmt.Sprintf("%s/repos/%s/issues/%d/comments?per_page=100", g.apiURL, repo, prNumber), nil)
@@ -415,34 +438,40 @@ func (g *GitHubClientImpl) FindCommentByMarker(ctx context.Context, repo string,
 }
 
 // ReactionsClientImpl manages emoji reactions on PR comments.
+
 type ReactionsClientImpl struct {
         gh GitHubClient
 }
 
 // NewReactionsClient creates a ReactionsClient.
+
 func NewReactionsClient(gh GitHubClient) *ReactionsClientImpl {
         return &ReactionsClientImpl{gh: gh}
 }
 
 // Ack reacts to the command comment with 👍 (immediate acknowledgment).
 // This is the #1 fix for Prow's #1 complaint (silence).
+
 func (r *ReactionsClientImpl) Ack(ctx context.Context, repo string, commentID int64) error {
         return r.gh.ReactComment(ctx, repo, commentID, "+1")
 }
 
 // Success replaces the 👍 reaction with ✅ (white_check_mark).
+
 func (r *ReactionsClientImpl) Success(ctx context.Context, repo string, commentID int64) error {
         _ = r.gh.RemoveReaction(ctx, repo, commentID, "+1") // best-effort remove
         return r.gh.ReactComment(ctx, repo, commentID, "white_check_mark")
 }
 
 // Failure replaces the 👍 reaction with ❌.
+
 func (r *ReactionsClientImpl) Failure(ctx context.Context, repo string, commentID int64) error {
         _ = r.gh.RemoveReaction(ctx, repo, commentID, "+1")
         return r.gh.ReactComment(ctx, repo, commentID, "-1")
 }
 
 // Pending replaces the 👍 reaction with 👀 (eyes — "looking at this").
+
 func (r *ReactionsClientImpl) Pending(ctx context.Context, repo string, commentID int64) error {
         _ = r.gh.RemoveReaction(ctx, repo, commentID, "+1")
         return r.gh.ReactComment(ctx, repo, commentID, "eyes")
