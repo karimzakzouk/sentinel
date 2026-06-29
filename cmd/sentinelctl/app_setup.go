@@ -1,6 +1,6 @@
 // Package main — sentinelctl `app` subcommand.
 //
-// v4.1.0: Implements `sentinelctl app setup` — the one-command GitHub App
+
 // auto-provisioning flow.
 //
 // Usage:
@@ -158,7 +158,6 @@ func (c *client) handleAppSetup(args []string) {
                 fmt.Fprintf(os.Stderr, "Warning: failed to close temporary listener: %v\n", err)
         }
 
-        // v4.1.3: Codespaces detection.
         // In a Codespace browser editor, `http://localhost:<port>` is unreachable
         // from the user's browser (localhost = the laptop, not the Codespace).
         // GitHub's manifest redirect fails silently.
@@ -225,7 +224,6 @@ func (c *client) handleAppSetup(args []string) {
         // Open the browser.
         openBrowser(createURL)
 
-        // v4.1.2: Build the callback server. We serve on the listener we
         // already opened (to find a free port) — no ListenAndServe (which
         // defaults to :80 and fails with permission denied).
         // Declare channels first so the handler closure can capture them.

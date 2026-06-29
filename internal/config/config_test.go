@@ -24,15 +24,14 @@ func TestLoadDefaults(t *testing.T) {
         if c.ConfidenceAutonomous != 0.92 {
                 t.Errorf("ConfidenceAutonomous = %v, want 0.92", c.ConfidenceAutonomous)
         }
-        // v3.4.0: new defaults
-        // v3.11.0: LLMEmbeddingModel default changed from "text-embedding-3-small"
+
         // to "" (audit #13). The previous default was OpenAI-specific but the
         // default provider is "zai", so every default install silently fell back
         // to hash embeddings. Empty default is honest about what's happening.
         if c.LLMEmbeddingModel != "" {
                 t.Errorf("LLMEmbeddingModel = %q, want \"\" (empty — hash fallback by default)", c.LLMEmbeddingModel)
         }
-        // v3.11.0: LLMEmbeddingDim default is 1536 (audit #13).
+
         if c.LLMEmbeddingDim != 1536 {
                 t.Errorf("LLMEmbeddingDim = %d, want 1536", c.LLMEmbeddingDim)
         }
@@ -126,7 +125,6 @@ func TestSplitCSV(t *testing.T) {
         }
 }
 
-// v3.11.0: Test that the default ProductionNamespaces no longer includes
 // "payments" (audit #5). The demo's "payments" namespace leaked into every
 // install — operators with a namespace literally named "payments" got
 // stricter governance than intended.
@@ -153,4 +151,3 @@ func TestDefaultProductionNamespacesExcludesPayments(t *testing.T) {
         }
 }
 
-// v3.11.0: Test the unsupported-native-provider detection (audit #16).

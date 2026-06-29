@@ -159,14 +159,13 @@ func (s *Store) initSchema() error {
                 return err
         }
 
-        // v4.0.0: Run additive migrations (ALTER TABLE ADD COLUMN — idempotent).
         // SQLite doesn't support IF NOT EXISTS on ADD COLUMN, so we check the
         // schema first and skip columns that already exist.
         return s.migrateSchema()
 }
 
 // migrateSchema applies additive column migrations to the incidents table.
-// v4.0.0: Adds pr_number, pr_repo, pr_branch, pr_url, auto_merge_status
+
 // columns for chatops support. Idempotent — safe to run on every startup.
 func (s *Store) migrateSchema() error {
         // PRAGMA table_info returns one row per column. We check which columns
@@ -323,7 +322,7 @@ func (s *Store) GetIncident(ctx context.Context, id uuid.UUID) (*schemas.Inciden
 // prefix. If multiple incidents match, returns the most recently updated one.
 // Returns nil (no error) if no match.
 //
-// v3.8.4: Added so the CLI can accept the 8-char truncated IDs it displays
+
 // in `incidents list` output. Without this, `sentinelctl incidents get
 // 91cce5a5` would fail with "invalid incident ID" because the server did
 // uuid.Parse("91cce5a5") which requires a full 36-char UUID.
@@ -625,7 +624,7 @@ func (s *Store) StoreIncidentVector(ctx context.Context, inc *schemas.Incident, 
 }
 
 // computeEmbedding produces a bag-of-words vector from text.
-// v3.13.0: CRITICAL FIX — now calls hashEmbedding() (the same tokenizer used
+
 // by the runtime VectorStore) instead of strings.Fields(). Previously,
 // computeEmbedding used strings.Fields+ToLower (which keeps punctuation in
 // words: "KeyError:" → "keyerror:") while hashEmbedding used splitWords
@@ -668,8 +667,6 @@ func boolToInt(b bool) int {
         }
         return 0
 }
-
-// v4.0.0: chatops support methods.
 
 // FindIncidentByPR looks up an incident by its associated PR number + repo.
 // Used by chatops command handlers to resolve "/sentinel <cmd>" on a PR

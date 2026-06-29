@@ -89,16 +89,14 @@ type Investigator struct {
         cloner      *repo.Cloner
         vectorStore VectorStore
 
-        // v3.8.4: Optional allowlist of GitHub repos (owner/name) that this
         // Investigator is allowed to clone. Empty = allow all (legacy behavior,
         // not recommended for production). Set via SetAllowedRepos from main.go
         // using config.AllowedGitHubRepos.
         allowedRepos []string
 
-        // v3.11.0: Default branch fallback (CRITICAL audit #6). Was hardcoded
         // "main" in branch_resolver.go:48. Set via SetDefaultBranch from main.go.
         defaultBranch string
-        // v3.11.0: Git host (CRITICAL audit #2). Was hardcoded "github.com" in
+
         // cloner.go + branch_resolver.normalizeRepo. Set via SetGitHost from main.go.
         gitHost string
 }
@@ -148,7 +146,7 @@ func (a *Investigator) isRepoAllowed(repo string) bool {
 // VectorStore is the interface for incident memory retrieval.
 type VectorStore interface {
         Search(ctx context.Context, text string, k int) ([]*VectorMetadata, []float32, error)
-        // v3.7.0: Hash fallback check — when true, the applyKnownFix fast path
+
         // is disabled because hash embeddings can produce false high-similarity.
         UsingHashFallback() bool
 }
@@ -171,14 +169,13 @@ func NewInvestigator(router *llm.Router, k8sClient *k8s.Client, gitHubToken stri
                 gitHubToken:   gitHubToken,
                 cloner:        repo.NewCloner(gitHubToken),
                 vectorStore:   vectorStore,
-                defaultBranch: "main",       // v3.11.0: default; override via SetDefaultBranch
-                gitHost:       "github.com", // v3.11.0: default; override via SetGitHost
+                defaultBranch: "main",
+                gitHost:       "github.com",
         }
 }
 
 // Run executes the investigator agent.
-// v3.2.4: ALWAYS fetch full pod logs via K8s API at the start.
-// v3.3.0: Memory loop — query HNSW for similar past incidents first.
+
 //         If similarity > 0.85 → skip investigation, apply known fix directly.
 func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error {
         cluster := state.Cluster
@@ -200,7 +197,7 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
         // 0.5 MEMORY LOOP — query HNSW for similar past incidents.
         // If we've seen this exact pattern before AND it was successfully fixed,
         // skip the full investigation and apply the known fix directly.
-        // v3.7.0: Disabled when using hash embeddings — hash collisions can
+
         // produce false high-similarity scores. Only use real embeddings for
         // the applyKnownFix fast path.
         if a.vectorStore != nil && podLogs != "" {
@@ -209,7 +206,7 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
                         log.Printf("[memory] found %d similar incidents (top score: %.3f)", len(similar), scores[0])
 
                         // High similarity + prior success → skip investigation, apply known fix
-                        // v3.7.0: Only when using real embeddings (not hash fallback)
+
                         if scores[0] > 0.85 && similar[0].Outcome == "success" && !a.vectorStore.UsingHashFallback() {
                                 log.Printf("[memory] HIGH MATCH (score=%.3f) — applying known fix from incident %s", scores[0], similar[0].IncidentID)
                                 return a.applyKnownFix(ctx, state, similar[0], podLogs)
@@ -239,7 +236,6 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
                 return a.runWithoutRepo(ctx, state, podLogs)
         }
 
-        // v3.8.4: Enforce the GitHub repo allowlist. The repo string comes from
         // the sentinel.io/repo pod annotation, which any user with pod-edit
         // permission can set. Without this check, a malicious user could
         // annotate their pod with an arbitrary repo and have Sentinel clone it
@@ -249,7 +245,6 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
                 return a.runWithoutRepo(ctx, state, podLogs)
         }
 
-        // v3.5.0: Check if the error originates from a shared library (vendor/,
         // node_modules/, site-packages/). If so, redirect the investigation to
         // the library's repo instead of the service's repo.
         parsedError := ParseError(podLogs)
@@ -260,7 +255,7 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
                                 slf.DependencyName, slf.SourceRepo, slf.LibraryPath)
                         // Override the repo to clone with the library's repo
                         repoName = slf.SourceRepo
-                        // v3.8.4: Re-check the allowlist against the redirected repo.
+
                         // A bug in a shared library could itself be a prompt-injection
                         // vector if the source-repo lookup is ever coerced into
                         // returning an arbitrary string.
@@ -306,7 +301,7 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
 
         searchQueries, _ := round1Result["search_queries"].([]any)
         if len(searchQueries) == 0 {
-                // v3.2.3: Don't give up — extract search queries from the pod logs.
+
                 // The error type (KeyError, ZeroDivisionError) and the variable name
                 // (DATABASE_URLL) are right there in the traceback.
                 log.Printf("[investigator] LLM returned no search queries — extracting from pod logs")
@@ -361,7 +356,6 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
 
         var newHyps []schemas.Hypothesis
 
-        // v3.2.5: FALLBACK — if LLM returned 0 hypotheses but we have pod logs,
         // generate hypotheses from the error context directly.
         if len(rawHyps) == 0 && podLogs != "" {
                 log.Printf("[investigator] LLM returned 0 hypotheses — generating from error context")
@@ -569,7 +563,7 @@ func (a *Investigator) buildRound1Message(state *schemas.AgentState, podLogs str
         parts = append(parts, "## Anomaly Cluster Summary")
         parts = append(parts, state.Cluster.Summary)
         parts = append(parts, "")
-        // v3.11.0: Inject the detected programming language so the LLM doesn't
+
         // anchor on Python-only examples (audit #12). The parser already
         // detects Python/Go/Java/JS/Rust/Ruby/C from the error logs.
         if lang := detectLanguageHint(podLogs); lang != "" {
@@ -602,7 +596,7 @@ func (a *Investigator) buildRound2Message(state *schemas.AgentState, podLogs str
         parts = append(parts, fmt.Sprintf("# Service: %s", state.Cluster.Service))
         parts = append(parts, fmt.Sprintf("# Namespace: %s", state.Cluster.Namespace))
         parts = append(parts, "")
-        // v3.11.0: Inject the detected programming language (audit #12).
+
         if lang := detectLanguageHint(podLogs); lang != "" {
                 parts = append(parts, fmt.Sprintf("## Detected Language: %s", lang))
                 parts = append(parts, "")

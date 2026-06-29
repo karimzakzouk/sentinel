@@ -18,7 +18,7 @@ import (
 
 // validateFilePath validates a file path returned by the LLM for a code fix.
 //
-// v3.8.4: This function is called with paths that originate from LLM output,
+
 // which in turn was influenced by pod-log content (attacker-controllable).
 // Without validation, an LLM that returned "../../../etc/passwd" or
 // ".github/workflows/ci.yml" (allowing a malicious CI workflow to be
@@ -93,7 +93,7 @@ func validateFilePath(path string) string {
                 strings.HasPrefix(cleanSlash, "azure-pipelines.yml"):
                 sensitive = true
                 sensitiveReason = "CI/CD-sensitive path"
-        // v3.18.0: Block Dockerfile and build-chain config files (the docstring
+
         // always claimed these were blocked, but the switch missed them).
         // These let an LLM (potentially prompt-injected via pod logs) add
         // backdoor RUN commands or postinstall hooks.
@@ -193,10 +193,10 @@ type FixProposer struct {
         router      *llm.Router
         k8s         *k8s.Client
         gitHubToken string
-        // v3.11.0: gitHost for normalizeRepo (CRITICAL audit #2). Was hardcoded
+
         // "github.com" in branch_resolver.normalizeRepo. Set via SetGitHost.
         gitHost       string
-        defaultBranch string // v3.11.0: default branch fallback (CRITICAL audit #6)
+        defaultBranch string
 }
 
 // NewFixProposer creates a FixProposer.
@@ -205,8 +205,8 @@ func NewFixProposer(router *llm.Router, k8sClient *k8s.Client, gitHubToken strin
                 router:        router,
                 k8s:           k8sClient,
                 gitHubToken:   gitHubToken,
-                gitHost:       "github.com", // v3.11.0: default
-                defaultBranch: "main",       // v3.11.0: default
+                gitHost:       "github.com",
+                defaultBranch: "main",
         }
 }
 
@@ -278,7 +278,7 @@ func (a *FixProposer) Run(ctx context.Context, state *schemas.AgentState) error 
         }
 
         // 2. Ask LLM for the fix — with adaptive retry loop.
-        // v4.3.0: Uses SEARCH/REPLACE blocks (plain text) instead of JSON.
+
         // The LLM outputs metadata JSON (small) + SEARCH/REPLACE blocks (plain text).
         // We parse the blocks, apply them with layered matching (exact → fuzzy),
         // and feed actionable errors back on failure (Aider's pattern).
@@ -296,9 +296,9 @@ func (a *FixProposer) Run(ctx context.Context, state *schemas.AgentState) error 
                         userMsg = a.buildUserMessage(state) + retryHint
                 }
 
-                attemptCtx, attemptCancel := context.WithTimeout(ctx, 120*time.Second) // v4.3.1: was 90s — nemotron needs ~80s for 8k tokens
+                attemptCtx, attemptCancel := context.WithTimeout(ctx, 120*time.Second)
                 log.Printf("[fix_proposer] attempt %d/%d (SEARCH/REPLACE format)", attempt+1, maxRetries+1)
-                rawOutput, llmErr := a.router.FrontierText(attemptCtx, fixProposerSystemPrompt, userMsg, 8000) // v4.3.1: was 16000 — SEARCH/REPLACE is more compact than JSON
+                rawOutput, llmErr := a.router.FrontierText(attemptCtx, fixProposerSystemPrompt, userMsg, 8000)
                 attemptCancel()
                 if llmErr != nil {
                         lastError = fmt.Sprintf("LLM call failed: %v", llmErr)
@@ -455,7 +455,6 @@ func (a *FixProposer) buildUserMessage(state *schemas.AgentState) string {
         parts = append(parts, fmt.Sprintf("# Namespace: %s", state.Cluster.Namespace))
         parts = append(parts, "")
 
-        // v3.14.0: Layer B — if there's sandbox failure feedback, include it at the
         // TOP of the message so the LLM sees it first. This implements the
         // "generate → verify → feed error back → retry" loop used by Aider,
         // OpenHands, and SWE-agent. The LLM gets the exact runtime error from the
@@ -472,7 +471,6 @@ func (a *FixProposer) buildUserMessage(state *schemas.AgentState) string {
                 parts = append(parts, "")
         }
 
-        // v3.11.0: Inject the detected programming language (audit #12).
         // The FixProposer doesn't have direct access to podLogs, but the
         // anomaly explanations contain the original error logs. We concatenate
         // them and run the parser to detect the language.
@@ -578,7 +576,7 @@ func (a *FixProposer) llmCodeFix(ctx context.Context, state *schemas.AgentState,
                 }
                 path, _ := fcMap["path"].(string)
                 content, _ := fcMap["new_content"].(string)
-                // v3.8.4: Apply the same path validation as the main path.
+
                 validated := validateFilePath(path)
                 if validated != "" {
                         proposal.FilesToChange = append(proposal.FilesToChange, schemas.FileChange{Path: validated, NewContent: content})
@@ -592,11 +590,11 @@ func (a *FixProposer) llmCodeFix(ctx context.Context, state *schemas.AgentState,
 func (a *FixProposer) finalizeProposal(state *schemas.AgentState, proposal *schemas.FixProposal) {
         branchName := fmt.Sprintf("sentinel/%s-%s", state.Cluster.Service, state.IncidentID.String()[:8])
         proposal.BranchName = strPtr(branchName)
-        // v3.3.1: Respect sentinel.io/branch annotation for PR base instead of
+
         // hardcoding "main". If the service is deployed from "release-1.2", the
         // PR should target "release-1.2", not "main". Falls back to "main" if no
         // annotation is set (same as the investigator's clone behavior).
-        proposal.BaseBranch = strPtr(a.resolveBaseBranch(state)) // v3.11.0: was free function returning "main"
+        proposal.BaseBranch = strPtr(a.resolveBaseBranch(state))
 
         state.FixProposal = proposal
         state.Status = schemas.StatusFixProposed
@@ -612,7 +610,7 @@ func (a *FixProposer) finalizeProposal(state *schemas.AgentState, proposal *sche
 // Priority: sentinel.io/branch annotation > configured default branch.
 // This mirrors the investigator's resolveBranch logic but WITHOUT the
 // git-commit case (PRs target branches, not commits).
-// v3.11.0: Was a free function returning hardcoded "main". Now a method
+
 // so it can use the FixProposer's configurable defaultBranch (CRITICAL audit #6).
 func (a *FixProposer) resolveBaseBranch(state *schemas.AgentState) string {
         if branch, ok := state.Cluster.Annotations["sentinel.io/branch"]; ok && branch != "" {
@@ -660,7 +658,7 @@ func buildPRBody(state *schemas.AgentState, rc *schemas.RootCause, fixType strin
         }
         parts = append(parts, "")
         parts = append(parts, "## Verification")
-        // v3.8.4: This is a placeholder body written BEFORE sandbox verification
+
         // runs. The actual PR body is overwritten by agents.BuildPRBody in
         // main.go after the sandbox runs (or is skipped). The placeholder
         // must NOT claim sandbox verification was performed — it hasn't been
@@ -688,7 +686,7 @@ func strPtr(s string) *string { return &s }
 
 // extractMetadataJSON extracts the small JSON metadata object from the LLM output.
 // The LLM outputs {"fix_type":"code_fix",...} before the SEARCH/REPLACE blocks.
-// v4.3.0: Uses the existing extractJSON function which already handles:
+
 //   - markdown fences (```json...```)
 //   - bare JSON objects ({...})
 //   - prose around JSON

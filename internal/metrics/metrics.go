@@ -1,10 +1,10 @@
 // Package metrics provides Prometheus instrumentation for Sentinel.
 //
-// v3.4.0: Replaces the stub /metrics endpoint that returned a hardcoded
+
 // "sentinel_incidents_total 0". Now exports real counters/histograms/gauges
 // so Sentinel's own health is observable in Prometheus/Grafana.
 //
-// v3.8.4: All accessors are now mutex-guarded. The package-level metricSet
+
 // is mutated from multiple goroutines (3 concurrent investigations + N LLM
 // calls + SSE broadcaster), so unsynchronized map writes triggered the race
 // detector under real load. A single sync.Mutex protects every field; the
@@ -45,7 +45,6 @@ import (
         "time"
 )
 
-// v3.4.0: All metrics use the prometheus client_golang library... but we don't
 // want to add a new dependency (the project prides itself on minimal deps).
 // Instead we implement a minimal Prometheus exposition format by hand — it's
 // just text, and we control all the metric definitions.
@@ -55,7 +54,7 @@ import (
 // bucketing — but for a single-pod system, server-side aggregation is fine.
 
 // metricSet holds all our metric values. Single source of truth for /metrics.
-// v3.8.4: mu guards every field. All Record* / *Start / *End functions take
+
 // the lock for the duration of their read-modify-write. The render() function
 // takes a read lock so it sees a consistent snapshot.
 type metricSet struct {
@@ -68,12 +67,10 @@ type metricSet struct {
         sandboxVerifications  map[string]float64 // by verified
         llmCallsTotal         map[string]float64 // by "model:status"
 
-        // v3.18.0: H9 — token + cost tracking (was count + duration only).
         llmInputTokensTotal  map[string]int // by model
         llmOutputTokensTotal map[string]int // by model
         llmTotalCostUSD      map[string]float64 // by model
 
-        // v3.18.0: H34 — per-Level sandbox metrics (was aggregate only).
         sandboxLevelFailures map[string]int // by level: "1", "2", "3"
         sandboxRetryCount    map[string]int // by attempt index
 
@@ -89,7 +86,6 @@ type metricSet struct {
         activeIncidents float64
         llmInFlight     float64
 
-        // v3.18.0: M27 — histogram buckets for p50/p95/p99 computation.
         // Each bucket counts investigations/LLM calls/sandbox runs that took
         // <= the bucket's upper bound. Prometheus can compute quantiles from
         // these via histogram_quantile().
@@ -99,7 +95,7 @@ type metricSet struct {
 }
 
 // Standard bucket boundaries (seconds).
-// v3.18.0: M27 — without these, Prometheus couldn't compute p50/p95/p99.
+
 var (
         investBuckets = []float64{30, 60, 120, 180, 300, 600, 1200, 1800}
         llmBuckets    = []float64{1, 5, 10, 30, 60, 120, 300}
@@ -138,7 +134,7 @@ func RecordInvestigationComplete(status string, duration time.Duration) {
         metrics.activeIncidents--
         metrics.investigationDurationCount++
         metrics.investigationDurationSum += duration.Seconds()
-        // v3.18.0: M27 — bump histogram buckets.
+
         bumpBucket(metrics.investigationBuckets, investBuckets, duration.Seconds())
 }
 
@@ -160,7 +156,7 @@ func RecordSandboxVerification(verified bool, duration time.Duration) {
         metrics.sandboxVerifications[key]++
         metrics.sandboxDurationCount++
         metrics.sandboxDurationSum += duration.Seconds()
-        // v3.18.0: M27 — bump histogram buckets.
+
         bumpBucket(metrics.sandboxBuckets, sandboxBuckets, duration.Seconds())
 }
 
@@ -184,12 +180,12 @@ func RecordLLMCall(model, status string, duration time.Duration) {
         metrics.llmCallsTotal[key]++
         metrics.llmCallDurationCount++
         metrics.llmCallDurationSum += duration.Seconds()
-        // v3.18.0: M27 — bump histogram buckets.
+
         bumpBucket(metrics.llmCallBuckets, llmBuckets, duration.Seconds())
 }
 
 // RecordLLMTokens records token usage + estimated cost for an LLM call.
-// v3.18.0: H9 — was missing entirely; operators had no visibility into spend.
+
 // Pricing is approximate (per 1M tokens, USD) and based on public list prices as of 2024-12.
 // Real production cost tracking should use the provider's billing API.
 func RecordLLMTokens(model string, inputTokens, outputTokens int) {
@@ -235,7 +231,7 @@ func estimateCostUSD(model string, inputTokens, outputTokens int) float64 {
 }
 
 // RecordSandboxLevelFailure records which sandbox verification level failed.
-// v3.18.0: H34 — was aggregate only; operators couldn't tell which level was the bottleneck.
+
 func RecordSandboxLevelFailure(level int) {
         metrics.mu.Lock()
         defer metrics.mu.Unlock()
@@ -243,7 +239,7 @@ func RecordSandboxLevelFailure(level int) {
 }
 
 // RecordSandboxRetry records which sandbox retry attempt was used.
-// v3.18.0: H34 — track retry distribution.
+
 func RecordSandboxRetry(attempt int) {
         metrics.mu.Lock()
         defer metrics.mu.Unlock()
@@ -285,7 +281,7 @@ func render() string {
         incidentsTotal := mapClone(metrics.incidentsTotal)
         sandboxVerifications := mapClone(metrics.sandboxVerifications)
         llmCallsTotal := mapClone(metrics.llmCallsTotal)
-        // v3.18.0: H9 + H34 snapshots
+
         llmInputTokensTotal := mapCloneInt(metrics.llmInputTokensTotal)
         llmOutputTokensTotal := mapCloneInt(metrics.llmOutputTokensTotal)
         llmTotalCostUSD := mapCloneFloat(metrics.llmTotalCostUSD)
@@ -333,7 +329,6 @@ func render() string {
                 b.metric("sentinel_llm_calls_total", llmCallsTotal[key], "model", model, "status", status)
         }
 
-        // v3.18.0: H9 — token + cost metrics
         b.help("sentinel_llm_input_tokens_total", "Total LLM input (prompt) tokens by model")
         b.typ("sentinel_llm_input_tokens_total", "counter")
         for _, model := range sortedKeysInt(llmInputTokensTotal) {
@@ -352,7 +347,6 @@ func render() string {
                 b.metric("sentinel_llm_cost_usd_total", llmTotalCostUSD[model], "model", model)
         }
 
-        // v3.18.0: H34 — per-Level sandbox failure metrics
         b.help("sentinel_sandbox_level_failures_total", "Sandbox verification failures by level (1=pod ready, 2=endpoints, 3=original error)")
         b.typ("sentinel_sandbox_level_failures_total", "counter")
         for _, level := range sortedKeysInt(sandboxLevelFailures) {
@@ -390,7 +384,6 @@ func render() string {
         b.typ("sentinel_sandbox_duration_seconds_sum", "counter")
         b.metric("sentinel_sandbox_duration_seconds_sum", sandboxDurationSum)
 
-        // v3.18.0: M27 — histogram buckets (cumulative). Enables p50/p95/p99 via
         // histogram_quantile() in Prometheus.
         b.help("sentinel_investigation_duration_seconds_bucket", "Investigation duration histogram (cumulative buckets)")
         b.typ("sentinel_investigation_duration_seconds_bucket", "histogram")
@@ -457,7 +450,6 @@ func sortedKeys(m map[string]float64) []string {
         return keys
 }
 
-// v3.18.0: H9+H34 — helpers for int and float maps.
 func mapCloneInt(m map[string]int) map[string]int {
         out := make(map[string]int, len(m))
         for k, v := range m {

@@ -145,7 +145,6 @@ func (w *Watcher) handleItem(ctx context.Context, item *unstructured.Unstructure
                 log.Printf("[watcher] could not patch CR status: %v", err)
         }
 
-        // v3.13.0: Move the slow lookups (annotations + pod logs) into the handler
         // goroutine so the watch loop isn't blocked for ~10s per CR. Previously,
         // LookupWorkloadAnnotations (5 sequential K8s API calls) + FetchCrashingPodLogs
         // (3 retries × 2s = up to 6s) ran synchronously before spawning the handler.

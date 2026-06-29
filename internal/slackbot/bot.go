@@ -1,6 +1,6 @@
 // Package slackbot implements an interactive two-way Slack bot for Sentinel.
 //
-// v3.5.0: Replaces the outbound-only Slack alerts (agents/alerts.go) with
+
 // two-way communication. The bot:
 //   - Reports what it's doing as it works (investigation started, fix proposed, PR opened)
 //   - Accepts commands via @sentinel mentions or slash commands:
@@ -68,15 +68,14 @@ func New(signingSecret, botUserID string, investigate InvestigateFunc, listIncid
 }
 
 // SetBotToken sets the Slack OAuth bot token (xoxb-...) for posting replies.
-// v3.5.0: Required for @mention replies via chat.postMessage. Without it,
+
 // @mentions are logged but not posted back to Slack.
 func (b *Bot) SetBotToken(token string) {
         b.botToken = token
 }
 
 // IsPaused returns true if autonomous mode is paused.
-// v3.5.0: The detection layer checks this before triggering investigations.
-// v3.13.0: Simplified — just take the write lock since we may need to mutate
+
 // (auto-resume). The old RLock→RUnlock→Lock→Unlock→RLock dance created a race
 // window where readers could see stale paused-but-expired state.
 func (b *Bot) IsPaused() bool {
@@ -113,15 +112,13 @@ func (b *Bot) Resume() {
 }
 
 // HandleEvents is the HTTP handler for POST /slack/events.
-// v3.5.0: Handles both the Events API (app mentions) and slash commands.
-// v3.5.0: Verifies Slack signature using HMAC-SHA256 if signingSecret is set.
+
 func (b *Bot) HandleEvents(w http.ResponseWriter, r *http.Request) {
         if r.Method != "POST" {
                 http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
                 return
         }
 
-        // v3.16.0: Limit body size BEFORE signature verification to prevent
         // unauthenticated DoS (10GB POST would OOM the 256Mi pod).
         r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB
         body, err := io.ReadAll(r.Body)
@@ -130,10 +127,9 @@ func (b *Bot) HandleEvents(w http.ResponseWriter, r *http.Request) {
                 return
         }
 
-        // v3.5.0: Verify Slack signature (HMAC-SHA256).
         // Slack sends: X-Slack-Signature (HMAC of body using signing secret + timestamp)
         // and X-Slack-Request-Timestamp.
-        // v3.18.0: When signingSecret is empty, REFUSE event callbacks (was silently
+
         // accepted, allowing unauthenticated pause/investigate commands).
         // URL verification challenges are still accepted without a secret so initial
         // Slack app setup works (the secret may not be configured yet at install time).
@@ -155,7 +151,6 @@ func (b *Bot) HandleEvents(w http.ResponseWriter, r *http.Request) {
                 return
         }
 
-        // v3.5.0: Slack sends a URL verification challenge on first setup.
         var challenge struct {
                 Type      string `json:"type"`
                 Challenge string `json:"challenge"`
@@ -177,9 +172,9 @@ func (b *Bot) HandleEvents(w http.ResponseWriter, r *http.Request) {
 }
 
 // verifySlackSignature verifies the HMAC-SHA256 signature Slack sends.
-// v3.5.0: Uses the signing secret + timestamp + body to compute HMAC.
+
 //
-// v3.8.4: Now enforces timestamp freshness. Previous implementation skipped
+
 // the check to "avoid clock skew issues in test environments" — that left
 // the bot vulnerable to indefinite replay attacks (a captured Slack request
 // could be re-sent forever to trigger investigations). The freshness window
@@ -193,7 +188,6 @@ func (b *Bot) verifySlackSignature(r *http.Request, body []byte) bool {
                 return false
         }
 
-        // v3.8.4: Parse the timestamp and reject requests older than 5 minutes.
         // Slack's own retry policy retries failed deliveries for up to 3 hours,
         // but a *successful* delivery followed by a replay attack is the threat
         // we're defending against — 5 minutes is generous enough for normal
@@ -244,7 +238,7 @@ func (b *Bot) handleSlashCommand(w http.ResponseWriter, r *http.Request, body []
 }
 
 // handleEvent processes an Events API callback (app_mention).
-// v3.5.0: Posts the reply back to Slack via chat.postMessage if botToken is set.
+
 func (b *Bot) handleEvent(w http.ResponseWriter, r *http.Request, body []byte) {
         var event struct {
                 Type string `json:"type"`
@@ -277,7 +271,6 @@ func (b *Bot) handleEvent(w http.ResponseWriter, r *http.Request, body []byte) {
         userName := "<@" + event.Event.User + ">"
         response := b.dispatchCommand(text, userName)
 
-        // v3.5.0: Post the reply back to Slack via chat.postMessage.
         if b.botToken != "" && event.Event.Channel != "" {
                 if err := b.postMessage(event.Event.Channel, response); err != nil {
                         log.Printf("[slackbot] failed to post reply: %v", err)
@@ -292,7 +285,7 @@ func (b *Bot) handleEvent(w http.ResponseWriter, r *http.Request, body []byte) {
 }
 
 // postMessage posts a message to a Slack channel via chat.postMessage.
-// v3.5.0: Requires botToken (xoxb-...). Returns error if the API call fails.
+
 func (b *Bot) postMessage(channel, text string) error {
         payload, _ := json.Marshal(map[string]string{
                 "channel": channel,
@@ -319,7 +312,7 @@ func (b *Bot) postMessage(channel, text string) error {
 }
 
 // dispatchCommand parses the command text and dispatches to the right handler.
-// v3.5.0: Returns the response text (Markdown for Slack).
+
 func (b *Bot) dispatchCommand(text, userName string) string {
         text = strings.TrimSpace(text)
         if text == "" {
@@ -476,7 +469,7 @@ func (b *Bot) helpText() string {
 }
 
 // parseFormBody parses a URL-encoded form body into a map.
-// v3.13.0: Replaced hand-rolled parser (only handled 5 percent-encoded chars)
+
 // with stdlib url.ParseQuery. The old parser mis-parsed @mentions (%40),
 // paths (%2F), = (%3D), & (%26), and any other encoded char — corrupting
 // Slack commands that contained them.

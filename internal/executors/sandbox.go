@@ -23,14 +23,14 @@ import (
 )
 
 // sandboxHTTPClient is the shared HTTP client for sandbox Level 2 + 3 probes.
-// v3.13.0: audit finding #11 — verifyEndpoints + verifyOriginalErrorFixed
+
 // created a new http.Client on every call (2-3 per incident), defeating
 // connection pooling. A package-level shared client reuses TCP+TLS connections
 // to the canary Service, cutting probe latency ~50%.
 var sandboxHTTPClient = &http.Client{Timeout: 5 * time.Second}
 
 // SandboxResult is the outcome of a sandbox run.
-// v3.18.0: Added PodLogs and ProbeResults fields so the LLM gets concrete
+
 // failure details (was a one-line Summary, making the retry loop ineffective).
 type SandboxResult struct {
         Verified      bool
@@ -39,12 +39,12 @@ type SandboxResult struct {
         MirrorApplied bool
         ErrorCount5xx int
         RequestCount  int
-        // v3.14.2: InfrastructureError is true when the failure is NOT a code issue
+
         // (e.g. RBAC denied, image pull failure, namespace creation failed).
         // When true, the retry loop should NOT feed the error back to the LLM —
         // the LLM can't fix a permissions issue.
         InfrastructureError bool
-        // v3.18.0: Concrete failure evidence — included in SandboxFeedback so
+
         // the LLM can actually diagnose + fix the issue.
         PodLogs      string   // last N bytes of canary pod logs (Level 1 failure)
         ProbeResults []string // per-probe outcome (Level 2/3 failure)
@@ -56,12 +56,12 @@ type SandboxResult struct {
 //   Level 2: All configured endpoints return 2xx/3xx (app starts + serves traffic)
 //   Level 3: Original error is gone (reproduce the crash conditions)
 //
-// v3.4.0: probePaths replaces the hardcoded /pay?amount=... test inputs that
+
 // only worked for the demo app. Now configurable via SENTINEL_SANDBOX_PROBE_PATHS.
 // Defaults to /,/healthz,/readyz. For app-specific paths (e.g. /pay?amount=0),
 // set the env var.
 //
-// v3.8.4: Three correctness + security hardening fixes:
+
 //   - waitForReady now requires ReadyReplicas >= 1 sustained for sustainedWindow
 //     (default 30s) before passing Level 1. A pod that goes Ready then
 //     immediately crashes no longer passes Level 1.
@@ -78,7 +78,7 @@ type SandboxResult struct {
 //   - createNamespace now also creates a default-deny NetworkPolicy on the
 //     sandbox namespace so the canary can't reach arbitrary services.
 //
-// v3.11.0: sentinelNamespace field replaces the hardcoded "sentinel" literal
+
 // in the sandbox NetworkPolicy ingress rule (audit #8). When the Helm release
 // isn't named "sentinel", probes from the actual Sentinel namespace were
 // denied → Level 2 verification always failed on connection errors.
@@ -86,10 +86,10 @@ type SandboxRunner struct {
         clientset        *kubernetes.Clientset
         sandboxPrefix    string
         enableMirroring  bool
-        probePaths       []string // v3.4.0: configurable probe paths for Level 2 + 3
-        sustainedWindow  time.Duration // v3.8.4: how long Ready must be sustained for Level 1
-        sentinelNamespace string // v3.11.0: for the sandbox NetworkPolicy ingress allow-list
-        // v3.18.0: probePathsMu guards probePaths against concurrent Run() calls.
+        probePaths       []string
+        sustainedWindow  time.Duration
+        sentinelNamespace string
+
         // Run() is invoked on the shared instance from multiple investigation goroutines.
         probePathsMu sync.RWMutex
 }
@@ -101,14 +101,13 @@ func NewSandbox(clientset *kubernetes.Clientset, sandboxPrefix string, enableMir
                 sandboxPrefix:    sandboxPrefix,
                 enableMirroring:  enableMirroring,
                 probePaths:       []string{"/", "/healthz", "/readyz"}, // sensible defaults
-                sustainedWindow:  30 * time.Second, // v3.18.0: H14 — was 10s (v3.15.0), missed delayed crashes (connection pool exhaustion ~30s, GC pressure 15-60s, cache TTL expiry ~60s). Restored to 30s.
-                sentinelNamespace: "sentinel", // v3.11.0: default; override via WithSentinelNamespace
+                sustainedWindow:  30 * time.Second,
+                sentinelNamespace: "sentinel",
         }
 }
 
 // WithProbePaths sets custom probe paths for Level 2 + 3 verification.
-// v3.4.0: Each path can include query string (e.g. "/pay?amount=0").
-// Replaces the hardcoded /pay?amount=... inputs that only worked for demo-app.
+
 func (s *SandboxRunner) WithProbePaths(paths []string) *SandboxRunner {
         if len(paths) > 0 {
                 s.probePaths = paths
@@ -117,7 +116,7 @@ func (s *SandboxRunner) WithProbePaths(paths []string) *SandboxRunner {
 }
 
 // WithSustainedReady overrides the default 30s sustained-ready window.
-// v3.8.4: Exposed for testing and for operators who want tighter / looser
+
 // crash-after-ready detection. Set to 0 to disable (NOT recommended —
 // reintroduces the crash-after-ready false positive).
 func (s *SandboxRunner) WithSustainedReady(d time.Duration) *SandboxRunner {
@@ -151,7 +150,7 @@ func (s *SandboxRunner) Run(ctx context.Context, inc *schemas.Incident) SandboxR
         if err := s.createNamespace(ctx, sandboxNS); err != nil {
                 return SandboxResult{Verified: false, Summary: fmt.Sprintf("create_namespace: %v", err), Namespace: sandboxNS}
         }
-        // v3.8.4: Isolate the sandbox namespace with a default-deny NetworkPolicy.
+
         // This is best-effort — if it fails, we log and continue (the namespace
         // itself is still isolated by virtue of being separate).
         if err := s.createSandboxNetworkPolicy(ctx, sandboxNS); err != nil {
@@ -168,11 +167,10 @@ func (s *SandboxRunner) Run(ctx context.Context, inc *schemas.Incident) SandboxR
                         Verified:            false,
                         Summary:             fmt.Sprintf("deploy_failed: %s", deployResult.err),
                         Namespace:           sandboxNS,
-                        InfrastructureError: true, // v3.14.2: don't retry — LLM can't fix RBAC/image-pull
+                        InfrastructureError: true,
                 }
         }
 
-        // v4.2.0: Tier 0 — error-gone oracle. The original trigger endpoint
         // probing (Layer C from v3.14.0) is REMOVED. It caused more bugs than
         // it fixed (wrong endpoint detection, 4xx on handled errors = false
         // failure). The primary oracle is now Level 3: scan canary logs for
@@ -253,7 +251,7 @@ func (s *SandboxRunner) Run(ctx context.Context, inc *schemas.Incident) SandboxR
         // The reproducer is a standalone script that calls the buggy function + exits 0 if OK.
         // Best-effort: if no reproducer was generated or it fails to run due to
         // infrastructure errors, don't block the PR (Levels 1-4 are the real gates).
-        // v4.3.2: Only block if the reproducer actually ran AND found a crash
+
         // (exit code != 0). Infrastructure errors (wrong container name, pod
         // creation failed, etc.) are non-blocking.
         if fp.CanaryImage != nil && *fp.CanaryImage != "" {
@@ -265,7 +263,7 @@ func (s *SandboxRunner) Run(ctx context.Context, inc *schemas.Incident) SandboxR
                                 strings.Contains(reproResult.Summary, "not valid for pod")
                         if !reproResult.Overall &&
                            !strings.Contains(reproResult.Summary, "no reproducer generated") &&
-                           !isInfraError { // v4.3.2: don't block on infra errors
+                           !isInfraError {
                                 log.Printf("[sandbox] Level 5 FAILED: reproducer script crashed")
                                 return SandboxResult{
                                         Verified:     false,
@@ -296,7 +294,7 @@ func (s *SandboxRunner) createNamespace(ctx context.Context, ns string) error {
                         Name: ns,
                         Labels: map[string]string{
                                 "sentinel.io/sandbox": "true",
-                                // v3.14.2: Changed from "restricted" to "baseline". The restricted
+
                                 // PodSecurity standard blocks pods that don't set runAsNonRoot=true,
                                 // which conflicts with canary pods that inherit the prod image's
                                 // user (which might be root). "baseline" still blocks privileged
@@ -311,7 +309,6 @@ func (s *SandboxRunner) createNamespace(ctx context.Context, ns string) error {
                 return err
         }
 
-        // v3.14.3: No longer need to create per-namespace RBAC — the ClusterRole
         // now grants cluster-wide create on deployments, services, configmaps,
         // pods, secrets, roles, and rolebindings. This was the previous approach
         // but it failed because the SA couldn't create Roles in the sandbox NS.
@@ -324,7 +321,7 @@ func (s *SandboxRunner) createNamespace(ctx context.Context, ns string) error {
 // probe requests (which arrive via the Service cluster IP) but cannot
 // initiate arbitrary egress to other services in the cluster.
 //
-// v3.8.4: Previously the sandbox namespace had no NetworkPolicy, so a canary
+
 // pod (with prod secrets mounted via CopyConfigMapsAndSecrets) could phone
 // home to attacker C2 over HTTPS. The default-deny egress below blocks all
 // outbound traffic. Ingress is also denied except from the Sentinel
@@ -343,7 +340,7 @@ func (s *SandboxRunner) createSandboxNetworkPolicy(ctx context.Context, ns strin
                 From: []networkingv1.NetworkPolicyPeer{
                         {
                                 NamespaceSelector: &metav1.LabelSelector{
-                                        // v3.11.0: Use s.sentinelNamespace instead of hardcoded "sentinel" (audit #8).
+
                                         MatchLabels: map[string]string{"kubernetes.io/metadata.name": s.sentinelNamespace},
                                 },
                         },
@@ -441,7 +438,7 @@ func (s *SandboxRunner) deployCanary(ctx context.Context, inc *schemas.Incident,
         }
 
         // Copy ConfigMaps + Secrets from prod namespace to sandbox.
-        // v3.8.4: Surface errors instead of silently swallowing them. A missing
+
         // ConfigMap/Secret in prod means the sandbox canary will start with empty
         // env vars, which can mask the real failure behind a misleading "Ready"
         // status (the pod can go Ready with broken config).
@@ -450,7 +447,7 @@ func (s *SandboxRunner) deployCanary(ctx context.Context, inc *schemas.Incident,
         }
 
         // Create a Service so Level 2 verification can reach the canary.
-        // v3.11.0: Derive the port from (1) prod Service, (2) prod Deployment's
+
         // container ports, (3) fallback to 8000. Previously hardcoded 8000, which
         // broke for any app on 8080/3000/5000/etc. when the prod Service had no
         // ports declared (CRITICAL audit #3).
@@ -460,7 +457,7 @@ func (s *SandboxRunner) deployCanary(ctx context.Context, inc *schemas.Incident,
         if prodSvc, err := s.clientset.CoreV1().Services(fp.TargetNamespace).Get(ctx, fp.TargetService, metav1.GetOptions{}); err == nil && len(prodSvc.Spec.Ports) > 0 {
                 sandboxPorts = prodSvc.Spec.Ports
         } else if prodDeploy != nil && len(prodDeploy.Spec.Template.Spec.Containers) > 0 {
-                // v3.11.0: No prod Service (or Service has no ports) — derive from
+
                 // the prod Deployment's container ports. This handles apps that
                 // expose a non-8000 port (e.g. 8080, 3000, 5000) without a Service.
                 prodContainerPorts := prodDeploy.Spec.Template.Spec.Containers[0].Ports
@@ -502,11 +499,11 @@ func (s *SandboxRunner) deployCanary(ctx context.Context, inc *schemas.Incident,
 // passes Level 1 because ReadyReplicas briefly hit 1 between pod start and
 // the first crash.
 //
-// v4.2.1: Removed old waitForReady (replaced by waitForReadyWithLogs which
+
 // also captures canary logs during the sustained window).
 
 // getProbePaths returns a copy of probePaths under the read lock.
-// v3.18.0: Replaces direct s.probePaths access — Run() is invoked concurrently
+
 // from multiple investigation goroutines, so the slice must be guarded.
 func (s *SandboxRunner) getProbePaths() []string {
         s.probePathsMu.RLock()
@@ -850,7 +847,7 @@ func parsePathMethod(entry string) (method, path string) {
 // every probe to return 2xx/3xx. v3.18.0: extracted from verifyEndpoints so the
 // caller passes a local slice (no shared state race).
 //
-// v3.18.0: Fixed two critical bugs:
+
 //   1. 4xx responses now FAIL (was: only 5xx failed; 404/401/405 falsely passed).
 //   2. POST/DELETE/PATCH endpoints are now probed with the correct method (was:
 //      always GET, returning 405 on POST endpoints which falsely passed).
@@ -861,7 +858,7 @@ func (s *SandboxRunner) verifyEndpointsWithPaths(ctx context.Context, ns, servic
                 log.Printf("[sandbox] Level 2 FAILED: Service %s/%s not found (deployCanary should have created it)", ns, service)
                 return false
         }
-        // v3.18.0: probe ALL service ports, not just the first (multi-port services).
+
         if len(svc.Spec.Ports) == 0 {
                 log.Printf("[sandbox] Level 2 FAILED: Service %s/%s has no ports", ns, service)
                 return false
@@ -898,7 +895,7 @@ func (s *SandboxRunner) verifyEndpointsWithPaths(ctx context.Context, ns, servic
                                         continue
                                 }
                                 resp.Body.Close()
-                                // v3.18.0: 4xx now fails (was only 5xx). 404/401/405 = app broken.
+
                                 if resp.StatusCode >= 400 {
                                         consecutiveFailures++
                                         consecutiveSuccesses = 0
@@ -928,7 +925,7 @@ type level3Result struct {
 // verifyOriginalErrorFixed checks whether the original error from the incident
 // has been resolved by the fix deployed in the sandbox.
 //
-// v3.11.0: Replaced the Python-only `errorTypeRe` regex (which only matched
+
 // KeyError/ImportError/ValueError/TypeError/etc. — all Python builtins) with
 // agents.ParseError(), which is multi-language (Python, Go, Java, JS, Rust,
 // Ruby, C, signals). The previous implementation silently returned nil for
@@ -943,12 +940,12 @@ type level3Result struct {
 // + JS startup SyntaxError all auto-pass Level 1 (the canary pod started and
 // stayed Ready for sustainedWindow — that's sufficient evidence the startup
 // error is gone).
-// v4.2.1: Removed verifyOriginalErrorFixedWithPaths (replaced by
+
 // verifyErrorGoneFromLogs which is the primary oracle — scans canary
 // logs for the original error type instead of probing HTTP endpoints).
 
 func (s *SandboxRunner) cleanup(ctx context.Context, ns string) {
-        // v3.18.0: Use a fresh context so cleanup runs even if the parent ctx
+
         // is cancelled (e.g. investigation timeout). Previously, the cancelled
         // ctx caused Namespace.Delete to return context.Canceled immediately,
         // leaking the namespace + all its resources.
@@ -965,7 +962,7 @@ func (s *SandboxRunner) cleanup(ctx context.Context, ns string) {
 // namespaces that leak when the Sentinel pod is killed mid-verification
 // (the in-process defer cleanup doesn't survive pod restarts).
 //
-// v3.8.4: Call this periodically from main.go (every 5 minutes) to prevent
+
 // leaked sandbox namespaces from accumulating. The reaper is idempotent —
 // it's safe to run concurrently with active sandbox runs because the
 // sandbox runner holds the namespace for <5 minutes (240s Ready timeout +
@@ -1007,7 +1004,7 @@ func (s *SandboxRunner) ReapStaleSandboxNamespaces(ctx context.Context, maxAge t
 // patchPodSpec copies the prod pod spec into the sandbox canary, applies the
 // canary image, and force-sets a safe security context.
 //
-// v3.8.4: Previous implementation only swapped the image and inherited the
+
 // prod pod's entire security context. If the prod pod was privileged, used
 // hostPath, hostNetwork, or had dangerous capabilities, the sandbox canary
 // inherited all of those — turning a sandbox into a potential privilege
@@ -1029,7 +1026,6 @@ func patchPodSpec(spec corev1.PodSpec, canaryImage string) corev1.PodSpec {
                 spec.Containers[i].Image = canaryImage
                 spec.Containers[i].ImagePullPolicy = corev1.PullAlways
 
-                // v3.8.4: Force a safe container security context.
                 if spec.Containers[i].SecurityContext == nil {
                         spec.Containers[i].SecurityContext = &corev1.SecurityContext{}
                 }
@@ -1048,7 +1044,7 @@ func patchPodSpec(spec corev1.PodSpec, canaryImage string) corev1.PodSpec {
                 if sc.SeccompProfile == nil {
                         sc.SeccompProfile = &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}
                 }
-                // v3.16.0: Don't force RunAsNonRoot/RunAsUser. The prod image
+
                 // may run as root (e.g. Go binaries that bind to port 80).
                 // Forcing non-root breaks canaries for root-running prod images.
                 // The namespace PodSecurity label is "baseline" which allows
@@ -1059,7 +1055,6 @@ func patchPodSpec(spec corev1.PodSpec, canaryImage string) corev1.PodSpec {
                 // will run as root".
         }
 
-        // v3.16.0: Don't force pod-level RunAsNonRoot either. Same reasoning
         // as above — respect the prod image's user. The namespace's PodSecurity
         // "baseline" label provides the security boundary.
         if spec.SecurityContext == nil {
@@ -1070,13 +1065,11 @@ func patchPodSpec(spec corev1.PodSpec, canaryImage string) corev1.PodSpec {
                 psc.SeccompProfile = &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}
         }
 
-        // v3.8.4: Clear host namespaces. A sandbox canary should never need
         // hostNetwork / hostPID / hostIPC.
         spec.HostNetwork = false
         spec.HostPID = false
         spec.HostIPC = false
 
-        // v3.8.4: Replace hostPath volumes with emptyDir. hostPath volumes
         // give the canary access to host filesystem — a sandbox escape vector.
         for i := range spec.Volumes {
                 if spec.Volumes[i].HostPath != nil {

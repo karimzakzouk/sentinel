@@ -42,19 +42,16 @@ import (
         "github.com/karimzakzouk/sentinel/v3/internal/web"
 )
 
-// v3.7.0: Package-level broadcaster for SSE events. Assigned in main() to the
 // API server, used by the investigation handler to push real-time updates.
 var broadcaster events.Broadcaster = events.Noop()
 var _ = broadcaster // used in handler closures below
 
-// v4.0.0: Package-level chatops status comment manager. Assigned in main(),
 // used by executeCodeFix to post the initial [SENTINELSTATUS] comment when
 // a PR is opened. Package-level (not passed through executeFix) because
 // executeCodeFix is called from a closure that doesn't have access to main's
 // local scope.
 var chatopsStatusManager chatops.StatusCommentManager
 
-// v4.1.0: Package-level GitHub client refs, assigned in main(). Used by
 // the runtimecfg apply callback (registered BEFORE these clients exist) to
 // reconfigure them live when the GitHub App credentials change at runtime.
 // Without these package-level vars, the apply callback would have to be
@@ -66,7 +63,7 @@ var (
         pkgAutoMergeGH *automerge.GitHubClientImpl
         pkgPrReviewer  *prreview.Reviewer
         pkgCfg         *config.Config
-        // v4.2.1: Package-level auto-merge merger. Assigned in main(), used by
+
         // executeCodeFix to Track() PRs for auto-merge after they open.
         pkgAutoMergeMerger *automerge.Merger
 )
@@ -85,7 +82,6 @@ func main() {
                 listenAddr = *addr
         }
 
-        // v3.18.0: Validate config BEFORE initializing the logger — fail fast
         // on missing required fields instead of crashing 5-10 minutes later
         // at the first LLM call.
         if errs, warns := cfg.Validate(); len(errs) > 0 || len(warns) > 0 {
@@ -103,7 +99,6 @@ func main() {
                 }
         }
 
-        // v3.4.0: Initialize structured logger (JSON to stdout, level from config).
         // Falls back to stdlib log for any code not yet migrated to slog.
         logging.Init(cfg.LogLevel)
 
@@ -117,12 +112,9 @@ func main() {
                 "log_level", cfg.LogLevel,
         )
 
-        // v3.12.0: GoAI now supports Anthropic, Bedrock, Azure, and 20+ other
         // providers natively. The old "unsupported native provider" warning
         // (v3.11.0 audit #16) is no longer needed — removed.
 
-
-        // v3.11.0: Warn if the embedding model is empty but the operator is using
         // a provider that supports embeddings (audit #13). Empty default is fine
         // (uses hash fallback) but if the operator set an LLM provider expecting
         // embeddings to work, they should know.
@@ -133,8 +125,6 @@ func main() {
                 )
         }
 
-        // v3.8.0: Load runtime config (overrides env vars, editable from web UI)
-        // v3.8.4: Path now configurable via SENTINEL_RUNTIME_CONFIG_PATH env var.
         // Was hardcoded to /data/runtime-config.json which doesn't exist when
         // running locally (outside K8s). Defaults to /data/runtime-config.json
         // for in-cluster deployments, but operators running locally can set
@@ -159,14 +149,13 @@ func main() {
         }
 
         // 3. LLM router
-        // v3.4.0: retry config (was no retry — single HTTP call, killed by free-tier rate limits)
+
         router := llm.NewWithProvider(cfg.LLMProvider, cfg.ResolvedBaseURL(), cfg.LLMAPIKey, cfg.LLMFastModel, cfg.LLMFrontierModel)
         router.SetRetryConfig(cfg.LLMMaxRetries, time.Duration(cfg.LLMRetryBaseDelayMs)*time.Millisecond)
         if cfg.LLMProvider == "bedrock" {
                 router.SetBedrockRegion(func() string { r := os.Getenv("AWS_REGION"); if r == "" { return "us-east-1" }; return r }())
         }
 
-        // v4.0.0: Multi-provider failover pool. When cfg.LLMProviders is non-empty,
         // wire the pool into the router. Every LLM call then tries providers in
         // priority order with circuit-breaker failover.
         if len(cfg.LLMProviders) > 0 {
@@ -184,7 +173,6 @@ func main() {
                 )
         }
 
-        // v3.8.4: Wire the runtime config apply callback. When the user
         // saves settings via POST /settings, runtimecfg.Manager invokes
         // this callback, which propagates the new LLM provider / API key /
         // models into the live router. This is what makes the web UI's
@@ -232,8 +220,6 @@ func main() {
                         "fast_model", fastModel, "frontier_model", frontierModel,
                         "api_key_set", apiKey != "", "base_url_changed", baseURL != "")
 
-                // v3.18.0: H22 — apply sandbox config + timeouts + thresholds to the live cfg.
-                // Was: only LLM fields were applied; the v3.17.0 sandbox config fields were
                 // silently dropped (the headline feature was dead code via the web UI).
                 if rc.SandboxEnabled != nil {
                         cfg.SandboxEnabled = *rc.SandboxEnabled
@@ -269,7 +255,6 @@ func main() {
                         logging.Init(rc.LogLevel)
                 }
 
-                // v4.1.0: GitHub App credentials — when set, reconfigure all 4 GitHub
                 // clients live (no restart). When cleared, fall back to PAT.
                 // Uses package-level vars (pkgGHExec etc.) because the apply callback
                 // is registered BEFORE the clients are created.
@@ -298,8 +283,6 @@ func main() {
                 }
         })
 
-        // v3.4.0: Wire LLM metrics (avoids circular import: llm → metrics → ... → llm)
-        // v3.18.0: H9 — record token counts + estimated cost alongside count+duration.
         llm.SetMetricsRecorder(func(model, status string, duration time.Duration, inputTokens, outputTokens int) {
                 metrics.RecordLLMCall(model, status, duration)
                 if status == "success" && (inputTokens > 0 || outputTokens > 0) {
@@ -309,15 +292,14 @@ func main() {
         llm.SetInFlightHooks(metrics.LLMCallStart, metrics.LLMCallEnd)
 
         // 3.5 Vector store (HNSW + LLM embeddings) — created before pipeline for memory loop
-        // v3.4.0: embedding model now configurable (was hardcoded "text-embedding-3-small")
-        // v3.11.0: default LLMEmbeddingModel is now "" (empty) — when empty, the
+
         // vector store uses permanent hash fallback (audit #13). Also wire the
         // configurable hash-fallback dim (cfg.LLMLLMEmbeddingDim, default 1536).
         vectorStore := feedback.NewVectorStoreWithDim(cfg.ResolvedBaseURL(), cfg.LLMAPIKey, cfg.LLMEmbeddingModel, cfg.LLMEmbeddingDim)
 
         // 4. Agent pipeline (with vector store for memory loop)
         pipeline := agents.NewPipeline(router, k8sClient, cfg.GitHubToken, store, &vectorStoreAdapter{vs: vectorStore})
-        // v3.6.0: Configurable timeouts + confidence threshold (re-wired v3.8.1 — was accidentally dropped)
+
         pipeline.SetConfig(
                 cfg.InvestigatorTimeoutSec,
                 cfg.EvidenceGathererTimeoutSec,
@@ -325,56 +307,53 @@ func main() {
                 cfg.FixProposerTimeoutSec,
                 cfg.ConfidenceLoopBackThreshold,
         )
-        // v3.4.0: Wire Prometheus backend for evidence gatherer
+
         if cfg.PrometheusURL != "" {
                 pipeline.SetPrometheusURL(cfg.PrometheusURL)
         }
-        // v3.8.4: Wire the GitHub repo allowlist into the investigator.
+
         // When non-empty, the investigator refuses to clone repos outside
         // this list — primary defense against the pod-annotation SSRF.
         pipeline.SetAllowedRepos(cfg.AllowedGitHubRepos)
-        // v3.11.0: Wire gitHost + defaultBranch into the pipeline (CRITICAL audit #2 + #6).
+
         pipeline.SetGitHost(cfg.GitHost)
         pipeline.SetDefaultBranch(cfg.DefaultBranch)
-        // v3.11.0: Wire LLMPriorWeight + MaxPipelineIterations (audit #9).
+
         // Were hardcoded 0.4 + 5 in analyst.go + schemas/types.go.
         pipeline.SetLLMPriorWeight(cfg.LLMPriorWeight)
         pipeline.SetMaxIterations(cfg.MaxPipelineIterations)
 
         // 5. Safety policy (embedded, replaces OPA sidecar)
-        // v3.11.0: Wire cfg.HighRiskServices (obs-1). Was: the demo's
+
         // payment-api/billing-api/auth-service leaked into every install because
         // NewPolicy couldn't override HighRiskServices.
         policy := safety.NewPolicy(cfg.ProductionNamespaces, cfg.ConfidenceAutonomous, cfg.ConfidenceHumanReview).
                 WithHighRiskServices(cfg.HighRiskServices)
 
         // 6. Executors
-        // v3.11.0: Wire cfg.GitHost + cfg.GitHubAPIURL + cfg.DefaultBranch into
+
         // the GitHub executor (CRITICAL audit #2 + #6). Was hardcoded to
         // github.com + https://api.github.com + "main" in 14+ sites.
         ghExec := executors.NewGitHub(cfg.GitHubToken).
                 WithAPIURL(cfg.GitHubAPIURL).
                 WithGitHost(cfg.GitHost).
                 WithDefaultBranch(cfg.DefaultBranch)
-        pkgGHExec = ghExec // v4.1.0: package-level ref for runtimecfg apply callback
-        pkgCfg = cfg       // v4.1.0: package-level ref for runtimecfg apply callback
+        pkgGHExec = ghExec
+        pkgCfg = cfg
         k8sExec := executors.NewK8s(k8sClient.Clientset())
-        // v3.11.0: Wire cfg.Namespace into the sandbox (audit #8).
-        // Was: hardcoded "sentinel" in the NetworkPolicy ingress allow-list.
+
         sandbox := executors.NewSandbox(k8sClient.Clientset(), cfg.SandboxNamespacePrefix, cfg.EnableTrafficMirroring).
                 WithProbePaths(cfg.SandboxProbePaths).
                 WithSentinelNamespace(cfg.Namespace)
-        // v3.11.0: Wire configurable Kaniko settings (audit #7, #14, #2).
-        // Was: hardcoded docker.io + alpine/git:2.43.0 + gcr.io/kaniko-project/executor:v1.24.0 + github.com.
+
         kaniko := executors.NewKaniko(k8sClient.Clientset(), cfg.Namespace).
                 WithDockerHubUsername(cfg.DockerHubUsername).
                 WithRegistry(cfg.KanikoRegistry).
                 WithInitImage(cfg.KanikoInitImage).
                 WithExecutorImage(cfg.KanikoExecutorImage).
                 WithGitHost(cfg.GitHost).
-                WithGitHubToken(cfg.GitHubToken) // v3.18.0: private repo support
+                WithGitHubToken(cfg.GitHubToken)
 
-        // v3.18.0: H2 — `ready` is read by HTTP handlers on /readyz and written by a
         // background goroutine. Was a plain bool (race detector failure). Use atomic.
         var ready atomic.Bool
 
@@ -383,7 +362,7 @@ func main() {
         // v3.2: Slack alerts (graceful degradation if no webhook)
         alertSender := agents.NewAlertSender(cfg.SlackWebhook)
         // v3.2: Outcome watcher (monitors service post-fix)
-        // v3.11.0: Wire configurable Phase 1 durations (audit #9). Was hardcoded
+
         // 10min watch / 30s interval in feedback/outcome.go NewOutcomeWatcher.
         outcomeWatcher := feedback.NewOutcomeWatcher(k8sClient.Clientset(), store)
         if cfg.OutcomeWatchDurationMin > 0 || cfg.OutcomeCheckIntervalSec > 0 {
@@ -403,26 +382,24 @@ func main() {
                 }
         }()
 
-        // v3.8.2: Concurrency limiter — max N concurrent investigations to prevent
         // LLM API quota exhaustion during incident storms (Claude's review).
-        // v3.11.0: Configurable via cfg.MaxConcurrentInvestigations (audit #15).
+
         // Was hardcoded to 3.
         maxConcurrent := cfg.MaxConcurrentInvestigations
         if maxConcurrent <= 0 {
                 maxConcurrent = 3
         }
         invSem := make(chan struct{}, maxConcurrent)
-        // v3.18.0: H3 — WaitGroup tracking in-flight investigations so shutdown
+
         // can wait for them to finish (with a deadline) before closing the SQLite store.
         var invWG sync.WaitGroup
 
         // 7. The full investigation handler — runs the agent pipeline + execution
         handler := func(ctx context.Context, cluster schemas.AnomalyCluster, crName, crNamespace string) {
-                // v3.18.0: H3 — track this investigation in the WaitGroup so shutdown can wait.
+
                 invWG.Add(1)
                 defer invWG.Done()
 
-                // v3.8.2: Acquire semaphore — blocks if 3 investigations are already running
                 select {
                 case invSem <- struct{}{}:
                         defer func() { <-invSem }()
@@ -430,7 +407,6 @@ func main() {
                         return
                 }
 
-                // v3.4.0: Metrics — track investigation count + duration + active gauge.
                 invStart := time.Now()
                 finalStatus := "failed"
                 metrics.RecordInvestigationStart()
@@ -468,7 +444,7 @@ func main() {
                         "type": "started", "incident_id": incident.IncidentID.String(),
                         "service": cluster.Service, "namespace": cluster.Namespace,
                 })
-                // v3.9.2: Live pipeline trace — broadcast each phase as it happens
+
                 broadcaster.BroadcastEvent("pipeline", map[string]any{
                         "incident_id": incident.IncidentID.String(),
                         "phase": "detection", "status": "complete",
@@ -476,7 +452,6 @@ func main() {
                         "timestamp": time.Now().UTC().Format(time.RFC3339),
                 })
 
-                // v3.4.0: Attach incident_id to context so all subsequent log lines
                 // from this handler can be correlated in Datadog/Loki.
                 invCtx := logging.WithIncidentID(ctx, incident.IncidentID.String())
 
@@ -512,7 +487,6 @@ func main() {
                         logging.ErrorCtx(invCtx, "save incident (post-pipeline) failed", "error", err)
                 }
 
-                // v3.9.2: Broadcast investigation complete
                 invMsg := "Investigation complete"
                 if incident.State.RootCause != nil {
                         invMsg = fmt.Sprintf("Root cause: %s (confidence: %.0f%%)", incident.State.RootCause.Statement, incident.State.RootCause.Confidence*100)
@@ -529,7 +503,7 @@ func main() {
 
                 if incident.State.FixProposal == nil {
                         logging.InfoCtx(invCtx, "no fix proposed", "status", incident.Status)
-                        // v3.18.0: M4 — pass incidentId + rootCause so kubectl get si shows them.
+
                         rootCause := ""
                         if incident.State.RootCause != nil {
                                 rootCause = incident.State.RootCause.Statement
@@ -574,7 +548,7 @@ func main() {
                         map[string]any{"verdict": string(decision.Verdict)})
 
                 if decision.Verdict != schemas.VerdictAllow {
-                        // v3.8.4: Differentiate the two non-Allow verdicts in logs.
+
                         if decision.Verdict == schemas.VerdictRequireHumanApproval {
                                 logging.WarnCtx(invCtx, "fix requires human approval",
                                         "verdict", decision.Verdict,
@@ -654,7 +628,6 @@ func main() {
                         logging.ErrorCtx(invCtx, "save incident (resolved) failed", "error", err)
                 }
 
-                // v3.9.2: Broadcast final resolution
                 prURL := ""
                 if incident.State.ExecutionResult != nil && incident.State.ExecutionResult.PRURL != nil {
                         prURL = *incident.State.ExecutionResult.PRURL
@@ -678,7 +651,7 @@ func main() {
                 alertSender.SendAlert(incident.Cluster.Service, incident.Cluster.Namespace, incident.Cluster.Summary, prURL)
 
                 // v3.2: Start outcome watcher (monitors service recovery for 10 min)
-                // v3.5.0: Now uses WatchWithDetails — Phase 1 (10 min recovery) +
+
                 // Phase 2 (24h re-occurrence watch). Phase 2 corrects the Beta prior
                 // if the same error reappears after the initial recovery.
                 if success && prURL != "" {
@@ -711,7 +684,7 @@ func main() {
                         "pr_url": prURL, "success": success,
                 })
                 finalStatus = string(incident.Status)
-                // v3.18.0: M4 — pass confidence + prURL + rootCause so kubectl get si shows them.
+
                 rootCause := ""
                 confidence := 0.0
                 if incident.State.RootCause != nil {
@@ -739,7 +712,6 @@ func main() {
                 w.Run(ctx)
         }()
 
-        // v3.8.4: Background reaper for leaked sandbox namespaces. The in-process
         // defer cleanup doesn't survive pod restarts — if Sentinel is killed
         // mid-verification, the sentinel-sandbox-* namespace leaks forever.
         // This goroutine runs every 5 minutes and deletes any sandbox namespace
@@ -760,7 +732,6 @@ func main() {
                 }
         }()
 
-        // v3.5.0: Cross-service incident correlation.
         // Detects cascading failures (3+ services failing within 60s) and
         // identifies the most-recently-deployed service as the likely cause.
         // Declared BEFORE clustererHandler so the closure can capture it.
@@ -791,7 +762,6 @@ func main() {
 
                 repo := annotations["sentinel.io/repo"]
 
-                // v3.5.0: Register this incident with the correlator. If a cascade is
                 // detected (3+ services failing simultaneously), the correlator emits
                 // an event and we skip the individual investigation — the cascade
                 // handler will trigger a rollback instead.
@@ -857,7 +827,7 @@ func main() {
                 }
 
                 // Send to clusterer — it will group + dedup + emit one trigger
-                // v3.2.4: No pod logs in the signal — the investigator fetches them
+
                 clusterer.Send(ctx, detection.Signal{
                         Type:      detection.SignalLogError,
                         Service:   service,
@@ -870,9 +840,9 @@ func main() {
 
         detector := detection.NewWithConfig(
                 k8sClient.Clientset(), detectionHandler, cfg.SlackWebhook,
-                time.Duration(cfg.DetectionCooldownSec)*time.Second, // v3.11.0: was hardcoded 5*time.Minute (audit #9)
-                cfg.DetectionTailLines,                              // v3.11.0: was hardcoded 100 (audit #9)
-                cfg.SkipNamespaces,                                  // v3.11.0: was hardcoded kube-system/kube-public/kube-node-lease (audit #11)
+                time.Duration(cfg.DetectionCooldownSec)*time.Second,
+                cfg.DetectionTailLines,
+                cfg.SkipNamespaces,
         )
         go func() {
                 logging.Info("detection layer started (live log streaming + pod status)")
@@ -880,7 +850,7 @@ func main() {
         }()
 
         go func() {
-                // v3.18.0: H6 — panic recovery for background goroutine.
+
                 defer func() {
                         if r := recover(); r != nil {
                                 logging.Error("ready-setter goroutine panicked", "panic", r)
@@ -912,8 +882,7 @@ func main() {
                                 Severity:  schemas.SeverityWarning,
                                 Summary:   fmt.Sprintf("Manual investigation: %s", reason),
                         }
-                        // v3.11.0: Use cfg.Namespace instead of hardcoded "sentinel" (audit #8).
-                        // Was: go handler(ctx, cluster, "manual", "sentinel")
+
                         // which broke when the Helm release wasn't named "sentinel" — the
                         // SentinelIncident CR would be created in a nonexistent namespace
                         // and RBAC would deny it.
@@ -922,42 +891,36 @@ func main() {
                 },
                 func() bool { return ready.Load() },
         )
-        // v3.8.4: Enable admin API bearer-token auth when SENTINEL_API_TOKEN is set.
+
         // Empty token = auth disabled (logs a loud warning). Health/readiness/metrics
         // endpoints remain open so kubelet probes and Prometheus still work.
         apiServer.SetAPIToken(cfg.APIToken)
 
-        // v3.8.5: Wire the embedded web UI. The UI is a Next.js static export
         // compiled into the binary via go:embed (internal/web/out/). Without
         // this call, the API server serves a placeholder "Web UI not built"
         // page even though the UI is embedded in the binary.
         apiServer.SetWebUIHandler(web.Handler())
 
-        // v3.5.0: Wire predictive PR review (GitHub webhook receiver).
-        // v3.8.0: If GitHub App credentials are configured, use the app for
         // verified bot identity + auto-webhook registration.
-        // v3.11.0: Wire cfg.GitHubAPIURL for GitHub Enterprise support (audit #2).
-        // v3.13.0: Actually wire the App into prReviewer (was dead code — audit #2).
+
         prReviewer := prreview.New(cfg.GitHubToken, cfg.GitHubWebhookSecret, &prReviewVectorAdapter{vs: vectorStore}).
                 WithAPIURL(cfg.GitHubAPIURL)
-        pkgPrReviewer = prReviewer // v4.1.0: package-level ref for runtimecfg apply callback
+        pkgPrReviewer = prReviewer
         apiServer.SetWebhookHandler(http.HandlerFunc(prReviewer.HandleWebhook))
 
-        // v4.0.0: Wire chatops — PR-comment-driven command execution.
         // Creates the dependency bag, GitHub client, reactions client,
         // status comment manager, and webhook handler. All wired into the
         // API server via SetChatopsHandler. The webhook handler dispatches
         // to both prreview (pull_request events) and chatops (issue_comment).
         chatopsGHClient := chatops.NewGitHubClient(cfg.GitHubToken, cfg.GitHubAPIURL)
-        pkgChatopsGH = chatopsGHClient // v4.1.0: package-level ref for runtimecfg apply callback
+        pkgChatopsGH = chatopsGHClient
         chatopsReactions := chatops.NewReactionsClient(chatopsGHClient)
         chatopsStatus := chatops.NewStatusCommentManager(chatopsGHClient)
         chatopsStatusManager = chatopsStatus // assign to package var for executeCodeFix
 
-        // v4.0.0: Auto-merge — policy + merger + GitHub client.
         // Created before chatopsDeps so the deps bag can reference the merger.
         autoMergeGH := automerge.NewGitHubClient(cfg.GitHubToken, cfg.GitHubAPIURL)
-        pkgAutoMergeGH = autoMergeGH // v4.1.0: package-level ref for runtimecfg apply callback
+        pkgAutoMergeGH = autoMergeGH
         autoMergeCfg := automerge.Config{
                 Enabled:              cfg.AutoMergeEnabled,
                 Namespaces:           cfg.AutoMergeNamespaces,
@@ -969,9 +932,8 @@ func main() {
         }
         autoMergePolicy := automerge.NewPolicy(autoMergeCfg, policy)
         autoMergeMerger := automerge.NewMerger(autoMergePolicy, autoMergeGH, &autoMergeStoreAdapter{store: store}, &autoMergeOutcomeAdapter{watcher: outcomeWatcher, policy: autoMergePolicy})
-        pkgAutoMergeMerger = autoMergeMerger // v4.2.1: package-level ref for executeCodeFix
+        pkgAutoMergeMerger = autoMergeMerger
 
-        // v4.2.5: Wire callbacks so the merger updates the [SENTINELSTATUS] comment
         // after merge/skip. Was: the status comment said "(not configured)" forever.
         autoMergeMerger.SetOnMerged(func(repo string, prNumber int) {
                 if chatopsStatusManager != nil {
@@ -1011,11 +973,10 @@ func main() {
         chatopsHandler := chatops.NewWebhookHandler(chatopsDeps, cfg.GitHubWebhookSecret)
         apiServer.SetChatopsHandler(chatopsHandler)
 
-        // v4.0.0: Wire the LLM provider pool + auto-merge status getters
         // so /providers and /automerge endpoints work.
         apiServer.SetProvidersStatusGetter(&providersStatusAdapter{router: router})
         apiServer.SetAutoMergeStatusGetter(&autoMergeStatusAdapter{policy: autoMergePolicy, merger: autoMergeMerger})
-        // v4.1.0: Wire the GitHubAppManager so /settings/github-app + sentinelctl app setup work.
+
         apiServer.SetGitHubAppManager(rtCfg)
 
         logging.Info("chatops enabled",
@@ -1029,33 +990,28 @@ func main() {
                 "max_per_hour", cfg.AutoMergeMaxPerHour,
         )
 
-        // v4.0.0: Start the auto-merge merger loop.
         if cfg.AutoMergeEnabled {
                 go autoMergeMerger.Run(ctx, 30*time.Second)
                 logging.Info("auto-merge merger started", "poll_interval", "30s")
         }
 
-        // v4.2.0: Start the auto-remediation controller (disk pressure, stuck pods).
         if cfg.AutoRemediationEnabled {
                 remediation := executors.NewRemediationController(k8sClient.Clientset(), cfg.SkipNamespaces)
                 go remediation.Run(ctx, 5*time.Minute)
                 logging.Info("auto-remediation controller started", "poll_interval", "5m")
         }
 
-        // v3.8.0: GitHub App — verified bot identity + auto-webhook registration
-        // v3.11.0: Use NewWithAPIURL for GitHub Enterprise support (audit #2).
-        // v3.13.0: Wire the App into prReviewer via WithGitHubApp() so PR comments
         // appear as the verified "Sentinel" bot instead of the PAT user.
-        // v4.0.0: Also wire into ghExec (PR opener), chatopsGHClient (comments +
+
         // reactions), and autoMergeGH (merge API). When configured, ALL GitHub
         // operations appear as "Sentinel[bot]" instead of the PAT owner.
-        // v4.0.0: Also read from env vars (SENTINEL_GITHUB_APP_*) not just runtime config.
+
         var ghApp *githubapp.App
         rtConfig := rtCfg.Get()
         appID := rtConfig.GitHubAppID
         appKey := rtConfig.GitHubAppPrivateKey
         appInstall := rtConfig.GitHubAppInstallID
-        // v4.0.0: Fall back to env vars if runtime config is empty
+
         if appID == "" {
                 appID = cfg.GitHubAppID
                 appKey = cfg.GitHubAppPrivateKey
@@ -1067,10 +1023,10 @@ func main() {
                         logging.Error("GitHub App init failed", "error", err)
                 } else {
                         ghApp = app
-                        prReviewer.WithGitHubApp(ghApp)     // v3.13.0: predictive PR review
-                        ghExec.WithTokenProvider(ghApp)     // v4.0.0: PR opening + branch pushing
-                        chatopsGHClient.WithTokenProvider(&chatopsTokenProviderAdapter{app: ghApp})  // v4.0.0: comments + reactions + labels + merges
-                        autoMergeGH.WithTokenProvider(&automergeTokenProviderAdapter{app: ghApp})    // v4.0.0: auto-merge API calls
+                        prReviewer.WithGitHubApp(ghApp)
+                        ghExec.WithTokenProvider(ghApp)
+                        chatopsGHClient.WithTokenProvider(&chatopsTokenProviderAdapter{app: ghApp})
+                        autoMergeGH.WithTokenProvider(&automergeTokenProviderAdapter{app: ghApp})
                         logging.Info("GitHub App configured — ALL GitHub operations appear as Sentinel[bot]",
                                 "app_id", appID,
                                 "install_id", appInstall,
@@ -1084,7 +1040,6 @@ func main() {
         }
         _ = ghApp // Used by the reviewers + executors above
 
-        // v3.5.0: Wire interactive Slack bot (two-way commands).
         // Accepts: pause, resume, investigate, list, status, help.
         // The bot's IsPaused() is checked by the detection layer before triggering.
         slackBot := slackbot.New(cfg.SlackSigningSecret, cfg.SlackBotUserID,
@@ -1096,7 +1051,7 @@ func main() {
                                 Severity:  schemas.SeverityWarning,
                                 Summary:   fmt.Sprintf("Slack-triggered: %s", reason),
                         }
-                        // v3.11.0: Use cfg.Namespace instead of hardcoded "sentinel" (audit #8).
+
                         go handler(ctx, cluster, "slack", cfg.Namespace)
                         return cluster.ClusterID.String(), nil
                 },
@@ -1120,28 +1075,24 @@ func main() {
         )
         apiServer.SetSlackHandler(http.HandlerFunc(slackBot.HandleEvents))
 
-        // v3.7.0: Wire SSE broadcaster + v3.8.0: Wire runtime config saver + pause controller
         broadcaster = apiServer
         apiServer.SetPauseController(slackBot)
         apiServer.SetRuntimeCfgSaver(rtCfg)
 
-        // v3.5.0: Wire the Slack bot token for posting @mention replies.
         if cfg.SlackBotToken != "" {
                 slackBot.SetBotToken(cfg.SlackBotToken)
         }
 
-        // v4.0.0: Wire the slack bot as the chatops pause controller so
         // /sentinel pause + /sentinel resume can pause autonomous mode.
         chatopsDeps.PauseController = slackBot
 
-        // v3.5.0: Wire the Slack bot's pause checker into the detection layer.
         // When autonomous mode is paused via Slack, the clusterer skips emitting
         // triggers — no new investigations start until resumed.
         clusterer.SetPauseChecker(slackBot)
 
         go func() {
                 if err := apiServer.Start(); err != nil && err != http.ErrServerClosed {
-                        // v3.13.0: audit finding #20 — API bind failure should be fatal.
+
                         // Previously, the error was just logged and Sentinel continued running
                         // with no API — kubelet readiness probe fails, pod gets restarted,
                         // but the watcher + detector keep running against a dead API.
@@ -1156,14 +1107,12 @@ func main() {
         <-sigCh
         logging.Info("shutting down...")
 
-        // v3.18.0: H4 — stop clusterer timers so pending triggers don't fire post-shutdown.
         clusterer.Stop()
-        // v3.18.0: H1 — cancel all active pod log streams so they don't race with store.Close().
+
         detector.StopAllLogStreams()
 
         cancel()
 
-        // v3.18.0: H3 — wait for in-flight investigations to finish (with a deadline)
         // before closing the SQLite store. Was: process could os.Exit mid-LLM-call,
         // leaving half-written incidents and half-applied branches.
         done := make(chan struct{})
@@ -1188,7 +1137,7 @@ func main() {
 // For CODE_FIX / ROLL_FORWARD: 4-phase flow (branch → Kaniko → sandbox → PR)
 // detectSandboxFailureLevel parses the sandbox summary to determine which
 // verification level failed (1, 2, or 3). Used for per-Level metrics.
-// v3.18.0: H34 — operators can now see which level is the bottleneck.
+
 func detectSandboxFailureLevel(summary string) int {
         switch {
         case strings.Contains(summary, "canary_pods_not_ready"):
@@ -1225,7 +1174,7 @@ func executeFix(
                 return k8sExec.Restart(ctx, fp)
 
         case schemas.FixScale:
-                // v3.4.0: configurable default replicas (was hardcoded int32(2))
+
                 newReplicas := cfg.ScaleFixDefaultReplicas
                 return k8sExec.Scale(ctx, fp, newReplicas)
 
@@ -1266,7 +1215,7 @@ func executeCodeFix(
         }
 
         // Phase 2 + 3: Build canary + sandbox verification
-        // v3.14.0: Operator-controlled sandbox behavior via 3 config knobs:
+
         //   SandboxEnabled — should we run the sandbox at all? (default: true)
         //   SandboxRequired — if sandbox fails, block the PR? (default: false = open with needs-review)
         //   SandboxMaxRetries — how many times to retry on sandbox failure (default: 2)
@@ -1278,7 +1227,6 @@ func executeCodeFix(
         sandboxSummary := "skipped (sandbox disabled)"
         sandboxRan := false
 
-        // v3.14.0: Check if sandbox should run at all
         shouldRunSandbox := cfg.SandboxEnabled
         if !shouldRunSandbox {
                 sandboxSummary = "skipped (sandbox disabled — fast mode)"
@@ -1305,7 +1253,7 @@ func executeCodeFix(
 
                 for sandboxAttempt := 0; sandboxAttempt <= maxRetries; sandboxAttempt++ {
                         if sandboxAttempt > 0 {
-                                // v3.14.0: Layer B — feed the sandbox failure back to the fix proposer.
+
                                 // Only sandbox Level 1/2/3 failures trigger retries (not Kaniko failures).
                                 logging.Info("sandbox retry: feeding failure back to fix proposer",
                                         "fix_id", fp.FixID, "attempt", sandboxAttempt+1, "max", maxRetries+1)
@@ -1369,19 +1317,19 @@ func executeCodeFix(
 
                         // Phase 3: Sandbox verification
                         logging.Info("execution Phase 3: running sandbox verification", "fix_id", fp.FixID, "attempt", sandboxAttempt+1)
-                        // v3.18.0: H34 — record which retry attempt we're on.
+
                         metrics.RecordSandboxRetry(sandboxAttempt + 1)
                         sandboxStart := time.Now()
                         sb := sandbox.Run(ctx, incident)
                         sandboxVerified = sb.Verified
                         sandboxSummary = sb.Summary
                         metrics.RecordSandboxVerification(sandboxVerified, time.Since(sandboxStart))
-                        // v3.18.0: H34 — record which Level failed for observability.
+
                         if !sandboxVerified {
                                 level := detectSandboxFailureLevel(sb.Summary)
                                 metrics.RecordSandboxLevelFailure(level)
                         }
-                        // v3.18.0: C12 — include pod logs + probe results in the LLM feedback
+
                         // (was a one-line Summary, making the retry loop ineffective).
                         if sb.PodLogs != "" {
                                 sandboxSummary += "\n\n--- POD LOGS ---\n" + sb.PodLogs
@@ -1399,7 +1347,6 @@ func executeCodeFix(
                                 break // success — no more retries needed
                         }
 
-                        // v3.14.2: Don't retry on infrastructure errors (RBAC, image pull,
                         // namespace creation). The LLM can't fix these — only code issues
                         // (Level 1/2/3 failures) should trigger the feedback retry loop.
                         if sb.InfrastructureError {
@@ -1415,7 +1362,6 @@ func executeCodeFix(
                 }
         }
 
-        // v3.14.0: If sandbox is required and it failed, don't open the PR.
         if sandboxRan && !sandboxVerified && cfg.SandboxRequired {
                 logging.Error("sandbox verification failed and sandbox is required — not opening PR",
                         "fix_id", fp.FixID, "summary", sandboxSummary)
@@ -1468,7 +1414,6 @@ func executeCodeFix(
                 "sandbox_verified": sandboxVerified,
         })
 
-        // v4.0.0: Persist the PR association so chatops commands on this PR
         // can find the incident via FindIncidentByPR (uses the new pr_repo
         // + pr_number columns added by the v4.0.0 DB migration).
         repoName := ""
@@ -1481,9 +1426,8 @@ func executeCodeFix(
                 }
         }
 
-        // v4.0.0: Post the initial [SENTINELSTATUS] comment so reviewers see
         // the state + available commands immediately when they open the PR.
-        // v4.2.6: MUST be posted BEFORE EvaluateNow — EvaluateNow is synchronous
+
         // and triggers the merge + onMerged callback which updates the status
         // comment. If we post the initial comment AFTER EvaluateNow, it overwrites
         // the merged status with "⏳ Queued".
@@ -1512,7 +1456,6 @@ func executeCodeFix(
                 }
         }
 
-        // v4.2.6: Track for auto-merge AFTER posting the status comment.
         // EvaluateNow is synchronous — it triggers the merge + onMerged callback
         // which updates the status comment to "✅ Merged". If we post the initial
         // comment after this, it overwrites "✅ Merged" with "⏳ Queued".
@@ -1545,7 +1488,7 @@ func executeCodeFix(
                 if incident.State.GovernanceDecision != nil {
                         policyVerdict = string(incident.State.GovernanceDecision.Verdict)
                 }
-                // v4.2.3: Read sentinel.io/auto-merge annotation from the incident.
+
                 // Was missing — defaulted to false, policy rejected every PR.
                 autoMergeAnnotation := false
                 if incident.Cluster.Annotations != nil {
@@ -1591,7 +1534,6 @@ func executeCodeFix(
                 pkgAutoMergeMerger.EvaluateNow(ctx, repoName, prResult.PRNumber)
         }
 
-        // v4.2.6: Status comment was already posted above (before EvaluateNow).
         // The onMerged callback updates it to "✅ Merged" if the merge succeeds.
         return nil
 }
@@ -1669,8 +1611,6 @@ func (a *storeAdapter) ListRecentIncidents(ctx context.Context, limit int) ([]an
         return out, nil
 }
 
-// v3.3.1: GetIncident — was missing, causing /incidents/{id} to return 404.
-// v3.8.4: Fixed nil-interface trap. feedback.Store.GetIncident returns
 // (*schemas.Incident)(nil) for not-found, but boxing a typed nil pointer
 // into `any` produces a non-nil interface. Without the explicit nil check,
 // every lookup of a non-existent UUID returned 200 with body "null" instead
@@ -1687,7 +1627,6 @@ func (a *storeAdapter) GetIncident(ctx context.Context, id uuid.UUID) (any, erro
         return inc, nil
 }
 
-// v3.8.4: FindIncidentByPrefix — bridges feedback.Store.FindIncidentByPrefix
 // to the api.Store interface. Without this adapter method, the type assertion
 // in handleIncident would fail (storeAdapter doesn't have the method) and
 // every short-ID lookup would return 400 "prefix matching not supported".
@@ -1704,7 +1643,7 @@ func (a *storeAdapter) FindIncidentByPrefix(ctx context.Context, prefix string) 
 }
 
 // vectorStoreAdapter bridges feedback.VectorStore to agents.VectorStore interface.
-// v3.3.1: Passes through REAL cosine similarity scores from the underlying HNSW
+
 // index. The previous version fabricated scores (0.9 for top result, descending
 // by 0.1) which made the investigator's memory loop fire applyKnownFix on every
 // incident after the first success — see internal/feedback/vector.go.
@@ -1731,13 +1670,12 @@ func (a *vectorStoreAdapter) Search(ctx context.Context, text string, k int) ([]
         return out, scores, nil
 }
 
-// v3.7.0: Pass through hash fallback status
 func (a *vectorStoreAdapter) UsingHashFallback() bool {
         return a.vs.UsingHashFallback()
 }
 
 // prReviewVectorAdapter bridges feedback.VectorStore to prreview.VectorStore.
-// v3.5.0: Used by the predictive PR review feature to score PR diffs against
+
 // incident memory. Same pattern as vectorStoreAdapter above.
 type prReviewVectorAdapter struct {
         vs *feedback.VectorStore
@@ -1762,12 +1700,9 @@ func (a *prReviewVectorAdapter) Search(ctx context.Context, text string, k int) 
         return out, scores, nil
 }
 
-// v3.7.0: Pass through hash fallback status
 func (a *prReviewVectorAdapter) UsingHashFallback() bool {
         return a.vs.UsingHashFallback()
 }
-
-// v4.0.0: chatops adapters — bridge feedback.Store + slog to chatops interfaces.
 
 // chatopsStoreAdapter adapts *feedback.Store to the chatops.Store interface.
 // The chatops package uses its own minimal Incident type (decoupled from
@@ -1853,8 +1788,6 @@ type slogAdapter struct{}
 func (s *slogAdapter) Info(msg string, args ...any)  { logging.Info(msg, args...) }
 func (s *slogAdapter) Warn(msg string, args ...any)  { logging.Warn(msg, args...) }
 func (s *slogAdapter) Error(msg string, args ...any) { logging.Error(msg, args...) }
-
-// v4.0.0: Auto-merge adapters — bridge automerge package to feedback.Store + outcome watcher.
 
 // autoMergeStoreAdapter adapts feedback.Store to automerge.Store.
 type autoMergeStoreAdapter struct {
@@ -1995,8 +1928,6 @@ func (a *chatopsSandboxAdapter) RunForIncident(ctx context.Context, incidentID s
         return result.Verified, result.Summary, nil
 }
 
-// v4.0.0: Status adapters for the /providers and /automerge API endpoints.
-
 // providersStatusAdapter wraps *llm.Router to implement api.ProvidersStatusGetter.
 type providersStatusAdapter struct {
         router *llm.Router
@@ -2054,7 +1985,6 @@ func (a *autoMergeStatusAdapter) AutoMergeStatus() any {
         }
 }
 
-// v4.0.0: GitHub App token provider adapters — bridge githubapp.App to the
 // TokenProvider interfaces in chatops + automerge packages.
 
 // chatopsTokenProviderAdapter wraps githubapp.App for the chatops package.

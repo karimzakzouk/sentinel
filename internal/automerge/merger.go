@@ -28,9 +28,9 @@ type Merger struct {
         mu       sync.Mutex
         tracked  map[string]*TrackedPR // key: "repo#pr_number"
         stopCh   chan struct{}
-        // v4.2.5: Per-PR locks to prevent EvaluateNow + poll from racing.
+
         prLocks   sync.Map // key: "repo#pr_number" → *sync.Mutex
-        // v4.2.5: Callback to update the status comment after merge/skip.
+
         onMerged  func(repo string, prNumber int)
         onSkipped func(repo string, prNumber int, reason string)
 }
@@ -208,14 +208,13 @@ func (m *Merger) EvaluateNow(ctx context.Context, repo string, prNumber int) {
 }
 
 // evaluateAndMerge runs the policy + merges if approved.
-// v4.2.5: Wrapped in a per-PR mutex to prevent EvaluateNow + poll from
+
 // racing on the same PR (which caused duplicate merges + duplicate comments).
 func (m *Merger) evaluateAndMerge(ctx context.Context, pr *TrackedPR) {
         lock := m.prLock(pr.Repo, pr.PRNumber)
         lock.Lock()
         defer lock.Unlock()
 
-        // v4.2.5: Check if this PR is still tracked (might have been merged/untracked
         // by a previous evaluateAndMerge call that won the lock).
         m.mu.Lock()
         _, stillTracked := m.tracked[prKey(pr.Repo, pr.PRNumber)]
@@ -261,7 +260,7 @@ func (m *Merger) evaluateAndMerge(ctx context.Context, pr *TrackedPR) {
         // Evaluate the policy.
         decision := m.policy.Evaluate(pr.Input)
         if !decision.AutoMerge {
-                // v4.2.2: Always log the reason — was silent when GatesFailed was empty
+
                 // (which happens when a pre-gate check fails, e.g. missing annotation).
                 log.Printf("[automerge] PR %s#%d NOT auto-merging: %s (gates_passed=%v gates_failed=%v)",
                         pr.Repo, pr.PRNumber, decision.Reason, decision.GatesPassed, decision.GatesFailed)
@@ -282,7 +281,7 @@ func (m *Merger) evaluateAndMerge(ctx context.Context, pr *TrackedPR) {
                         _ = m.gh.PostComment(ctx, pr.Repo, pr.PRNumber, body)
                         _ = m.store.UpdateAutoMergeStatus(ctx, pr.IncidentID, "skipped:"+decision.Reason)
                         m.Untrack(pr.Repo, pr.PRNumber)
-                        // v4.2.5: Update the status comment
+
                         if m.onSkipped != nil {
                                 m.onSkipped(pr.Repo, pr.PRNumber, decision.Reason)
                         }
@@ -313,7 +312,6 @@ func (m *Merger) evaluateAndMerge(ctx context.Context, pr *TrackedPR) {
                 pr.BaseBranch, formatGatesList(decision.GatesPassed, true))
         _ = m.gh.PostComment(ctx, pr.Repo, pr.PRNumber, body)
 
-        // v4.2.5: Update the status comment
         if m.onMerged != nil {
                 m.onMerged(pr.Repo, pr.PRNumber)
         }

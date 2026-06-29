@@ -1,5 +1,5 @@
 // Package runtimecfg provides hot-reloadable runtime configuration.
-// v3.8.0: Settings changed via the web UI are persisted to /data/runtime-config.json
+
 // and applied immediately — no restart needed.
 package runtimecfg
 
@@ -31,7 +31,7 @@ type RuntimeConfig struct {
         LLMMaxRetries               int     `json:"llm_max_retries,omitempty"`
         LLMRetryBaseDelayMs         int     `json:"llm_retry_base_delay_ms,omitempty"`
         SkipSandboxNonProd          *bool   `json:"skip_sandbox_non_prod,omitempty"`
-        // v3.17.0: Sandbox config — editable from the web UI Settings page.
+
         SandboxEnabled              *bool   `json:"sandbox_enabled,omitempty"`
         SandboxRequired             *bool   `json:"sandbox_required,omitempty"`
         SandboxMaxRetries           int     `json:"sandbox_max_retries,omitempty"`
@@ -72,7 +72,7 @@ type Manager struct {
         mu       sync.RWMutex
         config   *RuntimeConfig
         filePath string
-        // v3.8.4: appliedCallback is invoked after every successful Save. It
+
         // receives the new RuntimeConfig so the caller can propagate changes
         // to live components (LLM router, pipeline, sandbox, etc.) without
         // requiring a restart. Set via SetApplyCallback.
@@ -83,7 +83,7 @@ type Manager struct {
 // Save. The callback runs under the Manager's lock — keep it fast (it
 // should just copy fields into live components, not do I/O).
 //
-// v3.8.4: This is the mechanism that makes the web UI's Settings page
+
 // actually take effect. main.go registers a callback that propagates the
 // new LLM provider/model/key, timeouts, and confidence thresholds into
 // the live Router, Pipeline, and Policy. Previously, settings were saved
@@ -128,7 +128,7 @@ func (m *Manager) Save(cfg *RuntimeConfig) error {
         if err != nil {
                 return err
         }
-        // v3.8.4: Create the parent directory if it doesn't exist. The default
+
         // path /data/runtime-config.json works in K8s (PVC mounted at /data)
         // but fails locally with "no such file or directory" when /data doesn't
         // exist. This makes local testing work without requiring operators to
@@ -144,7 +144,7 @@ func (m *Manager) Save(cfg *RuntimeConfig) error {
         }
         m.config = cfg
         log.Printf("[runtimecfg] saved to %s (%d overrides)", m.filePath, countOverrides(cfg))
-        // v3.8.4: Invoke the apply callback while still holding the lock —
+
         // the callback is expected to be a fast field-copy, not I/O. If it
         // panics, the deferred unlock still runs (the panic propagates up
         // through SaveFromJSON -> api.handleSettings -> recovers via the
@@ -156,7 +156,7 @@ func (m *Manager) Save(cfg *RuntimeConfig) error {
 }
 
 // SaveFromJSON saves config from raw JSON bytes (implements api.RuntimeCfgSaver).
-// v3.18.0: M8 — validate before persisting. Was: any garbage JSON was accepted
+
 // and applied (negative timeouts, invalid providers, etc.), causing silent failures.
 func (m *Manager) SaveFromJSON(jsonBytes []byte) error {
         var cfg RuntimeConfig
@@ -170,7 +170,7 @@ func (m *Manager) SaveFromJSON(jsonBytes []byte) error {
 }
 
 // Validate returns a list of validation errors (empty if config is valid).
-// v3.18.0: M8 — was missing; operators could POST {"investigator_timeout_sec": -1}
+
 // and break every LLM call (negative timeout = already-expired context).
 func (c *RuntimeConfig) Validate() []string {
         var errs []string
@@ -248,14 +248,13 @@ func countOverrides(c *RuntimeConfig) int {
         if c.LLMMaxRetries > 0 { n++ }
         if c.LLMRetryBaseDelayMs > 0 { n++ }
         if c.SkipSandboxNonProd != nil { n++ }
-        // v3.18.0: M20 — was missing sandbox fields (count under-reported).
+
         if c.SandboxEnabled != nil { n++ }
         if c.SandboxRequired != nil { n++ }
         if c.SandboxMaxRetries > 0 { n++ }
         return n
 }
 
-// v4.1.0: GitHubAppManager methods. Implements api.GitHubAppManager.
 // Stores App credentials in runtime config + triggers the apply callback
 // so main.go's wiring code can reconfigure the live GitHub clients.
 

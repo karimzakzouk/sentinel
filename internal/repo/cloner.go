@@ -1,5 +1,5 @@
 // Package repo provides repository cloning + local search for the agent pipeline.
-// v3.0.2: replaces the GitHub API file-fetch approach with a local clone,
+
 // exactly like SWE-agent / OpenHands / Aider do it.
 //
 // The flow:
@@ -32,20 +32,20 @@ import (
 
 // Cloner clones a GitHub repo to a local temp dir using go-git (pure Go, no CGO).
 //
-// v3.11.0: Now supports GitHub Enterprise / GitLab / Bitbucket via
+
 // cfg.GitHost (CRITICAL audit #2). Was hardcoded to github.com in 2 sites.
 type Cloner struct {
         githubToken string
-        gitHost     string // v3.11.0: default "github.com"; override via WithGitHost
-        defaultBranch string // v3.11.0: default "main"; override via WithDefaultBranch
+        gitHost     string
+        defaultBranch string
 }
 
 // NewCloner creates a Cloner.
 func NewCloner(githubToken string) *Cloner {
         return &Cloner{
                 githubToken:   githubToken,
-                gitHost:       "github.com", // v3.11.0: default
-                defaultBranch: "main",       // v3.11.0: default
+                gitHost:       "github.com",
+                defaultBranch: "main",
         }
 }
 
@@ -78,7 +78,7 @@ func (c *Cloner) WithDefaultBranch(branch string) *Cloner {
 // read-only in the distroless image (readOnlyRootFilesystem: true).
 func (c *Cloner) Clone(ctx context.Context, repo, ref string) (string, error) {
         if ref == "" {
-                ref = c.defaultBranch // v3.11.0: was hardcoded "main" (audit #6)
+                ref = c.defaultBranch
         }
 
         // Use /data/repos/ (the mounted PVC) instead of /tmp (read-only in distroless)
@@ -88,7 +88,6 @@ func (c *Cloner) Clone(ctx context.Context, repo, ref string) (string, error) {
                 cloneDir = os.TempDir()
         }
 
-        // v3.17.0: Clone caching — if a clone of this repo+ref already exists,
         // do a git fetch (only downloads new commits) instead of a full clone.
         // Saves 2-5s on re-investigations of the same service.
         safeRepo := strings.ReplaceAll(repo, "/", "-")
@@ -100,7 +99,6 @@ func (c *Cloner) Clone(ctx context.Context, repo, ref string) (string, error) {
                 existingDir := matches[0]
                 log.Printf("[cloner] found existing clone at %s, fetching updates", existingDir)
 
-                // v3.18.0: SECURITY — fetch URL must NOT embed the token (logs leak).
                 // Use a token-free URL + Auth option on the fetch.
                 fetchURL := fmt.Sprintf("https://%s/%s.git", c.gitHost, repo)
                 fetchAuth := c.gitAuth()
@@ -146,7 +144,6 @@ func (c *Cloner) Clone(ctx context.Context, repo, ref string) (string, error) {
                 return "", fmt.Errorf("create clone dir: %w", err)
         }
 
-        // v3.18.0: SECURITY — clone URL must NOT embed the token in the URL
         // itself (go-git error messages include the URL, leaking the token to logs).
         // Instead, use a token-free URL + the Auth option on CloneOptions.
         cloneURL := fmt.Sprintf("https://%s/%s.git", c.gitHost, repo)
@@ -220,7 +217,7 @@ func (c *Cloner) Clone(ctx context.Context, repo, ref string) (string, error) {
 }
 
 // gitAuth returns an HTTP basic-auth object for go-git, or nil if no token is set.
-// v3.18.0: Replaces URL-embedded token (which leaked to logs on clone failure).
+
 func (c *Cloner) gitAuth() *githttpprovider.BasicAuth {
         if c.githubToken == "" {
                 return nil
@@ -252,7 +249,7 @@ func isHex(s string) bool {
 }
 
 // Cleanup removes the cloned repo.
-// v3.18.0: Logs an error if RemoveAll fails (was silently swallowed — caused
+
 // slow PVC disk leak when clones contained read-only files).
 func (c *Cloner) Cleanup(path string) {
         if err := os.RemoveAll(path); err != nil {
@@ -399,7 +396,7 @@ func Search(root string, pattern string, maxResults int) ([]SearchResult, error)
 
 // ReadFile reads a file from the cloned repo.
 //
-// v3.8.4: This function is called with paths that originate from LLM output
+
 // (the investigator asks the LLM which files to read, and the LLM returns
 // arbitrary strings). The previous implementation called
 // filepath.Join(root, relPath) with no validation, so an LLM that returned

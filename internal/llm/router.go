@@ -1,5 +1,5 @@
 // Package llm provides the LLM router backed by GoAI.
-// v3.12.0+: Supports 25+ native providers (OpenAI, Anthropic, Bedrock, Azure,
+
 // Google, Vertex, OpenRouter, Groq, Mistral, Cohere, xAI, DeepSeek, Ollama,
 // vLLM, etc.) via github.com/zendev-sh/goai. No proxy needed.
 package llm
@@ -20,49 +20,48 @@ import (
 
 // Router picks fast vs frontier model and centralizes the API client.
 //
-// v3.12.0: Now backed by GoAI (github.com/zendev-sh/goai) for 25+ native
+
 // LLM providers. The provider field determines which GoAI provider package
 // is used (anthropic → native /v1/messages, bedrock → SigV4, azure →
 // native Azure, etc.). For OpenAI-compatible providers (zai, custom,
 // litellm, ollama, vllm), the openai provider package is used with a
 // custom base URL.
 //
-// v4.0.0: Multi-provider failover pool. When cfg.LLMProviders is non-empty,
+
 // the Router wraps every LLM call in pool.Call(), which tries providers in
 // priority order and trips a circuit breaker on failure. The legacy
 // single-provider fields (providerType, baseURL, apiKey, fastModel,
 // frontierModel) are still used as a fallback when the pool is empty
 // (backwards compat with existing installs).
 type Router struct {
-        providerType   string // v3.12.0: "openai", "anthropic", "bedrock", "azure", etc.
+        providerType   string
         baseURL        string
         apiKey         string
         fastModel      string
         frontierModel  string
-        bedrockRegion  string // v3.12.0: AWS region for Bedrock
-        // v3.4.0: retry config
+        bedrockRegion  string
+
         maxRetries     int
         retryBaseDelay time.Duration
-        // v3.8.4: mu guards baseURL / apiKey / fastModel / frontierModel /
+
         // maxRetries / retryBaseDelay. These fields can be mutated at runtime
         // via Update (called from the runtimecfg apply callback when the user
         // changes LLM settings in the web UI). Without this lock, an in-flight
         // request could see a torn string pointer during an Update.
         mu sync.RWMutex
 
-        // v4.0.0: Optional multi-provider failover pool. nil = legacy single-provider mode.
         pool *Pool
 }
 
 // New creates a Router with default retry settings (3 retries, 500ms base delay).
-// v3.12.0: Defaults to provider="custom" (OpenAI-compatible with custom base URL).
+
 // Use NewWithProvider() to specify a native provider like "anthropic" or "bedrock".
 func New(baseURL, apiKey, fastModel, frontierModel string) *Router {
         return NewWithProvider("custom", baseURL, apiKey, fastModel, frontierModel)
 }
 
 // NewWithProvider creates a Router configured for a specific LLM provider.
-// v3.12.0: The provider string maps to GoAI's provider packages:
+
 //   "openai", "anthropic", "bedrock", "azure", "google", "vertex",
 //   "zai", "openrouter", "groq", "mistral", "cohere", "xai",
 //   "deepseek", "cerebras", "fireworks", "together", "perplexity",
@@ -115,7 +114,7 @@ func (r *Router) Pool() *Pool {
 }
 
 // SetRetryConfig configures retry behavior.
-// v3.4.0: maxRetries = 0 disables retry. baseDelay is the initial backoff
+
 // (doubles each retry, with jitter).
 func (r *Router) SetRetryConfig(maxRetries int, baseDelay time.Duration) {
         r.mu.Lock()
@@ -125,9 +124,9 @@ func (r *Router) SetRetryConfig(maxRetries int, baseDelay time.Duration) {
 }
 
 // Update reconfigures the router (called when settings change at runtime).
-// v3.8.4: Now thread-safe — takes the write lock so in-flight requests
+
 // using the read methods below see a consistent snapshot.
-// v3.12.0: Also updates the providerType (so runtime config can switch providers).
+
 func (r *Router) Update(baseURL, apiKey, fastModel, frontierModel string) {
         r.mu.Lock()
         defer r.mu.Unlock()
@@ -198,19 +197,18 @@ func (r *Router) FrontierText(ctx context.Context, system, user string, maxToken
         return r.complete(ctx, frontierModel, system, user, maxTokens)
 }
 
-// v3.12.0: The old chatRequest/chatMessage/responseFormat/chatResponse types
 // and the do() function were removed — GoAI handles HTTP transport + request/
 // response format internally. The extractJSON, backoffDelay, parseRetryAfter,
 // and isTransientCapacityError helpers are kept (used by tests + completeJSON).
 
 // complete calls the LLM model and returns the raw text response.
-// v3.12.0: Now backed by GoAI (goai.GenerateText). GoAI handles:
+
 //   - Provider-specific auth (Bearer, x-api-key, SigV4, Azure AD)
 //   - Provider-specific request format (/chat/completions, /v1/messages, etc.)
 //   - Retries with exponential backoff (via WithMaxRetries)
 //   - Timeout (via WithTimeout)
 //
-// v4.0.0: When a failover pool is configured, the call is wrapped in
+
 // pool.Call() which tries each provider in priority order. The single-
 // provider fields (providerType, baseURL, apiKey) are temporarily
 // swapped to the acquired provider's config for the duration of the call
@@ -224,7 +222,6 @@ func (r *Router) complete(ctx context.Context, model, system, user string, maxTo
         }
         callStart := time.Now()
 
-        // v4.0.0: Multi-provider failover path.
         r.mu.RLock()
         pool := r.pool
         r.mu.RUnlock()
@@ -300,7 +297,7 @@ func (r *Router) completeSingle(ctx context.Context, model, system, user string,
                 goai.WithTemperature(0.2),
                 goai.WithMaxRetries(maxRetries),
                 goai.WithTimeout(300*time.Second),
-                // v3.12.0: Force Chat Completions API (not Responses API). GoAI's openai
+
                 // provider defaults to /responses which many OpenAI-compatible providers
                 // (OpenRouter, z.ai, Ollama, vLLM) don't support. /chat/completions is
                 // the universal standard. Native providers (Anthropic, Bedrock, etc.)
@@ -314,7 +311,7 @@ func (r *Router) completeSingle(ctx context.Context, model, system, user string,
                 return "", fmt.Errorf("LLM call failed: %w", err)
         }
         if recordLLMMetrics != nil {
-                // v3.18.0: H9 — record token usage from GoAI's TotalUsage.
+
                 inTokens := result.TotalUsage.InputTokens
                 outTokens := result.TotalUsage.OutputTokens
                 recordLLMMetrics(model, "success", time.Since(callStart), inTokens, outTokens)
@@ -324,11 +321,11 @@ func (r *Router) completeSingle(ctx context.Context, model, system, user string,
 
 // recordLLMMetrics is set by main.go via SetMetricsRecorder. This avoids a
 // circular import (llm → metrics → ... → llm). If nil, metrics are skipped.
-// v3.18.0: H9 — signature extended with token counts (was model+status+duration only).
+
 var recordLLMMetrics func(model, status string, duration time.Duration, inputTokens, outputTokens int)
 
 // SetMetricsRecorder wires in the metrics recorder. Called from main.go.
-// v3.4.0: Allows the metrics package to observe LLM call latencies without
+
 // creating a dependency cycle.
 func SetMetricsRecorder(fn func(model, status string, duration time.Duration, inputTokens, outputTokens int)) {
         recordLLMMetrics = fn
@@ -362,11 +359,11 @@ func SetInFlightHooks(start, end func()) {
 }
 
 // completeJSON calls the LLM model and parses the response as JSON.
-// v3.12.0: Now backed by GoAI. The JSON instruction prompt is preserved
+
 // (appends "Output ONLY a valid JSON object" to prevent reasoning prose).
 // The extractJSON() function handles markdown fences + prose stripping.
 func (r *Router) completeJSON(ctx context.Context, model, system, user string, maxTokens int) (map[string]any, error) {
-        // v3.9.6: Stronger instruction to prevent the model from producing
+
         // extensive reasoning prose before the JSON. Some models (nemotron-3-super)
         // "think out loud" for 20K characters, use all max_tokens on reasoning,
         // and the actual JSON gets truncated.
@@ -383,7 +380,7 @@ func (r *Router) completeJSON(ctx context.Context, model, system, user string, m
 }
 
 // backoffDelay computes the retry delay for the given attempt (1-indexed).
-// v3.4.0: Exponential backoff: baseDelay * 2^(attempt-1), with ±25% jitter.
+
 // Attempt 1: 500ms ± 125ms. Attempt 2: 1s ± 250ms. Attempt 3: 2s ± 500ms.
 // Final result is capped at 30s (applied AFTER jitter to avoid overruns).
 func (r *Router) backoffDelay(attempt int) time.Duration {
@@ -434,7 +431,7 @@ func (r *Router) parseRetryAfter(value string) time.Duration {
 
 // isTransientCapacityError returns true if the error message looks like a
 // transient capacity/rate-limit issue that would benefit from a retry.
-// v3.11.0: Used to detect 200-with-error-body responses where the provider
+
 // returns HTTP 200 but puts a capacity error in the JSON body (e.g. OpenRouter
 // routing to an upstream provider whose worker pool is full).
 //
@@ -472,7 +469,7 @@ func isTransientCapacityError(msg string) bool {
 // extractJSON defensively parses JSON from LLM output.
 // Handles markdown fences, bare JSON, prose around JSON, and truncated JSON.
 //
-// v3.9.6: Handles the "reasoning prose before JSON" case. Some models
+
 // (nemotron-3-super) produce 20K chars of reasoning, then the JSON at the
 // end. If the JSON is truncated (max_tokens cutoff), we:
 //  1. Find all candidate JSON start positions (lines starting with `{`)
@@ -504,7 +501,6 @@ func extractJSON(text string) map[string]any {
                 return v
         }
 
-        // v3.9.6: Try 4 — find all lines that start with { and try parsing from
         // each. This handles the case where the model produces prose like:
         //   "We need to add a check...\n\n{ \"fix_type\": \"code_fix\", ..."
         // The bareJSONRe above would match from the first { in the prose (if any),
@@ -553,7 +549,7 @@ func extractJSON(text string) map[string]any {
 }
 
 var (
-        // v3.8.8: Broader fence regex. The old one only matched ```json or bare ```.
+
         // Some models (gpt-oss-20b:free) return ```jsoncjson or ```jsonc or other
         // language tags. Match any word characters after the opening fence.
         jsonBlockRe = regexp.MustCompile("(?s)" + "```(?:[a-zA-Z]+)?\\s*(\\{.*?\\}|\\[.*?\\])\\s*```")

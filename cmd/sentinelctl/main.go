@@ -19,7 +19,7 @@
 //      --json          Output raw JSON instead of tables
 //      --timeout D     HTTP timeout (default: 30s)
 //
-// v3.8.4: Added --token / SENTINEL_API_TOKEN for admin-endpoint auth.
+
 // The server now 401s /admin/* and POST /settings when SENTINEL_API_TOKEN
 // is set; without --token, those commands fail with a clear error message.
 // Also added HTTP timeouts (was none — a hung Sentinel pod hung the CLI
@@ -51,7 +51,6 @@ func main() {
                 os.Exit(0)
         }
 
-        // v3.8.4: Check for --help / -h / --version ANYWHERE in args before
         // doing anything else. These are "meta flags" that should work no matter
         // where they appear — `sentinelctl trigger --help` should print help,
         // not trigger an investigation with service="--help" (which is what
@@ -73,7 +72,6 @@ func main() {
         jsonOut := false
         timeout := 30 * time.Second
 
-        // v3.8.4: Find the subcommand = first non-flag arg, skipping flag
         // values so `sentinelctl --server URL trigger demo-app` finds `trigger`,
         // not `URL`. Then harvest global flags from everywhere (before and
         // after the subcommand) so users get kubectl-style flag-anywhere UX.
@@ -98,7 +96,6 @@ func main() {
         // args + subcommand-specific flags.
         positional, server, token, jsonOut, timeout := extractGlobalFlags(filtered, server, token, jsonOut, timeout)
 
-        // v3.8.4: Strip trailing slash from server URL so we don't produce
         // double-slash URLs like http://host//incidents. Most servers handle
         // it but it's sloppy and some strict proxies reject it.
         server = strings.TrimRight(server, "/")
@@ -144,7 +141,7 @@ func main() {
 // slice (including flags before the subcommand) so global flags can be
 // harvested separately.
 //
-// v3.8.4: Without this, `sentinelctl --server URL trigger demo-app` would
+
 // treat `URL` as the subcommand because Go's flag package stops at the
 // first non-flag arg. We do our own scan to recognize the value-consuming
 // flags and skip their values.
@@ -245,16 +242,16 @@ func extractGlobalFlags(args []string, server, token string, jsonOut bool, timeo
 // client wraps the HTTP calls to Sentinel's API.
 type client struct {
         baseURL string
-        token   string // v3.8.4: bearer token for admin endpoints
+        token   string
         jsonOut bool
-        http    *http.Client // v3.8.4: custom client with timeout
+        http    *http.Client
 }
 
 // do sends an HTTP request and returns the response body. The authRequired
 // flag controls whether the bearer token is attached — admin endpoints
 // (/admin/*, POST /settings) need it; read endpoints don't.
 //
-// v3.8.4: On 401, returns a clear error telling the user to set --token
+
 // or SENTINEL_API_TOKEN. Previously a 401 produced a generic "API returned
 // 401" message with no hint about the fix.
 func (c *client) do(method, path string, body io.Reader, authRequired bool) ([]byte, error) {
@@ -335,7 +332,7 @@ func (c *client) handleIncidents(args []string) {
 }
 
 func (c *client) listIncidents(args []string) {
-        // v3.8.4: --limit flag was documented in help but silently ignored
+
         // (always sent limit=20). Now actually honored. Supports both
         // --limit 50 and --limit=50 forms.
         limit := 20
@@ -466,7 +463,7 @@ func (c *client) handleTrigger(args []string) {
                 os.Exit(1)
         }
         service := args[0]
-        // v3.8.4: Reject service names that start with '-'. This is defense-in-depth
+
         // — the meta-flag check in main() should catch --help/-h before we get here,
         // but if a future flag is added that isn't in the meta-flag list, we don't
         // want to accidentally trigger an investigation with service="--whatever".
@@ -476,7 +473,7 @@ func (c *client) handleTrigger(args []string) {
                 os.Exit(1)
         }
         ns := "default"
-        // v3.8.4: Support both --namespace sim and --namespace=sim (and -n
+
         // shorthand). Previous version only handled the space form, so
         // --namespace=sim was silently ignored and the request went to the
         // "default" namespace — confusing.
@@ -494,7 +491,6 @@ func (c *client) handleTrigger(args []string) {
                 }
         }
 
-        // v3.8.4: /admin/investigate requires auth.
         body, err := c.postAuth("/admin/investigate", map[string]string{
                 "service":   service,
                 "namespace": ns,
@@ -512,7 +508,7 @@ func (c *client) handleTrigger(args []string) {
 
 func (c *client) handlePause(args []string) {
         duration := 30
-        // v3.8.4: Support both --duration 60 and --duration=60 (and -d
+
         // shorthand). Previous version only handled the space form, so
         // --duration=60 was silently ignored and pause always used 30 min.
         for i := 0; i < len(args); i++ {
@@ -529,7 +525,6 @@ func (c *client) handlePause(args []string) {
                 }
         }
 
-        // v3.8.4: /admin/pause requires auth.
         _, err := c.postAuth("/admin/pause", map[string]any{
                 "duration_min": duration,
                 "reason":       "paused via CLI",
@@ -541,7 +536,7 @@ func (c *client) handlePause(args []string) {
 }
 
 func (c *client) handleResume() {
-        // v3.8.4: /admin/resume requires auth.
+
         _, err := c.postAuth("/admin/resume", nil, true)
         if err != nil {
                 fail(err)
@@ -573,7 +568,7 @@ func (c *client) handleStats() {
 
 // handleConfig implements `sentinelctl config view` and `sentinelctl config set`.
 //
-// v3.8.4: Added `config set` so the CLI can drive the now-real Settings
+
 // page. The server's POST /settings endpoint accepts a JSON body matching
 // the RuntimeConfig struct in internal/runtimecfg/runtimecfg.go. The
 // apply callback in main.go propagates the changes into the live LLM
@@ -654,7 +649,6 @@ func (c *client) setConfig(arg string) {
                 fail(fmt.Errorf("invalid JSON: %w", err))
         }
 
-        // v3.8.4: POST /settings requires auth.
         body, err := c.postAuth("/settings", json.RawMessage(jsonBytes), true)
         if err != nil {
                 fail(err)

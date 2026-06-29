@@ -26,23 +26,23 @@ import (
 //                     → update Beta prior with a failure (overrides the
 //                     Phase 1 success if any).
 //
-// v3.5.0: Added Phase 2 — the 24-hour re-occurrence watcher. Before this,
+
 // Sentinel marked a fix as "successful" if the pod was Running+Ready 10
 // minutes after the PR opened. But if the same error reappeared 2 hours
 // later (common for flaky fixes, race conditions, load-dependent bugs),
 // the Beta prior was never corrected. The system "learned" from sandbox
 // results, not real outcomes.
 //
-// v3.3.1: Removed dead `tracker` field. Added panic recovery. fixType parameter.
+
 type OutcomeWatcher struct {
         clientset *kubernetes.Clientset
         store     *Store
-        // v3.5.0: configurable durations (were hardcoded)
+
         shortWatchDuration time.Duration // Phase 1: default 10 min
         shortCheckInterval time.Duration // Phase 1 poll: default 30s
         longWatchDuration  time.Duration // Phase 2: default 24h
         longCheckInterval  time.Duration // Phase 2 poll: default 5 min
-        // v4.2.5: Track active watches to prevent duplicates (was starting 3+ watches
+
         // for the same incident because both the merger + the investigation handler
         // called WatchWithDetails).
         activeWatches sync.Map // key: "service/namespace/incidentID" → bool
@@ -61,7 +61,7 @@ func NewOutcomeWatcher(clientset *kubernetes.Clientset, store *Store) *OutcomeWa
 }
 
 // SetDurations configures both Phase 1 and Phase 2 durations.
-// v3.5.0: Allows tests to use short durations. Production uses defaults.
+
 func (w *OutcomeWatcher) SetDurations(shortWatch, shortInterval, longWatch, longInterval time.Duration) {
         if shortWatch > 0 {
                 w.shortWatchDuration = shortWatch
@@ -78,7 +78,7 @@ func (w *OutcomeWatcher) SetDurations(shortWatch, shortInterval, longWatch, long
 }
 
 // Watch monitors the service for 10 minutes after a fix (Phase 1 only).
-// v3.3.1: fixType is passed through to recordOutcome.
+
 func (w *OutcomeWatcher) Watch(ctx context.Context, service, namespace, incidentID string, prOpened bool) {
         w.WatchWithFixType(ctx, service, namespace, incidentID, prOpened, "code_fix")
 }
@@ -89,12 +89,11 @@ func (w *OutcomeWatcher) WatchWithFixType(ctx context.Context, service, namespac
 }
 
 // WatchWithDetails is the full watcher (Phase 1 + Phase 2).
-// v3.5.0: errorFingerprint is the original error type (e.g. "KeyError",
+
 // "panic", "NullPointerException"). If non-empty, Phase 2 will watch for
 // its re-occurrence in pod logs over 24h. If empty, Phase 2 is skipped.
 func (w *OutcomeWatcher) WatchWithDetails(ctx context.Context, service, namespace, incidentID string, prOpened bool, fixType, errorFingerprint string) {
-        // v4.2.5: Deduplicate — if a watch is already running for this incident, skip.
-        // v4.2.6: Fixed — the Delete was in the function's defer (ran immediately),
+
         // not in the goroutine's defer (runs when the watch finishes). Now the key
         // stays active until the goroutine completes.
         watchKey := fmt.Sprintf("%s/%s/%s", service, namespace, incidentID)
@@ -104,7 +103,7 @@ func (w *OutcomeWatcher) WatchWithDetails(ctx context.Context, service, namespac
         }
 
         go func() {
-                // v4.2.6: Clean up the watch flag when the goroutine finishes, not when
+
                 // the function returns. Was: defer in the function body → deleted immediately.
                 defer w.activeWatches.Delete(watchKey)
                 defer func() {
@@ -117,7 +116,7 @@ func (w *OutcomeWatcher) WatchWithDetails(ctx context.Context, service, namespac
                 recovered := w.runPhase1(ctx, service, namespace, incidentID, fixType)
 
                 // === Phase 2: Long-term re-occurrence watch (24h) ===
-                // v3.5.0: Only run if we have an error fingerprint AND the service
+
                 // recovered in Phase 1 (if it didn't recover, we already recorded
                 // failure — no point watching for re-occurrence).
                 if recovered && errorFingerprint != "" {
@@ -156,7 +155,7 @@ func (w *OutcomeWatcher) runPhase1(ctx context.Context, service, namespace, inci
 }
 
 // runPhase2 watches for error re-occurrence over 24h.
-// v3.5.0: Every longCheckInterval, fetches pod logs and checks if the
+
 // original error fingerprint reappears. If it does → fix failed in prod →
 // record a failure (overriding the Phase 1 success).
 func (w *OutcomeWatcher) runPhase2(ctx context.Context, service, namespace, incidentID, fixType, errorFingerprint string) {
@@ -245,7 +244,7 @@ func (w *OutcomeWatcher) fetchPodLogs(ctx context.Context, service, namespace st
 }
 
 // extractErrorFingerprint extracts the error type from an incident's pod logs.
-// v3.5.0: Used by main.go to pass the fingerprint to WatchWithDetails.
+
 // Returns the first matching error type, or "" if none found.
 func ExtractErrorFingerprint(podLogs string) string {
         // Common error type patterns across languages
@@ -315,8 +314,7 @@ func (w *OutcomeWatcher) checkService(ctx context.Context, service, namespace st
 }
 
 // recordOutcome writes the outcome to the Beta tracker + vector store.
-// v3.3.1: fixType is now a parameter (was hardcoded to "code_fix").
-// v3.5.0: Called twice if Phase 2 detects re-occurrence — the second call
+
 // overrides the first (success → failure). This is correct: the Beta prior
 // should reflect the REAL outcome, not the sandbox outcome.
 func (w *OutcomeWatcher) recordOutcome(incidentID, service, namespace string, success bool, detail string, fixType string) {

@@ -28,18 +28,18 @@ type KanikoBuilder struct {
         clientset         *kubernetes.Clientset
         namespace         string
         dockerSecretName  string
-        dockerHubUsername string // v3.3.1: used for --cache-repo (was incorrectly using secret name)
-        // v3.11.0: Registry-aware support (CRITICAL audit #7). Default "docker.io".
+        dockerHubUsername string
+
         // ECR users set "123456789.dkr.ecr.us-east-1.amazonaws.com", GCR users set
         // "gcr.io/myproject", Harbor users set "harbor.mycorp.internal", etc.
         registry string
-        // v3.11.0: Configurable Kaniko images (audit #14).
+
         initImage     string
         executorImage string
-        // v3.11.0: Configurable git host (CRITICAL audit #2). Default "github.com".
+
         // The Kaniko init container's git clone uses this host.
         gitHost string
-        // v3.18.0: GitHub token used by the init container's `git clone` for
+
         // private repos. Was empty (so private repos failed with "authentication
         // required"). The token is passed via an env var (never interpolated
         // into the shell script body) sourced from a K8s Secret, so it doesn't
@@ -53,10 +53,10 @@ func NewKaniko(clientset *kubernetes.Clientset, namespace string) *KanikoBuilder
                 clientset:        clientset,
                 namespace:        namespace,
                 dockerSecretName: "kaniko-docker-hub-creds",
-                registry:         "docker.io", // v3.11.0: was hardcoded in Build()
+                registry:         "docker.io",
                 initImage:        kanikoInitImageDefault,
                 executorImage:    kanikoExecutorImageDefault,
-                gitHost:          "github.com", // v3.11.0: was hardcoded in init script
+                gitHost:          "github.com",
         }
 }
 
@@ -70,7 +70,7 @@ func (k *KanikoBuilder) WithDockerHubUsername(username string) *KanikoBuilder {
 }
 
 // WithRegistry sets the container registry Kaniko pushes to. v3.11.0:
-// Replaces the hardcoded "docker.io" in Build() and buildPodSpec().
+
 // For ECR use "<account>.dkr.ecr.<region>.amazonaws.com",
 // for GCR use "gcr.io/<project>",
 // for ACR use "<name>.azurecr.io",
@@ -84,7 +84,7 @@ func (k *KanikoBuilder) WithRegistry(registry string) *KanikoBuilder {
 }
 
 // WithInitImage sets the Kaniko init container image (clone-and-patch).
-// v3.11.0: Replaces the hardcoded const kanikoInitImage.
+
 func (k *KanikoBuilder) WithInitImage(image string) *KanikoBuilder {
         if image != "" {
                 k.initImage = image
@@ -93,7 +93,7 @@ func (k *KanikoBuilder) WithInitImage(image string) *KanikoBuilder {
 }
 
 // WithExecutorImage sets the Kaniko executor image.
-// v3.11.0: Replaces the hardcoded const kanikoExecutorImage.
+
 func (k *KanikoBuilder) WithExecutorImage(image string) *KanikoBuilder {
         if image != "" {
                 k.executorImage = image
@@ -102,7 +102,7 @@ func (k *KanikoBuilder) WithExecutorImage(image string) *KanikoBuilder {
 }
 
 // WithGitHost sets the git host used in the Kaniko init container's clone URL.
-// v3.11.0: Replaces the hardcoded "https://github.com/" in the init script.
+
 // For GitHub Enterprise use "gh.mycorp.internal",
 // for GitLab use "gitlab.com", etc.
 func (k *KanikoBuilder) WithGitHost(host string) *KanikoBuilder {
@@ -113,7 +113,7 @@ func (k *KanikoBuilder) WithGitHost(host string) *KanikoBuilder {
 }
 
 // WithGitHubToken sets the GitHub PAT used by the init container's git clone.
-// v3.18.0: Without this, private repos fail with "authentication required".
+
 // The token is passed to the init container via an env var sourced from a
 // K8s Secret reference (not inline), so it doesn't leak via pod describe/logs.
 func (k *KanikoBuilder) WithGitHubToken(token string) *KanikoBuilder {
@@ -160,7 +160,7 @@ func validateRepoBranch(repo, branch string) error {
 // Build builds a Docker image with the fixed files applied.
 // Returns the full image reference (e.g. "docker.io/karimzakzouk/sentinel-sim:sentinel-abc12345").
 //
-// v3.8.4: This function previously interpolated repo and branch verbatim into
+
 // a /bin/sh -c script run inside the clone-and-patch init container, allowing
 // shell injection via pod annotations. repo and branch are now (a) validated
 // against a strict allowlist and (b) passed to the init container as env vars,
@@ -175,7 +175,7 @@ func (k *KanikoBuilder) Build(ctx context.Context, repo, branch string, fixedFil
         buildID := buildIDFromTag(imageTag)
         configmapName := fmt.Sprintf("kaniko-fixed-files-%s", buildID)
         podName := fmt.Sprintf("kaniko-build-%s", buildID)
-        // v3.11.0: Use the configured registry (CRITICAL audit #7). Was:
+
         //   fullImage := fmt.Sprintf("docker.io/%s:%s", imageName, imageTag)
         // which broke for ECR/GCR/ACR/Harbor users — the prodImage's registry
         // was stripped and the canary was force-pushed to docker.io.
@@ -208,7 +208,7 @@ func (k *KanikoBuilder) Build(ctx context.Context, repo, branch string, fixedFil
         }
 
         // 3. Wait for completion (5 min timeout)
-        // v3.14.2: Increased from 5min to 10min. The build itself takes ~100s,
+
         // but pushing the final image to Docker Hub takes 60-120s for a ~150MB
         // image. 5min was not enough — the push was killed mid-way.
         // With layer cache warm, the total drops to ~2-3min.
@@ -228,7 +228,7 @@ func (k *KanikoBuilder) Build(ctx context.Context, repo, branch string, fixedFil
 
 // createConfigMap packages fixed files into a ConfigMap.
 //
-// v3.8.4: Previous implementation encoded file paths as
+
 // `strings.ReplaceAll(path, "/", "__")` and the init container reversed this
 // with `sed 's/__/\//g'`. That is lossy: a file path like `src/__test__/foo.py`
 // would be encoded as `src____test____foo.py` and decoded back to
@@ -298,14 +298,14 @@ func (k *KanikoBuilder) createConfigMap(ctx context.Context, name string, files 
 const kanikoInitImageDefault = "alpine/git:2.43.0"
 
 // kanikoExecutorImageDefault is the default Kaniko executor image.
-// v3.11.0: Now overridable via WithExecutorImage() + cfg.KanikoExecutorImage.
+
 // Tag-pinned to a stable upstream release; operators should re-pin to a
 // digest for prod.
 const kanikoExecutorImageDefault = "gcr.io/kaniko-project/executor:v1.24.0"
 
 // buildPodSpec builds the Kaniko build pod.
 //
-// v3.8.4: repo and branch are passed to the init container as env vars
+
 // (SENTINEL_REPO, SENTINEL_BRANCH) rather than interpolated into the shell
 // script. This is the second layer of defense against shell injection —
 // even if validateRepoBranch were ever bypassed, the env-var path can't be
@@ -314,7 +314,7 @@ func (k *KanikoBuilder) buildPodSpec(podName, repo, branch, configmapName, fullI
         // The init container script is fully static — no string interpolation of
         // repo / branch / paths. All variable inputs come from env vars and the
         // path-sidecar files mounted from the ConfigMap.
-        // v3.11.0: The git host is templated from k.gitHost (was hardcoded
+
         // "https://github.com/"). This is safe because k.gitHost comes from
         // cfg.GitHost, which is set by the operator at deploy time — NOT from
         // pod annotations (which would be an injection vector).
@@ -355,10 +355,9 @@ ls -la /workspace/repo/`
                 fmt.Sprintf("--destination=%s", fullImage),
                 "--context=/workspace/repo",
                 "--force",
-                "--cache=true", // v3.3.0: enable layer caching for faster builds
+                "--cache=true",
         }
-        // v3.11.0: Use the configured registry for --cache-repo (CRITICAL audit #7).
-        // Was: "--cache-repo=docker.io/"+k.dockerHubUsername+"/sentinel-build-cache"
+
         // which broke for ECR/GCR/ACR/Harbor users — the cache push went to
         // docker.io even when --destination was a different registry.
         if k.dockerHubUsername != "" {
@@ -371,7 +370,6 @@ ls -la /workspace/repo/`
         }
         kanikoArgs = append(kanikoArgs, "--snapshotMode=redo")
 
-        // v3.14.0 fix: Kaniko needs root + CAP_CHOWN to build images.
         // Previous fix removed RunAsNonRoot/RunAsUser but kept Capabilities:Drop ALL,
         // which removes CAP_CHOWN → "chown /etc/gshadow: operation not permitted".
         // Kaniko is a trusted build tool — don't drop capabilities.
@@ -391,20 +389,20 @@ ls -la /workspace/repo/`
                 Spec: corev1.PodSpec{
                         RestartPolicy: corev1.RestartPolicyNever,
                         SecurityContext: &corev1.PodSecurityContext{
-                                // v3.13.0: No RunAsNonRoot/RunAsUser — Kaniko needs root.
+
                                 SeccompProfile: seccompProfile,
                         },
                         InitContainers: []corev1.Container{
                                 {
                                         Name:       "clone-and-patch",
-                                        Image:      k.initImage, // v3.11.0: configurable via WithInitImage
+                                        Image:      k.initImage,
                                         WorkingDir: "/workspace",
                                         Command:    []string{"/bin/sh", "-c"},
                                         Args:       []string{initScript},
                                         Env: []corev1.EnvVar{
                                                 {Name: "SENTINEL_REPO", Value: repo},
                                                 {Name: "SENTINEL_BRANCH", Value: branch},
-                                                // v3.18.0: GitHub token via env var so private repos can be cloned.
+
                                                 // We use EnvVarSource (not inline Value) so the token doesn't appear
                                                 // in `kubectl describe pod` output. The secret name is fixed
                                                 // "sentinel-secrets" (created by Helm) and the key is "githubToken".
@@ -420,7 +418,6 @@ ls -la /workspace/repo/`
                                                 AllowPrivilegeEscalation: &allowPrivilegeEscalation,
                                                 ReadOnlyRootFilesystem:  newBool(true),
                                                 SeccompProfile:          seccompProfile,
-                                                // v3.14.0: No Capabilities drop — Kaniko needs CAP_CHOWN to extract layers
                                         },
                                         VolumeMounts: []corev1.VolumeMount{
                                                 {Name: "workspace", MountPath: "/workspace"},
@@ -431,13 +428,12 @@ ls -la /workspace/repo/`
                         Containers: []corev1.Container{
                                 {
                                         Name:       "kaniko",
-                                        Image:      k.executorImage, // v3.11.0: configurable via WithExecutorImage
+                                        Image:      k.executorImage,
                                         Args:       kanikoArgs,
                                         WorkingDir: "/workspace",
                                         SecurityContext: &corev1.SecurityContext{
                                                 AllowPrivilegeEscalation: &allowPrivilegeEscalation,
                                                 SeccompProfile:          seccompProfile,
-                                                // v3.14.0: No Capabilities drop — Kaniko needs CAP_CHOWN to extract layers
                                         },
                                         VolumeMounts: []corev1.VolumeMount{
                                                 {Name: "workspace", MountPath: "/workspace"},
@@ -477,7 +473,7 @@ func (k *KanikoBuilder) waitForCompletion(ctx context.Context, podName string, t
                                 return false
                         }
                 }
-                // v3.18.0: use select-on-time.After so the loop is interruptible by ctx cancellation.
+
                 select {
                 case <-ctx.Done():
                         return false
@@ -502,7 +498,7 @@ func (k *KanikoBuilder) getPodLogs(ctx context.Context, podName string) (string,
 }
 
 func (k *KanikoBuilder) cleanup(ctx context.Context, configmapName, podName string) {
-        // v3.18.0: Use a fresh context for cleanup so we can still delete resources
+
         // after the parent ctx is cancelled (e.g. on investigation timeout).
         // Without this, leaked Kaniko pods accumulate forever (no reaper exists).
         cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -520,7 +516,7 @@ func lastN(s string, n int) string {
 }
 
 // buildIDFromTag extracts an 8-char build ID from an image tag.
-// v3.18.0: Replaces `strings.ReplaceAll(imageTag, "sentinel-", "")[:8]` which
+
 // panicked with slice-out-of-range if the tag was shorter than 8 chars or
 // didn't contain "sentinel-". Falls back to a hash of the tag.
 func buildIDFromTag(imageTag string) string {
@@ -537,7 +533,7 @@ func buildIDFromTag(imageTag string) string {
 }
 
 // validateDockerfilePath validates that a dockerfile_path from LLM output is safe.
-// v3.18.0: M48 — was passed unsanitized to Kaniko's --dockerfile flag, allowing
+
 // path traversal (e.g. "../../vendor/attacker/Dockerfile") and build-chain attacks.
 // Allowed: "Dockerfile", "Dockerfile.*", "docker/Dockerfile", "subdir/Dockerfile".
 // Rejected: absolute paths, "..", control chars, non-Dockerfile filenames.
@@ -584,7 +580,7 @@ func filepathIsAbs(path string) bool {
 // BuildForIncident is a convenience wrapper that extracts all params from a
 // FixProposal + branch info and calls Build.
 //
-// v3.9.0: If a FileChange uses search/replace (Changes) instead of
+
 // NewContent, the fixed file is already on the branch (PrepareBranch applied
 // the search/replace). In that case, we don't need to overlay it via ConfigMap
 // — Kaniko clones the branch which already has the fix. We only overlay files
@@ -596,7 +592,7 @@ func (k *KanikoBuilder) BuildForIncident(ctx context.Context, inc *schemas.Incid
         dockerfilePath := "Dockerfile"
         if fp.DockerfilePath != nil && *fp.DockerfilePath != "" {
                 dockerfilePath = *fp.DockerfilePath
-                // v3.18.0: M48 — validate dockerfilePath (was passed unsanitized to Kaniko's
+
                 // --dockerfile flag, allowing path traversal / build-chain attacks via LLM output).
                 if err := validateDockerfilePath(dockerfilePath); err != nil {
                         return "", fmt.Errorf("invalid dockerfile_path: %w", err)
@@ -608,7 +604,7 @@ func (k *KanikoBuilder) BuildForIncident(ctx context.Context, inc *schemas.Incid
                 if fc.Path == "" {
                         continue
                 }
-                // v3.9.0: If this is a search/replace change, the file is already
+
                 // fixed on the branch. Skip the ConfigMap overlay — Kaniko will
                 // clone the branch and get the fixed file directly.
                 if len(fc.Changes) > 0 && fc.NewContent == "" {

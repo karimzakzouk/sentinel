@@ -1,6 +1,6 @@
 // Package chatops implements GitHub-PR-comment-driven command execution.
 //
-// v4.0.0: Sentinel now responds to /sentinel <command> comments on its PRs.
+
 // This is the chatops layer — every command is parsed, permission-checked,
 // executed, and the result is fed back via emoji reactions + status comments.
 //
@@ -245,16 +245,13 @@ type Deps struct {
         StatusComment StatusCommentManager
         Logger        Logger
 
-        // v4.0.0: Auto-merge client. When set, /sentinel approve, /sentinel hold,
         // /sentinel no-merge, /sentinel merge can interact with the auto-merger.
         // nil = auto-merge not configured (commands post "not configured" message).
         AutoMerge AutoMergeClient
 
-        // v4.0.0: Pause controller (the slackbot implements this). When set,
         // /sentinel pause + /sentinel resume can pause autonomous mode.
         PauseController PauseController
 
-        // v4.0.0: K8s rollback executor. When set, /sentinel rollback can
         // trigger kubectl rollout undo on a deployment. nil = not configured.
         Rollback RollbackExecutor
 }
@@ -338,7 +335,6 @@ type Incident struct {
         PRRepo     string
         PRBranch   string
 
-        // v4.0.0: Extended fields for chatops commands.
         FixType            string
         HasSchemaMigration bool
         IsHighRisk         bool
@@ -347,15 +343,12 @@ type Incident struct {
         PolicyVerdict      string // safety.Policy.Evaluate verdict
         BaseBranch         string
 
-        // v4.2.5: Auto-merge status for the status comment.
         AutoMergeEnabled bool
         AutoMergeMerged  bool
         AutoMergeSkipped string // non-empty = skipped with reason
 
-        // v4.0.0: Agent trace for /sentinel trace. Each entry is one agent step.
         AgentTrace []map[string]any
 
-        // v4.0.0: Hypotheses for /sentinel trace + /sentinel explain.
         Hypotheses []Hypothesis
 }
 
@@ -408,18 +401,15 @@ type GitHubClient interface {
         // PostCommentWithID posts a comment and returns its ID (for follow-up reactions).
         PostCommentWithID(ctx context.Context, repo string, prNumber int, body string) (int64, error)
 
-        // v4.0.0: Label management — used by /sentinel approve, /sentinel hold,
         // /sentinel no-merge. Labels are the gate; the merger watches them.
         SetLabels(ctx context.Context, repo string, prNumber int, labels []string) error
         RemoveLabel(ctx context.Context, repo string, prNumber int, label string) error
         GetLabels(ctx context.Context, repo string, prNumber int) ([]string, error)
 
-        // v4.0.0: Merge — used by /sentinel merge. The merger is the only thing
         // that auto-merges, but /sentinel merge is the manual override that
         // merges through Sentinel (so the outcome watcher attaches).
         Merge(ctx context.Context, repo string, prNumber int, commitMessage string) error
 
-        // v4.0.0: FindAlternativesComment returns the body of the [SENTINELALTERNATIVES]
         // comment (if any) — used by /sentinel apply to read the chosen approach.
         FindCommentByMarker(ctx context.Context, repo string, prNumber int, marker string) (string, error)
 }

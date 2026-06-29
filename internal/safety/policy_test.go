@@ -45,12 +45,11 @@ func TestDefaultPolicyDenyProdLowConfidence(t *testing.T) {
         }
 }
 
-// v3.8.4: Previously this test expected high-risk services to be Denied.
 // The new verdict matrix sends high-risk services to RequireHumanApproval
 // instead — that's more useful (a human can approve a high-confidence fix
 // to a payment service rather than having to do it manually from scratch).
 //
-// v3.11.0: Updated to use NewPolicyWithHighRisk (audit #5 + obs-1). The
+
 // default HighRiskServices is now empty — demo values no longer leak into
 // every install. Tests must explicitly set up high-risk services.
 func TestDefaultPolicyHumanReviewForHighRiskService(t *testing.T) {
@@ -69,7 +68,6 @@ func TestDefaultPolicyHumanReviewForHighRiskService(t *testing.T) {
         }
 }
 
-// v3.11.0: New test — verifies that the default policy has NO high-risk
 // services (demo values removed). A service that was high-risk in the demo
 // (payment-api) is now auto-fixable in prod if confidence is high enough.
 func TestDefaultPolicyNoHighRiskServicesByDefault(t *testing.T) {
@@ -85,7 +83,6 @@ func TestDefaultPolicyNoHighRiskServicesByDefault(t *testing.T) {
         }
 }
 
-// v3.8.4: High-risk service in non-prod is still allowed — the high-risk
 // label only matters in production.
 func TestDefaultPolicyAllowHighRiskServiceInNonProd(t *testing.T) {
         p := DefaultPolicy()
@@ -132,7 +129,6 @@ func TestDefaultPolicyAllowRollbackWithoutSchemaMigration(t *testing.T) {
         }
 }
 
-// v3.8.4: New test — prod fix with confidence between humanReview (0.70)
 // and autonomous (0.92) should go to RequireHumanApproval.
 func TestDefaultPolicyHumanReviewForMediumConfidenceInProd(t *testing.T) {
         p := DefaultPolicy()
@@ -150,7 +146,6 @@ func TestDefaultPolicyHumanReviewForMediumConfidenceInProd(t *testing.T) {
         }
 }
 
-// v3.8.4: New test — blast radius exceeded in prod goes to human review.
 func TestDefaultPolicyHumanReviewForBlastRadiusExceeded(t *testing.T) {
         p := DefaultPolicy()
         d := p.Evaluate(Input{
@@ -168,7 +163,6 @@ func TestDefaultPolicyHumanReviewForBlastRadiusExceeded(t *testing.T) {
         }
 }
 
-// v3.8.4: New test — unsafe fix type in prod is denied (not even human-reviewed).
 func TestDefaultPolicyDenyUnsafeFixTypeInProd(t *testing.T) {
         p := DefaultPolicy()
         d := p.Evaluate(Input{
@@ -209,7 +203,7 @@ func TestRulesEvaluated(t *testing.T) {
                 TargetNamespace: "prod",
                 Confidence:      0.95,
         })
-        // v3.8.4: Now 7 rules (was 5). Added safe_fix_type, confidence_autonomous,
+
         // confidence_human_review; removed the old allow_fix composite rule.
         if len(d.RulesEvaluated) != 7 {
                 t.Errorf("expected 7 rules evaluated, got %d", len(d.RulesEvaluated))

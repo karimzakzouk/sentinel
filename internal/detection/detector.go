@@ -59,7 +59,6 @@ var errorPatterns = []*regexp.Regexp{
         regexp.MustCompile(`level=fatal`),
 }
 
-// v3.8.4: extractErrorTypePatterns are pre-compiled at package init.
 // Previous implementation called regexp.MustCompile inside a loop on every
 // line of every streamed log — measurable CPU waste on chatty pods (the
 // regexes were re-compiled N times per pod-log-line, where N is the number
@@ -101,16 +100,14 @@ type Detector struct {
         streams   map[string]context.CancelFunc
         streamsMu sync.Mutex
 
-        // v3.5.3: Track which pods we've already logged discovery for, to avoid
         // log spam when the watch fires repeatedly for the same pod.
         discoveredPods map[string]time.Time
         discoveredMu   sync.Mutex
 
-        // v3.11.0: Configurable cooldown + tail lines (audit #9). Were hardcoded
         // 5*time.Minute + 100 in shouldTrigger + streamPodLogs.
         cooldown   time.Duration
         tailLines  int64
-        // v3.11.0: Configurable namespace skip list (audit #11). Was hardcoded
+
         // kube-system/kube-public/kube-node-lease.
         skipNamespaces map[string]bool
 }
@@ -206,14 +203,13 @@ func (d *Detector) watchNamespaces(ctx context.Context) {
 }
 
 func (d *Detector) watchPodsInNamespace(ctx context.Context, namespace string) {
-        // v3.11.0: Use configurable skip list (audit #11). Was hardcoded to
+
         // kube-system/kube-public/kube-node-lease, missing common system
         // namespaces like calico-system, cert-manager, ingress-nginx, monitoring.
         if d.skipNamespaces[namespace] {
                 return
         }
 
-        // v3.7.0: Replaced goto restart with a named loop for clarity.
         // (Claude's review noted the goto was unusual and would confuse contributors.)
 watchLoop:
         for {
@@ -250,15 +246,15 @@ watchLoop:
                                 if !ok {
                                         watcher.Stop()
                                         time.Sleep(5 * time.Second)
-                                        continue watchLoop // v3.7.0: named loop instead of goto restart
+                                        continue watchLoop
                                 }
                                 pod, ok := event.Object.(*corev1.Pod)
                                 if !ok {
                                         continue
                                 }
-                                // v3.18.0: H1 — on pod DELETED, cancel its log stream so the
+
                                 // goroutine doesn't retry forever against a non-existent pod.
-                                // Was: cancel was stored in d.streams but never invoked, leaking
+
                                 // a permanent 5s-tick goroutine per deleted pod.
                                 if event.Type == watch.Deleted {
                                         d.stopLogStream(string(pod.UID))
@@ -277,7 +273,6 @@ func (d *Detector) handlePod(ctx context.Context, pod *corev1.Pod) {
                 repo, hasRepo = annotations["sentinel.io/repo"]
         }
 
-        // v3.5.1: If the pod doesn't have the annotation, check the owning
         // Deployment/StatefulSet/DaemonSet. Users often put annotations on the
         // Deployment metadata instead of the pod template metadata.
         if !hasRepo {
@@ -291,7 +286,6 @@ func (d *Detector) handlePod(ctx context.Context, pod *corev1.Pod) {
                 return
         }
 
-        // v3.5.3: Only log pod discovery once per pod UID (not on every watch tick).
         // The watch fires on every status change, which can be 10+ times per second
         // during startup. This was flooding the logs.
         d.discoveredMu.Lock()
@@ -391,7 +385,7 @@ func (d *Detector) checkPodStatus(ctx context.Context, pod *corev1.Pod, repo str
                         }
                         return
                 }
-                // v3.5.0: Catch pods that crashed but haven't yet escalated to CrashLoopBackOff.
+
                 // When a container crashes, K8s sets LastTerminationState.Terminated with the
                 // exit code. The pod goes through Error → (restart) → Error → ... → CrashLoopBackOff.
                 // Without this check, Sentinel waits 2-3 minutes for CrashLoopBackOff before reacting.
@@ -440,7 +434,7 @@ func (d *Detector) startLogStream(ctx context.Context, pod *corev1.Pod, repo str
         d.streamsMu.Unlock()
 
         go func() {
-                // v3.3.1: Panic recovery — a panic in streamPodLogs would kill this
+
                 // goroutine silently, leaving the pod unmonitored until restart.
                 defer func() {
                         if r := recover(); r != nil {
@@ -458,7 +452,7 @@ func (d *Detector) startLogStream(ctx context.Context, pod *corev1.Pod, repo str
 }
 
 // stopLogStream cancels the log stream goroutine for a pod UID.
-// v3.18.0: H1 — was stored but never called, leaking a permanent 5s-tick
+
 // goroutine per deleted pod (the retry loop hit "pod not found" forever).
 func (d *Detector) stopLogStream(podUID string) {
         d.streamsMu.Lock()
@@ -474,7 +468,7 @@ func (d *Detector) stopLogStream(podUID string) {
 }
 
 // StopAllLogStreams cancels every active log stream. Called on shutdown.
-// v3.18.0: H1 — previously no way to stop streams on SIGTERM, so they
+
 // raced with store.Close() and could panic on a closed SQLite handle.
 func (d *Detector) StopAllLogStreams() {
         d.streamsMu.Lock()
@@ -495,7 +489,7 @@ func (d *Detector) streamPodLogs(ctx context.Context, pod *corev1.Pod, repo stri
         opts := &corev1.PodLogOptions{
                 Follow:    true,
                 Container: containerName,
-                TailLines: ptr(d.tailLines), // v3.11.0: was hardcoded int64(100) (audit #9)
+                TailLines: ptr(d.tailLines),
         }
 
         for {
@@ -508,7 +502,7 @@ func (d *Detector) streamPodLogs(ctx context.Context, pod *corev1.Pod, repo stri
                 req := d.clientset.CoreV1().Pods(pod.Namespace).GetLogs(pod.Name, opts)
                 stream, err := req.Stream(ctx)
                 if err != nil {
-                        // v3.18.0: H1 — break out if the pod is gone (was retrying forever).
+
                         if apierrors.IsNotFound(err) || apierrors.IsGone(err) {
                                 log.Printf("[detection] log stream %s/%s: pod no longer exists, stopping", pod.Namespace, pod.Name)
                                 return
@@ -524,7 +518,6 @@ func (d *Detector) streamPodLogs(ctx context.Context, pod *corev1.Pod, repo stri
                 scanner := bufio.NewScanner(stream)
                 scanner.Buffer(make([]byte, 0, 256*1024), 256*1024)
 
-                // v3.2.3: Buffer tracebacks until we see the error type line at the bottom.
                 // This prevents firing with "unknown_error" when the actual error type
                 // (e.g. KeyError) is at the end of a 40-line traceback.
                 var tracebackBuffer strings.Builder
@@ -628,7 +621,7 @@ func (d *Detector) isErrorLine(line string) bool {
 }
 
 func (d *Detector) extractErrorType(line string) string {
-        // v3.8.4: Uses the pre-compiled extractErrorTypePatterns slice instead
+
         // of re-compiling regexes on every call. For a pod emitting 1000 log
         // lines, this avoids 7000 regexp.MustCompile calls per detection pass.
         for _, p := range extractErrorTypePatterns {
@@ -655,7 +648,7 @@ func (d *Detector) shouldTrigger(namespace, service, errorType string) bool {
         defer d.mu.Unlock()
 
         if lastSeen, exists := d.recentSeen[fp]; exists {
-                if time.Since(lastSeen) < d.cooldown { // v3.11.0: was hardcoded 5*time.Minute (audit #9)
+                if time.Since(lastSeen) < d.cooldown {
                         return false
                 }
         }
@@ -739,7 +732,6 @@ func (d *Detector) cleanupLoop(ctx context.Context) {
                         }
                         d.mu.Unlock()
 
-                        // v3.5.3: Clean up old discovered pod entries (keep for 1h)
                         d.discoveredMu.Lock()
                         for uid, seen := range d.discoveredPods {
                                 if time.Since(seen) > time.Hour {

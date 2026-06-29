@@ -44,41 +44,35 @@ type Server struct {
         webUIHandler    http.Handler
         http            *http.Server
 
-        // v4.0.0: Chatops handler — runs alongside webhookHandler on /webhook/github.
         // When set, /webhook/github first calls webhookHandler (prreview — handles
         // pull_request events for predictive PR review). If webhookHandler doesn't
         // claim the event (returns 200 without writing), the chatops handler runs
         // (handles issue_comment events for /sentinel commands).
         chatopsHandler http.Handler
 
-        // v4.0.0: LLM provider pool status getter (for /providers endpoint).
         providersStatus ProvidersStatusGetter
-        // v4.0.0: Auto-merge status getter (for /automerge endpoint).
+
         autoMergeStatus AutoMergeStatusGetter
-        // v4.1.0: GitHub App manager (for /settings/github-app endpoint).
+
         githubAppManager GitHubAppManager
 
-        // v3.7.0: SSE
         eventSubs   map[chan ServerEvent]bool
         eventSubsMu sync.Mutex
 
-        // v3.8.0: Runtime config persistence
         rtCfgSaver RuntimeCfgSaver
 
-        // v3.8.4: Bearer token required for admin endpoints. Empty = auth
         // disabled (the server logs a loud warning at startup). When set,
         // every request to /admin/* or POST /settings must carry
         // 'Authorization: Bearer <token>'. Health/readiness/metrics/SSE/web UI
         // remain unauthenticated so dashboards and probes still work.
         apiToken string
 
-        // v3.18.0: H27 — per-IP rate limiter for admin + webhook endpoints.
         // Prevents brute-force token attacks and webhook flood DoS.
         rateLimiter *ipRateLimiter
 }
 
 // ipRateLimiter is a simple per-IP token bucket rate limiter.
-// v3.18.0: H27 — was missing entirely; admin endpoints had no throttle,
+
 // allowing brute-force token attacks at line speed despite constant-time compare.
 // 10 requests per minute per IP — generous enough for legitimate use
 // (a human clicking buttons) but blocks scripted attacks.
@@ -148,7 +142,7 @@ func (rl *ipRateLimiter) Allow(addr string) bool {
 type Store interface {
         ListRecentIncidents(ctx context.Context, limit int) ([]any, error)
         GetIncident(ctx context.Context, id uuid.UUID) (any, error)
-        // v3.8.4: FindIncidentByPrefix supports short-ID lookup. The CLI
+
         // displays 8-char truncated IDs in `incidents list` output; without
         // this, `incidents get <8-char-id>` fails because GetIncident requires
         // a full UUID. Returns nil (no error) if no match; prefix must be ≥4
@@ -174,7 +168,7 @@ func New(addr string, store Store, settings SettingsGetter, investigate Investig
                 investigate:  investigate,
                 readyChecker: ready,
                 eventSubs:    make(map[chan ServerEvent]bool),
-                // v3.18.0: H27 — 10 req/min per IP for admin + webhook endpoints.
+
                 rateLimiter:  newIPRateLimiter(10, time.Minute),
         }
         mux := http.NewServeMux()
@@ -185,7 +179,7 @@ func New(addr string, store Store, settings SettingsGetter, investigate Investig
         mux.HandleFunc("/incidents", s.handleIncidents)
         mux.HandleFunc("/incidents/", s.handleIncident)
         mux.HandleFunc("/settings", s.handleSettings)
-        // v4.1.0: GitHub App auto-provisioning endpoints (used by sentinelctl app setup)
+
         mux.HandleFunc("/settings/github-app", s.handleGitHubApp)
         mux.HandleFunc("/settings/github-app-install", s.handleGitHubAppInstall)
         mux.HandleFunc("/admin/investigate", s.handleInvestigate)
@@ -194,13 +188,12 @@ func New(addr string, store Store, settings SettingsGetter, investigate Investig
         mux.HandleFunc("/events", s.handleSSE)
         mux.HandleFunc("/webhook/github", s.handleWebhook)
         mux.HandleFunc("/slack/events", s.handleSlack)
-        // v4.0.0: LLM provider pool status (health, failover counts, tripped breakers)
+
         mux.HandleFunc("/providers", s.handleProviders)
-        // v4.0.0: Auto-merge policy status (rate limit, cooldown, tracked PRs)
+
         mux.HandleFunc("/automerge", s.handleAutoMerge)
         mux.HandleFunc("/", s.handleWebUI)
 
-        // v3.8.4: Wrap the mux in an auth middleware that gates admin endpoints
         // on a bearer token. The middleware is a no-op when apiToken is empty
         // (set via SetAPIToken), but we still register it so the wrapping order
         // is consistent.
@@ -210,7 +203,7 @@ func New(addr string, store Store, settings SettingsGetter, investigate Investig
                 ReadTimeout:  10 * time.Second,
                 ReadHeaderTimeout: 5 * time.Second,
                 IdleTimeout:  60 * time.Second,
-                // v3.18.0: H26 — was missing all timeouts. Slowloris could exhaust FDs.
+
                 // WriteTimeout is intentionally 0 (infinite) so SSE /events can stream
                 // indefinitely. Non-SSE routes are wrapped in http.TimeoutHandler where
                 // appropriate (admin operations get a 60s hard cap).
@@ -219,7 +212,7 @@ func New(addr string, store Store, settings SettingsGetter, investigate Investig
 }
 
 // SetAPIToken enables bearer-token auth on admin endpoints. Empty = disabled.
-// v3.8.4: When set, every request to /admin/* or POST /settings must carry
+
 // 'Authorization: Bearer <token>'. Mismatched or missing tokens get a 401.
 // Health/readiness/metrics/SSE/web UI remain unauthenticated so dashboards
 // and probes still work.
@@ -245,11 +238,11 @@ func (s *Server) SetAPIToken(token string) {
 // Webhook and Slack endpoints do their own signature verification and are
 // not gated by this middleware.
 //
-// v3.18.0: H27 — admin + webhook endpoints now have per-IP rate limiting
+
 // (10 req/min) to prevent brute-force token attacks and webhook flood DoS.
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
         return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-                // v3.18.0: H27 — rate limit admin + webhook + slack endpoints.
+
                 // Health/metrics/incidents reads are not rate-limited (kubelet + Prometheus scrape frequently).
                 if strings.HasPrefix(r.URL.Path, "/admin/") ||
                         r.URL.Path == "/webhook/github" ||
@@ -269,7 +262,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 
                 isAdmin := strings.HasPrefix(r.URL.Path, "/admin/")
                 isSettingsWrite := r.URL.Path == "/settings" && r.Method == http.MethodPost
-                // v3.18.0: H28 — gate /incidents behind auth. Incident data (root cause,
+
                 // repo, branch, PR URL) is sensitive. Was: anyone with cluster network
                 // access could read every incident.
                 isIncidentsRead := strings.HasPrefix(r.URL.Path, "/incidents")
@@ -461,7 +454,6 @@ func (s *Server) handleIncidents(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleIncident(w http.ResponseWriter, r *http.Request) {
         idStr := strings.TrimPrefix(r.URL.Path, "/incidents/")
 
-        // v3.8.4: Try full UUID first. If that fails (e.g. the CLI sent an 8-char
         // truncated ID like "91cce5a5" from `incidents list` output), fall back
         // to prefix matching via FindIncidentByPrefix.
         id, err := uuid.Parse(idStr)
@@ -504,7 +496,7 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
                 writeJSON(w, 200, s.settings())
                 return
         }
-        // v3.8.0: POST /settings — save runtime config
+
         if r.Method == "POST" {
                 if s.rtCfgSaver == nil {
                         writeJSON(w, 501, map[string]string{"error": "runtime config saver not configured"})
@@ -536,7 +528,7 @@ func (s *Server) handleInvestigate(w http.ResponseWriter, r *http.Request) {
                 Namespace string `json:"namespace"`
                 Reason    string `json:"reason"`
         }
-        r.Body = http.MaxBytesReader(nil, r.Body, maxRequestBodyBytes) // v3.13.0: OOM defense
+        r.Body = http.MaxBytesReader(nil, r.Body, maxRequestBodyBytes)
         if err := json.NewDecoder(r.Body).Decode(&spec); err != nil {
                 writeJSON(w, 400, map[string]string{"error": "invalid JSON"})
                 return
@@ -573,7 +565,7 @@ func (s *Server) handlePause(w http.ResponseWriter, r *http.Request) {
                 Reason      string `json:"reason"`
         }
         if r.Body != nil {
-                r.Body = http.MaxBytesReader(nil, r.Body, maxRequestBodyBytes) // v3.13.0: OOM defense
+                r.Body = http.MaxBytesReader(nil, r.Body, maxRequestBodyBytes)
                 _ = json.NewDecoder(r.Body).Decode(&req)
         }
         if req.DurationMin <= 0 {
@@ -619,7 +611,6 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
                 return
         }
 
-        // v3.13.0: Cap concurrent SSE subscribers to prevent OOM DoS.
         s.eventSubsMu.Lock()
         if len(s.eventSubs) >= maxSSESubscribers {
                 s.eventSubsMu.Unlock()
@@ -657,7 +648,7 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
-        // v4.0.0: Dispatch to both prreview (pull_request events) AND chatops
+
         // (issue_comment events). Each handler ignores event types it doesn't
         // care about. We buffer the body so both handlers can read it.
         if s.webhookHandler == nil && s.chatopsHandler == nil {
@@ -844,14 +835,14 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 // maxRequestBodyBytes limits the size of request bodies to prevent OOM DoS.
-// v3.13.0: audit finding #3 — POST handlers used io.ReadAll(r.Body) with no
+
 // limit. An attacker could POST a 10GB body and OOM the 256Mi pod.
 // 1MB is generous for all legitimate API requests (settings JSON, investigate
 // trigger JSON, pause JSON are all <2KB in practice).
 const maxRequestBodyBytes = 1 << 20 // 1MB
 
 func readBody(r *http.Request) (string, error) {
-        // v3.13.0: Wrap r.Body in MaxBytesReader to cap the read at 1MB.
+
         r.Body = http.MaxBytesReader(nil, r.Body, maxRequestBodyBytes)
         data, err := io.ReadAll(r.Body)
         return string(data), err

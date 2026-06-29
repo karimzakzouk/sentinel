@@ -1,5 +1,5 @@
 // Package agents implements the 4-agent reasoning pipeline.
-// Replaces the Python LangGraph multi-agent system with a plain Go state machine.
+
 //
 // Pipeline:
 //   Investigator → EvidenceGatherer → Analyst → FixProposer
@@ -26,25 +26,21 @@ type Pipeline struct {
         evidenceGatherer *EvidenceGatherer
         analyst          *Analyst
         fixProposer      *FixProposer
-        testGenerator    *TestGenerator    // v4.2.0: generates regression tests (Tier 3)
-        reproducerGen    *ReproducerGenerator // v4.2.0: generates reproducer scripts (Tier 4)
+        testGenerator    *TestGenerator
+        reproducerGen    *ReproducerGenerator
         betaStore        BetaStore
 
-        // v3.6.0: Configurable timeouts (seconds) — set via SetConfig
         investigatorTimeoutSec       int
         evidenceGathererTimeoutSec   int
         analystTimeoutSec            int
         fixProposerTimeoutSec        int
         confidenceLoopBackThreshold  float64
 
-        // v4.2.0: Whether to generate a regression test (Tier 3). Default true.
         generateTests bool
 
-        // v4.2.0: Whether to generate a reproducer script (Tier 4). Default true.
         // Used as a fallback when the test generator fails or the repo has no test framework.
         generateReproducer bool
 
-        // v3.11.0: Max pipeline iterations (audit #9).
         maxIterations int
 }
 
@@ -55,21 +51,21 @@ func NewPipeline(router *llm.Router, k8sClient *k8s.Client, gitHubToken string, 
                 evidenceGatherer:            NewEvidenceGatherer(router, k8sClient),
                 analyst:                     NewAnalyst(router),
                 fixProposer:                 NewFixProposer(router, k8sClient, gitHubToken),
-                testGenerator:               NewTestGenerator(router), // v4.2.0
-                reproducerGen:               NewReproducerGenerator(router), // v4.2.0
+                testGenerator:               NewTestGenerator(router),
+                reproducerGen:               NewReproducerGenerator(router),
                 betaStore:                   betaStore,
                 investigatorTimeoutSec:      120,
                 evidenceGathererTimeoutSec:  90,
                 analystTimeoutSec:           15,
-                fixProposerTimeoutSec:       300, // v4.3.1: was 120 — needs room for 2 full 120s attempts
+                fixProposerTimeoutSec:       300,
                 confidenceLoopBackThreshold: 0.3,
-                generateTests:               true,    // v4.2.0: enable by default
-                generateReproducer:          true,    // v4.2.0: enable by default
+                generateTests:               true,
+                generateReproducer:          true,
         }
 }
 
 // SetConfig sets configurable pipeline parameters.
-// v3.6.0: Allows tuning timeouts and thresholds via env vars.
+
 func (p *Pipeline) SetConfig(invTimeout, evTimeout, anTimeout, fpTimeout int, confLoopBack float64) {
         if invTimeout > 0 {
                 p.investigatorTimeoutSec = invTimeout
@@ -89,14 +85,14 @@ func (p *Pipeline) SetConfig(invTimeout, evTimeout, anTimeout, fpTimeout int, co
 }
 
 // SetPrometheusURL wires the Prometheus backend into the evidence gatherer.
-// v3.4.0: Allows evidence queries of type "prometheus" to execute against
+
 // a real Prometheus instance. No-op if URL is empty (backward compatible).
 func (p *Pipeline) SetPrometheusURL(url string) {
         p.evidenceGatherer.SetPrometheusURL(url)
 }
 
 // SetAllowedRepos propagates the GitHub repo allowlist to the Investigator.
-// v3.8.4: The Investigator checks this list before cloning any repo
+
 // referenced by the sentinel.io/repo pod annotation. See
 // Config.IsRepoAllowed for the matching config-level helper.
 func (p *Pipeline) SetAllowedRepos(repos []string) {
@@ -104,7 +100,7 @@ func (p *Pipeline) SetAllowedRepos(repos []string) {
 }
 
 // SetGitHost propagates the git host to the Investigator + FixProposer.
-// v3.11.0: Replaces hardcoded "github.com" in cloner.go + branch_resolver.go
+
 // (CRITICAL audit #2). Enables GitHub Enterprise / GitLab / Bitbucket.
 func (p *Pipeline) SetGitHost(host string) {
         p.investigator.SetGitHost(host)
@@ -121,7 +117,7 @@ func (p *Pipeline) SetDefaultBranch(branch string) {
 }
 
 // SetLLMPriorWeight propagates the LLM prior weight to the Analyst.
-// v3.11.0: Replaces the hardcoded 0.4 in analyst.go (audit #9).
+
 func (p *Pipeline) SetLLMPriorWeight(w float64) {
         p.analyst.SetLLMPriorWeight(w)
 }
@@ -141,7 +137,7 @@ func (p *Pipeline) SetMaxIterations(n int) {
 }
 
 // RetryFixProposal re-runs ONLY the fix proposer with the current state.
-// v3.14.0: Layer B — called when the sandbox verification fails. The caller
+
 // sets state.SandboxFeedback with the failure details before calling this.
 // The fix proposer sees the feedback in its user message and generates a
 // new, corrected fix. Does NOT re-run the investigator/evidence/analyst —
@@ -156,14 +152,13 @@ func (p *Pipeline) RetryFixProposal(ctx context.Context, state *schemas.AgentSta
 }
 
 // Run executes the full pipeline on the given state. Handles rewinds.
-// v3.6.0: Speed optimization — skip evidence gathering when the top hypothesis
+
 // already has high confidence (>= 0.7). Evidence gathering adds ~90s of LLM +
 // K8s API latency; for obvious errors like KeyError with the key name in the
 // traceback, it's unnecessary.
 func (p *Pipeline) Run(ctx context.Context, state *schemas.AgentState) error {
         defer recoverPanic("pipeline")
 
-        // v3.11.0: Override state.MaxIterations with the pipeline's configured
         // value (audit #9). Was hardcoded 5 in schemas.NewAgentState.
         if p.maxIterations > 0 {
                 state.MaxIterations = p.maxIterations
@@ -183,7 +178,6 @@ func (p *Pipeline) Run(ctx context.Context, state *schemas.AgentState) error {
                         return nil
                 }
 
-                // v3.6.0: Skip evidence gathering if the top hypothesis is already
                 // high-confidence. This saves ~90s (LLM + K8s API calls) for obvious
                 // errors like KeyError: 'DATABASE_URLL' where the traceback has all
                 // the info we need.
@@ -246,7 +240,6 @@ func (p *Pipeline) Run(ctx context.Context, state *schemas.AgentState) error {
                 }
                 fpCancel()
 
-                // v4.2.0: Tier 3 — generate a regression test (best-effort, non-blocking).
                 // The test is generated by a SEPARATE LLM call from the fix proposer —
                 // the LLM that wrote the fix does NOT write the test. This prevents
                 // the LLM from gaming its own test.
@@ -282,7 +275,6 @@ func (p *Pipeline) Run(ctx context.Context, state *schemas.AgentState) error {
                         }
                 }
 
-                // v4.2.0: Tier 4 — generate a reproducer script (best-effort, non-blocking).
                 if p.generateReproducer && state.FixProposal != nil {
                         reproCtx, reproCancel := context.WithTimeout(ctx, 60*time.Second)
                         reproducer, err := p.reproducerGen.Generate(reproCtx, state)
@@ -308,7 +300,6 @@ func (p *Pipeline) Run(ctx context.Context, state *schemas.AgentState) error {
                         }
                 }
 
-                // v4.4.0: Security scan + reviewer agent.
                 // Runs AFTER the fix is generated but BEFORE the pipeline returns.
                 // If the security check fails, the fix is marked as requiring human review
                 // (status = governance_review) and the security findings are stored.

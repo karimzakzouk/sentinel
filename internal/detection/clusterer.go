@@ -18,7 +18,7 @@ const (
 )
 
 // Signal is what detectors send to the clusterer.
-// v3.2.4: NO pod logs in the signal — detection triggers, investigation fetches.
+
 // The signal is just the alarm bell. The investigator fetches full logs via K8s API.
 type Signal struct {
         Type      SignalType
@@ -40,13 +40,12 @@ type Clusterer struct {
         pending map[string]*pendingCluster
         window  time.Duration
 
-        // v3.5.0: Optional pause checker — if set and returns true, the clusterer
         // skips emitting triggers (autonomous mode paused via Slack bot).
         pauseChecker PauseChecker
 }
 
 // PauseChecker returns true if autonomous mode is paused.
-// v3.5.0: Implemented by the Slack bot — allows pausing investigations
+
 // without restarting Sentinel.
 type PauseChecker interface {
         IsPaused() bool
@@ -64,14 +63,14 @@ func NewClusterer(handler IncidentHandler, tracker *ActiveTracker) *Clusterer {
                 handler: handler,
                 tracker: tracker,
                 pending: make(map[string]*pendingCluster),
-                window:  500 * time.Millisecond, // v3.17.0: was 3s, reduced to 500ms (catches cascades, doesn't penalize single incidents)
+                window:  500 * time.Millisecond,
         }
 }
 
 // SetPauseChecker wires in a pause checker (e.g. the Slack bot).
-// v3.5.0: When set, the clusterer checks IsPaused() before emitting triggers.
+
 // If paused, signals are silently dropped (not buffered).
-// v3.18.0: Guarded by mu — was written without a lock, racing with the timer
+
 // goroutine's read at emit() (interface assignment is not atomic).
 func (c *Clusterer) SetPauseChecker(pc PauseChecker) {
         c.mu.Lock()
@@ -102,7 +101,7 @@ func (c *Clusterer) Send(ctx context.Context, sig Signal) {
         c.pending[key] = pending
 
         pending.timer = time.AfterFunc(c.window, func() {
-                // v3.3.1: Panic recovery — emit runs in a timer goroutine.
+
                 // Without this, a panic in the handler chain would kill the
                 // detection layer's timer thread and silently stop clustering.
                 defer func() {
@@ -116,7 +115,7 @@ func (c *Clusterer) Send(ctx context.Context, sig Signal) {
 
 // Stop cancels all pending cluster timers. Call on shutdown so pending timers
 // don't fire after the parent context is cancelled.
-// v3.18.0: H4 — was missing, so pending timers (up to 500ms old) fired
+
 // post-shutdown, spawning handler goroutines against a cancelled ctx.
 func (c *Clusterer) Stop() {
         c.mu.Lock()
@@ -131,7 +130,7 @@ func (c *Clusterer) Stop() {
 }
 
 // emit fires the cluster after the grouping window closes.
-// v3.2.4: Does NOT fetch logs. Passes service + namespace + reason only.
+
 // The investigator fetches full logs via K8s API.
 func (c *Clusterer) emit(key string) {
         c.mu.Lock()
@@ -148,7 +147,6 @@ func (c *Clusterer) emit(key string) {
                 return
         }
 
-        // v3.5.0: Check if autonomous mode is paused (via Slack bot).
         if c.pauseChecker != nil && c.pauseChecker.IsPaused() {
                 log.Printf("[clusterer] skipping %s — autonomous mode paused", key)
                 return
@@ -166,9 +164,8 @@ func (c *Clusterer) emit(key string) {
         log.Printf("[clusterer] emitting trigger for %s (signals: %s)",
                 key, strings.Join(signalTypes, "+"))
 
-        // v3.2.4: Pass EMPTY pod logs — the investigator will fetch full logs itself.
         // This is the industry pattern: detection triggers, investigation fetches context.
-        // v3.18.0: H6 — added panic recovery (was missing — a panic in the handler
+
         // chain killed the process).
         if c.handler != nil {
                 go func() {

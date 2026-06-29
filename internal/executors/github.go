@@ -20,9 +20,9 @@ import (
 )
 
 // GitHubExecutor opens Pull Requests via the GitHub REST API.
-// Replaces the Python PyGithub-based executor with direct net/http calls.
+
 //
-// v3.11.0: Now supports GitHub Enterprise / GitLab / Bitbucket via
+
 // cfg.GitHost + cfg.GitHubAPIURL (CRITICAL audit #2). Was hardcoded to
 // https://api.github.com in 8 sites within this file.
 
@@ -36,10 +36,10 @@ type TokenProvider interface {
 type GitHubExecutor struct {
         token        string
         http         *http.Client
-        apiURL       string // v3.11.0: base API URL (default "https://api.github.com")
-        gitHost      string // v3.11.0: git host for clone URLs (default "github.com")
-        defaultBranch string // v3.11.0: default branch fallback (default "main")
-        // v4.0.0: Optional GitHub App token provider. When set, takes precedence
+        apiURL       string
+        gitHost      string
+        defaultBranch string
+
         // over the static token — every API call fetches a fresh installation token
         // (cached internally by the App). Falls back to the static token on error.
         tokenProvider TokenProvider
@@ -50,9 +50,9 @@ func NewGitHub(token string) *GitHubExecutor {
         return &GitHubExecutor{
                 token:         token,
                 http:          &http.Client{Timeout: 30 * time.Second},
-                apiURL:        "https://api.github.com", // v3.11.0: default; override via WithAPIURL
-                gitHost:       "github.com",             // v3.11.0: default; override via WithGitHost
-                defaultBranch: "main",                   // v3.11.0: default; override via WithDefaultBranch
+                apiURL:        "https://api.github.com",
+                gitHost:       "github.com",
+                defaultBranch: "main",
         }
 }
 
@@ -132,7 +132,7 @@ func (e *GitHubExecutor) PrepareBranch(ctx context.Context, inc *schemas.Inciden
         repo := *fp.Repo
 
         // 1. Get the base branch's latest commit SHA
-        baseBranch := e.defaultBranch // v3.11.0: was hardcoded "main" (audit #6)
+        baseBranch := e.defaultBranch
         if fp.BaseBranch != nil && *fp.BaseBranch != "" {
                 baseBranch = *fp.BaseBranch
         }
@@ -159,7 +159,7 @@ func (e *GitHubExecutor) PrepareBranch(ctx context.Context, inc *schemas.Inciden
                 if fc.Path == "" {
                         continue
                 }
-                // v3.9.0: If the FileChange has search/replace blocks, fetch the
+
                 // current file content, apply the blocks, then write the result.
                 // This produces minimal, surgical diffs instead of rewriting the
                 // entire file.
@@ -306,10 +306,10 @@ func (e *GitHubExecutor) getFileSHA(ctx context.Context, repo, path, ref string)
 }
 
 // getFileContent fetches the decoded content of a file from a GitHub repo.
-// v3.9.0: Used by applySearchReplace to get the current file before applying
+
 // search/replace blocks.
 // GetFileContent fetches the decoded content of a file from a GitHub repo.
-// v3.14.0: Exported for the sandbox retry loop (Fix C) — fetches the current
+
 // file state from the branch so the LLM generates search/replace blocks against
 // the current code, not the original.
 func (e *GitHubExecutor) GetFileContent(ctx context.Context, repo, path, ref string) (string, error) {
@@ -339,7 +339,7 @@ func (e *GitHubExecutor) GetFileContent(ctx context.Context, repo, path, ref str
 // each search/replace block using multiple matching strategies, validates
 // the result is syntactically correct, and returns the modified content.
 //
-// v3.10.0: Multi-strategy matching (following Aider's approach):
+
 //  1. Exact match — search text must match character-for-character
 //  2. Whitespace-insensitive match — strip leading/trailing whitespace per line
 //  3. Fuzzy match — Levenshtein distance >80% similarity
@@ -386,7 +386,6 @@ func (e *GitHubExecutor) applySearchReplace(ctx context.Context, repo, branch, p
                         continue
                 }
 
-                // v3.18.0: H10 — "already applied" detection.
                 // If the search text is absent BUT the replacement is present,
                 // the fix was already applied in a previous retry. Treat as success
                 // instead of looping forever regenerating the same fix.
@@ -398,7 +397,7 @@ func (e *GitHubExecutor) applySearchReplace(ctx context.Context, repo, branch, p
 
                 // All strategies failed
                 failedBlocks = append(failedBlocks, i)
-                // v3.18.0: H19 — include the search preview in the returned error
+
                 // so the LLM sees what didn't match (was only logged, not fed back).
                 preview := ch.Search
                 if len(preview) > 120 {
@@ -414,7 +413,6 @@ func (e *GitHubExecutor) applySearchReplace(ctx context.Context, repo, branch, p
                         len(changes), strings.Join(matchErrors, "; "))
         }
 
-        // v3.10.0: Reject useless partial fixes.
         // If some blocks failed, check whether the applied blocks are "meaningful"
         // (i.e. they actually change code logic, not just add an import).
         // If ALL applied blocks are just import changes and the actual fix blocks
@@ -453,7 +451,7 @@ func (e *GitHubExecutor) applySearchReplace(ctx context.Context, repo, branch, p
                 // Try applying blocks one at a time, skipping syntax-breaking ones
                 content = originalContent
                 goodBlocks := 0
-                var droppedBlocks []int // v3.18.0: H13 — track which blocks were dropped
+                var droppedBlocks []int
                 for i, ch := range changes {
                         matched, trial := tryAllStrategies(content, ch.Search, ch.Replace)
                         if !matched {
@@ -470,7 +468,7 @@ func (e *GitHubExecutor) applySearchReplace(ctx context.Context, repo, branch, p
                 if goodBlocks == 0 {
                         return "", fmt.Errorf("all search/replace blocks produce syntax errors — LLM generated broken code")
                 }
-                // v3.18.0: H13 — if any blocks were dropped, log a loud warning so
+
                 // the operator (and the LLM retry loop via logs) knows the fix is
                 // incomplete. We still ship the partial fix (better than nothing)
                 // but the warning ensures it's visible.
@@ -500,7 +498,7 @@ func tryExactMatch(content, search, replace string) (bool, string) {
 // line of both the search text and the file content, then tries to match.
 // This handles the #1 LLM error: getting indentation wrong.
 //
-// v3.10.0: Following Aider's approach.
+
 func tryWhitespaceInsensitiveMatch(content, search, replace string) (bool, string) {
         // Normalize: strip leading/trailing whitespace from each line
         normalize := func(s string) string {
@@ -538,7 +536,7 @@ func tryWhitespaceInsensitiveMatch(content, search, replace string) (bool, strin
                         // Found the match at startLine. Replace those lines with the
                         // replacement text, preserving the original indentation of the
                         // first line.
-                        // v3.18.0: H12 — fixed indent corruption. Was prepending originalIndent
+
                         // IN ADDITION to the replacement's own indent, producing 4+8=12 spaces.
                         originalIndent := getIndent(contentLines[startLine])
                         replaceLines := strings.Split(replace, "\n")
@@ -564,7 +562,7 @@ func tryWhitespaceInsensitiveMatch(content, search, replace string) (bool, strin
 // tryFuzzyMatch uses a simple similarity score to find the closest match.
 // If the best match has >80% similarity (Levenshtein-based), use it.
 //
-// v3.10.0: Following Aider's approach. Disabled by default in Aider for
+
 // safety, but we enable it because free models produce more search text
 // errors than GPT-4. The 80% threshold is conservative enough to avoid
 // false matches.
@@ -576,7 +574,6 @@ func tryFuzzyMatch(content, search, replace string) (bool, string) {
                 return false, content
         }
 
-        // v3.10.1: Log the search text for debugging
         for i, sl := range searchLines {
                 preview := strings.TrimSpace(sl)
                 if len(preview) > 80 {
@@ -602,7 +599,6 @@ func tryFuzzyMatch(content, search, replace string) (bool, string) {
                 }
         }
 
-        // v3.10.1: Log the best match details
         if bestStart >= 0 {
                 for j := 0; j < len(searchLines); j++ {
                         fileLine := strings.TrimSpace(contentLines[bestStart+j])
@@ -620,7 +616,6 @@ func tryFuzzyMatch(content, search, replace string) (bool, string) {
 
         log.Printf("[github] fuzzy: best score=%.1f%% at line %d (threshold=85%%)", bestScore*100, bestStart+1)
 
-        // v3.18.0: H11 — raised threshold from 70% to 85%. At 70%, 3 lines of a
         // 10-line search block could be completely wrong and still match, applying
         // the fix to the wrong function (e.g. payment fix applied to refund function).
         // 85% is closer to Aider's safe default while still tolerating minor
@@ -632,7 +627,7 @@ func tryFuzzyMatch(content, search, replace string) (bool, string) {
         log.Printf("[github] fuzzy match: %.1f%% similarity at line %d", bestScore*100, bestStart+1)
 
         // Replace the matched lines with the replacement text.
-        // v3.18.0: H12 — fixed indent corruption. Was prepending originalIndent
+
         // IN ADDITION to the replacement's own indent, producing 4+8=12 spaces
         // and breaking Python block structure (IndentationError).
         // Fix: strip the replacement's leading indent, then prepend originalIndent ONCE.
@@ -757,7 +752,7 @@ func min3(a, b, c int) int {
 //
 // For unknown file types, validation is skipped (returns nil).
 //
-// v3.9.7: This is the quality gate that prevents broken PRs. The LLM
+
 // sometimes generates code with missing closing quotes, unclosed parens,
 // or broken indentation. This catches those before writing to GitHub.
 func validateSyntax(path, content string) error {
@@ -773,7 +768,7 @@ func validateSyntax(path, content string) error {
                 return validateJSON(content)
         case ".yaml", ".yml":
                 return validateYAML(content)
-        // v3.18.0: H18 — extend brace-balance validator to more languages.
+
         // Catches the dominant LLM mistake (unbalanced delimiters) for Java, Rust,
         // Ruby, C#, C/C++, PHP, Kotlin, Swift, Scala. Same validator as Python/JS —
         // these languages share enough lexical structure that brace/paren/bracket
@@ -802,7 +797,7 @@ func validateSyntax(path, content string) error {
 
 // validateSyntax, validatePython, validateGo, validateJS, validateJSON,
 // validateYAML are implemented in syntax_validate.go (pure-Go, no exec).
-// v3.11.0: Replaced the previous exec.Command("python3"/"gofmt"/"node")
+
 // implementation, which silently returned nil in distroless (no binaries)
 // AND swallowed os.CreateTemp errors. See syntax_validate.go for details.
 
@@ -831,8 +826,7 @@ func (e *GitHubExecutor) addLabels(ctx context.Context, repo string, prNumber in
 }
 
 func (e *GitHubExecutor) do(ctx context.Context, method, url string, body any, out any) error {
-        // v3.18.0: H17 — retry on 429 (rate limit) and 403 (secondary rate limit / abuse detection).
-        // Was: a single HTTP request, no retry. During incident storms with 3 concurrent
+
         // investigations × ~10 GitHub calls each, the secondary rate limit triggered and
         // all subsequent GitHub operations failed permanently.
         const maxRetries = 3
@@ -863,7 +857,7 @@ func (e *GitHubExecutor) do(ctx context.Context, method, url string, body any, o
                 if err != nil {
                         return err
                 }
-                req.Header.Set("Authorization", "Bearer "+e.authToken(ctx)) // v4.0.0: GitHub App token when configured
+                req.Header.Set("Authorization", "Bearer "+e.authToken(ctx))
                 req.Header.Set("Accept", "application/vnd.github+json")
                 req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
                 if body != nil {
@@ -925,7 +919,6 @@ func isGitHubRateLimit(resp *http.Response) bool {
                 strings.Contains(bodyStr, "abuse detection") ||
                 strings.Contains(bodyStr, "rate limit")
 }
-
 
 // base64Decode decodes a base64-encoded string (used for GitHub Contents API
 // file content). v3.9.0.

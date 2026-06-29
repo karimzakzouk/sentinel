@@ -31,24 +31,21 @@ type ParsedError struct {
 var (
         // Error type: "KeyError:", "NullPointerException:", "panic:", "fatal error:", "TypeError:"
         // Matches any word ending in Error or Exception, plus panic/fatal/crash.
-        // v3.3.1: colon is now OPTIONAL to catch Java exceptions like
+
         // "StackOverflowError" and "OutOfMemoryError" that appear without colons.
         // The \w+ prefix is REQUIRED to avoid matching standalone "error" inside
         // phrases like "runtime error" (which would shadow the real "panic:" line).
         errorTypeRe = regexp.MustCompile(`(?i)(\w+(?:Error|Exception))(?::\s*(.+)?)?`)
 
-        // v3.3.1: Standalone "Error:" or "Exception:" — for Node.js warnings like
         // "UnhandledPromiseRejectionWarning: Error: connect ECONNREFUSED" where the
         // actual error type is the bare "Error" after the colon. Requires a colon
         // to avoid false positives on prose like "an error occurred".
         standaloneErrorRe = regexp.MustCompile(`(?i)(?:^|\s)(Error|Exception):\s*(.+)`)
 
-        // v3.3.1: panicRe now also matches Rust's "thread 'main' panicked at"
         // (past tense, mid-line) in addition to Go's "panic:" / "fatal error:".
         panicRe = regexp.MustCompile(`(?i)(?:^(?:panic|fatal error|fatal):\s*(.+)?|panicked at\s+'?(.+)?'?)`)
         sigRe   = regexp.MustCompile(`(?i)(SIGABRT|SIGSEGV|SIGBUS|SIGKILL|SIGTERM)`)
 
-        // v3.3.1: Ruby-style errors wrapped in parens: "(NoMethodError)"
         rubyErrorRe = regexp.MustCompile(`\((\w+(?:Error|Exception))\)`)
 
         // File:line patterns — universal across languages
@@ -60,12 +57,12 @@ var (
         // Generic: path/to/file.ext:line
         pythonFileRe = regexp.MustCompile(`File "([^"]+\.\w+)", line (\d+)`)
         javaFileRe    = regexp.MustCompile(`at\s+[\w.]+\(([\w]+\.java):(\d+)\)`)
-        // v3.3.1: Node.js stack frame — two forms:
+
         //   "at Foo (/path/file.js:line:col)"  — with function name
         //   "at /path/file.js:line:col"         — without function name (user code)
         // The function name part is optional to handle bare-path frames.
         nodeFileRe = regexp.MustCompile(`at\s+(?:[\w.<>\s]+\s*\()?\s*([^\s)]+\.js):(\d+)`)
-        // v3.3.1: generic file:line — restricted to known code extensions to avoid
+
         // matching IP:port pairs (e.g. "127.0.0.1:5432") and other noise.
         codeExtRe = regexp.MustCompile(`\.(py|go|js|ts|tsx|jsx|java|rs|rb|c|cpp|cc|h|hpp|kt|swift|php|scala|cs)$`)
         genericFileRe   = regexp.MustCompile(`(?:at\s+)?\(?(?:[\w./-]+/)?([\w-]+\.\w+):(\d+)`)
@@ -73,7 +70,7 @@ var (
 
 // ParseError universally parses an error from any language's logs.
 //
-// v3.3.1: Three-pass scan to handle precedence correctly:
+
 //   - Pass 1 (bottom-up): look for explicit error types (KeyError:, panic:,
 //     panicked at, (NoMethodError)). These take top priority.
 //   - Pass 2 (bottom-up): if no explicit error type, look for signal-based
@@ -126,7 +123,7 @@ func ParseError(logs string) *ParsedError {
 // NullPointerException, panic:, panicked at, (NoMethodError), standalone Error:).
 // Does NOT check for signals — those are handled in a separate pass.
 //
-// v3.3.1: Order matters. panicRe is checked BEFORE standaloneErrorRe so that
+
 // "panic: runtime error: ..." is classified as "panic" (not "error" from the
 // "runtime error:" substring). standaloneErrorRe is a fallback for Node.js
 // warnings that don't have a panic prefix.
@@ -145,7 +142,6 @@ func parseErrorTypeLine(line, fullLogs string) *ParsedError {
                 return pe
         }
 
-        // v3.3.1: Ruby-style error in parens: (NoMethodError)
         if m := rubyErrorRe.FindStringSubmatch(line); len(m) >= 2 {
                 pe := &ParsedError{
                         ErrorType: m[1],
@@ -173,7 +169,6 @@ func parseErrorTypeLine(line, fullLogs string) *ParsedError {
                 return pe
         }
 
-        // v3.3.1: Standalone "Error:" / "Exception:" — for Node.js warnings.
         // Checked LAST so it only fires when no more-specific pattern matched.
         if m := standaloneErrorRe.FindStringSubmatch(line); len(m) >= 3 {
                 pe := &ParsedError{
@@ -242,12 +237,12 @@ func parseFileLine(line, fullLogs string) *ParsedError {
 // extractFileAndLine finds the first source file + line number in the logs.
 // Works across all languages.
 //
-// v3.3.1: Order matters. We try the most specific patterns first (Python,
+
 // Java, Node.js) before falling back to the generic pattern. The generic
 // pattern is now restricted to known code extensions to avoid false matches
 // on IP:port pairs like "127.0.0.1:5432".
 func extractFileAndLine(logs string) (string, string) {
-        // v3.15.0: For Python, prefer non-site-packages frames. The previous code
+
         // used FindStringSubmatch (first match) which always returned the first
         // frame — for web apps (FastAPI/Flask + uvicorn), that's always
         // site-packages/uvicorn/... This caused a false "shared library bug"
@@ -268,7 +263,7 @@ func extractFileAndLine(logs string) (string, string) {
         if m := javaFileRe.FindStringSubmatch(logs); len(m) >= 3 {
                 return m[1], m[2]
         }
-        // v3.3.1: Try Node.js format: at Foo (/path/file.js:line:col)
+
         // Prefer paths with a "/" prefix (user code like /app/db.js) over bare
         // module names (Node internals like net.js). Scan all matches and pick
         // the first one that has a path separator.
@@ -307,7 +302,7 @@ func stripContainerPath(path string) string {
 
 // detectLanguage guesses the language from the error type + log content.
 //
-// v3.3.1: Rust is now checked BEFORE Go. The previous order checked Go first,
+
 // which meant "panic" + "panicked" logs were classified as Go even when the
 // logs were Rust ("thread 'main' panicked at"). Rust's distinctive marker is
 // the past-tense "panicked" (Go uses present-tense "panic:").
@@ -319,7 +314,7 @@ func detectLanguage(errorType, logs string) string {
                 errorType == "KeyError" || errorType == "IndentationError" || errorType == "SyntaxError" {
                 return "python"
         }
-        // v3.3.1: Rust BEFORE Go — "panicked" (past tense) is Rust's marker.
+
         // Go uses "panic:" (present tense). .rs files are unambiguous.
         if strings.Contains(logsLower, "panicked") || strings.Contains(logs, ".rs") {
                 return "rust"
@@ -484,12 +479,12 @@ func ExtractSearchQueriesUniversal(logs string) []string {
 //   POST /api/users HTTP/1.1
 //   "GET /divide?a=10&b=0"
 // Works across all web server log formats (uvicorn, gunicorn, express, gin, etc.)
-// v3.14.0: Layer C — used by the sandbox to test the exact endpoint that
+
 // triggered the error.
 var httpReqRe = regexp.MustCompile(`(?i)(?:GET|POST|PUT|DELETE|PATCH)\s+(/[^\s"]+)`)
 
 // httpReqWithStatusRe extracts HTTP request lines WITH their status code.
-// v3.15.0: Used to prefer failing requests (4xx/5xx) over successful ones.
+
 // Matches formats like:
 //   GET /path HTTP/1.1" 500
 //   GET /path 500
@@ -498,7 +493,7 @@ var httpReqWithStatusRe = regexp.MustCompile(`(?i)(?:GET|POST|PUT|DELETE|PATCH)\
 
 // ExtractTriggerEndpoint pulls the HTTP request path that triggered the error
 // from the pod logs. Returns "" if no HTTP request is found (non-web service).
-// v3.15.0: Fixed — now prefers requests with 4xx/5xx status codes (the actual
+
 // failing request) over 2xx requests (health checks, successful calls).
 // Previously returned the FIRST request, which was often a health check.
 //
@@ -510,7 +505,7 @@ func ExtractTriggerEndpoint(logs string) string {
 }
 
 // ExtractTriggerEndpointWithMethod returns both the path AND the HTTP method.
-// v3.18.0: The sandbox needs the method to probe with the correct verb — was
+
 // always GET, returning 405 on POST endpoints which falsely passed Level 2
 // (because 405 < 500 was treated as success).
 // Also: filters to safe methods for replay — GET/HEAD only. POST/DELETE/PUT
@@ -521,7 +516,7 @@ func ExtractTriggerEndpoint(logs string) string {
 // failure under the new Level 2 logic — so the LLM is told the route exists
 // but isn't testable via GET, and must reason about the fix differently).
 func ExtractTriggerEndpointWithMethod(logs string) (path, method string) {
-        // v3.18.0: removed ineffectual `method = "GET"` assignment (golangci-lint
+
         // ineffassign). The method is always set by extractMethod() before return,
         // or we return ("", "") if no match — callers check path == "" first.
         // First, find a request with a 4xx/5xx status code.

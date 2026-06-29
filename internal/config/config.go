@@ -25,7 +25,7 @@ type Config struct {
         LLMAPIKey       string
         LLMFastModel    string
         LLMFrontierModel string
-        // v3.4.0: configurable embedding model. v3.11.0: default changed from
+
         // "text-embedding-3-small" to "" (empty) — the previous default was
         // OpenAI-specific but the default LLM provider is "zai", so every
         // default install was calling a non-existent OpenAI embeddings endpoint
@@ -35,7 +35,7 @@ type Config struct {
         // must set both SENTINEL_LLM_EMBEDDING_MODEL and ensure their
         // LLMBaseURL/provider supports the /embeddings endpoint.
         LLMEmbeddingModel string
-        // v3.11.0: Configurable embedding dimension for the hash fallback
+
         // (audit #13). Was hardcoded 1536 in feedback/vector.go hashEmbedding().
         // If an operator configures a real embedding model with a different dim
         // (e.g. 1024 for bge-large, 3072 for text-embedding-3-large), the hash
@@ -51,9 +51,9 @@ type Config struct {
 
         // GitHub
         GitHubToken string
-        // v3.5.0: GitHub webhook secret for PR review signature verification.
+
         GitHubWebhookSecret string
-        // v3.8.4: Optional allowlist of GitHub repos (owner/name) that Sentinel
+
         // is allowed to clone and open PRs against. Sourced from the
         // sentinel.io/repo pod annotation. Empty list = allow all (legacy
         // behavior, NOT recommended for production). When non-empty, any pod
@@ -63,7 +63,7 @@ type Config struct {
         // string and having Sentinel clone it (and exfiltrate the PAT to
         // github.com in the process).
         AllowedGitHubRepos []string
-        // v3.8.4: Bearer token required to call admin API endpoints
+
         // (/admin/*, /settings POST, /incidents POST, /pause, /resume).
         // Empty = auth disabled (NOT recommended for production; the API
         // will log a loud warning at startup). When set, every admin
@@ -71,7 +71,6 @@ type Config struct {
         // and metrics endpoints remain unauthenticated.
         APIToken string
 
-        // v4.0.0: GitHub App credentials. When all three are set, Sentinel uses
         // the GitHub App's installation token for ALL GitHub API calls (opening
         // PRs, posting comments, reacting, merging) instead of the PAT. This makes
         // PRs and comments appear as the verified "Sentinel" bot identity instead
@@ -96,7 +95,6 @@ type Config struct {
         DockerHubUsername string
         DockerHubToken    string
 
-        // v3.11.0: Registry-aware Kaniko support (CRITICAL audit #7).
         // Previously docker.io was hardcoded in 4 places (kaniko.go:106,255,
         // secrets.yaml:28, values.yaml:12), so ECR/GCR/ACR/Harbor/Quay users
         // got an invalid destination image:
@@ -107,14 +105,12 @@ type Config struct {
         // Default: docker.io (backwards-compatible).
         KanikoRegistry string
 
-        // v3.11.0: GitHub Enterprise / GitLab / Bitbucket support (CRITICAL audit #2).
         // Previously github.com was hardcoded in 14+ sites across 6 files.
         // Now the git host + API URL are configurable.
         // Default: github.com + https://api.github.com (backwards-compatible).
         GitHost      string // e.g. "github.com", "gh.mycorp.internal", "gitlab.com"
         GitHubAPIURL string // e.g. "https://api.github.com", "https://gh.mycorp.internal/api/v3"
 
-        // v3.11.0: Default branch (CRITICAL audit #6).
         // Previously "main" was hardcoded in 4 sites (github.go:64, cloner.go:51,
         // branch_resolver.go:48, fix_proposer.go:617), breaking repos whose
         // default branch is master/develop/trunk/release-X.Y.
@@ -122,14 +118,12 @@ type Config struct {
         // sentinel.io/branch annotation takes precedence.
         DefaultBranch string
 
-        // v3.11.0: Configurable high-risk services (audit obs-1).
         // Previously the safety policy hardcoded payment-api/billing-api/auth-service
         // as high-risk and NewPolicy() could not override them. Now configurable.
         // Default: empty (no services are high-risk by default — demo values
         // should not leak into production installs).
         HighRiskServices []string
 
-        // v3.11.0: Configurable namespace skip list (audit #11).
         // Previously hardcoded to kube-system/kube-public/kube-node-lease, missing
         // common system namespaces like calico-system, cert-manager, ingress-nginx,
         // monitoring, etc. Sentinel would waste API QPS watching those.
@@ -140,14 +134,12 @@ type Config struct {
         // tekton-pipelines, istio-system, knative-serving, kubernetes-dashboard.
         SkipNamespaces []string
 
-        // v3.11.0: Configurable Kaniko images (audit #14).
         // Previously hardcoded as unexported consts in kaniko.go.
         // Default: the previous pinned values (alpine/git:2.43.0,
         // gcr.io/kaniko-project/executor:v1.24.0).
         KanikoInitImage     string
         KanikoExecutorImage string
 
-        // v3.11.0: Configurable max concurrent investigations (audit #15).
         // Previously hardcoded to 3 in main.go:208.
         // Default: 3 (backwards-compatible).
         MaxConcurrentInvestigations int
@@ -175,42 +167,33 @@ type Config struct {
         // Investigation timeout (seconds)
         InvestigationTimeout int
 
-        // v3.4.0: Agent timeouts (seconds). Previously hardcoded in pipeline.go.
         InvestigatorTimeoutSec  int
         EvidenceGathererTimeoutSec int
         AnalystTimeoutSec       int
         FixProposerTimeoutSec   int
 
-        // v3.4.0: Confidence routing threshold (was hardcoded 0.3, comment said 0.5).
         ConfidenceLoopBackThreshold float64
         MaxPipelineIterations       int
 
-        // v3.4.0: Outcome watcher (was hardcoded 10min / 30s).
         OutcomeWatchDurationMin    int
         OutcomeCheckIntervalSec    int
 
-        // v3.4.0: Detection layer (was hardcoded 5min cooldown / 100 tail lines).
         DetectionCooldownSec    int
         DetectionTailLines      int64
 
-        // v3.4.0: Scale fix default replicas (was hardcoded int32(2)).
         ScaleFixDefaultReplicas int32
 
-        // v3.4.0: LLM prior weight in analyst (was hardcoded 0.4).
         LLMPriorWeight float64
 
-        // v3.4.0: Sandbox probe config (was hardcoded /pay?amount=...).
         SandboxProbePaths []string
 
-        // v3.6.0: Skip sandbox verification for non-production namespaces.
         // Default false — sandbox runs for all namespaces.
-        // v3.14.0: superseded by SandboxEnabled — but kept for backwards compat.
+
         // When SandboxEnabled=false, sandbox is skipped entirely (for all namespaces).
         // When SandboxEnabled=true + SkipSandboxNonProd=true, sandbox is skipped
         // for non-prod namespaces only.
         SkipSandboxNonProd bool
 
-        // v3.14.0: Sandbox configuration — operator control over verification behavior.
         // SandboxEnabled: should we run the sandbox at all?
         //   true (default) — build canary, deploy, verify, then open PR
         //   false — skip sandbox entirely, open PR immediately (fast mode)
@@ -224,11 +207,9 @@ type Config struct {
         SandboxRequired   bool
         SandboxMaxRetries int
 
-        // v3.4.0: LLM retry config (was no retry — single HTTP call).
         LLMMaxRetries        int
         LLMRetryBaseDelayMs  int
 
-        // v4.0.0: Multi-provider LLM pool with priority-ordered failover + circuit breaker.
         // Operators can stack multiple API keys (e.g. 3 OpenRouter + 2 Groq + 1 Gemini)
         // and Sentinel will try them in priority order. If a provider fails, the
         // circuit breaker trips for that provider and subsequent calls skip it
@@ -239,7 +220,6 @@ type Config struct {
         // single-provider mode (uses LLMProvider + LLMAPIKey above).
         LLMProviders []llm.ProviderConfig
 
-        // v4.0.0: Auto-merge configuration.
         AutoMergeEnabled        bool
         AutoMergeNamespaces     []string
         AutoMergeMinConfidence  float64
@@ -248,24 +228,19 @@ type Config struct {
         AutoMergeMaxPerHour     int
         AutoMergeCooldownMin    int
 
-        // v4.2.0: Auto-remediation — detects + fixes infra issues (disk full,
         // stuck pods, etc.) without code changes. Default false.
         AutoRemediationEnabled bool
 
-        // v3.4.0: Observability backends (for Evidence Gatherer).
         PrometheusURL string
         LokiURL       string
         JaegerURL     string
 
-        // v3.4.0: Slack webhook (was read via os.Getenv in 2 places).
         SlackWebhook string
 
-        // v3.5.0: Interactive Slack bot (Events API + slash commands)
         SlackSigningSecret string // verifies Slack webhook signatures
         SlackBotUserID     string // Sentinel's Slack user ID (for @mention parsing)
         SlackBotToken      string // OAuth bot token (xoxb-...) for posting replies
 
-        // v3.4.0: Structured logging level (DEBUG/INFO/WARN/ERROR). Default INFO.
         LogLevel string
 }
 
@@ -297,12 +272,12 @@ func Load() *Config {
                 LLMAPIKey:              getenv("SENTINEL_LLM_API_KEY", ""),
                 LLMFastModel:           getenv("SENTINEL_LLM_FAST_MODEL", "glm-4-flash"),
                 LLMFrontierModel:       getenv("SENTINEL_LLM_FRONTIER_MODEL", "glm-4.5"),
-                // v3.11.0: Default LLMEmbeddingModel changed from "text-embedding-3-small"
+
                 // to "" (audit #13). The previous default was OpenAI-specific but the
                 // default provider is "zai", so every default install silently fell back
                 // to hash embeddings. Empty default is honest about what's happening.
                 LLMEmbeddingModel:      getenv("SENTINEL_LLM_EMBEDDING_MODEL", ""),
-                // v3.11.0: Configurable hash-fallback dim (audit #13). Default 1536
+
                 // preserves backwards compat with existing indexes.
                 LLMEmbeddingDim:        getenvInt("SENTINEL_LLM_EMBEDDING_DIM", 1536),
                 Namespace:              getenv("SENTINEL_NAMESPACE", "sentinel"),
@@ -311,30 +286,30 @@ func Load() *Config {
                 GitHubWebhookSecret:    getenv("SENTINEL_GITHUB_WEBHOOK_SECRET", ""),
                 AllowedGitHubRepos:     splitCSV(getenv("SENTINEL_ALLOWED_GITHUB_REPOS", "")),
                 APIToken:               getenv("SENTINEL_API_TOKEN", ""),
-                // v4.0.0: GitHub App credentials (optional — when set, PRs + comments
+
                 // appear as the "Sentinel" bot instead of the PAT owner).
                 GitHubAppID:            getenv("SENTINEL_GITHUB_APP_ID", ""),
                 GitHubAppPrivateKey:    getenv("SENTINEL_GITHUB_APP_PRIVATE_KEY", ""),
                 GitHubAppInstallID:     getenv("SENTINEL_GITHUB_APP_INSTALL_ID", ""),
                 DockerHubUsername:      getenv("SENTINEL_DOCKER_HUB_USERNAME", ""),
                 DockerHubToken:         getenv("SENTINEL_DOCKER_HUB_TOKEN", ""),
-                // v3.11.0: Registry-aware Kaniko (CRITICAL audit #7)
+
                 KanikoRegistry:         getenv("SENTINEL_KANIKO_REGISTRY", "docker.io"),
-                // v3.11.0: GitHub Enterprise / GitLab / Bitbucket (CRITICAL audit #2)
+
                 GitHost:                getenv("SENTINEL_GIT_HOST", "github.com"),
                 GitHubAPIURL:           getenv("SENTINEL_GITHUB_API_URL", "https://api.github.com"),
-                // v3.11.0: Default branch (CRITICAL audit #6)
+
                 DefaultBranch:          getenv("SENTINEL_DEFAULT_BRANCH", "main"),
-                // v3.11.0: Configurable high-risk services (audit obs-1)
+
                 HighRiskServices:       splitCSV(getenv("SENTINEL_HIGH_RISK_SERVICES", "")),
-                // v3.11.0: Configurable namespace skip list (audit #11)
+
                 SkipNamespaces:         splitCSV(getenv("SENTINEL_SKIP_NAMESPACES", "kube-system,kube-public,kube-node-lease,calico-system,calico-apiserver,cert-manager,ingress-nginx,monitoring,prometheus,grafana,loki,metallb-system,longhorn-system,cattle-system,fleet-system,gatekeeper-system,external-secrets,vault,argo-events,argo-rollouts,tekton-pipelines,istio-system,knative-serving,kubernetes-dashboard")),
-                // v3.11.0: Configurable Kaniko images (audit #14)
+
                 KanikoInitImage:        getenv("SENTINEL_KANIKO_INIT_IMAGE", "alpine/git:2.43.0"),
                 KanikoExecutorImage:    getenv("SENTINEL_KANIKO_EXECUTOR_IMAGE", "gcr.io/kaniko-project/executor:v1.24.0"),
-                // v3.11.0: Configurable max concurrent investigations (audit #15)
+
                 MaxConcurrentInvestigations: getenvInt("SENTINEL_MAX_CONCURRENT_INVESTIGATIONS", 3),
-                // v3.11.0: Removed "payments" from default (audit #5). The demo's
+
                 // "payments" namespace leaked into every install, causing non-demo
                 // services in a namespace literally named "payments" to be treated
                 // as production (stricter governance). Operators who actually use a
@@ -352,70 +327,53 @@ func Load() *Config {
                 APIPort:                getenvInt("PORT", 8000),
                 InvestigationTimeout:   getenvInt("SENTINEL_INVESTIGATION_TIMEOUT", 600),
 
-                // v3.4.0: Agent timeouts (were hardcoded in pipeline.go)
                 InvestigatorTimeoutSec:     getenvInt("SENTINEL_INVESTIGATOR_TIMEOUT", 120),
                 EvidenceGathererTimeoutSec: getenvInt("SENTINEL_EVIDENCE_GATHERER_TIMEOUT", 90),
                 AnalystTimeoutSec:          getenvInt("SENTINEL_ANALYST_TIMEOUT", 15),
                 FixProposerTimeoutSec:      getenvInt("SENTINEL_FIX_PROPOSER_TIMEOUT", 300),
 
-                // v3.4.0: Confidence routing (was hardcoded 0.3; comment said 0.5)
                 ConfidenceLoopBackThreshold: getenvFloat("SENTINEL_CONFIDENCE_LOOP_BACK", 0.3),
                 MaxPipelineIterations:       getenvInt("SENTINEL_MAX_PIPELINE_ITERATIONS", 5),
 
-                // v3.4.0: Outcome watcher (was hardcoded 10min / 30s)
                 OutcomeWatchDurationMin: getenvInt("SENTINEL_OUTCOME_WATCH_DURATION_MIN", 10),
                 OutcomeCheckIntervalSec: getenvInt("SENTINEL_OUTCOME_CHECK_INTERVAL_SEC", 30),
 
-                // v3.4.0: Detection layer (was hardcoded 5min / 100 lines)
                 DetectionCooldownSec: getenvInt("SENTINEL_DETECTION_COOLDOWN_SEC", 300),
                 DetectionTailLines:   int64(getenvInt("SENTINEL_DETECTION_TAIL_LINES", 100)),
 
-                // v3.4.0: Scale fix (was hardcoded int32(2))
                 ScaleFixDefaultReplicas: int32(getenvInt("SENTINEL_SCALE_FIX_REPLICAS", 2)),
 
-                // v3.4.0: Analyst LLM weight (was hardcoded 0.4)
                 LLMPriorWeight: getenvFloat("SENTINEL_LLM_PRIOR_WEIGHT", 0.4),
 
-                // v3.4.0: Sandbox probe paths (was hardcoded /pay?amount=...)
                 SandboxProbePaths: splitCSV(getenv("SENTINEL_SANDBOX_PROBE_PATHS", "/,/healthz,/readyz")),
 
-                // v3.6.0: Skip sandbox for non-prod (default false — sandbox runs for all)
-                // v3.10.0: Sandbox ON by default for ALL namespaces (was true=skip).
                 // The sandbox verifies the fix actually works before opening a PR.
                 // Operators who want fast mode (skip sandbox for non-prod) can set
                 // SENTINEL_SKIP_SANDBOX_NON_PROD=true.
                 SkipSandboxNonProd: getenvBool("SENTINEL_SKIP_SANDBOX_NON_PROD", false),
 
-                // v3.14.0: Sandbox configuration — operator control over verification.
                 SandboxEnabled:    getenvBool("SENTINEL_SANDBOX_ENABLED", true),
                 SandboxRequired:   getenvBool("SENTINEL_SANDBOX_REQUIRED", false),
                 SandboxMaxRetries: getenvInt("SENTINEL_SANDBOX_MAX_RETRIES", 2),
 
-                // v3.4.0: LLM retry (was no retry)
                 LLMMaxRetries:       getenvInt("SENTINEL_LLM_MAX_RETRIES", 3),
                 LLMRetryBaseDelayMs: getenvInt("SENTINEL_LLM_RETRY_BASE_DELAY_MS", 500),
 
-                // v3.4.0: Observability backends (for Evidence Gatherer)
                 PrometheusURL: getenv("SENTINEL_PROMETHEUS_URL", ""),
                 LokiURL:       getenv("SENTINEL_LOKI_URL", ""),
                 JaegerURL:     getenv("SENTINEL_JAEGER_URL", ""),
 
-                // v3.4.0: Slack (was os.Getenv in 2 places)
                 SlackWebhook: getenv("SENTINEL_SLACK_WEBHOOK", ""),
 
-                // v3.5.0: Interactive Slack bot
                 SlackSigningSecret: getenv("SENTINEL_SLACK_SIGNING_SECRET", ""),
                 SlackBotUserID:     getenv("SENTINEL_SLACK_BOT_USER_ID", ""),
                 SlackBotToken:      getenv("SENTINEL_SLACK_BOT_TOKEN", ""),
 
-                // v3.4.0: Structured logging level
                 LogLevel: getenv("SENTINEL_LOG_LEVEL", "INFO"),
 
-                // v4.0.0: Multi-provider pool. Loaded from JSON env var.
                 // Empty = legacy single-provider mode (uses LLMProvider + LLMAPIKey).
                 LLMProviders: loadLLMProviders(),
 
-                // v4.0.0: Auto-merge config. All defaults are conservative —
                 // auto-merge is OFF by default, no namespaces allowed, requires
                 // explicit opt-in per service via annotation.
                 AutoMergeEnabled:       getenvBool("SENTINEL_AUTO_MERGE_ENABLED", false),
@@ -425,7 +383,7 @@ func Load() *Config {
                 AutoMergeCITimeoutSec:  getenvInt("SENTINEL_AUTO_MERGE_CI_TIMEOUT_SEC", 900),
                 AutoMergeMaxPerHour:    getenvInt("SENTINEL_AUTO_MERGE_MAX_PER_HOUR", 3),
                 AutoMergeCooldownMin:   getenvInt("SENTINEL_AUTO_MERGE_COOLDOWN_MIN", 60),
-                // v4.2.0: Auto-remediation (default false — opt-in)
+
                 AutoRemediationEnabled: getenvBool("SENTINEL_AUTO_REMEDIATION_ENABLED", false),
         }
 }
@@ -482,7 +440,7 @@ func (c *Config) IsProductionNamespace(namespace string) bool {
 // NOT recommended for production; set the allowlist via
 // SENTINEL_ALLOWED_GITHUB_REPOS=owner1/repo1,owner2/repo2).
 //
-// v3.8.4: This is the primary defense against the SSRF-style attack where a
+
 // user with pod-edit permission annotates their pod with an arbitrary repo
 // string and Sentinel dutifully clones it (sending the GitHub PAT to
 // github.com for any repo the PAT can access). With the allowlist set, only
@@ -506,7 +464,7 @@ func (c *Config) IsRepoAllowed(repo string) bool {
 // Validate checks the config for missing required fields, invalid values, and
 // insecure defaults. Returns a list of errors (empty if all checks pass) and
 // a list of warnings (non-blocking).
-// v3.18.0: Closes audit finding M2 — previously Sentinel started "successfully"
+
 // with empty required fields and failed 5-10 minutes later at the first LLM call.
 func (c *Config) Validate() (errors []string, warnings []string) {
         // Critical: LLM credentials
