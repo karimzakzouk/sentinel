@@ -296,9 +296,9 @@ func (a *FixProposer) Run(ctx context.Context, state *schemas.AgentState) error 
                         userMsg = a.buildUserMessage(state) + retryHint
                 }
 
-                attemptCtx, attemptCancel := context.WithTimeout(ctx, 90*time.Second)
+                attemptCtx, attemptCancel := context.WithTimeout(ctx, 120*time.Second) // v4.3.1: was 90s — nemotron needs ~80s for 8k tokens
                 log.Printf("[fix_proposer] attempt %d/%d (SEARCH/REPLACE format)", attempt+1, maxRetries+1)
-                rawOutput, llmErr := a.router.FrontierText(attemptCtx, fixProposerSystemPrompt, userMsg, 16000)
+                rawOutput, llmErr := a.router.FrontierText(attemptCtx, fixProposerSystemPrompt, userMsg, 8000) // v4.3.1: was 16000 — SEARCH/REPLACE is more compact than JSON
                 attemptCancel()
                 if llmErr != nil {
                         lastError = fmt.Sprintf("LLM call failed: %v", llmErr)

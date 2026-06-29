@@ -61,7 +61,7 @@ func NewPipeline(router *llm.Router, k8sClient *k8s.Client, gitHubToken string, 
                 investigatorTimeoutSec:      120,
                 evidenceGathererTimeoutSec:  90,
                 analystTimeoutSec:           15,
-                fixProposerTimeoutSec:       120,
+                fixProposerTimeoutSec:       300, // v4.3.1: was 120 — needs room for 2 full 120s attempts
                 confidenceLoopBackThreshold: 0.3,
                 generateTests:               true,    // v4.2.0: enable by default
                 generateReproducer:          true,    // v4.2.0: enable by default

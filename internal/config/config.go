@@ -356,7 +356,7 @@ func Load() *Config {
                 InvestigatorTimeoutSec:     getenvInt("SENTINEL_INVESTIGATOR_TIMEOUT", 120),
                 EvidenceGathererTimeoutSec: getenvInt("SENTINEL_EVIDENCE_GATHERER_TIMEOUT", 90),
                 AnalystTimeoutSec:          getenvInt("SENTINEL_ANALYST_TIMEOUT", 15),
-                FixProposerTimeoutSec:      getenvInt("SENTINEL_FIX_PROPOSER_TIMEOUT", 120),
+                FixProposerTimeoutSec:      getenvInt("SENTINEL_FIX_PROPOSER_TIMEOUT", 300),
 
                 // v3.4.0: Confidence routing (was hardcoded 0.3; comment said 0.5)
                 ConfidenceLoopBackThreshold: getenvFloat("SENTINEL_CONFIDENCE_LOOP_BACK", 0.3),
