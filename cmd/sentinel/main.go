@@ -1490,21 +1490,40 @@ func executeCodeFix(
                 if incident.State.GovernanceDecision != nil {
                         policyVerdict = string(incident.State.GovernanceDecision.Verdict)
                 }
+                // v4.2.3: Read sentinel.io/auto-merge annotation from the incident.
+                // Was missing — defaulted to false, policy rejected every PR.
+                autoMergeAnnotation := false
+                if incident.Cluster.Annotations != nil {
+                        if v, ok := incident.Cluster.Annotations["sentinel.io/auto-merge"]; ok && v == "true" {
+                                autoMergeAnnotation = true
+                        }
+                }
+                if !autoMergeAnnotation {
+                        for _, anomaly := range incident.Cluster.Anomalies {
+                                if anomaly.Annotations != nil {
+                                        if v, ok := anomaly.Annotations["sentinel.io/auto-merge"]; ok && v == "true" {
+                                                autoMergeAnnotation = true
+                                                break
+                                        }
+                                }
+                        }
+                }
                 pkgAutoMergeMerger.Track(&automerge.TrackedPR{
                         IncidentID: incident.IncidentID.String(),
                         Repo:       repoName,
                         PRNumber:   prResult.PRNumber,
                         BaseBranch: baseBranch,
                         Input: automerge.Input{
-                                IncidentID:         incident.IncidentID.String(),
-                                Service:            incident.Cluster.Service,
-                                Namespace:          incident.Cluster.Namespace,
-                                FixType:            fixType,
-                                HasSchemaMigration: hasSchemaMigration,
-                                IsHighRisk:         isHighRisk,
-                                Confidence:         confidence,
-                                SandboxVerified:    sandboxVerified,
-                                PolicyVerdict:      policyVerdict,
+                                IncidentID:          incident.IncidentID.String(),
+                                Service:             incident.Cluster.Service,
+                                Namespace:           incident.Cluster.Namespace,
+                                FixType:             fixType,
+                                HasSchemaMigration:  hasSchemaMigration,
+                                IsHighRisk:          isHighRisk,
+                                Confidence:          confidence,
+                                SandboxVerified:     sandboxVerified,
+                                PolicyVerdict:       policyVerdict,
+                                AutoMergeAnnotation: autoMergeAnnotation,
                         },
                 })
                 logging.Info("PR tracked for auto-merge",
