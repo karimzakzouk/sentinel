@@ -1,5 +1,5 @@
 # =============================================================================
-# Sentinel v4.2.3 — Complete Values Reference
+# Sentinel v4.2.4 — Complete Values Reference
 # =============================================================================
 # This file documents EVERY configurable option in Sentinel.
 # Copy it, edit what you need, then install:
@@ -12,7 +12,7 @@
 image:
   registry: "docker.io/karimzakzouk"
   repository: "sentinel-v3"
-  tag: "4.2.3"
+  tag: "4.2.4"
   pullPolicy: Always
 
 # ─── Sentinel Configuration ──────────────────────────────────────────────────
