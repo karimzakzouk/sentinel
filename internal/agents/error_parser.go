@@ -18,14 +18,12 @@ import (
 //   - File:line: any "file.ext:line" or `File "path", line N` or `at path(N)` pattern
 //   - Error detail: the text after the error type on the same line
 
-type ParsedError struct {
-        ErrorType string // e.g. "KeyError", "panic", "NullPointerException", "TypeError"
-        ErrorDetail string // e.g. "'DATABASE_URLL'", "runtime error: index out of range"
-        SourceFile string // e.g. "app/main.py", "src/handler.go", "com/acme/Foo.java"
-        SourceLine string // e.g. "11", "42", "1337"
-        Language string // detected language: "python", "go", "java", "javascript", "rust", "unknown"
-        RawLine string // the full error line
-}
+// ParsedError is an alias for schemas.ParsedError. Kept for backwards
+// compatibility — new code should use schemas.ParsedError directly.
+//
+// The canonical type lives in internal/schemas so the executors package
+// doesn't have to import agents (fixes LEAK-1 from the architecture audit).
+type ParsedError = schemas.ParsedError
 
 // Universal patterns — match any language
 var (

@@ -23,7 +23,7 @@ import (
         metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
         "k8s.io/client-go/kubernetes"
 
-        "github.com/karimzakzouk/sentinel/internal/agents"
+        "github.com/karimzakzouk/sentinel/internal/schemas"
 )
 
 // TestRunner runs LLM-generated tests in the sandbox. v4.2.0.
@@ -63,7 +63,7 @@ type TestRunResult struct {
 // fixCanaryImage is the canary image with the fix applied (already built by Kaniko).
 // test is the LLM-generated test to run.
 // sandboxNS is the sandbox namespace (already created by the sandbox runner).
-func (r *TestRunner) RunTest(ctx context.Context, fixCanaryImage, sandboxNS string, test *agents.GeneratedTest) (*TestResult, error) {
+func (r *TestRunner) RunTest(ctx context.Context, fixCanaryImage, sandboxNS string, test *schemas.GeneratedTest) (*TestResult, error) {
         if test == nil || test.TestContent == "" {
                 return &TestResult{
                         Overall: true,
@@ -245,7 +245,7 @@ func (r *TestRunner) waitForPodCompletion(ctx context.Context, ns, name, contain
 // RunReproducer executes the LLM-generated reproducer script in the sandbox. v4.2.0 Tier 4.
 // The reproducer is a standalone script (no test framework) that calls the
 // buggy function + exits 0 if OK, 1 if crash.
-func (r *TestRunner) RunReproducer(ctx context.Context, canaryImage, sandboxNS string, reproducer *agents.GeneratedReproducer) (*TestResult, error) {
+func (r *TestRunner) RunReproducer(ctx context.Context, canaryImage, sandboxNS string, reproducer *schemas.GeneratedReproducer) (*TestResult, error) {
         if reproducer == nil || reproducer.ScriptContent == "" {
                 return &TestResult{
                         Overall: true,

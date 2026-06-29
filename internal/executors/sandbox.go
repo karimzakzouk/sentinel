@@ -720,12 +720,12 @@ func (s *SandboxRunner) runRegressionTest(ctx context.Context, sandboxNS string,
 }
 
 // parseGeneratedTest parses a JSON string into a GeneratedTest.
-func parseGeneratedTest(jsonStr string) (*agents.GeneratedTest, error) {
+func parseGeneratedTest(jsonStr string) (*schemas.GeneratedTest, error) {
         var raw map[string]string
         if err := json.Unmarshal([]byte(jsonStr), &raw); err != nil {
                 return nil, err
         }
-        return &agents.GeneratedTest{
+        return &schemas.GeneratedTest{
                 TestFile:      raw["test_file"],
                 TestFramework: raw["test_framework"],
                 TestLanguage:  raw["test_language"],
@@ -762,7 +762,7 @@ func (s *SandboxRunner) runReproducer(ctx context.Context, sandboxNS string, inc
                         Summary: "reproducer parse failed (non-blocking): " + err.Error(),
                 }
         }
-        reproducer := &agents.GeneratedReproducer{
+        reproducer := &schemas.GeneratedReproducer{
                 ScriptFile:     raw["script_file"],
                 ScriptLanguage: raw["script_language"],
                 ScriptContent:  raw["script_content"],

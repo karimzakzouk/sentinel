@@ -9,6 +9,7 @@ package agents
 
 import (
         "context"
+        "encoding/json"
         "fmt"
         "log"
         "time"
@@ -252,7 +253,7 @@ func (p *Pipeline) Run(ctx context.Context, state *schemas.AgentState) error {
                         } else if test != nil {
                                 // Store the test in the agent state for the sandbox to run.
                                 // We store it as a special event so it persists + is visible in the trace.
-                                testJSON, _ := test.MarshalJSON()
+                                testJSON, _ := json.Marshal(test)
                                 state.AgentTrace = append(state.AgentTrace, map[string]any{
                                         "agent":         "test_generator",
                                         "action":        "test_generated",
@@ -281,7 +282,7 @@ func (p *Pipeline) Run(ctx context.Context, state *schemas.AgentState) error {
                         if err != nil {
                                 log.Printf("[pipeline] reproducer generation failed (non-blocking): %v", err)
                         } else if reproducer != nil {
-                                reproJSON, _ := reproducer.MarshalJSON()
+                                reproJSON, _ := json.Marshal(reproducer)
                                 state.AgentTrace = append(state.AgentTrace, map[string]any{
                                         "agent":           "reproducer_generator",
                                         "action":          "reproducer_generated",

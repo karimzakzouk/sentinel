@@ -307,3 +307,58 @@ func NewIncident(cluster AnomalyCluster) Incident {
                 BetaBeta:   1.0,
         }
 }
+
+// ─── Fix verification types ──────────────────────────────────────────────────
+// These were previously in internal/agents and imported by internal/executors
+// (LEAK-1 from the architecture audit). Moved here so the executors package
+// doesn't have to import agents — outer adapter was reaching into inner
+// reasoning layer. The agents package keeps thin wrappers for back-compat.
+
+// ParsedError is the structured form of a runtime error extracted from logs.
+// Multi-language: works for Python, Go, Java, JavaScript, Rust.
+type ParsedError struct {
+	// ErrorType is the error class (e.g. "KeyError", "panic",
+	// "NullPointerException", "TypeError").
+	ErrorType string
+
+	// ErrorDetail is the error-specific detail (e.g. "'DATABASE_URL'",
+	// "runtime error: index out of range").
+	ErrorDetail string
+
+	// SourceFile is the file path from the stack trace (e.g.
+	// "app/main.py", "src/handler.go", "com/acme/Foo.java").
+	SourceFile string
+
+	// SourceLine is the line number as a string (e.g. "11", "42", "1337").
+	SourceLine string
+
+	// Language is the detected language: "python", "go", "java",
+	// "javascript", "rust", or "unknown".
+	Language string
+
+	// RawLine is the full original error line from the logs.
+	RawLine string
+}
+
+// GeneratedTest is an LLM-generated test that reproduces the original error.
+// Used by sandbox Level 4 verification — if the test fails against the
+// canary, the fix didn't actually fix the bug.
+type GeneratedTest struct {
+	TestFile      string `json:"test_file"`
+	TestFramework string `json:"test_framework"`
+	TestLanguage  string `json:"test_language"`
+	TestContent   string `json:"test_content"`
+	TestCommand   string `json:"test_command"`
+	Description   string `json:"description"`
+}
+
+// GeneratedReproducer is an LLM-generated reproducer script. Used by sandbox
+// Level 5 verification (strongest) — runs the script against the canary and
+// checks for non-zero exit.
+type GeneratedReproducer struct {
+	ScriptFile     string `json:"script_file"`
+	ScriptLanguage string `json:"script_language"`
+	ScriptContent  string `json:"script_content"`
+	RunCommand     string `json:"run_command"`
+	Description    string `json:"description"`
+}

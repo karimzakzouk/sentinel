@@ -15,7 +15,6 @@ package agents
 
 import (
         "context"
-        "encoding/json"
         "fmt"
         "strings"
 
@@ -54,14 +53,13 @@ Return ONLY a JSON object:
 
 No prose before or after the JSON.`
 
-// GeneratedReproducer is the output of the reproducer generator.
-type GeneratedReproducer struct {
-        ScriptFile     string `json:"script_file"`
-        ScriptLanguage string `json:"script_language"`
-        ScriptContent  string `json:"script_content"`
-        RunCommand     string `json:"run_command"`
-        Description    string `json:"description"`
-}
+// GeneratedReproducer is an alias for schemas.GeneratedReproducer. Kept for
+// backwards compatibility — new code should use schemas.GeneratedReproducer
+// directly.
+//
+// The canonical type lives in internal/schemas so the executors package
+// doesn't have to import agents (fixes LEAK-1 from the architecture audit).
+type GeneratedReproducer = schemas.GeneratedReproducer
 
 // ReproducerGenerator generates standalone reproducer scripts.
 type ReproducerGenerator struct {
@@ -164,13 +162,5 @@ func (g *ReproducerGenerator) buildUserMessage(state *schemas.AgentState) string
         return strings.Join(parts, "\n")
 }
 
-// MarshalJSON serializes the GeneratedReproducer for storage.
-func (r *GeneratedReproducer) MarshalJSON() ([]byte, error) {
-        return json.Marshal(map[string]string{
-                "script_file":     r.ScriptFile,
-                "script_language": r.ScriptLanguage,
-                "script_content":  r.ScriptContent,
-                "run_command":     r.RunCommand,
-                "description":     r.Description,
-        })
-}
+// (MarshalJSON removed — the struct's json: tags produce identical output.
+// The method was redundant and prevented moving the type to schemas.)
