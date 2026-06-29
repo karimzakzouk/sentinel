@@ -347,6 +347,11 @@ type Incident struct {
         PolicyVerdict      string // safety.Policy.Evaluate verdict
         BaseBranch         string
 
+        // v4.2.5: Auto-merge status for the status comment.
+        AutoMergeEnabled bool
+        AutoMergeMerged  bool
+        AutoMergeSkipped string // non-empty = skipped with reason
+
         // v4.0.0: Agent trace for /sentinel trace. Each entry is one agent step.
         AgentTrace []map[string]any
 

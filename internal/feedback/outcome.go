@@ -7,6 +7,7 @@ import (
         "log"
         "regexp"
         "strings"
+        "sync"
         "time"
 
         corev1 "k8s.io/api/core/v1"
@@ -41,6 +42,10 @@ type OutcomeWatcher struct {
         shortCheckInterval time.Duration // Phase 1 poll: default 30s
         longWatchDuration  time.Duration // Phase 2: default 24h
         longCheckInterval  time.Duration // Phase 2 poll: default 5 min
+        // v4.2.5: Track active watches to prevent duplicates (was starting 3+ watches
+        // for the same incident because both the merger + the investigation handler
+        // called WatchWithDetails).
+        activeWatches sync.Map // key: "service/namespace/incidentID" → bool
 }
 
 // NewOutcomeWatcher creates an OutcomeWatcher with default durations.
@@ -88,6 +93,17 @@ func (w *OutcomeWatcher) WatchWithFixType(ctx context.Context, service, namespac
 // "panic", "NullPointerException"). If non-empty, Phase 2 will watch for
 // its re-occurrence in pod logs over 24h. If empty, Phase 2 is skipped.
 func (w *OutcomeWatcher) WatchWithDetails(ctx context.Context, service, namespace, incidentID string, prOpened bool, fixType, errorFingerprint string) {
+        // v4.2.5: Deduplicate — if a watch is already running for this incident, skip.
+        // Was: the investigation handler + the auto-merge merger both called this,
+        // starting 3+ concurrent watches for the same incident.
+        watchKey := fmt.Sprintf("%s/%s/%s", service, namespace, incidentID)
+        if _, alreadyWatching := w.activeWatches.LoadOrStore(watchKey, true); alreadyWatching {
+                log.Printf("[outcome] %s/%s — watch already running, skipping duplicate (incident %s)", service, namespace, incidentID)
+                return
+        }
+        // Clean up the watch flag when done.
+        defer w.activeWatches.Delete(watchKey)
+
         go func() {
                 defer func() {
                         if r := recover(); r != nil {

@@ -28,6 +28,11 @@ type Merger struct {
         mu       sync.Mutex
         tracked  map[string]*TrackedPR // key: "repo#pr_number"
         stopCh   chan struct{}
+        // v4.2.5: Per-PR locks to prevent EvaluateNow + poll from racing.
+        prLocks   sync.Map // key: "repo#pr_number" → *sync.Mutex
+        // v4.2.5: Callback to update the status comment after merge/skip.
+        onMerged  func(repo string, prNumber int)
+        onSkipped func(repo string, prNumber int, reason string)
 }
 
 // TrackedPR is a PR pending auto-merge evaluation.
@@ -75,6 +80,26 @@ func NewMerger(policy *Policy, gh GitHubClient, store Store, outcome OutcomeWatc
                 tracked: make(map[string]*TrackedPR),
                 stopCh:  make(chan struct{}),
         }
+}
+
+// SetOnMerged sets a callback invoked after a PR is successfully merged. v4.2.5.
+// Used by main.go to update the [SENTINELSTATUS] comment with the merge result.
+func (m *Merger) SetOnMerged(fn func(repo string, prNumber int)) {
+        m.onMerged = fn
+}
+
+// SetOnSkipped sets a callback invoked when a PR is skipped from auto-merge. v4.2.5.
+func (m *Merger) SetOnSkipped(fn func(repo string, prNumber int, reason string)) {
+        m.onSkipped = fn
+}
+
+// prLock returns (or creates) a per-PR mutex. v4.2.5: prevents EvaluateNow
+// and the 30s poll from racing on the same PR (which caused duplicate merges
+// + duplicate comments).
+func (m *Merger) prLock(repo string, prNumber int) *sync.Mutex {
+        key := fmt.Sprintf("%s#%d", repo, prNumber)
+        val, _ := m.prLocks.LoadOrStore(key, &sync.Mutex{})
+        return val.(*sync.Mutex)
 }
 
 // Track adds a PR to the auto-merge watch list. Called after Sentinel opens
@@ -178,7 +203,21 @@ func (m *Merger) EvaluateNow(ctx context.Context, repo string, prNumber int) {
 }
 
 // evaluateAndMerge runs the policy + merges if approved.
+// v4.2.5: Wrapped in a per-PR mutex to prevent EvaluateNow + poll from
+// racing on the same PR (which caused duplicate merges + duplicate comments).
 func (m *Merger) evaluateAndMerge(ctx context.Context, pr *TrackedPR) {
+        lock := m.prLock(pr.Repo, pr.PRNumber)
+        lock.Lock()
+        defer lock.Unlock()
+
+        // v4.2.5: Check if this PR is still tracked (might have been merged/untracked
+        // by a previous evaluateAndMerge call that won the lock).
+        m.mu.Lock()
+        _, stillTracked := m.tracked[prKey(pr.Repo, pr.PRNumber)]
+        m.mu.Unlock()
+        if !stillTracked {
+                return // already merged or untracked
+        }
         // Fetch fresh CI status + labels.
         ciStatus, err := m.gh.GetCIStatus(ctx, pr.Repo, pr.PRNumber)
         if err != nil {
@@ -238,6 +277,10 @@ func (m *Merger) evaluateAndMerge(ctx context.Context, pr *TrackedPR) {
                         _ = m.gh.PostComment(ctx, pr.Repo, pr.PRNumber, body)
                         _ = m.store.UpdateAutoMergeStatus(ctx, pr.IncidentID, "skipped:"+decision.Reason)
                         m.Untrack(pr.Repo, pr.PRNumber)
+                        // v4.2.5: Update the status comment
+                        if m.onSkipped != nil {
+                                m.onSkipped(pr.Repo, pr.PRNumber, decision.Reason)
+                        }
                 }
                 return
         }
@@ -259,17 +302,22 @@ func (m *Merger) evaluateAndMerge(ctx context.Context, pr *TrackedPR) {
         // Success!
         m.policy.RecordMerge()
         _ = m.store.UpdateAutoMergeStatus(ctx, pr.IncidentID, "merged")
+        m.Untrack(pr.Repo, pr.PRNumber)
 
         body := fmt.Sprintf("✅ Auto-merged into `%s`\n\nGates passed:\n%s\n\nMonitoring deployment...",
                 pr.BaseBranch, formatGatesList(decision.GatesPassed, true))
         _ = m.gh.PostComment(ctx, pr.Repo, pr.PRNumber, body)
+
+        // v4.2.5: Update the status comment
+        if m.onMerged != nil {
+                m.onMerged(pr.Repo, pr.PRNumber)
+        }
 
         // Start post-merge outcome monitoring.
         if m.outcome != nil {
                 m.outcome.WatchPostMerge(ctx, pr.IncidentID, pr.Input.Service, pr.Input.Namespace)
         }
 
-        m.Untrack(pr.Repo, pr.PRNumber)
         log.Printf("[automerge] merged PR %s#%d", pr.Repo, pr.PRNumber)
 }
 

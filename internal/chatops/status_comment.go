@@ -98,8 +98,22 @@ func (s *StatusCommentManagerImpl) Render(incident *Incident, extra string) stri
         // Overall status
         sb.WriteString(fmt.Sprintf("| Overall | %s | `%s` |\n", emojiForStatus(incident.Status), incident.Status))
 
-        // Auto-merge (placeholder — wired in the auto-merge package)
-        sb.WriteString("| Auto-merge | — | (not configured) |\n")
+        // Auto-merge status — v4.2.5: was hardcoded "(not configured)"
+        autoMergeStatus := "—"
+        autoMergeDetail := "(not configured)"
+        if incident.AutoMergeEnabled {
+                if incident.AutoMergeMerged {
+                        autoMergeStatus = "✅"
+                        autoMergeDetail = "Merged"
+                } else if incident.AutoMergeSkipped != "" {
+                        autoMergeStatus = "⏭️"
+                        autoMergeDetail = incident.AutoMergeSkipped
+                } else {
+                        autoMergeStatus = "⏳"
+                        autoMergeDetail = "Queued (evaluating gates)"
+                }
+        }
+        sb.WriteString(fmt.Sprintf("| Auto-merge | %s | %s |\n", autoMergeStatus, autoMergeDetail))
 
         sb.WriteString("\n")
         sb.WriteString(fmt.Sprintf("_Last updated: %s_\n\n", time.Now().UTC().Format("2006-01-02 15:04:05 UTC")))

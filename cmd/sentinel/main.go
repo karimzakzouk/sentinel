@@ -971,6 +971,29 @@ func main() {
         autoMergeMerger := automerge.NewMerger(autoMergePolicy, autoMergeGH, &autoMergeStoreAdapter{store: store}, &autoMergeOutcomeAdapter{watcher: outcomeWatcher, policy: autoMergePolicy})
         pkgAutoMergeMerger = autoMergeMerger // v4.2.1: package-level ref for executeCodeFix
 
+        // v4.2.5: Wire callbacks so the merger updates the [SENTINELSTATUS] comment
+        // after merge/skip. Was: the status comment said "(not configured)" forever.
+        autoMergeMerger.SetOnMerged(func(repo string, prNumber int) {
+                if chatopsStatusManager != nil {
+                        inc := &chatops.Incident{
+                                AutoMergeEnabled: true,
+                                AutoMergeMerged:  true,
+                                Status:           "verified",
+                        }
+                        _ = chatopsStatusManager.Update(context.Background(), repo, prNumber, inc, "✅ PR auto-merged. Monitoring deployment...")
+                }
+        })
+        autoMergeMerger.SetOnSkipped(func(repo string, prNumber int, reason string) {
+                if chatopsStatusManager != nil {
+                        inc := &chatops.Incident{
+                                AutoMergeEnabled: true,
+                                AutoMergeSkipped: reason,
+                                Status:           "verified",
+                        }
+                        _ = chatopsStatusManager.Update(context.Background(), repo, prNumber, inc, "")
+                }
+        })
+
         chatopsDeps := &chatops.Deps{
                 Store:         &chatopsStoreAdapter{store: store},
                 GitHub:        chatopsGHClient,
@@ -1555,6 +1578,8 @@ func executeCodeFix(
                         chatopsInc.RootCause = incident.State.RootCause.Statement
                         chatopsInc.Confidence = incident.State.RootCause.Confidence
                 }
+                // v4.2.5: Set auto-merge status for the status comment
+                chatopsInc.AutoMergeEnabled = cfg.AutoMergeEnabled
                 extra := "Available commands: `/sentinel help` for the full list."
                 if !sandboxVerified {
                         extra += "\n\n⚠️ Sandbox verification did not pass — review carefully before merging."
