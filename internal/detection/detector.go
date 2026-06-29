@@ -181,6 +181,7 @@ func (d *Detector) watchPods(ctx context.Context) {
 func (d *Detector) watchNamespaces(ctx context.Context) {
         watcher, err := d.clientset.CoreV1().Namespaces().Watch(ctx, metav1.ListOptions{})
         if err != nil {
+                log.Printf("[detection] failed to watch namespaces: %v", err)
                 return
         }
         defer watcher.Stop()
@@ -320,6 +321,7 @@ func (d *Detector) lookupRepoFromOwner(ctx context.Context, pod *corev1.Pod) str
                         // Pod → ReplicaSet → Deployment
                         rs, err := d.clientset.AppsV1().ReplicaSets(pod.Namespace).Get(ctx, ownerRef.Name, metav1.GetOptions{})
                         if err != nil {
+                                log.Printf("[detection] failed to get ReplicaSet %s/%s: %v", pod.Namespace, ownerRef.Name, err)
                                 continue
                         }
                         // Check ReplicaSet annotations

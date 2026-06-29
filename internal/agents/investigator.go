@@ -421,6 +421,7 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
                         }
                         content, err := repo.ReadFile(repoPath, path)
                         if err != nil {
+                                log.Printf("[investigator] failed to read stack file %s: %v", path, err)
                                 continue
                         }
                         fetched[path] = content

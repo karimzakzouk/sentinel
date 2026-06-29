@@ -411,19 +411,21 @@ func cmdApply(ctx context.Context, cmd *Command, deps *Deps) error {
                         fmt.Sprintf("❌ Invalid choice `%s`. Must be A, B, or C. Run `/sentinel alternatives` to see options.", cmd.ArgList[0]))
         }
 
-        // TODO(v4.1.0): full implementation — read the [SENTINELALTERNATIVES]
-        // comment to get the chosen approach, re-run FixProposer with the
-        // approach as a system hint, push new commits to the branch via the
-        // GitHub executor, re-trigger sandbox verification.
+        // NOTE: Full /sentinel apply implementation requires extending FixProposer
+        // to accept an "approach hint" parameter, re-running it with the chosen
+        // approach, pushing new commits via the GitHub executor, and re-triggering
+        // sandbox verification. Tracked as a future enhancement. For now, the
+        // command posts the LLM-generated approach description so the developer
+        // can implement it manually.
 
         body := fmt.Sprintf("## ⏳ Apply Approach %s\n\n"+
                 "Requested by @%s.\n\n"+
-                "Full implementation of `/sentinel apply` ships in v4.1.0 alongside the auto-merge feature. For now, you can:\n\n"+
-                "1. Manually implement approach %s on this branch\n"+
+                "Automatic approach application is not yet implemented. To use approach %s:\n\n"+
+                "1. Manually implement approach %s on this branch (description below)\n"+
                 "2. Run `/sentinel retry-sandbox` to verify it\n"+
                 "3. Merge as usual\n\n"+
                 "The LLM-generated approach description is in the [SENTINELALTERNATIVES] comment above.",
-                choice, cmd.Author, choice)
+                choice, cmd.Author, choice, choice)
 
         return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber, body)
 }

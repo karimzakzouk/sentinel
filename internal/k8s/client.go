@@ -54,8 +54,8 @@ type Client struct {
 // of every other K8s tool (kubectl, helm, client-go examples).
 //
 // If neither works, returns an error so main.go can decide whether to
-// fatal (production) or log-and-continue (local dev with --no-k8s flag,
-// which is a TODO).
+// fatal (production) or log-and-continue (local dev — run with a local
+// kubeconfig pointing at a kind cluster).
 func New() (*Client, error) {
         config, err := rest.InClusterConfig()
         if err != nil {
