@@ -1,0 +1,76 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payments-api
+  namespace: sim
+  annotations:
+    sentinel.io/repo: YOUR_GITHUB_USER/sentinel-demo-app
+    sentinel.io/branch: main
+  labels:
+    app: payments-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: payments-api
+  template:
+    metadata:
+      labels:
+        app: payments-api
+    spec:
+      containers:
+      - name: api
+        image: python:3.11-slim
+        ports:
+        - containerPort: 5000
+        command: ["python", "-c"]
+        args:
+        - |
+          from flask import Flask, jsonify
+          import os
+          app = Flask(__name__)
+
+          @app.route('/')
+          def health():
+              return jsonify({"status": "ok"})
+
+          @app.route('/healthz')
+          def healthz():
+              return jsonify({"status": "ok"})
+
+          @app.route('/readyz')
+          def readyz():
+              return jsonify({"status": "ready"})
+
+          @app.route('/pay')
+          def pay():
+              # BUG: 'price' is an integer (from query string default),
+              # but we try to concatenate it with a string.
+              # TypeError: can only concatenate str (not "int") to str
+              price = 50
+              return "Price: " + price
+
+          if __name__ == '__main__':
+              app.run(host='0.0.0.0', port=5000)
+        env:
+        - name: PYTHONUNBUFFERED
+          value: "1"
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: payments-api
+  namespace: sim
+spec:
+  selector:
+    app: payments-api
+  ports:
+  - port: 80
+    targetPort: 5000

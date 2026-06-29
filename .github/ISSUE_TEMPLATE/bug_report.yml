@@ -1,0 +1,70 @@
+---
+name: Bug report
+description: Report a bug in Sentinel
+title: "[bug]: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report! Please fill out the sections below.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug. What did you expect to happen? What actually happened?
+      placeholder: "Sentinel detected a TypeError but the fix proposer returned an empty diff..."
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: How can we reproduce this?
+      placeholder: |
+        1. Deploy Sentinel v4.5.0 via Helm
+        2. Annotate a Deployment with sentinel.io/repo
+        3. Trigger a TypeError in the pod
+        4. ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Sentinel version
+      description: Run `sentinelctl version` or check the pod image tag
+      placeholder: "4.5.0"
+    validations:
+      required: true
+  - type: input
+    id: llm-provider
+    attributes:
+      label: LLM provider
+      description: Which LLM provider are you using?
+      placeholder: "gemini / openai / anthropic / openrouter / ..."
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Paste relevant log output. Run `kubectl -n sentinel logs deploy/sentinel` and include the incident_id if you have one.
+      render: shell
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      options:
+        - "Low — cosmetic / minor inconvenience"
+        - "Medium — feature broken, workaround exists"
+        - "High — core functionality broken, no workaround"
+        - "Critical — production down / data loss"
+    validations:
+      required: true
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Code of Conduct
+      options:
+        - label: I agree to follow this project's Code of Conduct
+          required: true

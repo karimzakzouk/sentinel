@@ -400,6 +400,39 @@ spec:
 EOF
 ```
 
+### Alertmanager integration
+
+Sentinel accepts Alertmanager webhooks at `POST /webhook/alertmanager`. Configure Alertmanager to send firing alerts to Sentinel:
+
+```yaml
+# alertmanager.yml
+receivers:
+  - name: sentinel
+    webhook_configs:
+      - url: http://sentinel.sentinel.svc.cluster.local/webhook/alertmanager
+        send_resolved: false
+route:
+  receiver: sentinel
+  group_by: [service, namespace]
+  group_wait: 0s        # don't wait — Sentinel dedupes
+  group_interval: 5m
+  repeat_interval: 1h
+```
+
+Sentinel extracts the `service`, `namespace`, `alertname`, and `summary` from each alert and feeds it to the same investigation pipeline as log-detected incidents. See [`internal/alertmanager/receiver.go`](internal/alertmanager/receiver.go) for the payload format.
+
+### Examples
+
+See [`examples/python-crashloop/`](examples/python-crashloop/) for a complete 60-second walkthrough: install Sentinel → deploy a broken Flask app → watch Sentinel auto-fix it → merge the PR.
+
+### Community
+
+- **Bug reports & feature requests**: [GitHub Issues](https://github.com/karimzakzouk/sentinel/issues) — use the templates
+- **Questions & discussion**: [GitHub Discussions](https://github.com/karimzakzouk/sentinel/discussions)
+- **Security vulnerabilities**: See [SECURITY.md](SECURITY.md) — report privately
+- **Contributing**: See [CONTRIBUTING.md](CONTRIBUTING.md)
+- **Code of Conduct**: See [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
+
 ## Development
 
 ```bash

@@ -1,0 +1,55 @@
+---
+name: Incident retro
+description: Share what Sentinel did right/wrong during a production incident
+title: "[retro]: "
+labels: ["incident-retro"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Tell us how Sentinel performed during a real incident. This helps us
+        improve the detection → investigation → fix → verification loop.
+  - type: input
+    id: incident-id
+    attributes:
+      label: Incident ID
+      description: The UUID from `sentinelctl incidents get <id>`
+      placeholder: "550e8400-e29b-41d4-a716-446655440000"
+    validations:
+      required: true
+  - type: input
+    id: service
+    attributes:
+      label: Affected service
+      placeholder: "payments-api"
+    validations:
+      required: true
+  - type: dropdown
+    id: outcome
+    attributes:
+      label: What did Sentinel do?
+      options:
+        - "Detected + diagnosed + fixed + verified + auto-merged (perfect)"
+        - "Detected + diagnosed + fixed + verified, but I merged manually"
+        - "Detected + diagnosed, but the fix was wrong"
+        - "Detected, but diagnosis was wrong"
+        - "Did not detect the incident"
+        - "Detected a false positive"
+        - "Other (describe below)"
+    validations:
+      required: true
+  - type: textarea
+    id: what-went-well
+    attributes:
+      label: What went well?
+  - type: textarea
+    id: what-went-wrong
+    attributes:
+      label: What went wrong?
+      description: What did Sentinel miss? What was the fix it should have proposed?
+  - type: textarea
+    id: logs
+    attributes:
+      label: Agent trace
+      description: Paste the output of `sentinelctl incidents get <id> --json` (or the agent_trace section)
+      render: json

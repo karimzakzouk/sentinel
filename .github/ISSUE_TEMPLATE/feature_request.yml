@@ -1,0 +1,51 @@
+---
+name: Feature request
+description: Suggest a new feature for Sentinel
+title: "[feat]: "
+labels: ["enhancement", "triage"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: Describe the pain point. "I'm always frustrated when..."
+      placeholder: "Sentinel can't auto-fix bugs that only reproduce under specific traffic patterns..."
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: What would you like Sentinel to do?
+      placeholder: "Add mirrord-based traffic mirroring into the sandbox so the canary receives real production traffic..."
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What workarounds have you tried? Why aren't they sufficient?
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - "Detection (log streaming, pod status, Alertmanager)"
+        - "Investigation (agents, error parser, repo search)"
+        - "Sandbox (verification levels, backends)"
+        - "Execution (GitHub PR, Kaniko, K8s patches)"
+        - "Auto-merge (gates, rate limit, cooldown)"
+        - "Chatops (/sentinel commands)"
+        - "Web UI / sentinelctl"
+        - "LLM providers / cost"
+        - "Observability (metrics, tracing, logs)"
+        - "Other"
+    validations:
+      required: true
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Code of Conduct
+      options:
+        - label: I agree to follow this project's Code of Conduct
+          required: true
