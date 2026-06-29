@@ -11,7 +11,7 @@
 image:
   registry: "docker.io/karimzakzouk"
   repository: "sentinel-v3"
-  tag: "4.2.6"
+  tag: "4.3.0"
   pullPolicy: Always
 
 sentinel:
@@ -23,7 +23,7 @@ sentinel:
   # (NOT recommended — the server logs a loud warning at startup).
   apiToken: ""
 
-  # v4.2.6: GitHub App credentials. When all three are set, ALL GitHub
+  # v4.3.0: GitHub App credentials. When all three are set, ALL GitHub
   # operations (PRs, comments, reactions, labels, merges) appear as
   # "Sentinel[bot]" instead of the PAT owner's personal account.
   # Empty = use the PAT (githubToken) — PRs appear as the PAT owner.
@@ -67,7 +67,7 @@ sentinel:
     # Default 1536 (matches text-embedding-3-small for backwards compat).
     embeddingDim: 1536
 
-    # v4.2.6: Multi-provider failover pool. Stack multiple API keys (e.g. 3
+    # v4.3.0: Multi-provider failover pool. Stack multiple API keys (e.g. 3
     # OpenRouter + 2 Groq + 1 Gemini) and Sentinel will try them in priority
     # order with circuit-breaker failover. Empty = single-provider mode (uses
     # provider + apiKey above).
@@ -94,7 +94,7 @@ sentinel:
     #       priority: 3
     providers: []
 
-  # v4.2.6: Auto-merge configuration. All three opt-in layers must be true
+  # v4.3.0: Auto-merge configuration. All three opt-in layers must be true
   # for auto-merge to fire on a given PR:
   #   1. autoMerge.enabled (global switch, default false)
   #   2. namespace in autoMerge.namespaces
@@ -281,7 +281,7 @@ nodeSelector: {}
 tolerations: []
 affinity: {}
 
-# v4.2.6: Metrics configuration
+# v4.3.0: Metrics configuration
 metrics:
   # ServiceMonitor for Prometheus Operator (kube-prometheus-stack).
   # When enabled, Sentinel's /metrics endpoint is auto-discovered.
@@ -293,7 +293,7 @@ metrics:
     # (e.g. release: prometheus for kube-prometheus-stack's default selector)
     labels: {}
 
-# v4.2.6: PodDisruptionBudget — prevents all replicas from being evicted
+# v4.3.0: PodDisruptionBudget — prevents all replicas from being evicted
 # simultaneously during voluntary disruptions (node drain, cluster autoscaler).
 podDisruptionBudget:
   enabled: false

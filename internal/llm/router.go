@@ -479,6 +479,13 @@ func isTransientCapacityError(msg string) bool {
 //  2. Try to parse from each, starting from the LAST one (most likely to be
 //     the actual JSON, not a `{` mentioned in prose)
 //  3. If none parse, try repairTruncated on each candidate
+// ExtractJSON defensively parses JSON from LLM output.
+// Exported so other packages (agents) can use it for parsing metadata JSON
+// from SEARCH/REPLACE-formatted LLM output. v4.3.0.
+func ExtractJSON(text string) map[string]any {
+        return extractJSON(text)
+}
+
 func extractJSON(text string) map[string]any {
         // Try 1: markdown-fenced JSON block
         if m := jsonBlockRe.FindStringSubmatch(text); len(m) >= 2 {

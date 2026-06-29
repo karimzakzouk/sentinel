@@ -120,7 +120,7 @@ func validateFilePath(path string) string {
 
 const fixProposerSystemPrompt = `You are Sentinel's Fix Proposer agent. You write production code fixes for runtime errors.
 
-Given a confirmed root cause and the source code, propose ONE fix using search/replace blocks.
+Given a confirmed root cause and the source code, propose ONE fix using SEARCH/REPLACE blocks.
 
 ## Fix Quality Requirements
 - Fix the ROOT CAUSE, not just the symptom. If a collection access crashes (dict/key lookup, array index, map get), add a proper check — don't just wrap it in try/catch.
@@ -144,31 +144,49 @@ Before submitting, mentally apply your replacement to the search text and verify
 ## Root Cause Description
 - Be precise. State WHAT is broken and WHERE.
 - Do NOT speculate about infrastructure, databases, or configuration unless the error traceback explicitly references them.
-- If the error is a missing-key access (e.g. "KeyError: 99", "NullPointerException", "panic: index out of range") at "users[user_id]", the root cause is "the collection doesn't contain user_id 99" — not "the database doesn't have the user".
+- If the error is a missing-key access (e.g. "KeyError: 99", "NullPointerException", "panic: index out of range") at "users[user_id]", the root cause is "the collection doesn't user_id 99" — not "the database doesn't have the user".
 
-## Search/Replace Format
-Each change has:
-- "search": EXACT text from the file (copy character-for-character, including indentation and newlines)
-- "replace": the new text that replaces it
+## Output Format
+
+Output TWO sections:
+
+### Section 1: Metadata (JSON, small)
+Output a JSON object with the fix metadata. Keep it short.
+{"fix_type":"code_fix","description":"Brief description","pr_title":"[Sentinel] Brief title","pr_body":"Short summary"}
+
+### Section 2: Code Fix (SEARCH/REPLACE blocks)
+
+Use this exact format for each file you want to change:
+
+app/main.py
+<<<<<<< SEARCH
+    result = a / b
+=======
+    if b == 0:
+        raise HTTPException(status_code=400, detail="Divisor cannot be zero")
+    result = a / b
+>>>>>>> REPLACE
 
 Rules:
-- "search" MUST match the file exactly (whitespace, indentation, comments — everything)
+- The SEARCH section MUST match the file exactly (whitespace, indentation, comments — everything)
+- Copy the search text character-for-character from the source code provided above
 - Keep blocks small (2-10 lines) — only the code that needs to change
 - Multiple blocks per file are OK if multiple spots need fixing
-- For NEW files, use "new_content" with the full file instead of "changes"
+- The file path goes on the line BEFORE <<<<<<< SEARCH
+- Do NOT wrap the SEARCH/REPLACE blocks in JSON or code fences
 
-## Response Format
-Return ONLY a JSON object:
-{
-  "fix_type": "code_fix",
-  "description": "Precise description of what's broken and how the fix works",
-  "files_to_change": [{"path": "src/handler.<ext>", "changes": [{"search": "exact code", "replace": "fixed code"}]}],
-  "dockerfile_path": "Dockerfile",
-  "pr_title": "[Sentinel] Brief description",
-  "pr_body": "Short summary"
-}
+## Example Output
 
-No prose before or after the JSON. Start with { and end with }.`
+{"fix_type":"code_fix","description":"Add zero check before division","pr_title":"[Sentinel] Fix ZeroDivisionError in /divide","pr_body":"Added a guard clause to return 400 when b=0."}
+
+app/main.py
+<<<<<<< SEARCH
+    result = a / b
+=======
+    if b == 0:
+        raise HTTPException(status_code=400, detail="Divisor cannot be zero")
+    result = a / b
+>>>>>>> REPLACE`
 
 // FixProposer translates a root cause into a concrete FixProposal.
 type FixProposer struct {
@@ -259,16 +277,15 @@ func (a *FixProposer) Run(ctx context.Context, state *schemas.AgentState) error 
                 return nil
         }
 
-        // 2. Ask LLM for the fix — with adaptive retry loop
-        // v3.9.9: If the first attempt returns 0 files or the syntax validation
-        // fails, retry up to 3 times with feedback about what went wrong.
-        // This is the "agentic loop" pattern from OpenClaw/Aider — let the LLM
-        // see its own mistakes and correct them.
+        // 2. Ask LLM for the fix — with adaptive retry loop.
+        // v4.3.0: Uses SEARCH/REPLACE blocks (plain text) instead of JSON.
+        // The LLM outputs metadata JSON (small) + SEARCH/REPLACE blocks (plain text).
+        // We parse the blocks, apply them with layered matching (exact → fuzzy),
+        // and feed actionable errors back on failure (Aider's pattern).
         userMsg := a.buildUserMessage(state)
-        var result map[string]any
         var files []schemas.FileChange
         var fixType schemas.FixType
-        var dockerfilePath, prTitle, prBody string
+        var dockerfilePath, prTitle, prBody, description string
         var lastError string
 
         maxRetries := 3
@@ -279,15 +296,9 @@ func (a *FixProposer) Run(ctx context.Context, state *schemas.AgentState) error 
                         userMsg = a.buildUserMessage(state) + retryHint
                 }
 
-                // v3.18.0: H20 — give each attempt its own sub-context with a per-attempt
-                // timeout. Was: all attempts shared the parent ctx (120s). If the first
-                // call took 119s, retries 1-3 were immediately cancelled — making the
-                // retry loop useless when the first call was slow.
-                // Per-attempt timeout = parent deadline / remaining attempts, capped at 90s.
                 attemptCtx, attemptCancel := context.WithTimeout(ctx, 90*time.Second)
-                log.Printf("[fix_proposer] attempt %d/%d", attempt+1, maxRetries+1)
-                var llmErr error
-                result, llmErr = a.router.FrontierJSON(attemptCtx, fixProposerSystemPrompt, userMsg, 16000)
+                log.Printf("[fix_proposer] attempt %d/%d (SEARCH/REPLACE format)", attempt+1, maxRetries+1)
+                rawOutput, llmErr := a.router.FrontierText(attemptCtx, fixProposerSystemPrompt, userMsg, 16000)
                 attemptCancel()
                 if llmErr != nil {
                         lastError = fmt.Sprintf("LLM call failed: %v", llmErr)
@@ -295,17 +306,12 @@ func (a *FixProposer) Run(ctx context.Context, state *schemas.AgentState) error 
                         continue
                 }
 
-                // Debug logging
-                log.Printf("[fix_proposer] LLM response keys: %v", keysOfAny(result))
+                log.Printf("[fix_proposer] attempt %d: got %d chars of output", attempt+1, len(rawOutput))
 
-                // Normalize
-                if rawList, ok := result["hypotheses"].([]any); ok && len(rawList) > 0 {
-                        if first, ok := rawList[0].(map[string]any); ok {
-                                result = first
-                        }
-                }
-
-                fixTypeStr, _ := result["fix_type"].(string)
+                // Parse metadata JSON from the first line(s)
+                // The LLM outputs {"fix_type":"code_fix",...} before the SEARCH/REPLACE blocks
+                metadata := extractMetadataJSON(rawOutput)
+                fixTypeStr, _ := metadata["fix_type"].(string)
                 if fixTypeStr == "" {
                         fixTypeStr = "code_fix"
                 }
@@ -313,50 +319,101 @@ func (a *FixProposer) Run(ctx context.Context, state *schemas.AgentState) error 
                 if !isValidFixType(fixTypeStr) {
                         fixType = schemas.FixCodeFix
                 }
-
-                rawFiles, _ := result["files_to_change"].([]any)
-                files = parseFilesToChange(rawFiles, state)
-
-                if len(files) == 0 {
-                        files = extractFilesFromAlternativeKeys(result, state)
-                }
-
-                dockerfilePath, _ = result["dockerfile_path"].(string)
+                dockerfilePath, _ = metadata["dockerfile_path"].(string)
                 if dockerfilePath == "" {
                         dockerfilePath = "Dockerfile"
                 }
-                prTitle, _ = result["pr_title"].(string)
+                prTitle, _ = metadata["pr_title"].(string)
                 if prTitle == "" {
                         prTitle = fmt.Sprintf("[Sentinel] %s for %s", fixType, state.Cluster.Service)
                 }
-                prBody, _ = result["pr_body"].(string)
+                prBody, _ = metadata["pr_body"].(string)
                 if prBody == "" {
                         prBody = buildPRBody(state, rc, string(fixType))
                 }
+                description, _ = metadata["description"].(string)
+                if description == "" {
+                        description = fmt.Sprintf("Fix %s in %s", fixType, state.Cluster.Service)
+                }
 
-                if len(files) > 0 {
-                        // Got files — check if they have valid search/replace blocks
-                        // with non-empty search text
-                        validBlocks := 0
-                        for _, f := range files {
-                                validBlocks += len(f.Changes)
-                                if f.NewContent != "" {
-                                        validBlocks++
+                // Parse SEARCH/REPLACE blocks from the output
+                blocks := ParseEditBlocks(rawOutput)
+
+                if len(blocks) > 0 {
+                        // We have SEARCH/REPLACE blocks — apply them to the source code
+                        log.Printf("[fix_proposer] attempt %d: parsed %d SEARCH/REPLACE block(s)", attempt+1, len(blocks))
+
+                        // Group blocks by file path
+                        blocksByFile := make(map[string][]EditBlock)
+                        for _, b := range blocks {
+                                path := b.FilePath
+                                if path == "" {
+                                        // Use the first fetched file as default
+                                        for p := range state.FetchedCode {
+                                                path = p
+                                                break
+                                        }
                                 }
+                                // Normalize path against fetched code keys
+                                path = normalizeFilePath(path, state.FetchedCode)
+                                blocksByFile[path] = append(blocksByFile[path], EditBlock{
+                                        FilePath: path,
+                                        Search:   b.Search,
+                                        Replace:  b.Replace,
+                                })
                         }
-                        if validBlocks > 0 {
-                                log.Printf("[fix_proposer] attempt %d succeeded — %d file(s), %d block(s)", attempt+1, len(files), validBlocks)
+
+                        // Apply blocks to each file
+                        allApplied := true
+                        files = []schemas.FileChange{}
+                        for filePath, fileBlocks := range blocksByFile {
+                                originalContent, ok := state.FetchedCode[filePath]
+                                if !ok {
+                                        lastError = fmt.Sprintf("file %s not found in fetched source code. Available files: %v", filePath, keysOf(state.FetchedCode))
+                                        allApplied = false
+                                        break
+                                }
+
+                                editResult := ApplyEditBlocks(originalContent, fileBlocks)
+                                if !editResult.Success {
+                                        lastError = editResult.FailedReason
+                                        allApplied = false
+                                        break
+                                }
+
+                                // Build FileChange from the result — use Changes (search/replace)
+                                // so the GitHub executor can apply them to the branch
+                                var changes []schemas.SearchReplace
+                                for _, b := range fileBlocks {
+                                        changes = append(changes, schemas.SearchReplace{
+                                                Search:  strings.TrimRight(b.Search, "\n"),
+                                                Replace: strings.TrimRight(b.Replace, "\n"),
+                                        })
+                                }
+                                files = append(files, schemas.FileChange{
+                                        Path:    filePath,
+                                        Changes: changes,
+                                })
+                                log.Printf("[fix_proposer] applied %d block(s) to %s", len(fileBlocks), filePath)
+                        }
+
+                        if allApplied && len(files) > 0 {
+                                log.Printf("[fix_proposer] attempt %d succeeded — %d file(s), %d block(s) applied", attempt+1, len(files), len(blocks))
                                 break
                         }
-                        lastError = "files_to_change was parsed but contained no valid search/replace blocks (search or replace was empty)"
-                } else {
-                        lastError = fmt.Sprintf("LLM returned 0 files. Response keys: %v", keysOfAny(result))
-                        if rawFilesVal, ok := result["files_to_change"]; ok {
-                                lastError += fmt.Sprintf(" (files_to_change type=%T)", rawFilesVal)
-                        } else {
-                                lastError += " (files_to_change key missing)"
-                        }
+                        log.Printf("[fix_proposer] attempt %d failed: %s", attempt+1, lastError)
+                        continue
                 }
+
+                // No SEARCH/REPLACE blocks found — try whole-file replacement fallback
+                if filePath, content := ParseWholeFileReplacement(rawOutput); filePath != "" && content != "" {
+                        filePath = normalizeFilePath(filePath, state.FetchedCode)
+                        log.Printf("[fix_proposer] attempt %d: using whole-file replacement for %s (%d chars)", attempt+1, filePath, len(content))
+                        files = []schemas.FileChange{{Path: filePath, NewContent: content}}
+                        break
+                }
+
+                lastError = "no SEARCH/REPLACE blocks or whole-file replacement found in LLM output"
                 log.Printf("[fix_proposer] attempt %d failed: %s", attempt+1, lastError)
         }
 
@@ -378,9 +435,8 @@ func (a *FixProposer) Run(ctx context.Context, state *schemas.AgentState) error 
                 FixType:           fixType,
                 TargetService:     state.Cluster.Service,
                 TargetNamespace:   state.Cluster.Namespace,
-                Description:       getStr(result, "description"),
+                Description:       description,
                 Repo:              strPtr(discoverRepo(state, a.gitHost)),
-                K8sAction:         getMap(result, "k8s_action"),
                 FilesToChange:     files,
                 DockerfilePath:    strPtr(dockerfilePath),
                 PRTitle:           strPtr(prTitle),
@@ -804,4 +860,52 @@ func getStr(m map[string]any, key string) string {
 func getMap(m map[string]any, key string) map[string]any {
         v, _ := m[key].(map[string]any)
         return v
+}
+
+// extractMetadataJSON extracts the small JSON metadata object from the LLM output.
+// The LLM outputs {"fix_type":"code_fix",...} before the SEARCH/REPLACE blocks.
+// v4.3.0: Uses the existing extractJSON function which already handles:
+//   - markdown fences (```json...```)
+//   - bare JSON objects ({...})
+//   - prose around JSON
+//   - truncated JSON repair
+func extractMetadataJSON(rawOutput string) map[string]any {
+        // The metadata JSON is the FIRST JSON object in the output (before the SEARCH/REPLACE blocks)
+        // If the output starts with SEARCH/REPLACE blocks (no JSON), return empty map
+        if strings.Contains(rawOutput, "<<<<<<< SEARCH") {
+                // Find the JSON before the first SEARCH block
+                idx := strings.Index(rawOutput, "<<<<<<< SEARCH")
+                if idx > 0 {
+                        beforeBlocks := rawOutput[:idx]
+                        return llm.ExtractJSON(beforeBlocks)
+                }
+        }
+        // No SEARCH blocks — try the whole output
+        return llm.ExtractJSON(rawOutput)
+}
+
+// normalizeFilePath matches the LLM-provided file path against the keys in
+// FetchedCode. LLMs often use container paths (e.g. /app/app/main.py) or
+// add/remove leading directories. This function finds the best match.
+func normalizeFilePath(path string, fetchedCode map[string]string) string {
+        // Exact match
+        if _, ok := fetchedCode[path]; ok {
+                return path
+        }
+        // Try: path is a suffix of a fetched key (LLM used /app/app/main.py, key is app/main.py)
+        for key := range fetchedCode {
+                if strings.HasSuffix(key, path) || strings.HasSuffix(path, key) {
+                        return key
+                }
+        }
+        // Try: strip leading directories from path
+        parts := strings.Split(path, "/")
+        for i := 0; i < len(parts); i++ {
+                shortPath := strings.Join(parts[i:], "/")
+                if _, ok := fetchedCode[shortPath]; ok {
+                        return shortPath
+                }
+        }
+        // No match — return as-is (the apply step will fail with a clear error)
+        return path
 }
