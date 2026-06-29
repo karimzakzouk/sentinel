@@ -1,6 +1,6 @@
 # Contributing to Sentinel
 
-Sentinel is an autonomous AI SRE — one Go binary, one pod, ~28MB. It detects incidents in real-time, clones your repo, diagnoses the root cause with an LLM, writes a fix, verifies it in a sandbox, and opens a Pull Request.
+Sentinel is an autonomous AI SRE — one Go binary, one pod, 43MB image. It detects incidents in real-time, clones your repo, diagnoses the root cause with an LLM, writes a fix, verifies it in a sandbox, and opens a Pull Request.
 
 ## Quick Start
 
@@ -96,15 +96,45 @@ All tests use stdlib `testing` — no testify, no ginkgo, no gomock.
 
 Every push to `main` and every PR runs:
 - golangci-lint (v2)
-- go test -race
-- go vet
-- govulncheck (CVE scan)
-- helm lint
+- go test -race + go build + helm lint + helm template
+- `make check-version` (version sync — fails if any file drifted from `VERSION`)
+- govulncheck (CVE scan on Go deps)
+- Trivy (CVE scan on Docker image)
+- Next.js build (web UI)
 
-Every tag (`v3.*.*`) triggers:
-- Docker build (amd64 + arm64, multi-stage with web UI)
-- Push to Docker Hub + GHCR
-- Helm chart package + publish to GitHub Pages
+Every tag (`v*.*.*`) triggers the Release workflow:
+- Multi-arch Docker build (native amd64 + arm64 runners, no QEMU)
+- Push to Docker Hub (`karimzakzouk/sentinel:X.Y.Z` + `:latest`) and GHCR
+- Helm chart package + publish to GitHub Pages (Helm repo)
+- GitHub Release with auto-generated notes
+
+See [README → Versioning & Releases](README.md#versioning--releases) for the full release flow.
+
+## Releasing a New Version
+
+**Do not** manually edit version strings in `Chart.yaml`, `values.yaml`, `my-values.yaml`, `web/package.json`, or `README.md`. The `VERSION` file at the repo root is the single source of truth — `scripts/sync-version.py` rewrites every other file to match.
+
+```bash
+# Cut a release in one command:
+make release VERSION=4.5.0
+
+# This will:
+#   1. Rewrite all version-synced files to 4.5.0
+#   2. git commit -m "release: v4.5.0"
+#   3. git tag v4.5.0
+#   4. git push origin main v4.5.0
+# CI does the rest (Docker build, Helm chart, GitHub Release).
+```
+
+If you only want to sync files locally without committing (e.g. for testing):
+```bash
+make bump-version VERSION=4.5.0
+```
+
+To verify everything is in sync (CI runs this on every PR):
+```bash
+make check-version
+```
 
 ## Code Style
 

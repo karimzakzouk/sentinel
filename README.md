@@ -419,6 +419,93 @@ go test ./... -race
 helm lint chart/
 ```
 
+## Versioning & Releases
+
+Sentinel uses a **single source of truth** versioning system. The `VERSION` file at the repo root is canonical — every other file that needs the version is auto-synced from it. There is no manual editing of `Chart.yaml`, `values.yaml`, `README.md`, or `web/package.json` when bumping the version.
+
+### Files synced from `VERSION`
+
+| File | Field |
+|------|-------|
+| `VERSION` | canonical (e.g. `4.4.0`) |
+| `chart/Chart.yaml` | `version:` + `appVersion:` |
+| `chart/values.yaml` | `image.tag:` + comment header |
+| `my-values.yaml` | `image.tag:` |
+| `web/package.json` | `"version":` |
+| `README.md` | `helm install ... --version X.Y.Z` |
+| `internal/version/version.go` | injected at build time via `-ldflags` (source always says `"dev"`) |
+
+The sync logic lives in [`scripts/sync-version.py`](scripts/sync-version.py). CI runs `make check-version` on every PR and fails the build if any file drifts from `VERSION`.
+
+### Releasing a new version
+
+```bash
+# 1. Make sure main is clean and up to date
+git checkout main && git pull
+
+# 2. Run the release target (bump + commit + tag + push)
+make release VERSION=4.5.0
+```
+
+That's it. `make release` does:
+1. Rewrites every synced file to `4.5.0` via `scripts/sync-version.py --bump 4.5.0`
+2. `git commit -m "release: v4.5.0"`
+3. `git tag v4.5.0`
+4. `git push origin main v4.5.0`
+
+The tag push triggers the **Release workflow** (`.github/workflows/release.yml`), which automatically:
+- Runs `go test -race` + `helm lint`
+- Builds multi-arch Docker images (`linux/amd64` + `linux/arm64`) without QEMU
+- Pushes to Docker Hub (`karimzakzouk/sentinel:4.5.0` + `:latest`) and GHCR
+- Packages the Helm chart (`sentinel-4.5.0.tgz`)
+- Creates the GitHub Release with auto-generated notes
+- Publishes the chart to the `gh-pages` branch (Helm repo at `https://karimzakzouk.github.io/sentinel/`)
+
+Total time: ~4 minutes from tag push to live Helm repo.
+
+### Other version commands
+
+```bash
+make bump-version VERSION=4.5.0   # sync files only (no commit, no tag) — useful for testing
+make check-version                 # CI mode: exit 1 if any file drifted from VERSION
+```
+
+### Guard rails
+
+- **CI version-sync check** — every PR runs `make check-version`. Drift = build fail. You cannot merge a PR with a desynced version.
+- **Tag-vs-VERSION match** — the Release workflow aborts if the pushed git tag (e.g. `v4.5.0`) does not equal `cat VERSION`. You cannot accidentally tag the wrong version.
+- **Universal tag pattern** — the Release workflow fires on `v*.*.*`, so it works for any future major version (v5, v6, …). No `v3`/`v4`/`v5`-specific patterns anywhere in the repo.
+
+### For AI agents / automation
+
+If you are an automated agent tasked with cutting a release, the entire flow is:
+
+```bash
+# 1. Ensure working tree is clean
+git status --porcelain  # must be empty
+
+# 2. Pull latest main
+git checkout main && git pull --ff-only
+
+# 3. Run the release
+make release VERSION=X.Y.Z
+
+# 4. Monitor CI
+#    https://github.com/karimzakzouk/sentinel/actions/workflows/release.yml
+#    Wait for the "Release" workflow to complete. The Release job's last step
+#    publishes the Helm chart to gh-pages — once that's green, the new version
+#    is live at: https://karimzakzouk.github.io/sentinel/
+
+# 5. Verify
+helm repo update
+helm search repo sentinel/sentinel --versions | head -3
+# Should show X.Y.Z at the top of the list.
+```
+
+**Do NOT** manually edit `Chart.yaml`, `values.yaml`, `my-values.yaml`, `web/package.json`, or `README.md` version strings — `scripts/sync-version.py` owns those. Editing them by hand will cause `make check-version` to fail in CI.
+
+**Do NOT** create git tags by hand — `make release` does it correctly. A hand-created tag without the matching `VERSION` file bump will cause the Release workflow to abort.
+
 ## What's New
 
 ### v3.18.0 — Full Codebase Audit Round 2
