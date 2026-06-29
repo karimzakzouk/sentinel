@@ -176,7 +176,6 @@ func executeCodeFix(
                         if sandboxAttempt > 0 {
 
                                 // Only sandbox Level 1-5 failures trigger retries (not Kaniko failures).
-
                                 logging.Info("sandbox retry: feeding level-specific failure back to fix proposer",
                                         "fix_id", fp.FixID, "attempt", sandboxAttempt+1, "max", maxRetries+1,
                                         "level", detectSandboxFailureLevel(sandboxSummary))
@@ -184,32 +183,34 @@ func executeCodeFix(
                                 feedback := levelSpecificFeedback(sandboxSummary, sandboxSummary)
                                 incident.State.SandboxFeedback = &feedback
 
-                                // Re-run only the fix proposer (not the full pipeline — root cause hasn't changed)
-
-                                if err := pipeline.RetryFixProposal(ctx, &incident.State); err != nil {
-                                        logging.Error("fix proposer retry failed", "error", err)
-                                        break
-                                }
-
-                                // Update fp to the new fix proposal
-
-                                fp = incident.State.FixProposal
-                                if fp == nil {
-                                        break
-                                }
-
-// Fetch the CURRENT file content from the branch (which has
-                                // the previous fix applied) so the LLM generates search/replace blocks
-                                // against the current state, not the original.
-
+                                // CRITICAL: Fetch the CURRENT file content from the branch (which has
+                                // the previous fix applied) BEFORE calling RetryFixProposal. The fix
+                                // proposer needs the current branch state so it generates SEARCH/REPLACE
+                                // blocks that match the current file content — not the original file
+                                // content. Without this, the SEARCH blocks won't match when
+                                // PrepareBranch tries to apply them (fuzzy matcher fails at 72% < 85%).
                                 if stateFetchedCode := fetchCurrentBranchFiles(ctx, ghExec, branchInfo, incident); len(stateFetchedCode) > 0 {
                                         incident.State.FetchedCode = stateFetchedCode
                                         logging.Info("fetched current file state from branch for retry",
                                                 "fix_id", fp.FixID, "files", len(stateFetchedCode))
                                 }
 
-                                // Re-prepare the branch (updates files on the existing branch)
+                                // Re-run only the fix proposer (not the full pipeline — root cause hasn't changed).
+                                // NOW the fix proposer can see the current branch file content via
+                                // incident.State.FetchedCode and generate SEARCH/REPLACE blocks that match.
+                                if err := pipeline.RetryFixProposal(ctx, &incident.State); err != nil {
+                                        logging.Error("fix proposer retry failed", "error", err)
+                                        break
+                                }
 
+                                // Update fp to the new fix proposal
+                                fp = incident.State.FixProposal
+                                if fp == nil {
+                                        break
+                                }
+
+                                // Re-prepare the branch (updates files on the existing branch).
+                                // The SEARCH/REPLACE blocks should now match the current branch state.
                                 logging.Info("re-preparing fix branch with corrected code", "fix_id", fp.FixID, "attempt", sandboxAttempt+1)
                                 branchInfo = ghExec.PrepareBranch(ctx, incident)
                                 if !branchInfo.Success {

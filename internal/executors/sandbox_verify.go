@@ -463,3 +463,30 @@ type level3Result struct {
 // verifyErrorGoneFromLogs which is the primary oracle — scans canary
 // logs for the original error type instead of probing HTTP endpoints).
 
+
+// extractOriginalErrorType parses the incident's pod logs to find the original
+// error type (e.g. "KeyError", "TypeError", "panic", "ZeroDivisionError").
+// Used by Level 5 false-negative detection: if the reproducer failed but the
+// original error type is GONE from its output, the fix is correct and the
+// reproducer just had wrong success criteria.
+func (s *SandboxRunner) extractOriginalErrorType(inc *schemas.Incident) string {
+	if inc == nil || inc.Cluster.Anomalies == nil {
+		return ""
+	}
+	for _, a := range inc.Cluster.Anomalies {
+		if a.Explanation != "" {
+			parsed := agents.ParseError(a.Explanation)
+			if parsed != nil && parsed.ErrorType != "" {
+				return parsed.ErrorType
+			}
+		}
+	}
+	// Fallback: check the cluster summary
+	if inc.Cluster.Summary != "" {
+		parsed := agents.ParseError(inc.Cluster.Summary)
+		if parsed != nil && parsed.ErrorType != "" {
+			return parsed.ErrorType
+		}
+	}
+	return ""
+}

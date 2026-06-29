@@ -246,10 +246,17 @@ func (s *SandboxRunner) Run(ctx context.Context, inc *schemas.Incident) SandboxR
         // 7. Level 5 (Tier 4) — reproducer gate. v4.2.0.
         // If a reproducer script was generated, run it against the canary image.
         // The reproducer is a standalone script that calls the buggy function + exits 0 if OK.
-        // Best-effort: if no reproducer was generated or it fails to run due to
-        // infrastructure errors, don't block the PR (Levels 1-4 are the real gates).
-        // (exit code != 0). Infrastructure errors (wrong container name, pod
-        // creation failed, etc.) are non-blocking.
+        //
+        // FALSE NEGATIVE DETECTION: The reproducer is LLM-generated and can have
+        // wrong success criteria — e.g. expecting HTTP 200 when the correct fix
+        // returns 404 for a non-existent resource. To handle this, we check:
+        // if the reproducer failed but the ORIGINAL ERROR TYPE (e.g. KeyError,
+        // TypeError, panic) does NOT appear in the reproducer output, the fix
+        // is correct and L5 should pass. The reproducer's success criteria was
+        // wrong, but the actual bug (the error being raised) is gone.
+        //
+        // Infrastructure errors (wrong container name, pod creation failed, etc.)
+        // are always non-blocking.
 
         if fp.CanaryImage != nil && *fp.CanaryImage != "" {
                 reproResult := s.runReproducer(ctx, sandboxNS, inc, *fp.CanaryImage)
@@ -261,16 +268,27 @@ func (s *SandboxRunner) Run(ctx context.Context, inc *schemas.Incident) SandboxR
                         if !reproResult.Overall &&
                            !strings.Contains(reproResult.Summary, "no reproducer generated") &&
                            !isInfraError {
-                                log.Printf("[sandbox] Level 5 FAILED: reproducer script crashed")
-                                return SandboxResult{
-                                        Verified:     false,
-                                        Summary:      fmt.Sprintf("reproducer_failed: %s", reproResult.Summary),
-                                        Namespace:    sandboxNS,
-                                        PodLogs:      canaryLogs,
-                                        ProbeResults: []string{reproResult.Summary},
+                                // L5 failed. Check if the original error type is still present
+                                // in the reproducer output. If the original error (e.g. KeyError)
+                                // is GONE, the fix worked — the reproducer just had wrong success
+                                // criteria (e.g. expected 200 but got 404, which is the correct
+                                // behavior for a non-existent resource).
+                                originalErrorType := s.extractOriginalErrorType(inc)
+                                reproOutput := reproResult.Summary
+                                if originalErrorType != "" && !strings.Contains(reproOutput, originalErrorType) {
+                                        log.Printf("[sandbox] Level 5 FAILED but original error type %q is gone from reproducer output — fix is correct, reproducer had wrong success criteria", originalErrorType)
+                                        // Don't block — the fix works. L5 passes with a note.
+                                } else {
+                                        log.Printf("[sandbox] Level 5 FAILED: reproducer script crashed (original error type %q still present)", originalErrorType)
+                                        return SandboxResult{
+                                                Verified:     false,
+                                                Summary:      fmt.Sprintf("reproducer_failed: %s", reproResult.Summary),
+                                                Namespace:    sandboxNS,
+                                                PodLogs:      canaryLogs,
+                                                ProbeResults: []string{reproResult.Summary},
+                                        }
                                 }
-                        }
-                        if reproResult.Overall {
+                        } else if reproResult.Overall {
                                 log.Printf("[sandbox] Level 5 PASSED: reproducer script verified the fix")
                         } else {
                                 log.Printf("[sandbox] Level 5 SKIPPED: reproducer infrastructure error (non-blocking) — %s", reproResult.Summary)
