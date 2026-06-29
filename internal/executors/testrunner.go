@@ -176,7 +176,7 @@ func (r *TestRunner) RunTest(ctx context.Context, fixCanaryImage, sandboxNS stri
         }()
 
         // 3. Wait for the pod to complete (timeout 120s)
-        podOutput, err := r.waitForPodCompletion(ctx, sandboxNS, testPodName, 120*time.Second)
+        podOutput, err := r.waitForPodCompletion(ctx, sandboxNS, testPodName, "test-runner", 120*time.Second)
         if err != nil {
                 return &TestResult{
                         F2PResult: TestRunResult{Passed: false, Output: fmt.Sprintf("test pod failed: %v\n%s", err, podOutput)},
@@ -207,8 +207,10 @@ func (r *TestRunner) RunTest(ctx context.Context, fixCanaryImage, sandboxNS stri
 }
 
 // waitForPodCompletion waits for a pod to reach Succeeded/Failed state.
-// Returns the pod's logs.
-func (r *TestRunner) waitForPodCompletion(ctx context.Context, ns, name string, timeout time.Duration) (string, error) {
+// Returns the pod's logs. v4.3.2: containerName parameter added — was
+// hardcoded to "test-runner" which broke when the reproducer runner used
+// "repro-runner" as its container name.
+func (r *TestRunner) waitForPodCompletion(ctx context.Context, ns, name, containerName string, timeout time.Duration) (string, error) {
         deadline := time.Now().Add(timeout)
         for time.Now().Before(deadline) {
                 select {
@@ -224,7 +226,7 @@ func (r *TestRunner) waitForPodCompletion(ctx context.Context, ns, name string, 
                 if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
                         // Pod completed — fetch logs
                         req := r.clientset.CoreV1().Pods(ns).GetLogs(name, &corev1.PodLogOptions{
-                                Container: "test-runner",
+                                Container: containerName, // v4.3.2: was hardcoded "test-runner"
                         })
                         stream, err := req.Stream(ctx)
                         if err != nil {
@@ -331,7 +333,7 @@ func (r *TestRunner) RunReproducer(ctx context.Context, canaryImage, sandboxNS s
         }()
 
         // 3. Wait for completion
-        podOutput, err := r.waitForPodCompletion(ctx, sandboxNS, reproPodName, 120*time.Second)
+        podOutput, err := r.waitForPodCompletion(ctx, sandboxNS, reproPodName, "repro-runner", 120*time.Second) // v4.3.2: was missing container name
         if err != nil {
                 return &TestResult{
                         Overall: false,
