@@ -43,7 +43,6 @@ import (
 
 // API server, used by the investigation handler to push real-time updates.
 var broadcaster events.Broadcaster = events.Noop()
-var _ = broadcaster // used in handler closures below
 
 // used by executeCodeFix to post the initial [SENTINELSTATUS] comment when
 // a PR is opened. Package-level (not passed through executeFix) because

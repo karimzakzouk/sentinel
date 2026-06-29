@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"testing"
-	"time"
 )
 
 func TestPool_AcquirePriority(t *testing.T) {
@@ -216,4 +215,3 @@ func TestPool_DisabledProviderSkipped(t *testing.T) {
 }
 
 // Ensure time import is used.
-var _ = time.Now

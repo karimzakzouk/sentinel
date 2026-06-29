@@ -43,11 +43,9 @@ import (
         "os"
         "os/exec"
         "runtime"
-        "strings"
         "time"
 
         "github.com/karimzakzouk/sentinel/v3/internal/chatops/appprovision"
-        "github.com/karimzakzouk/sentinel/v3/internal/version"
 )
 
 func (c *client) handleApp(positional []string) {
@@ -506,5 +504,3 @@ func openBrowser(url string) {
 }
 
 // version import guard
-var _ = version.Version
-var _ = strings.TrimSpace

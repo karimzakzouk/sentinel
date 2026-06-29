@@ -15,7 +15,6 @@ import (
         "crypto/sha256"
         "encoding/hex"
         "encoding/json"
-        "fmt"
         "io"
         "log"
         "net/http"
@@ -177,4 +176,3 @@ func (h *WebhookHandler) verifySignature(body []byte, sig string) bool {
 }
 
 // missing time import fix
-var _ = fmt.Sprintf

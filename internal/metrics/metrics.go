@@ -40,7 +40,6 @@ import (
         "net/http"
         "sort"
         "strconv"
-        "strings"
         "sync"
         "time"
 )
@@ -526,4 +525,3 @@ func (b *builder) String() string {
 }
 
 // _ keeps strings imported (used in splitModelStatus).
-var _ = strings.Contains

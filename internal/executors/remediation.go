@@ -14,7 +14,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -222,4 +221,3 @@ func (r *RemediationController) Status() RemediationStatus {
 }
 
 // Guard against unused import warning if strings is not used elsewhere.
-var _ = strings.Contains

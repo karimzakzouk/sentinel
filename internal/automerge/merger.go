@@ -340,4 +340,3 @@ func prKey(repo string, prNumber int) string {
 }
 
 // strings import guard
-var _ = strings.Join

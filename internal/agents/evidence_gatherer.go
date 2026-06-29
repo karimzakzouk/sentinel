@@ -6,7 +6,6 @@ import (
         "fmt"
         "io"
         "net/http"
-        "net/url"
         "strconv"
         "strings"
         "sync"
@@ -306,7 +305,6 @@ func (a *EvidenceGatherer) queryPrometheus(ctx context.Context, promql string) m
 
 // _ keeps the url import alive (used implicitly by http.NewRequestWithContext
 // when parsing the URL, but Go's import checker is conservative).
-var _ = url.QueryEscape
 
 // queryK8s queries the K8s API for events, pods, deployments, or logs.
 func (a *EvidenceGatherer) queryK8s(ctx context.Context, query string) map[string]any {
