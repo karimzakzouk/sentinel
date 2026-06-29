@@ -42,7 +42,7 @@ import (
         "text/tabwriter"
         "time"
 
-        "github.com/karimzakzouk/sentinel/v3/internal/version"
+        "github.com/karimzakzouk/sentinel/internal/version"
 )
 
 func main() {

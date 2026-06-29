@@ -17,28 +17,28 @@ import (
 
         "github.com/google/uuid"
 
-        "github.com/karimzakzouk/sentinel/v3/internal/agents"
-        "github.com/karimzakzouk/sentinel/v3/internal/api"
-        "github.com/karimzakzouk/sentinel/v3/internal/automerge"
-        "github.com/karimzakzouk/sentinel/v3/internal/chatops"
-        "github.com/karimzakzouk/sentinel/v3/internal/config"
-        "github.com/karimzakzouk/sentinel/v3/internal/correlation"
-        "github.com/karimzakzouk/sentinel/v3/internal/detection"
-        "github.com/karimzakzouk/sentinel/v3/internal/events"
-        "github.com/karimzakzouk/sentinel/v3/internal/executors"
-        "github.com/karimzakzouk/sentinel/v3/internal/feedback"
-        "github.com/karimzakzouk/sentinel/v3/internal/github" // package name: githubapp
-        "github.com/karimzakzouk/sentinel/v3/internal/k8s"
-        "github.com/karimzakzouk/sentinel/v3/internal/llm"
-        "github.com/karimzakzouk/sentinel/v3/internal/logging"
-        "github.com/karimzakzouk/sentinel/v3/internal/metrics"
-        "github.com/karimzakzouk/sentinel/v3/internal/prreview"
-        "github.com/karimzakzouk/sentinel/v3/internal/runtimecfg"
-        "github.com/karimzakzouk/sentinel/v3/internal/safety"
-        "github.com/karimzakzouk/sentinel/v3/internal/slackbot"
-        "github.com/karimzakzouk/sentinel/v3/internal/schemas"
-        "github.com/karimzakzouk/sentinel/v3/internal/watcher"
-        "github.com/karimzakzouk/sentinel/v3/internal/web"
+        "github.com/karimzakzouk/sentinel/internal/agents"
+        "github.com/karimzakzouk/sentinel/internal/api"
+        "github.com/karimzakzouk/sentinel/internal/automerge"
+        "github.com/karimzakzouk/sentinel/internal/chatops"
+        "github.com/karimzakzouk/sentinel/internal/config"
+        "github.com/karimzakzouk/sentinel/internal/correlation"
+        "github.com/karimzakzouk/sentinel/internal/detection"
+        "github.com/karimzakzouk/sentinel/internal/events"
+        "github.com/karimzakzouk/sentinel/internal/executors"
+        "github.com/karimzakzouk/sentinel/internal/feedback"
+        "github.com/karimzakzouk/sentinel/internal/github" // package name: githubapp
+        "github.com/karimzakzouk/sentinel/internal/k8s"
+        "github.com/karimzakzouk/sentinel/internal/llm"
+        "github.com/karimzakzouk/sentinel/internal/logging"
+        "github.com/karimzakzouk/sentinel/internal/metrics"
+        "github.com/karimzakzouk/sentinel/internal/prreview"
+        "github.com/karimzakzouk/sentinel/internal/runtimecfg"
+        "github.com/karimzakzouk/sentinel/internal/safety"
+        "github.com/karimzakzouk/sentinel/internal/slackbot"
+        "github.com/karimzakzouk/sentinel/internal/schemas"
+        "github.com/karimzakzouk/sentinel/internal/watcher"
+        "github.com/karimzakzouk/sentinel/internal/web"
 )
 
 // API server, used by the investigation handler to push real-time updates.
@@ -355,11 +355,11 @@ func main() {
         // background goroutine. Was a plain bool (race detector failure). Use atomic.
         var ready atomic.Bool
 
-        // v3.2: Active incident tracker (per-service dedup)
+        // Active incident tracker (per-service dedup)
         tracker := detection.NewActiveTracker()
-        // v3.2: Slack alerts (graceful degradation if no webhook)
+        // Slack alerts (graceful degradation if no webhook)
         alertSender := agents.NewAlertSender(cfg.SlackWebhook)
-        // v3.2: Outcome watcher (monitors service post-fix)
+        // Outcome watcher (monitors service post-fix)
 
         // 10min watch / 30s interval in feedback/outcome.go NewOutcomeWatcher.
         outcomeWatcher := feedback.NewOutcomeWatcher(k8sClient.Clientset(), store)
@@ -371,7 +371,7 @@ func main() {
                         0, // Phase 2 long interval — keep default 5min
                 )
         }
-        // v3.2: Load existing vectors from SQLite into HNSW index on startup (delay 2s for DB to be ready)
+        // Load existing vectors from SQLite into HNSW index on startup (delay 2s for DB to be ready)
         go func() {
                 time.Sleep(2 * time.Second)
                 loadCtx := context.Background()
@@ -412,7 +412,7 @@ func main() {
                         metrics.RecordInvestigationComplete(finalStatus, time.Since(invStart))
                 }()
 
-                // v3.2: Panic recovery — never let an agent bug kill Sentinel
+                // Panic recovery — never let an agent bug kill Sentinel
                 defer func() {
                         if r := recover(); r != nil {
                                 logging.Error("investigation panic recovered",
@@ -606,7 +606,7 @@ func main() {
                         logging.ErrorCtx(invCtx, "store incident vector failed", "error", err)
                 }
 
-                // v3.2: Add to HNSW vector index for future RAG retrieval
+                // Add to HNSW vector index for future RAG retrieval
                 if incident.State.RootCause != nil && incident.State.FixProposal != nil {
                         vectorText := incident.Cluster.Summary + " " + incident.State.RootCause.Statement + " " + incident.State.FixProposal.Description
                         if err := vectorStore.Add(ctx, vectorText, &feedback.VectorMetadata{
@@ -639,16 +639,16 @@ func main() {
                         "timestamp": time.Now().UTC().Format(time.RFC3339),
                 })
 
-                // v3.2: Mark resolved in tracker (triggers 30-min cooldown)
+                // Mark resolved in tracker (triggers 30-min cooldown)
                 tracker.MarkResolved(incident.Cluster.Service, incident.Cluster.Namespace, success)
 
-                // v3.2: Send Slack alert with PR URL if available
+                // Send Slack alert with PR URL if available
                 if incident.State.ExecutionResult != nil && incident.State.ExecutionResult.PRURL != nil {
                         prURL = *incident.State.ExecutionResult.PRURL
                 }
                 alertSender.SendAlert(incident.Cluster.Service, incident.Cluster.Namespace, incident.Cluster.Summary, prURL)
 
-                // v3.2: Start outcome watcher (monitors service recovery for 10 min)
+                // Start outcome watcher (monitors service recovery for 10 min)
 
                 // Phase 2 (24h re-occurrence watch). Phase 2 corrects the Beta prior
                 // if the same error reappears after the initial recovery.
@@ -749,7 +749,7 @@ func main() {
         })
 
         // 9. Start the autonomous detection layer (live log streaming + pod status)
-        // v3.2: All detectors send signals to the clusterer, which groups them
+        // All detectors send signals to the clusterer, which groups them
         // and emits ONE incident per service per time window.
         clustererHandler := func(service, namespace, reason, podLogs string) {
                 // Look up workload annotations for repo + branch
@@ -806,7 +806,7 @@ func main() {
                 _ = repo
         }
 
-        // v3.2: Clusterer groups signals, tracker prevents duplicates
+        // Clusterer groups signals, tracker prevents duplicates
         clusterer := detection.NewClusterer(clustererHandler, tracker)
 
         // The detector sends signals to the clusterer instead of triggering directly

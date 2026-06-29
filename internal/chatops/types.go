@@ -1,8 +1,7 @@
 // Package chatops implements GitHub-PR-comment-driven command execution.
 //
-
-// This is the chatops layer — every command is parsed, permission-checked,
-// executed, and the result is fed back via emoji reactions + status comments.
+// Every command is parsed, permission-checked, executed, and the result
+// is fed back via emoji reactions + status comments.
 //
 // Design principles (informed by Prow + Mergify research):
 //   - Always ACK with a 👍 reaction immediately when a command is received

@@ -1,6 +1,6 @@
 // Package logging provides structured logging for Sentinel.
 //
-// v3.4.0: Replaces the stdlib log.Printf("[component] message") pattern with
+// Replaces the stdlib log.Printf("[component] message") pattern with
 // log/slog structured JSON logging. This enables:
 //   - Level filtering (Debug/Info/Warn/Error)
 //   - Structured fields (incident_id, service, namespace, etc.)
@@ -71,7 +71,7 @@ func Init(level string) {
         handler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
                 Level:     lvl,
                 AddSource: false,
-                // v3.18.0: H30 — redact secrets. Any field whose key matches one of
+                // H30 — redact secrets. Any field whose key matches one of
                 // these patterns is replaced with "***" so a future contributor who
                 // writes `logging.Info("configured", "api_key", cfg.LLMAPIKey)` doesn't
                 // leak the key to stdout/Loki/Datadog.

@@ -21,7 +21,7 @@ spec:
         app.kubernetes.io/instance: {{ .Release.Name }}
     spec:
       serviceAccountName: {{ .Values.serviceAccount.name | default .Release.Name }}
-      # v3.18.0: M40 — 45s grace period so in-flight SQLite writes + investigation
+      # M40 — 45s grace period so in-flight SQLite writes + investigation
       # cleanup (15s wait + 10s apiServer.Shutdown + ~5s buffer) can finish before
       # SIGKILL. Was: default 30s, which killed mid-commit.
       terminationGracePeriodSeconds: 45
@@ -50,20 +50,20 @@ spec:
               value: {{ .Values.sentinel.llm.fastModel | quote }}
             - name: SENTINEL_LLM_FRONTIER_MODEL
               value: {{ .Values.sentinel.llm.frontierModel | quote }}
-            # v3.4.0: configurable embedding model
-            # v3.11.0: default is now "" (empty) — hash fallback by default (audit #13)
+            # Configurable embedding model
+            # Default is now "" (empty) — hash fallback by default (audit #13)
             - name: SENTINEL_LLM_EMBEDDING_MODEL
               value: {{ .Values.sentinel.llm.embeddingModel | quote }}
-            # v3.11.0: Embedding dim for hash fallback (audit #13)
+            # Embedding dim for hash fallback (audit #13)
             - name: SENTINEL_LLM_EMBEDDING_DIM
               value: {{ .Values.sentinel.llm.embeddingDim | default 1536 | quote }}
-            # v4.0.0: Multi-provider failover pool (JSON array of ProviderConfig).
+            # Multi-provider failover pool (JSON array of ProviderConfig).
             # Empty = single-provider mode (uses SENTINEL_LLM_PROVIDER + SENTINEL_LLM_API_KEY).
             {{- if .Values.sentinel.llm.providers }}
             - name: SENTINEL_LLM_PROVIDERS
               value: {{ .Values.sentinel.llm.providers | toJson | quote }}
             {{- end }}
-            # v4.0.0: Auto-merge configuration
+            # Auto-merge configuration
             - name: SENTINEL_AUTO_MERGE_ENABLED
               value: {{ .Values.sentinel.autoMerge.enabled | quote }}
             {{- if .Values.sentinel.autoMerge.namespaces }}
@@ -93,31 +93,31 @@ spec:
                   name: {{ .Release.Name }}-secrets
                   key: dockerHubToken
                   optional: true
-            # v3.11.0: Registry-aware Kaniko (CRITICAL audit #7)
+            # Registry-aware Kaniko (CRITICAL audit #7)
             - name: SENTINEL_KANIKO_REGISTRY
               value: {{ .Values.sentinel.kanikoRegistry | default "docker.io" | quote }}
-            # v3.11.0: GitHub Enterprise / GitLab / Bitbucket (CRITICAL audit #2)
+            # GitHub Enterprise / GitLab / Bitbucket (CRITICAL audit #2)
             - name: SENTINEL_GIT_HOST
               value: {{ .Values.sentinel.gitHost | default "github.com" | quote }}
             - name: SENTINEL_GITHUB_API_URL
               value: {{ .Values.sentinel.githubApiUrl | default "https://api.github.com" | quote }}
-            # v3.11.0: Default branch (CRITICAL audit #6)
+            # Default branch (CRITICAL audit #6)
             - name: SENTINEL_DEFAULT_BRANCH
               value: {{ .Values.sentinel.defaultBranch | default "main" | quote }}
-            # v3.11.0: Configurable high-risk services (audit obs-1)
+            # Configurable high-risk services (audit obs-1)
             {{- if .Values.sentinel.highRiskServices }}
             - name: SENTINEL_HIGH_RISK_SERVICES
               value: {{ .Values.sentinel.highRiskServices | quote }}
             {{- end }}
-            # v3.11.0: Configurable namespace skip list (audit #11)
+            # Configurable namespace skip list (audit #11)
             - name: SENTINEL_SKIP_NAMESPACES
               value: {{ .Values.sentinel.skipNamespaces | quote }}
-            # v3.11.0: Configurable Kaniko images (audit #14)
+            # Configurable Kaniko images (audit #14)
             - name: SENTINEL_KANIKO_INIT_IMAGE
               value: {{ .Values.sentinel.kanikoInitImage | default "alpine/git:2.43.0" | quote }}
             - name: SENTINEL_KANIKO_EXECUTOR_IMAGE
               value: {{ .Values.sentinel.kanikoExecutorImage | default "gcr.io/kaniko-project/executor:v1.24.0" | quote }}
-            # v3.11.0: Max concurrent investigations (audit #15)
+            # Max concurrent investigations (audit #15)
             - name: SENTINEL_MAX_CONCURRENT_INVESTIGATIONS
               value: {{ .Values.sentinel.maxConcurrentInvestigations | default 3 | quote }}
             - name: SENTINEL_PRODUCTION_NAMESPACES
@@ -132,7 +132,7 @@ spec:
               value: {{ .Release.Name | quote }}
             - name: PORT
               value: "8000"
-            # v3.8.5: Admin API bearer token (was missing in v3.8.4 — the
+            # Admin API bearer token (was missing in v3.8.4 — the
             # value was in values.yaml but never passed to the pod).
             {{- if .Values.sentinel.apiToken }}
             - name: SENTINEL_API_TOKEN
@@ -141,12 +141,12 @@ spec:
                   name: {{ .Release.Name }}-secrets
                   key: apiToken
             {{- end }}
-            # v3.8.5: GitHub repo allowlist (was missing in v3.8.4).
+            # GitHub repo allowlist (was missing in v3.8.4).
             {{- if .Values.sentinel.allowedGithubRepos }}
             - name: SENTINEL_ALLOWED_GITHUB_REPOS
               value: {{ .Values.sentinel.allowedGithubRepos | quote }}
             {{- end }}
-            # v4.0.0: GitHub App credentials — when set, PRs + comments appear
+            # GitHub App credentials — when set, PRs + comments appear
             # as "Sentinel[bot]" instead of the PAT owner. All three required.
             {{- if .Values.sentinel.githubAppId }}
             - name: SENTINEL_GITHUB_APP_ID
@@ -164,7 +164,7 @@ spec:
             - name: SENTINEL_GITHUB_APP_INSTALL_ID
               value: {{ .Values.sentinel.githubAppInstallId | quote }}
             {{- end }}
-            # v3.4.0: Observability backends (for Evidence Gatherer)
+            # Observability backends (for Evidence Gatherer)
             {{- if .Values.sentinel.observability.prometheusUrl }}
             - name: SENTINEL_PROMETHEUS_URL
               value: {{ .Values.sentinel.observability.prometheusUrl | quote }}
@@ -177,30 +177,30 @@ spec:
             - name: SENTINEL_JAEGER_URL
               value: {{ .Values.sentinel.observability.jaegerUrl | quote }}
             {{- end }}
-            # v3.4.0: Structured logging level
+            # Structured logging level
             - name: SENTINEL_LOG_LEVEL
               value: {{ .Values.sentinel.logLevel | quote }}
-            # v3.4.0: LLM retry config
+            # LLM retry config
             - name: SENTINEL_LLM_MAX_RETRIES
               value: {{ .Values.sentinel.llmRetry.maxRetries | quote }}
             - name: SENTINEL_LLM_RETRY_BASE_DELAY_MS
               value: {{ .Values.sentinel.llmRetry.baseDelayMs | quote }}
-            # v3.4.0: Sandbox probe paths
+            # Sandbox probe paths
             - name: SENTINEL_SANDBOX_PROBE_PATHS
               value: {{ .Values.sentinel.sandboxProbePaths | quote }}
-            # v3.14.0: Sandbox configuration
+            # Sandbox configuration
             - name: SENTINEL_SANDBOX_ENABLED
               value: {{ .Values.sentinel.sandbox.enabled | default true | quote }}
             - name: SENTINEL_SANDBOX_REQUIRED
               value: {{ .Values.sentinel.sandbox.required | default false | quote }}
             - name: SENTINEL_SANDBOX_MAX_RETRIES
               value: {{ .Values.sentinel.sandbox.maxRetries | default 2 | quote }}
-            # v3.4.0: Slack webhook (optional)
+            # Slack webhook (optional)
             {{- if .Values.sentinel.slackWebhook }}
             - name: SENTINEL_SLACK_WEBHOOK
               value: {{ .Values.sentinel.slackWebhook | quote }}
             {{- end }}
-            # v3.5.0: Interactive Slack bot (Events API + slash commands)
+            # Interactive Slack bot (Events API + slash commands)
             {{- if .Values.sentinel.slackBot.signingSecret }}
             - name: SENTINEL_SLACK_SIGNING_SECRET
               valueFrom:
@@ -221,7 +221,7 @@ spec:
                   key: slackBotToken
                   optional: true
             {{- end }}
-            # v3.5.0: Predictive PR review (GitHub webhook)
+            # Predictive PR review (GitHub webhook)
             {{- if .Values.sentinel.githubWebhookSecret }}
             - name: SENTINEL_GITHUB_WEBHOOK_SECRET
               valueFrom:
@@ -248,7 +248,7 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /data
-            # v3.11.0: /tmp emptyDir — readOnlyRootFilesystem:true makes the
+            # /tmp emptyDir — readOnlyRootFilesystem:true makes the
             # rootfs read-only. Without this mount, any feature that writes
             # to /tmp (os.CreateTemp, http cache, etc.) silently fails. The
             # syntax validators were the original victim — they wrote to
@@ -269,7 +269,7 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: {{ .Release.Name }}-data
-        # v3.11.0: Writable /tmp for the read-only-rootfs pod.
+        # Writable /tmp for the read-only-rootfs pod.
         - name: tmp
           emptyDir: {}
 ---

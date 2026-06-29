@@ -1,6 +1,12 @@
 # Sentinel — The Autonomous AI SRE
 # Makefile for building, testing, and releasing Sentinel.
 #
+# Versioning:
+#   VERSION file is the single source of truth.
+#   `make bump-version VERSION=X.Y.Z` rewrites every other file to match.
+#   `make check-version` fails if any file is out of sync (used by CI).
+#   `make release VERSION=X.Y.Z` bumps, commits, tags, and pushes — CI does the rest.
+#
 # Usage:
 #   make build          # Build the sentinel binary
 #   make build-cli      # Build the sentinelctl CLI
@@ -12,7 +18,9 @@
 #   make run            # Run Sentinel locally (needs kubeconfig)
 #   make dev            # Run Sentinel in dev mode (mock K8s)
 #   make docker         # Build the Docker image
-#   make release        # Tag and push a release (usage: make release VERSION=3.6.0)
+#   make release        # Bump, commit, tag, push (usage: make release VERSION=4.5.0)
+#   make bump-version   # Sync VERSION across all files (usage: make bump-version VERSION=4.5.0)
+#   make check-version  # CI mode: fail if drift detected
 #   make helm-lint      # Validate the Helm chart
 #   make clean          # Remove built artifacts
 #   make install-cli    # Install sentinelctl to /usr/local/bin
@@ -20,23 +28,23 @@
 SHELL := /bin/bash
 
 # --- Variables ---
-# v3.8.4: VERSION is sourced from the VERSION file at the repo root.
-# This is the single source of truth — Chart.yaml, values.yaml, and the
-# README are kept in sync by `make release-bump`. Override with
-# `make build VERSION=3.9.0` for one-off builds.
+# VERSION is sourced from the VERSION file at the repo root.
+# This is the single source of truth — scripts/sync-version.py keeps
+# Chart.yaml, values.yaml, README.md, web/package.json, and version.go
+# in sync. Override with `make build VERSION=4.5.0` for one-off builds.
 VERSION ?= $(shell cat VERSION 2>/dev/null | tr -d '[:space:]')
 ifeq ($(VERSION),)
 VERSION := dev
 endif
 GOOS ?= $(shell go env GOOS)
 GOARCH ?= $(shell go env GOARCH)
-LDFLAGS := -s -w -X main.Version=$(VERSION) -X github.com/karimzakzouk/sentinel/v3/internal/version.Version=$(VERSION)
+LDFLAGS := -s -w -X main.Version=$(VERSION) -X github.com/karimzakzouk/sentinel/internal/version.Version=$(VERSION)
 BINARY := sentinel
 CLI_BINARY := sentinelctl
 BUILD_DIR := bin
 WEB_DIR := web
 WEB_OUT := web/out
-DOCKER_IMAGE ?= karimzakzouk/sentinel-v3
+DOCKER_IMAGE ?= karimzakzouk/sentinel
 GO ?= go
 
 # --- Default target ---
@@ -172,39 +180,31 @@ helm-template:
         @test $$(grep -c "kind:" /tmp/sentinel-rendered.yaml) -ge 6 && echo "Chart OK" || (echo "Chart FAILED" && exit 1)
 
 # --- Release ---
-.PHONY: release
-release: release-bump
-        @if [ -z "$(VERSION)" ]; then echo "Usage: make release VERSION=3.6.0"; exit 1; fi
-        @echo "==> Tagging v$(VERSION)..."
-        git add VERSION chart/Chart.yaml chart/values.yaml README.md
-        git commit -m "release: v$(VERSION)" || echo "(nothing to commit — already at $(VERSION))"
-        git tag v$(VERSION)
-        git push origin main v$(VERSION)
-        @echo "==> Release triggered. CI will build and publish."
+# Bump the VERSION file and sync every other file to match.
+# Usage: make bump-version VERSION=4.5.0
+.PHONY: bump-version
+bump-version:
+        @if [ -z "$(VERSION)" ]; then echo "Usage: make bump-version VERSION=4.5.0"; exit 1; fi
+        @python3 scripts/sync-version.py --bump $(VERSION)
+        @echo "==> Synced all files to $(VERSION). Review with 'git diff'."
 
-# v3.8.4: release-bump syncs the VERSION file's value into Chart.yaml,
-# values.yaml, and README.md. The VERSION file is the single source of
-# truth; everything else is derived. Run manually after editing VERSION,
-# or automatically as part of `make release`.
-.PHONY: release-bump
-release-bump:
-        @v=$$(cat VERSION | tr -d '[:space:]'); \
-        if [ -z "$$v" ]; then echo "VERSION file is empty"; exit 1; fi; \
-        echo "==> Bumping chart/values/README/web to $$v..."; \
-        # Chart.yaml: version + appVersion \
-        sed -i.bak -E "s/^version: .*/version: $$v/" chart/Chart.yaml; \
-        sed -i.bak -E 's/^appVersion: ".*"/appVersion: "'$$v'"/' chart/Chart.yaml; \
-        # values.yaml: image.tag \
-        sed -i.bak -E 's|^  tag: ".*"|  tag: "'$$v'"|' chart/values.yaml; \
-        # README.md: --version X.Y.Z in helm install examples \
-        sed -i.bak -E 's/--version [0-9.]+/--version '$$v'/g' README.md; \
-        # v3.18.0: M47 — web/package.json + my-values.yaml header + sidebar version string \
-        sed -i.bak -E 's/"version": "[0-9.]+.*"/"version": "'$$v'"/' web/package.json; \
-        sed -i.bak -E 's/^# Sentinel v[0-9.]+/# Sentinel v'$$v'/' my-values.yaml; \
-        sed -i.bak -E 's/Sentinel v[0-9.]+\.[0-9]+ starting/Sentinel '$$v' starting/' web/src/app/page.tsx; \
-        sed -i.bak -E 's/>v[0-9.]+\.[0-9]+\.[0-9]+</>v'$$v'</' web/src/app/page.tsx; \
-        rm -f chart/Chart.yaml.bak chart/values.yaml.bak README.md.bak web/package.json.bak my-values.yaml.bak web/src/app/page.tsx.bak; \
-        echo "==> Synced. Review with 'git diff'."
+# CI mode: fail if any file is out of sync with VERSION file.
+.PHONY: check-version
+check-version:
+        @python3 scripts/sync-version.py --check
+
+# Full release flow: bump, commit, tag, push. CI does the rest.
+# Usage: make release VERSION=4.5.0
+.PHONY: release
+release:
+        @if [ -z "$(VERSION)" ]; then echo "Usage: make release VERSION=4.5.0"; exit 1; fi
+        @echo "==> Syncing all files to $(VERSION)..."
+        @python3 scripts/sync-version.py --bump $(VERSION)
+        @git add -A
+        @git commit -m "release: v$(VERSION)" || echo "(nothing to commit)"
+        @git tag v$(VERSION)
+        @git push origin main v$(VERSION)
+        @echo "==> Release triggered. CI will build + publish Docker image + Helm chart + GitHub Release."
 
 # --- Install ---
 .PHONY: install-cli
@@ -250,7 +250,9 @@ help:
         @echo "  dev            Run Sentinel in dev mode (DEBUG logging)"
         @echo "  docker         Build Docker image"
         @echo "  helm-lint      Validate Helm chart"
-        @echo "  release        Tag and push a release (VERSION=3.6.0)"
+        @echo "  release        Bump + commit + tag + push (VERSION=4.5.0)"
+        @echo "  bump-version   Sync VERSION across all files (VERSION=4.5.0)"
+        @echo "  check-version  CI mode: fail if version drift detected"
         @echo "  install-cli    Install sentinelctl to /usr/local/bin"
         @echo "  clean          Remove build artifacts"
         @echo "  ci             Run all CI checks"

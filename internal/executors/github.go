@@ -16,7 +16,7 @@ import (
         "strings"
         "time"
 
-        "github.com/karimzakzouk/sentinel/v3/internal/schemas"
+        "github.com/karimzakzouk/sentinel/internal/schemas"
 )
 
 // GitHubExecutor opens Pull Requests via the GitHub REST API.

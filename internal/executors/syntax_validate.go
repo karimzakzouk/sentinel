@@ -2,7 +2,7 @@ package executors
 
 // Pure-Go syntax validators for the GitHub executor.
 //
-// v3.11.0: Replaces the previous exec.Command("python3"/"gofmt"/"node")
+// Replaces the previous exec.Command("python3"/"gofmt"/"node")
 // implementation, which silently returned nil (OK) in three failure cases:
 //
 //   1. distroless runtime image has no python3/gofmt/node binaries

@@ -1,6 +1,6 @@
 // Package correlation detects cascading failures across services.
 //
-// v3.5.0: If service B deploys at T=0 and services A, C, D start failing at
+// If service B deploys at T=0 and services A, C, D start failing at
 // T+2min, that's ONE rollback trigger, not three separate investigations.
 //
 // The correlator maintains a sliding window of active incidents. When the
@@ -78,7 +78,7 @@ func New(handler CorrelationHandler) *Correlator {
 }
 
 // SetConfig configures the correlation parameters.
-// v3.5.0: Allows tuning for different cluster sizes.
+// Allows tuning for different cluster sizes.
 func (c *Correlator) SetConfig(window time.Duration, threshold int, cooldown time.Duration) {
         c.mu.Lock()
         defer c.mu.Unlock()
@@ -94,7 +94,7 @@ func (c *Correlator) SetConfig(window time.Duration, threshold int, cooldown tim
 }
 
 // RegisterDeployment records that a service was deployed at the given time.
-// v3.5.0: Called by the detection layer when it observes a deployment event
+// Called by the detection layer when it observes a deployment event
 // (pod created with a new image tag). The most-recently-deployed service
 // before a cascade is the likely cause.
 func (c *Correlator) RegisterDeployment(service, namespace string, ts time.Time) {
@@ -108,7 +108,7 @@ func (c *Correlator) RegisterDeployment(service, namespace string, ts time.Time)
 }
 
 // RegisterIncident records a new incident and checks for correlation.
-// v3.5.0: Called by the detection layer when a new incident is triggered.
+// Called by the detection layer when a new incident is triggered.
 // If the number of distinct services with incidents in the window exceeds
 // the threshold, a CorrelationEvent is emitted (subject to cooldown).
 //
@@ -116,7 +116,7 @@ func (c *Correlator) RegisterDeployment(service, namespace string, ts time.Time)
 // the individual investigation), false otherwise (caller should proceed
 // with the normal investigation).
 //
-// v3.5.0: Handler is called SYNCHRONOUSLY after releasing the lock,
+// Handler is called SYNCHRONOUSLY after releasing the lock,
 // not in a goroutine. This avoids timing flakes in tests and potential
 // deadlocks if the handler calls back into the correlator. The detection
 // layer should not block on this — if the handler is slow, run it in a
@@ -223,7 +223,7 @@ func (c *Correlator) ActiveIncidentCount() int {
 
 // IsLikelyCascade returns true if the given service's incident is likely
 // part of an ongoing cascade (i.e., other services are also failing).
-// v3.5.0: The detection layer can use this to skip individual investigation
+// The detection layer can use this to skip individual investigation
 // and wait for the correlation handler to trigger a rollback instead.
 func (c *Correlator) IsLikelyCascade(service, namespace string) bool {
         c.mu.Lock()

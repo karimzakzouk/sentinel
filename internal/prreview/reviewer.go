@@ -13,8 +13,7 @@
 // This is the differentiator feature — Sentinel doesn't just fix incidents,
 // it prevents them.
 //
-
-//   POST /webhook/github  — receives GitHub webhook events
+// Endpoint: POST /webhook/github — receives GitHub webhook events.
 package prreview
 
 import (

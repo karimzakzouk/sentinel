@@ -7,7 +7,7 @@ package agents
 import (
 	"testing"
 
-	"github.com/karimzakzouk/sentinel/v3/internal/schemas"
+	"github.com/karimzakzouk/sentinel/internal/schemas"
 	"github.com/google/uuid"
 )
 

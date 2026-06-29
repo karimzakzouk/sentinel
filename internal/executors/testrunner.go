@@ -23,7 +23,7 @@ import (
         metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
         "k8s.io/client-go/kubernetes"
 
-        "github.com/karimzakzouk/sentinel/v3/internal/agents"
+        "github.com/karimzakzouk/sentinel/internal/agents"
 )
 
 // TestRunner runs LLM-generated tests in the sandbox. v4.2.0.
@@ -75,7 +75,7 @@ func (r *TestRunner) RunTest(ctx context.Context, fixCanaryImage, sandboxNS stri
                 test.TestFile, sandboxNS, test.TestFramework, test.TestCommand)
 
         // 1. Create a ConfigMap with the test file content.
-        // v4.2.1: ConfigMap keys can't contain "/" — use just the filename (last path segment).
+        // ConfigMap keys can't contain "/" — use just the filename (last path segment).
         // The full path is preserved in the pod by creating subdirectories.
         cmKey := test.TestFile
         if idx := strings.LastIndex(cmKey, "/"); idx >= 0 {

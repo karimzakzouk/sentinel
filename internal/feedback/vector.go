@@ -20,21 +20,21 @@ type VectorStore struct {
         baseURL    string
         apiKey     string
         model      string
-        // v3.11.0: Configurable embedding dimension for the hash fallback (audit #13).
+        // Configurable embedding dimension for the hash fallback (audit #13).
         // Was hardcoded 1536 in hashEmbedding() call sites. Default 1536.
         embeddingDim int
         httpClient *http.Client
         metadata   map[uint64]*VectorMetadata
         nextID     uint64
-        // v3.7.0: Track whether we're using real embeddings or hash fallback.
+        // Track whether we're using real embeddings or hash fallback.
         // When using hash fallback, the applyKnownFix fast path is disabled
         // because hash collisions can produce false high-similarity scores.
         usingHashFallback bool
-        // v3.8.4: When true, the hash fallback is permanent (no API configured)
+        // When true, the hash fallback is permanent (no API configured)
         // and won't be cleared by a successful call. When false, the fallback
         // is transient and clears on the next successful API call.
         hashFallbackPermanent bool
-        // v3.8.4: Timestamp of the last transient fallback. Used for diagnostics
+        // Timestamp of the last transient fallback. Used for diagnostics
         // and to log recovery when the flag clears.
         lastHashFallbackAt time.Time
 }
@@ -50,7 +50,7 @@ type VectorMetadata struct {
 }
 
 // NewVectorStore creates a new vector store.
-// v3.11.0: When model is empty, the store uses hash fallback permanently
+// When model is empty, the store uses hash fallback permanently
 // (audit #13). Previously, an empty model still triggered an API call to
 // /embeddings with model="", which would fail and silently fall back —
 // wasting a network round-trip per embedding. Now we short-circuit to hash
@@ -79,7 +79,7 @@ func NewVectorStoreWithDim(baseURL, apiKey, model string, dim int) *VectorStore 
 
 // GenerateEmbedding calls the LLM provider's embeddings API.
 //
-// v3.8.4: The hash-fallback flag is now sticky per-call but recoverable.
+// The hash-fallback flag is now sticky per-call but recoverable.
 // Previously, the first failure flipped usingHashFallback=true and it never
 // flipped back, even after the API recovered. We now track a timestamp of
 // the last failure and clear the flag after a recovery window (5 minutes),
@@ -91,7 +91,7 @@ func NewVectorStoreWithDim(baseURL, apiKey, model string, dim int) *VectorStore 
 //   - Network error / non-200 / parse error: transient fallback (flag set
 //     with a recovery timestamp; cleared on next successful call).
 func (v *VectorStore) GenerateEmbedding(ctx context.Context, text string) ([]float32, error) {
-        // v3.11.0: Short-circuit to permanent hash fallback when no model is
+        // Short-circuit to permanent hash fallback when no model is
         // configured (audit #13). Previously, an empty model still triggered
         // an API call to /embeddings with model="", which would fail with a
         // 400/422 from the provider and silently fall back — wasting a network
@@ -197,7 +197,7 @@ func (v *VectorStore) Add(ctx context.Context, text string, meta *VectorMetadata
 // (range [0, 1], where 1 = identical). HNSW returns results sorted by ascending
 // distance, so scores are already in descending order.
 //
-// v3.3.1: Returns REAL cosine similarities computed via hnsw.CosineDistance
+// Returns REAL cosine similarities computed via hnsw.CosineDistance
 // (1 - distance). Previously this method returned no scores, which forced the
 // caller in main.go to synthesize fake scores — that broke the memory loop's
 // 0.85 threshold (it fired on every incident after the first success).
@@ -242,7 +242,7 @@ func (v *VectorStore) Search(ctx context.Context, text string, k int) ([]*Vector
 }
 
 // UsingHashFallback returns true when no real embedding API is configured.
-// v3.7.0: When this returns true, the investigator should disable the
+// When this returns true, the investigator should disable the
 // applyKnownFix fast path (high similarity > 0.85) because hash embeddings
 // can produce false high-similarity scores due to hash collisions.
 func (v *VectorStore) UsingHashFallback() bool {

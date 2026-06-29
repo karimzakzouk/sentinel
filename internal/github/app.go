@@ -1,6 +1,6 @@
 // Package githubapp provides GitHub App authentication.
 //
-// v3.8.0: Replaces personal access tokens with GitHub App installation tokens.
+// Replaces personal access tokens with GitHub App installation tokens.
 // This enables:
 //   - One-click install from the GitHub Marketplace
 //   - Verified "Sentinel" bot identity on PR review comments
@@ -49,7 +49,7 @@ type App struct {
 }
 
 // New creates a GitHub App from the app ID, private key (PEM), and installation ID.
-// v3.11.0: apiURL is the base API URL (default "https://api.github.com"). For
+// ApiURL is the base API URL (default "https://api.github.com"). For
 // GitHub Enterprise, pass "https://gh.mycorp.internal/api/v3". Empty defaults
 // to the public GitHub API. CRITICAL audit #2.
 func New(appID, privateKeyPEM, installID string) (*App, error) {
@@ -184,7 +184,7 @@ func (a *App) PostReviewComment(ctx context.Context, owner, repo string, prNumbe
 }
 
 // FetchPRDiff fetches the PR diff using the app's installation token.
-// v3.18.0: SECURITY — diffURL is validated to be under api.github.com (or the
+// SECURITY — diffURL is validated to be under api.github.com (or the
 // configured GitHub Enterprise URL). Caller-supplied URLs from webhook bodies
 // are an SSRF + token-exfiltration vector.
 func (a *App) FetchPRDiff(ctx context.Context, diffURL string) (string, error) {
@@ -244,7 +244,7 @@ func validateGitHubURL(rawURL, expectedBase string) error {
 }
 
 // RegisterWebhook registers a webhook on a repo using the app's installation token.
-// v3.8.0: Called when the app is installed, so every repo gets PR review automatically.
+// Called when the app is installed, so every repo gets PR review automatically.
 func (a *App) RegisterWebhook(ctx context.Context, owner, repo, webhookURL, secret string) error {
         token, err := a.GetInstallToken(ctx)
         if err != nil {
@@ -287,7 +287,7 @@ func (a *App) RegisterWebhook(ctx context.Context, owner, repo, webhookURL, secr
 }
 
 // HandleInstallationEvent processes a GitHub App installation webhook.
-// v3.8.0: When the app is installed on an org, this auto-registers webhooks
+// When the app is installed on an org, this auto-registers webhooks
 // on every repo.
 func (a *App) HandleInstallationEvent(ctx context.Context, payload []byte, webhookURL, secret string) error {
         var event struct {

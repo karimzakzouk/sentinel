@@ -1,4 +1,4 @@
-module github.com/karimzakzouk/sentinel/v3
+module github.com/karimzakzouk/sentinel
 
 go 1.26.0
 

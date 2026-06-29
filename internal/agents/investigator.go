@@ -6,11 +6,11 @@ import (
         "log"
         "strings"
 
-        "github.com/karimzakzouk/sentinel/v3/internal/depanalysis"
-        "github.com/karimzakzouk/sentinel/v3/internal/k8s"
-        "github.com/karimzakzouk/sentinel/v3/internal/llm"
-        "github.com/karimzakzouk/sentinel/v3/internal/repo"
-        "github.com/karimzakzouk/sentinel/v3/internal/schemas"
+        "github.com/karimzakzouk/sentinel/internal/depanalysis"
+        "github.com/karimzakzouk/sentinel/internal/k8s"
+        "github.com/karimzakzouk/sentinel/internal/llm"
+        "github.com/karimzakzouk/sentinel/internal/repo"
+        "github.com/karimzakzouk/sentinel/internal/schemas"
 )
 
 const investigatorRound1Prompt = `You are Sentinel's Investigator agent — a senior SRE forming root cause hypotheses.

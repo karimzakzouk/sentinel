@@ -1,5 +1,4 @@
 // Package agents implements the 4-agent reasoning pipeline.
-
 //
 // Pipeline:
 //   Investigator → EvidenceGatherer → Analyst → FixProposer
@@ -14,9 +13,9 @@ import (
         "log"
         "time"
 
-        "github.com/karimzakzouk/sentinel/v3/internal/k8s"
-        "github.com/karimzakzouk/sentinel/v3/internal/llm"
-        "github.com/karimzakzouk/sentinel/v3/internal/schemas"
+        "github.com/karimzakzouk/sentinel/internal/k8s"
+        "github.com/karimzakzouk/sentinel/internal/llm"
+        "github.com/karimzakzouk/sentinel/internal/schemas"
 )
 
 // Pipeline runs all 4 agents in sequence with rewind support.

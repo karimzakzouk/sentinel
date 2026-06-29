@@ -1,4 +1,4 @@
-# v3.18.0: M45 — Dependabot keeps dependencies fresh.
+# M45 — Dependabot keeps dependencies fresh.
 # Checks for updates weekly, opens PRs grouped by ecosystem.
 version: 2
 updates:

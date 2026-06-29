@@ -3,7 +3,7 @@ package agents
 import (
 	"testing"
 
-	"github.com/karimzakzouk/sentinel/v3/internal/schemas"
+	"github.com/karimzakzouk/sentinel/internal/schemas"
 )
 
 func TestScanFix_CleanCode(t *testing.T) {

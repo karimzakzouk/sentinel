@@ -7,7 +7,7 @@ import (
 
 // TestShouldTriggerCooldown verifies the cooldown logic — the same error type
 // for the same service+namespace should not re-trigger within the cooldown window.
-// v3.13.0: first test for the detection layer (710 lines, previously 0 tests).
+// First test for the detection layer (710 lines, previously 0 tests).
 func TestShouldTriggerCooldown(t *testing.T) {
         d := New(nil, nil, "")
         // Override cooldown to 100ms for fast testing

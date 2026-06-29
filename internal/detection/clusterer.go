@@ -17,9 +17,8 @@ const (
         SignalK8sEvent  SignalType = "k8s_event"
 )
 
-// Signal is what detectors send to the clusterer.
-
-// The signal is just the alarm bell. The investigator fetches full logs via K8s API.
+// Signal is what detectors send to the clusterer. The signal is just the
+// alarm bell — the investigator fetches full logs via K8s API.
 type Signal struct {
         Type      SignalType
         Service   string
@@ -44,9 +43,8 @@ type Clusterer struct {
         pauseChecker PauseChecker
 }
 
-// PauseChecker returns true if autonomous mode is paused.
-
-// without restarting Sentinel.
+// PauseChecker returns true if autonomous mode is paused. Used to skip
+// emitting triggers without restarting Sentinel.
 type PauseChecker interface {
         IsPaused() bool
 }

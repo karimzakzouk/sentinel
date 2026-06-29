@@ -46,7 +46,7 @@ type Client struct {
 // New creates a Client using in-cluster config, with fallback to the local
 // kubeconfig for dev/testing.
 //
-// v3.8.4: Previously only tried rest.InClusterConfig() and hard-crashed
+// Previously only tried rest.InClusterConfig() and hard-crashed
 // (log.Fatalf in main.go) when not running inside a pod. That made local
 // testing impossible — the server wouldn't even start without
 // KUBERNETES_SERVICE_HOST being set. Now tries in-cluster first, then
@@ -60,7 +60,7 @@ func New() (*Client, error) {
         config, err := rest.InClusterConfig()
         if err != nil {
                 // Fall back to local kubeconfig for dev/testing.
-                // v3.8.4: Use client-go's clientcmd loading rules which respect
+                // Use client-go's clientcmd loading rules which respect
                 // KUBECONFIG env var and default to ~/.kube/config.
                 loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
                 configOverrides := &clientcmd.ConfigOverrides{}
@@ -287,11 +287,11 @@ func (c *Client) GetProdImage(ctx context.Context, service, namespace string) (s
 }
 
 // PatchCRStatus patches the status.phase of a SentinelIncident CR.
-// v3.15.0: If the CR name is not a real CR (e.g. "auto-detected", "manual",
+// If the CR name is not a real CR (e.g. "auto-detected", "manual",
 // "slack" from non-CRD trigger paths), the patch is silently skipped instead
 // of returning a "not found" error. This eliminates the noisy error log at
 // the end of every auto-detected investigation.
-// v3.18.0: M4 — delegates to PatchCRStatusFull so callers that pass extra
+// M4 — delegates to PatchCRStatusFull so callers that pass extra
 // fields (incidentId, rootCause, confidence, prUrl) populate the CRD status
 // columns. Was: only phase + lastUpdated were written, leaving kubectl get si
 // showing empty Confidence/PR columns.
@@ -300,9 +300,9 @@ func (c *Client) PatchCRStatus(ctx context.Context, name, namespace, phase strin
 }
 
 // PatchCRStatusFull patches all status fields of a SentinelIncident CR.
-// v3.18.0: M4 — was missing; CRD declared 6 status fields but code only wrote 2.
+// M4 — was missing; CRD declared 6 status fields but code only wrote 2.
 func (c *Client) PatchCRStatusFull(ctx context.Context, name, namespace, phase, incidentID, rootCause string, confidence float64, prURL string) error {
-        // v3.15.0: Skip patching for fake CR names from auto/manual/slack triggers.
+        // Skip patching for fake CR names from auto/manual/slack triggers.
         // Only real CRD-watcher triggers pass a valid CR name.
         if name == "" || name == "auto-detected" || name == "manual" || name == "slack" {
                 return nil
@@ -318,7 +318,7 @@ func (c *Client) PatchCRStatusFull(ctx context.Context, name, namespace, phase, 
                 "phase":       phase,
                 "lastUpdated": time.Now().UTC().Format(time.RFC3339),
         }
-        // v3.18.0: Only include non-zero values so we don't overwrite a real
+        // Only include non-zero values so we don't overwrite a real
         // incidentId with "" on a status-only update.
         if incidentID != "" {
                 status["incidentId"] = incidentID

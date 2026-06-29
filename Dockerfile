@@ -12,7 +12,7 @@ WORKDIR /web
 # Copy package files first (cacheable)
 COPY web/package.json web/package-lock.json* ./
 
-# v3.18.0: M41 — use `npm ci` (strict lockfile mode). Was:
+# M41 — use `npm ci` (strict lockfile mode). Was:
 #   npm install --frozen-lockfile 2>/dev/null || npm install
 # which silently fell back to `npm install` on lockfile drift, regenerating the
 # lockfile and hiding dependency mismatches. `npm ci` fails loudly on drift.
@@ -21,13 +21,13 @@ RUN npm ci
 # Copy web source and build
 COPY web/ .
 
-# v3.18.0: H23 + M42 — let the build fail loudly. Was: piped through `|| true`
+# H23 + M42 — let the build fail loudly. Was: piped through `|| true`
 # + a placeholder HTML fallback that masked real CI failures (broken JS bundle
 # produced a green build with no dashboard). Now if `next build` fails OR
 # produces no out/index.html, the Docker build fails.
 RUN npx next build
 
-# v3.18.0: M42 — fail loudly if the build didn't produce output.
+# M42 — fail loudly if the build didn't produce output.
 RUN test -f out/index.html || (echo "ERROR: next build did not produce out/index.html" && exit 1)
 
 # Copy built files to output directory
@@ -54,7 +54,7 @@ COPY . .
 # Copy the built web UI into the embed directory (overwrites placeholder)
 COPY --from=web-builder /out/ internal/web/out/
 
-# v3.8.4: VERSION comes from the VERSION file (single source of truth).
+# VERSION comes from the VERSION file (single source of truth).
 # The build arg still exists for backward compatibility with CI that
 # passes --build-arg VERSION=X.Y.Z, but defaults to reading VERSION.
 ARG VERSION=dev
@@ -63,7 +63,7 @@ ARG TARGETARCH=amd64
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
-    -ldflags="-s -w -extldflags '-static' -X main.Version=${VERSION} -X github.com/karimzakzouk/sentinel/v3/internal/version.Version=${VERSION}" \
+    -ldflags="-s -w -extldflags '-static' -X main.Version=${VERSION} -X github.com/karimzakzouk/sentinel/internal/version.Version=${VERSION}" \
     -trimpath \
     -o /sentinel ./cmd/sentinel
 
@@ -71,7 +71,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
-    -ldflags="-s -w -X github.com/karimzakzouk/sentinel/v3/internal/version.Version=${VERSION}" \
+    -ldflags="-s -w -X github.com/karimzakzouk/sentinel/internal/version.Version=${VERSION}" \
     -trimpath \
     -o /sentinelctl ./cmd/sentinelctl
 

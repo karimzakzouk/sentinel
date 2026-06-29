@@ -5,7 +5,7 @@ import (
         "strings"
         "time"
 
-        "github.com/karimzakzouk/sentinel/v3/internal/schemas"
+        "github.com/karimzakzouk/sentinel/internal/schemas"
 )
 
 // BuildPRBody creates a professional, lean PR body for the autonomous fix.
@@ -120,7 +120,7 @@ func BuildPRBody(incident *schemas.Incident, sandboxVerified bool, sandboxSummar
 
 // extractErrorTypeFromLogs uses the multi-language ParseError to detect the
 // error type from the anomaly explanation.
-// v3.13.0: Replaced the Python-centric hardcoded list with agents.ParseError,
+// Replaced the Python-centric hardcoded list with agents.ParseError,
 // which handles Python, Go, Java, JS, Rust, Ruby, C, and signals.
 func extractErrorTypeFromLogs(cluster *schemas.AnomalyCluster) string {
         for _, a := range cluster.Anomalies {

@@ -14,7 +14,7 @@ import (
         "k8s.io/apimachinery/pkg/types"
         "k8s.io/client-go/kubernetes"
 
-        "github.com/karimzakzouk/sentinel/v3/internal/schemas"
+        "github.com/karimzakzouk/sentinel/internal/schemas"
 )
 
 // K8sExecutor applies K8s patches (restart, scale, rollback).
@@ -67,7 +67,7 @@ func (e *K8sExecutor) Scale(ctx context.Context, fp *schemas.FixProposal, newRep
 
 // Rollback performs a kubectl rollout undo on the target Deployment.
 //
-// v3.8.4: Previous implementation picked the "second-newest by
+// Previous implementation picked the "second-newest by
 // CreationTimestamp" ReplicaSet that was not the current revision. That is
 // wrong in two cases:
 //  1. K8s retains old ReplicaSets with revisionHistoryLimit (default 10).
@@ -160,7 +160,7 @@ func parseRevision(s string) int64 {
 // CopyConfigMapsAndSecrets copies ConfigMaps + Secrets referenced by a
 // deployment from srcNs to dstNs (used by the sandbox runner).
 //
-// v3.8.4: Previous version silently swallowed every error — missing ConfigMap,
+// Previous version silently swallowed every error — missing ConfigMap,
 // missing Secret, create conflict, anything. The sandbox canary would then
 // start with empty env vars and Level 1 verification would still pass (because
 // the pod can go Ready with broken config), masking the real failure.
@@ -272,7 +272,7 @@ func mustJSON(v any) string {
 }
 
 // RollbackByName triggers kubectl rollout undo on a deployment by name.
-// v4.0.0: Used by chatops /sentinel rollback + /sentinel revert commands.
+// Used by chatops /sentinel rollback + /sentinel revert commands.
 // This is a thin wrapper around Rollback that constructs a synthetic
 // FixProposal so we don't have to refactor the existing method.
 func (e *K8sExecutor) RollbackByName(ctx context.Context, namespace, deploymentName string) error {

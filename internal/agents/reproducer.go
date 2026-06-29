@@ -19,8 +19,8 @@ import (
         "fmt"
         "strings"
 
-        "github.com/karimzakzouk/sentinel/v3/internal/llm"
-        "github.com/karimzakzouk/sentinel/v3/internal/schemas"
+        "github.com/karimzakzouk/sentinel/internal/llm"
+        "github.com/karimzakzouk/sentinel/internal/schemas"
 )
 
 const reproducerSystemPrompt = `You are Sentinel's Reproducer Generator agent. Your job is to write a standalone script that reproduces a production error.

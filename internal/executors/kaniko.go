@@ -14,7 +14,7 @@ import (
         metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
         "k8s.io/client-go/kubernetes"
 
-        "github.com/karimzakzouk/sentinel/v3/internal/schemas"
+        "github.com/karimzakzouk/sentinel/internal/schemas"
 )
 
 // KanikoBuilder builds Docker images inside Kubernetes without a daemon.
@@ -322,11 +322,11 @@ func (k *KanikoBuilder) buildPodSpec(podName, repo, branch, configmapName, fullI
 
 # Repo and branch arrive as env vars — they cannot inject shell
 # metacharacters even if a malicious value slipped past validation.
-# v3.11.0: The git host is templated at pod-creation time from the
+# The git host is templated at pod-creation time from the
 # operator-set cfg.GitHost (default "github.com"). It is NOT an env var
 # because that would re-introduce the injection surface — the host is
 # trusted config, repo/branch are not.
-# v3.18.0: If SENTINEL_GITHUB_TOKEN is set, configure git to use it via
+# If SENTINEL_GITHUB_TOKEN is set, configure git to use it via
 # the credential helper (instead of embedding it in the URL, which would
 # leak via pod logs). Empty token = anonymous clone (public repos only).
 if [ -n "$SENTINEL_GITHUB_TOKEN" ]; then

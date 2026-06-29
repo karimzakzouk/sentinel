@@ -27,8 +27,8 @@ import (
         "regexp"
         "strings"
 
-        "github.com/karimzakzouk/sentinel/v3/internal/llm"
-        "github.com/karimzakzouk/sentinel/v3/internal/schemas"
+        "github.com/karimzakzouk/sentinel/internal/llm"
+        "github.com/karimzakzouk/sentinel/internal/schemas"
 )
 
 // SecurityFinding is one security issue found in the fix.

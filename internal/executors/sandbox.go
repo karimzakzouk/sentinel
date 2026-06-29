@@ -18,20 +18,18 @@ import (
         "k8s.io/apimachinery/pkg/util/intstr"
         "k8s.io/client-go/kubernetes"
 
-        "github.com/karimzakzouk/sentinel/v3/internal/agents"
-        "github.com/karimzakzouk/sentinel/v3/internal/schemas"
+        "github.com/karimzakzouk/sentinel/internal/agents"
+        "github.com/karimzakzouk/sentinel/internal/schemas"
 )
 
 // sandboxHTTPClient is the shared HTTP client for sandbox Level 2 + 3 probes.
-
-// created a new http.Client on every call (2-3 per incident), defeating
-// connection pooling. A package-level shared client reuses TCP+TLS connections
-// to the canary Service, cutting probe latency ~50%.
+// A package-level shared client reuses TCP+TLS connections to the canary
+// Service, cutting probe latency ~50% (previously: a new http.Client was
+// created on every call, 2-3 per incident, defeating connection pooling).
 var sandboxHTTPClient = &http.Client{Timeout: 5 * time.Second}
 
-// SandboxResult is the outcome of a sandbox run.
-
-// failure details (was a one-line Summary, making the retry loop ineffective).
+// SandboxResult is the outcome of a sandbox run. Carries per-level failure
+// details (was a one-line Summary, making the retry loop ineffective).
 type SandboxResult struct {
         Verified      bool
         Summary       string
@@ -51,37 +49,29 @@ type SandboxResult struct {
 }
 
 // SandboxRunner creates an isolated namespace, deploys the fix, and verifies it.
-// 3 verification levels:
-//   Level 1: Canary pod becomes Ready AND stays Ready for sustainedWindow (startup crash fixed)
-//   Level 2: All configured endpoints return 2xx/3xx (app starts + serves traffic)
-//   Level 3: Original error is gone (reproduce the crash conditions)
+// Three verification levels:
+//   - Level 1: Canary pod becomes Ready AND stays Ready for sustainedWindow (startup crash fixed)
+//   - Level 2: All configured endpoints return 2xx/3xx (app starts + serves traffic)
+//   - Level 3: Original error is gone (reproduce the crash conditions)
 //
-
-// only worked for the demo app. Now configurable via SENTINEL_SANDBOX_PROBE_PATHS.
-// Defaults to /,/healthz,/readyz. For app-specific paths (e.g. /pay?amount=0),
-// set the env var.
+// Probe paths are configurable via SENTINEL_SANDBOX_PROBE_PATHS. Defaults to
+// /,/healthz,/readyz. For app-specific paths (e.g. /pay?amount=0), set the
+// env var.
 //
-
-//   - waitForReady now requires ReadyReplicas >= 1 sustained for sustainedWindow
+// Safety guarantees:
+//   - waitForReady requires ReadyReplicas >= 1 sustained for sustainedWindow
 //     (default 30s) before passing Level 1. A pod that goes Ready then
-//     immediately crashes no longer passes Level 1.
-//   - verifyEndpoints no longer silently swallows connection errors. If every
-//     probe fails to connect, Level 2 fails (previously: a canary that never
-//     bound its port passed Level 2 for free). If the prod Service exists but
-//     the sandbox Service is missing, Level 2 fails (previously: passed).
-//   - Level 3 verification now fails on ANY 4xx/5xx response, not just on
-//     5xx + error-string match. A 404 with no error string in the body no
-//     longer passes Level 3.
+//     immediately crashes does not pass Level 1.
+//   - verifyEndpoints does not silently swallow connection errors. If every
+//     probe fails to connect, Level 2 fails.
+//   - Level 3 verification fails on ANY 4xx/5xx response, not just on
+//     5xx + error-string match.
 //   - patchPodSpec force-sets a safe security context regardless of what the
-//     prod pod uses. A privileged prod pod no longer produces a privileged
-//     sandbox canary.
-//   - createNamespace now also creates a default-deny NetworkPolicy on the
+//     prod pod uses.
+//   - createNamespace also creates a default-deny NetworkPolicy on the
 //     sandbox namespace so the canary can't reach arbitrary services.
-//
-
-// in the sandbox NetworkPolicy ingress rule (audit #8). When the Helm release
-// isn't named "sentinel", probes from the actual Sentinel namespace were
-// denied → Level 2 verification always failed on connection errors.
+//   - The sandbox NetworkPolicy ingress rule allows probes from the actual
+//     Sentinel namespace (audit #8 fix).
 type SandboxRunner struct {
         clientset        *kubernetes.Clientset
         sandboxPrefix    string

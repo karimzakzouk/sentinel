@@ -17,8 +17,8 @@ import (
 
         "github.com/google/uuid"
 
-        "github.com/karimzakzouk/sentinel/v3/internal/metrics"
-        "github.com/karimzakzouk/sentinel/v3/internal/version"
+        "github.com/karimzakzouk/sentinel/internal/metrics"
+        "github.com/karimzakzouk/sentinel/internal/version"
 )
 
 // ServerEvent is pushed to SSE clients.

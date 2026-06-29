@@ -1,13 +1,13 @@
 // Package appprovision implements the GitHub App auto-provisioning flow.
 //
-// v4.1.0: Implements the "manifest flow" — a one-command setup that creates
+// Implements the "manifest flow" — a one-command setup that creates
 // a GitHub App in the user's account with all permissions pre-configured.
 // The user clicks one button on GitHub, GitHub redirects back with a code,
 // Sentinel exchanges the code for the App's PEM + ID + webhook secret, and
 // stores everything in runtime config. No manual App creation, no PEM file
 // management, no permission dropdowns.
 //
-// v4.1.1: Fixed manifest not pre-filling the GitHub form. The issue was:
+// Fixed manifest not pre-filling the GitHub form. The issue was:
 //   - hook_attributes.url was empty when no --webhook-url was passed
 //   - GitHub silently rejects manifests with empty hook_attributes.url
 //   - content_type was missing (GitHub defaults to "form", we need "json")
@@ -47,7 +47,7 @@ type HookAttributes struct {
 
 // DefaultManifest returns the manifest for Sentinel.
 //
-// v4.1.1: If webhookURL is empty, we use appURL as a placeholder for
+// If webhookURL is empty, we use appURL as a placeholder for
 // hook_attributes.url. GitHub REQUIRES a valid http(s) URL — an empty
 // string makes GitHub silently reject the manifest and show a blank form.
 // The user can change the webhook URL later in App settings.

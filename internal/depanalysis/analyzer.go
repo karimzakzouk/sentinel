@@ -1,7 +1,7 @@
 // Package depanalysis analyzes source code dependencies to identify when
 // an error originates from a shared library rather than the service itself.
 //
-// v3.5.0: If 12 services fail from the same shared library bug, Sentinel should
+// If 12 services fail from the same shared library bug, Sentinel should
 // open ONE PR in the shared library, not 12 PRs in 12 repos.
 //
 // Approach:
@@ -27,7 +27,7 @@ import (
 )
 
 // SharedLibFix is the result of dependency analysis.
-// v3.5.0: When an error originates from a shared library, the investigator
+// When an error originates from a shared library, the investigator
 // uses this to redirect the fix to the library's repo instead of the service.
 type SharedLibFix struct {
 	IsSharedLib    bool   // true if the error is in a shared library
@@ -41,7 +41,7 @@ type SharedLibFix struct {
 // library (vendor/, node_modules/, site-packages/, etc.) and extracts the
 // dependency info.
 //
-// v3.5.0: Called by the investigator after parsing the error. If IsSharedLib
+// Called by the investigator after parsing the error. If IsSharedLib
 // is true, the investigator should clone the dependency's repo and fix there.
 func AnalyzeStackTrace(sourceFile, podLogs string) SharedLibFix {
 	result := SharedLibFix{
@@ -162,7 +162,7 @@ func extractDependencyName(path string) (depDir, depName string) {
 // resolveDependencyRepo maps a dependency name to its source repository.
 // For Go modules, the dependency name IS the repo (github.com/org/repo).
 // For other ecosystems, we'd need a registry lookup (PyPI, npm, etc.).
-// v3.5.0: For now, we handle Go directly and return empty for others
+// For now, we handle Go directly and return empty for others
 // (the investigator can fall back to a web search or manual configuration).
 func resolveDependencyRepo(depName, language string) string {
 	switch language {

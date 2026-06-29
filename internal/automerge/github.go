@@ -23,7 +23,7 @@ type GitHubClientImpl struct {
         token  string
         apiURL string
         http   *http.Client
-        // v4.0.0: Optional GitHub App token provider. When set, all API calls
+        // Optional GitHub App token provider. When set, all API calls
         // (CI status, labels, merge, comments) use the App's installation token,
         // making them appear as the "Sentinel" bot identity.
         tokenProvider TokenProvider

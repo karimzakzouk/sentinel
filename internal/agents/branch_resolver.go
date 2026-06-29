@@ -5,7 +5,7 @@ import (
         "log"
         "strings"
 
-        "github.com/karimzakzouk/sentinel/v3/internal/schemas"
+        "github.com/karimzakzouk/sentinel/internal/schemas"
 )
 
 // resolveBranch determines which branch or commit to clone for this incident.
@@ -44,7 +44,7 @@ func (a *Investigator) resolveBranch(ctx context.Context, state *schemas.AgentSt
         }
 
         // 3. Fallback: configured default branch with warning.
-        // v3.11.0: Was hardcoded "main" (CRITICAL audit #6). Now uses the
+        // Was hardcoded "main" (CRITICAL audit #6). Now uses the
         // Investigator's configured defaultBranch (set from cfg.DefaultBranch).
         db := a.defaultBranch
         if db == "" {
@@ -55,7 +55,7 @@ func (a *Investigator) resolveBranch(ctx context.Context, state *schemas.AgentSt
 }
 
 // discoverRepo extracts the GitHub repo from the cluster's annotations.
-// v3.11.0: Now accepts a gitHost parameter so normalizeRepo can strip the
+// Now accepts a gitHost parameter so normalizeRepo can strip the
 // configured host prefix (was hardcoded to "github.com"). CRITICAL audit #2.
 func discoverRepo(state *schemas.AgentState, gitHost string) string {
         if repo, ok := state.Cluster.Annotations["sentinel.io/repo"]; ok {

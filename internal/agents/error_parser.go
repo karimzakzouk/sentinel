@@ -6,7 +6,7 @@ import (
         "regexp"
         "strings"
 
-        "github.com/karimzakzouk/sentinel/v3/internal/schemas"
+        "github.com/karimzakzouk/sentinel/internal/schemas"
 )
 
 // UniversalErrorParser extracts error information from ANY language's stack trace.

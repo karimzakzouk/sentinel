@@ -11,7 +11,7 @@
 # ─── Image ───────────────────────────────────────────────────────────────────
 image:
   registry: "docker.io/karimzakzouk"
-  repository: "sentinel-v3"
+  repository: "sentinel"
   tag: "4.4.0"
   pullPolicy: Always
 

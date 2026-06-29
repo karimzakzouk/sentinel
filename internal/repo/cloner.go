@@ -1,8 +1,6 @@
 // Package repo provides repository cloning + local search for the agent pipeline.
-
-// exactly like SWE-agent / OpenHands / Aider do it.
 //
-// The flow:
+// The flow mirrors SWE-agent / OpenHands / Aider:
 //   1. Clone the repo (shallow, --depth 1) to a temp dir using go-git (pure Go)
 //   2. Walk the file tree, filter noise (node_modules, vendor, .git, etc.)
 //   3. LLM round 1: "what should I search for?" → returns search queries
@@ -31,9 +29,7 @@ import (
 )
 
 // Cloner clones a GitHub repo to a local temp dir using go-git (pure Go, no CGO).
-//
-
-// cfg.GitHost (CRITICAL audit #2). Was hardcoded to github.com in 2 sites.
+// Respects cfg.GitHost (CRITICAL audit #2 — was hardcoded to github.com in 2 sites).
 type Cloner struct {
         githubToken string
         gitHost     string

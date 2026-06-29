@@ -21,7 +21,7 @@ spec:
           properties:
             spec:
               type: object
-              # v3.18.0: M3 — `service` is required. Was: empty spec accepted,
+              # M3 — `service` is required. Was: empty spec accepted,
               # triggering an investigation against "unknown" service.
               required: ["service"]
               properties:

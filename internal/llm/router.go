@@ -1,7 +1,8 @@
 // Package llm provides the LLM router backed by GoAI.
-
-// Google, Vertex, OpenRouter, Groq, Mistral, Cohere, xAI, DeepSeek, Ollama,
-// vLLM, etc.) via github.com/zendev-sh/goai. No proxy needed.
+//
+// Supports multiple providers (Anthropic, Bedrock, Azure, OpenAI, Google,
+// Vertex, OpenRouter, Groq, Mistral, Cohere, xAI, DeepSeek, Ollama, vLLM, etc.)
+// via github.com/zendev-sh/goai. No proxy needed.
 package llm
 
 import (
@@ -20,15 +21,12 @@ import (
 
 // Router picks fast vs frontier model and centralizes the API client.
 //
-
-// LLM providers. The provider field determines which GoAI provider package
-// is used (anthropic → native /v1/messages, bedrock → SigV4, azure →
-// native Azure, etc.). For OpenAI-compatible providers (zai, custom,
-// litellm, ollama, vllm), the openai provider package is used with a
-// custom base URL.
+// The provider field determines which GoAI provider package is used
+// (anthropic → native /v1/messages, bedrock → SigV4, azure → native Azure,
+// etc.). For OpenAI-compatible providers (zai, custom, litellm, ollama, vllm),
+// the openai provider package is used with a custom base URL.
 //
-
-// the Router wraps every LLM call in pool.Call(), which tries providers in
+// The Router wraps every LLM call in pool.Call(), which tries providers in
 // priority order and trips a circuit breaker on failure. The legacy
 // single-provider fields (providerType, baseURL, apiKey, fastModel,
 // frontierModel) are still used as a fallback when the pool is empty

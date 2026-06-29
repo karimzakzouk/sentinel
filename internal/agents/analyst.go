@@ -5,8 +5,8 @@ import (
         "strings"
         "time"
 
-        "github.com/karimzakzouk/sentinel/v3/internal/llm"
-        "github.com/karimzakzouk/sentinel/v3/internal/schemas"
+        "github.com/karimzakzouk/sentinel/internal/llm"
+        "github.com/karimzakzouk/sentinel/internal/schemas"
 )
 
 // categoryKeywordMap maps hypothesis keywords to categories for Beta-prior lookup.
@@ -38,7 +38,7 @@ var categoryKeywordMap = []struct {
 // Does NOT use the LLM — pure math (Bayes + Beta priors).
 type Analyst struct {
         router *llm.Router // kept for future LLM-assisted analysis; not used in v3.0
-        // v3.11.0: LLM prior weight in the Bayesian blend. Was hardcoded 0.4 (audit #9).
+        // LLM prior weight in the Bayesian blend. Was hardcoded 0.4 (audit #9).
         // Set via SetLLMPriorWeight from main.go using cfg.LLMPriorWeight.
         llmPriorWeight float64
 }
@@ -181,7 +181,7 @@ func (a *Analyst) Run(ctx context.Context, state *schemas.AgentState, betaStore 
         posteriorMean := postAlpha / (postAlpha + postBeta)
 
         // Combine LLM prior with Bayesian posterior (weighted average)
-        // v3.11.0: Use a.llmPriorWeight instead of hardcoded 0.4 (audit #9).
+        // Use a.llmPriorWeight instead of hardcoded 0.4 (audit #9).
         w := a.llmPriorWeight
         if w <= 0 || w >= 1 {
                 w = 0.4 // safety net — should never fire

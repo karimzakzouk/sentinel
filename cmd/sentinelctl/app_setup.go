@@ -45,7 +45,7 @@ import (
         "runtime"
         "time"
 
-        "github.com/karimzakzouk/sentinel/v3/internal/chatops/appprovision"
+        "github.com/karimzakzouk/sentinel/internal/chatops/appprovision"
 )
 
 func (c *client) handleApp(positional []string) {

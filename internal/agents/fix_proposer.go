@@ -11,9 +11,9 @@ import (
 
         "github.com/google/uuid"
 
-        "github.com/karimzakzouk/sentinel/v3/internal/k8s"
-        "github.com/karimzakzouk/sentinel/v3/internal/llm"
-        "github.com/karimzakzouk/sentinel/v3/internal/schemas"
+        "github.com/karimzakzouk/sentinel/internal/k8s"
+        "github.com/karimzakzouk/sentinel/internal/llm"
+        "github.com/karimzakzouk/sentinel/internal/schemas"
 )
 
 // validateFilePath validates a file path returned by the LLM for a code fix.

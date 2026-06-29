@@ -153,7 +153,7 @@ type RootCause struct {
 
 // FileChange is one file modification in a fix proposal.
 //
-// v3.9.0: Supports BOTH approaches:
+// Supports BOTH approaches:
 //   - Search/Replace (preferred): LLM returns Changes (list of search→replace
 //     blocks). Sentinel finds the exact "search" text in the file and swaps it
 //     with "replace". Minimal, surgical, no full-file rewrite needed. If the
@@ -258,7 +258,7 @@ type AgentState struct {
         MaxIterations      int                  `json:"max_iterations"`
         Status             IncidentStatus       `json:"status"`
         Error              *string              `json:"error,omitempty"`
-        // v3.14.0: Sandbox failure feedback. When the sandbox verification fails,
+        // Sandbox failure feedback. When the sandbox verification fails,
         // the failure details are stored here and fed back to the fix proposer on
         // the next retry. This implements the "generate → verify → feed error back
         // → retry" loop that Aider/OpenHands/SWE-agent all use.

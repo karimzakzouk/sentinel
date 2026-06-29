@@ -1,6 +1,6 @@
 // Package llm — provider pool with priority-ordered failover + circuit breaker.
 //
-// v4.0.0: Replaces the single-provider Router config with a multi-provider pool.
+// Replaces the single-provider Router config with a multi-provider pool.
 // Operators can stack multiple API keys (e.g. 3 OpenRouter keys + 2 Groq + 1 Gemini)
 // and Sentinel will try them in priority order. If a provider fails (auth error,
 // rate limit, timeout, network), the circuit breaker trips for that provider

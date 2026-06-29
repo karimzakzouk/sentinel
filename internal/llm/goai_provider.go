@@ -4,7 +4,7 @@ package llm
 // provider-specific packages. Each provider handles its own auth scheme,
 // request format, and response parsing — no proxy needed.
 //
-// v3.12.0: Replaces the previous OpenAI-only HTTP router with GoAI
+// Replaces the previous OpenAI-only HTTP router with GoAI
 // (github.com/zendev-sh/goai), a pure-Go SDK with 25+ native providers.
 // This adds native support for Anthropic (/v1/messages + x-api-key),
 // AWS Bedrock (SigV4), Azure OpenAI (api-key + api-version), Google

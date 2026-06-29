@@ -1,19 +1,18 @@
 // Package slackbot implements an interactive two-way Slack bot for Sentinel.
 //
-
-// two-way communication. The bot:
-//   - Reports what it's doing as it works (investigation started, fix proposed, PR opened)
-//   - Accepts commands via @sentinel mentions or slash commands:
-//     "pause autonomous mode for X"  — pauses auto-investigation for X minutes
-//     "investigate Y"                — manually triggers investigation for service Y
-//     "show me the last 5 incidents" — lists recent incidents
-//     "status"                       — shows current autonomous mode status
-//     "resume"                       — resumes autonomous mode
+// The bot reports what it's doing as it works (investigation started, fix
+// proposed, PR opened) and accepts commands via @sentinel mentions or slash
+// commands:
+//   - "pause autonomous mode for X"  — pauses auto-investigation for X minutes
+//   - "investigate Y"                — manually triggers investigation for service Y
+//   - "show me the last 5 incidents" — lists recent incidents
+//   - "status"                       — shows current autonomous mode status
+//   - "resume"                       — resumes autonomous mode
 //
-// ~200 lines. Uses the Slack Events API (not RTM — simpler, webhook-based).
+// Uses the Slack Events API (not RTM — simpler, webhook-based).
 //
 // Endpoints added to api/server.go:
-//   POST /slack/events  — receives Slack Events API + slash command payloads
+//   POST /slack/events — receives Slack Events API + slash command payloads
 package slackbot
 
 import (

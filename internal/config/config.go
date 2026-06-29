@@ -10,7 +10,7 @@ import (
         "os"
         "strings"
 
-        "github.com/karimzakzouk/sentinel/v3/internal/llm"
+        "github.com/karimzakzouk/sentinel/internal/llm"
 )
 
 // Config is the immutable-at-startup config. Runtime-mutable settings

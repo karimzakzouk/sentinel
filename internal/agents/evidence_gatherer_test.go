@@ -7,8 +7,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/karimzakzouk/sentinel/v3/internal/k8s"
-	"github.com/karimzakzouk/sentinel/v3/internal/llm"
+	"github.com/karimzakzouk/sentinel/internal/k8s"
+	"github.com/karimzakzouk/sentinel/internal/llm"
 )
 
 // TestEvidenceGatherer_Prometheus verifies that the v3.4.0 Prometheus backend

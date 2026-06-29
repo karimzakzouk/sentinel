@@ -50,13 +50,13 @@ rules:
   - apiGroups: ["apps"]
     resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
     verbs: ["get", "list", "watch"]
-  # v3.16.0: Sandbox write permissions — gated behind sandbox.enabled.
+  # Sandbox write permissions — gated behind sandbox.enabled.
   # When sandbox is disabled, these permissions are NOT granted, restoring
   # the least-privilege posture. The sandbox creates dynamic namespaces
   # (sentinel-sandbox-*) and needs cluster-wide create on deployments,
   # services, configmaps, pods, roles, rolebindings.
   #
-  # v3.18.0: SECURITY — removed cluster-wide secrets: create/update/patch/delete.
+  # SECURITY — removed cluster-wide secrets: create/update/patch/delete.
   # A compromised Sentinel pod could have wiped Secrets in EVERY namespace
   # (kube-system, vault, external-secrets, cert-manager). Sandbox Secrets
   # are now created via the per-sandbox-namespace Role bound dynamically
@@ -72,9 +72,9 @@ rules:
     resources: ["roles", "rolebindings"]
     verbs: ["create", "update", "patch", "delete", "get", "list", "watch"]
   {{- end }}
-  # v3.8.4: Opt-in secrets read. The sandbox runner copies prod secrets into
+  # Opt-in secrets read. The sandbox runner copies prod secrets into
   # the sandbox namespace so the canary can access the same env vars as prod.
-  # v3.14.3: secrets read is now ALWAYS granted when sandbox is enabled —
+  # Secrets read is now ALWAYS granted when sandbox is enabled —
   # the sandbox needs to read prod secrets to copy them into the sandbox NS.
   {{- if or .Values.sentinel.rbac.readSecrets .Values.sentinel.sandbox.enabled }}
   - apiGroups: [""]
@@ -94,7 +94,7 @@ rules:
   # Sandbox namespaces are named sentinel-sandbox-<service>-<fixid> and
   # can't be pre-created. If you don't want Sentinel creating namespaces,
   # disable the sandbox via sentinel.sandbox.enabled: false.
-  # v3.18.0: Now gated behind sandbox.enabled (was always granted, defeating
+  # Now gated behind sandbox.enabled (was always granted, defeating
   # the purpose of disabling the sandbox).
   {{- if .Values.sentinel.sandbox.enabled }}
   - apiGroups: [""]

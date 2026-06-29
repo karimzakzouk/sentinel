@@ -1,5 +1,5 @@
 # golangci-lint v2 configuration for Sentinel
-# v3.5.0: Migrated to v2 format, tuned exclusions for real-world Go patterns.
+# Migrated to v2 format, tuned exclusions for real-world Go patterns.
 
 version: "2"
 
@@ -17,7 +17,7 @@ linters:
     - misspell       # spelling errors in comments
     - revive         # golint successor — naming, exported docs
     - bodyclose      # http.Response.Body not closed
-    # v3.5.0: disabled noisy linters — gocritic (style opinions), dupl
+    # Disabled noisy linters — gocritic (style opinions), dupl
     # (duplicate code), goconst (string constants), nakedret (naked returns).
     # These are valid but too noisy for an established codebase.
 
@@ -28,9 +28,9 @@ linters:
       exclude-functions:
         - (net/http.ResponseWriter).Write
         - (io.Closer).Close
-        - (*github.com/karimzakzouk/sentinel/v3/internal/feedback.Store).Close
+        - (*github.com/karimzakzouk/sentinel/internal/feedback.Store).Close
     staticcheck:
-      # v3.5.0: Disable QF (quickfix) + ST1003 (naming) + ST1020 (comment format).
+      # Disable QF (quickfix) + ST1003 (naming) + ST1020 (comment format).
       # QF = style suggestions, ST1003 = would require renaming exported struct fields
       # (breaks JSON), ST1020 = comment format pedantry.
       checks: ["all", "-QF*", "-ST1003", "-ST1020"]

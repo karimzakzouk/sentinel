@@ -18,7 +18,7 @@ import (
         "github.com/google/uuid"
         _ "modernc.org/sqlite"
 
-        "github.com/karimzakzouk/sentinel/v3/internal/schemas"
+        "github.com/karimzakzouk/sentinel/internal/schemas"
 )
 
 // Store is the single storage layer for Sentinel v3.

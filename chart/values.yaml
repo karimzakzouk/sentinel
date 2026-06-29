@@ -1,16 +1,16 @@
-# Sentinel v3 — Helm Chart Values
+# Sentinel — Helm Chart Values
 #
-# v3 is a single Go binary in a single pod. No Postgres, no Weaviate, no UI,
-# no OPA sidecar. 43MB image, ~50MB RAM at idle.
+# Sentinel is a single Go binary in a single pod. No Postgres, no Weaviate,
+# no UI, no OPA sidecar. 43MB image, ~50MB RAM at idle.
 #
 # Install:
-#   helm install sentinel sentinel/sentinel --version 3.5.0 -n sentinel --create-namespace \
+#   helm install sentinel sentinel/sentinel --version 4.4.0 -n sentinel --create-namespace \
 #     --set sentinel.githubToken=YOUR_GITHUB_TOKEN \
 #     --set sentinel.llm.apiKey=YOUR_LLM_API_KEY
 
 image:
   registry: "docker.io/karimzakzouk"
-  repository: "sentinel-v3"
+  repository: "sentinel"
   tag: "4.4.0"
   pullPolicy: Always
 
@@ -18,12 +18,12 @@ sentinel:
   # GitHub token — REQUIRED for code_fix / roll_forward (opens PRs)
   githubToken: ""
 
-  # v3.8.5: Admin API bearer token. Required for sentinelctl admin commands
+  # Admin API bearer token. Required for sentinelctl admin commands
   # (trigger, pause, resume, config set). Empty = admin API unauthenticated
   # (NOT recommended — the server logs a loud warning at startup).
   apiToken: ""
 
-  # v4.4.0: GitHub App credentials. When all three are set, ALL GitHub
+  # GitHub App credentials. When all three are set, ALL GitHub
   # operations (PRs, comments, reactions, labels, merges) appear as
   # "Sentinel[bot]" instead of the PAT owner's personal account.
   # Empty = use the PAT (githubToken) — PRs appear as the PAT owner.
@@ -38,7 +38,7 @@ sentinel:
   githubAppPrivateKey: ""   # full PEM contents, including BEGIN/END lines
   githubAppInstallId: ""    # numeric, from the install URL
 
-  # v3.8.5: GitHub repo allowlist (CSV of owner/name). When set, Sentinel
+  # GitHub repo allowlist (CSV of owner/name). When set, Sentinel
   # only clones repos in this list. Empty = allow all (NOT recommended).
   # Example: "karimzakzouk/demo-app,karimzakzouk/sentinel"
   allowedGithubRepos: ""
@@ -50,8 +50,8 @@ sentinel:
     apiKey: ""
     fastModel: "glm-4-flash"
     frontierModel: "glm-4.5"
-    # v3.4.0: configurable embedding model.
-    # v3.11.0: default changed from "text-embedding-3-small" to "" (audit #13).
+    # Configurable embedding model.
+    # Default changed from "text-embedding-3-small" to "" (audit #13).
     # The previous default was OpenAI-specific but the default provider is "zai",
     # so every default install silently fell back to hash embeddings. Empty
     # default is honest — the vector store uses hash fallback explicitly.
@@ -60,14 +60,14 @@ sentinel:
     #   z.ai:   "embedding-3" (dim 2048)
     #   BGE:    "bge-large-en" (dim 1024)
     embeddingModel: ""
-    # v3.11.0: Embedding dimension for the hash fallback (audit #13).
+    # Embedding dimension for the hash fallback (audit #13).
     # Must match the real model's dim if you set embeddingModel above,
     # otherwise hash-fallback vectors will be incompatible with real
     # embeddings stored previously (silently corrupting the HNSW index).
     # Default 1536 (matches text-embedding-3-small for backwards compat).
     embeddingDim: 1536
 
-    # v4.4.0: Multi-provider failover pool. Stack multiple API keys (e.g. 3
+    # Multi-provider failover pool. Stack multiple API keys (e.g. 3
     # OpenRouter + 2 Groq + 1 Gemini) and Sentinel will try them in priority
     # order with circuit-breaker failover. Empty = single-provider mode (uses
     # provider + apiKey above).
@@ -94,7 +94,7 @@ sentinel:
     #       priority: 3
     providers: []
 
-  # v4.4.0: Auto-merge configuration. All three opt-in layers must be true
+  # Auto-merge configuration. All three opt-in layers must be true
   # for auto-merge to fire on a given PR:
   #   1. autoMerge.enabled (global switch, default false)
   #   2. namespace in autoMerge.namespaces
@@ -112,7 +112,7 @@ sentinel:
   dockerHubUsername: ""
   dockerHubToken: ""
 
-  # v3.11.0: Registry for Kaniko canary image pushes (CRITICAL audit #7).
+  # Registry for Kaniko canary image pushes (CRITICAL audit #7).
   # Default: docker.io (backwards-compatible). Set to your private registry
   # for ECR/GCR/ACR/Harbor/Quay support:
   #   ECR:     "123456789.dkr.ecr.us-east-1.amazonaws.com"
@@ -125,7 +125,7 @@ sentinel:
   # used for the Kaniko --cache-repo and the dockerconfigjson Secret auth URL.
   kanikoRegistry: "docker.io"
 
-  # v3.11.0: GitHub Enterprise / GitLab / Bitbucket support (CRITICAL audit #2).
+  # GitHub Enterprise / GitLab / Bitbucket support (CRITICAL audit #2).
   # Default: github.com + https://api.github.com (backwards-compatible).
   # For GitHub Enterprise:
   #   gitHost: "gh.mycorp.internal"
@@ -136,28 +136,28 @@ sentinel:
   gitHost: "github.com"
   githubApiUrl: "https://api.github.com"
 
-  # v3.11.0: Default branch (CRITICAL audit #6).
+  # Default branch (CRITICAL audit #6).
   # Default: main. Override for repos whose default branch is master/develop/trunk.
   # Per-repo override via sentinel.io/branch annotation takes precedence.
   defaultBranch: "main"
 
-  # v3.11.0: Configurable high-risk services (audit obs-1).
+  # Configurable high-risk services (audit obs-1).
   # Default: empty (no services are high-risk). The previous defaults
   # (payment-api, billing-api, auth-service) leaked from the demo app into
   # every install. Set to your own high-risk services, e.g.:
   #   highRiskServices: "payment-api,billing-api,auth-service"
   highRiskServices: ""
 
-  # v3.11.0: Configurable namespace skip list (audit #11).
+  # Configurable namespace skip list (audit #11).
   # Default includes common system namespaces. Add your own or override.
   skipNamespaces: "kube-system,kube-public,kube-node-lease,calico-system,calico-apiserver,cert-manager,ingress-nginx,monitoring,prometheus,grafana,loki,metallb-system,longhorn-system,cattle-system,fleet-system,gatekeeper-system,external-secrets,vault,argo-events,argo-rollouts,tekton-pipelines,istio-system,knative-serving,kubernetes-dashboard"
 
-  # v3.11.0: Configurable Kaniko images (audit #14).
+  # Configurable Kaniko images (audit #14).
   # Default: tag-pinned upstream values. Override to use a mirror or digest.
   kanikoInitImage: "alpine/git:2.43.0"
   kanikoExecutorImage: "gcr.io/kaniko-project/executor:v1.24.0"
 
-  # v3.11.0: Max concurrent investigations (audit #15).
+  # Max concurrent investigations (audit #15).
   # Default: 3. Each investigation can pin ~5min of LLM + K8s API + image-build
   # resources. Lower for memory-constrained dev clusters, raise for high-QPS prod.
   maxConcurrentInvestigations: 3
@@ -168,7 +168,7 @@ sentinel:
     # writeNamespaces:
     #   - sim
     #   - staging
-    # v3.8.4: Opt-in secrets read. When true, the chart grants the Sentinel
+    # Opt-in secrets read. When true, the chart grants the Sentinel
     # ServiceAccount get/list/watch on Secrets cluster-wide. Required for
     # the sandbox runner to copy prod secrets into the sandbox namespace
     # (so the canary can access the same env vars as prod). Default false
@@ -177,7 +177,7 @@ sentinel:
     readSecrets: false
 
   # Namespaces treated as production (stricter governance)
-  # v3.11.0: Removed "payments" from default (audit #5). The demo's "payments"
+  # Removed "payments" from default (audit #5). The demo's "payments"
   # namespace leaked into every install. Operators who actually use a "payments"
   # namespace should set this explicitly.
   productionNamespaces: "prod,production"
@@ -190,24 +190,24 @@ sentinel:
   panicCpuThresholdPct: 95.0
   panicConnectionsThreshold: 9000
 
-  # v3.4.0: Observability backends (for Evidence Gatherer)
+  # Observability backends (for Evidence Gatherer)
   observability:
     prometheusUrl: ""   # e.g. http://prometheus-server.monitoring.svc.cluster.local:9090
     lokiUrl: ""
     jaegerUrl: ""
 
-  # v3.4.0: Structured logging level (DEBUG/INFO/WARN/ERROR)
+  # Structured logging level (DEBUG/INFO/WARN/ERROR)
   logLevel: "INFO"
 
-  # v3.4.0: LLM retry config (free-tier rate-limit resilience)
+  # LLM retry config (free-tier rate-limit resilience)
   llmRetry:
     maxRetries: 3
     baseDelayMs: 500
 
-  # v3.4.0: Sandbox probe paths (was hardcoded /pay?amount=... for demo app)
+  # Sandbox probe paths (was hardcoded /pay?amount=... for demo app)
   sandboxProbePaths: "/,/healthz,/readyz"
 
-  # v3.14.0: Sandbox configuration — operator control over verification behavior.
+  # Sandbox configuration — operator control over verification behavior.
   #   enabled: should we run the sandbox at all? (default: true)
   #     true — build canary, deploy, verify, then open PR
   #     false — skip sandbox entirely, open PR immediately (fast mode)
@@ -222,16 +222,16 @@ sentinel:
     required: false
     maxRetries: 2
 
-  # v3.4.0: Slack webhook (optional, graceful degradation if empty)
+  # Slack webhook (optional, graceful degradation if empty)
   slackWebhook: ""
 
-  # v3.5.0: Interactive Slack bot (two-way commands via Events API)
+  # Interactive Slack bot (two-way commands via Events API)
   slackBot:
     signingSecret: ""  # verifies Slack webhook signatures
     botUserID: ""      # Sentinel's Slack user ID (for @mention parsing)
     botToken: ""       # OAuth bot token (xoxb-...) for posting replies
 
-  # v3.5.0: Predictive PR review (GitHub webhook receiver)
+  # Predictive PR review (GitHub webhook receiver)
   githubWebhookSecret: ""  # HMAC secret for verifying GitHub webhook signatures
 
 # Resource limits — v3 is much smaller than v2
@@ -259,7 +259,7 @@ rbac:
   clusterScope: true
 
 # NetworkPolicy — deny by default, allow only needed egress.
-# v3.8.5: Disabled by default. k3s (the most common dev cluster) has CNI
+# Disabled by default. k3s (the most common dev cluster) has CNI
 # quirks that cause intermittent timeouts to the K8s API (10.43.0.1:443)
 # even when the NetworkPolicy allows 0.0.0.0/0:443. Production clusters
 # with Calico/Cilium should enable this.
@@ -281,7 +281,7 @@ nodeSelector: {}
 tolerations: []
 affinity: {}
 
-# v4.4.0: Metrics configuration
+# Metrics configuration
 metrics:
   # ServiceMonitor for Prometheus Operator (kube-prometheus-stack).
   # When enabled, Sentinel's /metrics endpoint is auto-discovered.
@@ -293,7 +293,7 @@ metrics:
     # (e.g. release: prometheus for kube-prometheus-stack's default selector)
     labels: {}
 
-# v4.4.0: PodDisruptionBudget — prevents all replicas from being evicted
+# PodDisruptionBudget — prevents all replicas from being evicted
 # simultaneously during voluntary disruptions (node drain, cluster autoscaler).
 podDisruptionBudget:
   enabled: false

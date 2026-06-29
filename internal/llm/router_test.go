@@ -86,7 +86,7 @@ func TestExtractJSONList(t *testing.T) {
 
 // TestRouter_RetriesOn429 verifies that the router retries on 429 rate-limit
 // responses and eventually succeeds when the server recovers.
-// v3.4.0: Without retry, a single 429 from a free-tier model kills the
+// Without retry, a single 429 from a free-tier model kills the
 // investigation. This is the most important production-readiness fix.
 func TestRouter_RetriesOn429(t *testing.T) {
         var calls int32

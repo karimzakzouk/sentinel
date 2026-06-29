@@ -6,17 +6,17 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/karimzakzouk/sentinel/v3/internal/agents"
-	"github.com/karimzakzouk/sentinel/v3/internal/automerge"
-	"github.com/karimzakzouk/sentinel/v3/internal/chatops"
-	"github.com/karimzakzouk/sentinel/v3/internal/config"
-	"github.com/karimzakzouk/sentinel/v3/internal/executors"
-	"github.com/karimzakzouk/sentinel/v3/internal/feedback"
-	githubapp "github.com/karimzakzouk/sentinel/v3/internal/github"
-	"github.com/karimzakzouk/sentinel/v3/internal/k8s"
-	"github.com/karimzakzouk/sentinel/v3/internal/llm"
-	"github.com/karimzakzouk/sentinel/v3/internal/logging"
-	"github.com/karimzakzouk/sentinel/v3/internal/prreview"
+	"github.com/karimzakzouk/sentinel/internal/agents"
+	"github.com/karimzakzouk/sentinel/internal/automerge"
+	"github.com/karimzakzouk/sentinel/internal/chatops"
+	"github.com/karimzakzouk/sentinel/internal/config"
+	"github.com/karimzakzouk/sentinel/internal/executors"
+	"github.com/karimzakzouk/sentinel/internal/feedback"
+	githubapp "github.com/karimzakzouk/sentinel/internal/github"
+	"github.com/karimzakzouk/sentinel/internal/k8s"
+	"github.com/karimzakzouk/sentinel/internal/llm"
+	"github.com/karimzakzouk/sentinel/internal/logging"
+	"github.com/karimzakzouk/sentinel/internal/prreview"
 )
 
 type storeAdapter struct {

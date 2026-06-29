@@ -13,9 +13,9 @@ import (
 
         metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-        "github.com/karimzakzouk/sentinel/v3/internal/k8s"
-        "github.com/karimzakzouk/sentinel/v3/internal/llm"
-        "github.com/karimzakzouk/sentinel/v3/internal/schemas"
+        "github.com/karimzakzouk/sentinel/internal/k8s"
+        "github.com/karimzakzouk/sentinel/internal/llm"
+        "github.com/karimzakzouk/sentinel/internal/schemas"
 )
 
 const evidenceSystemPrompt = `You are Sentinel's Evidence Gatherer agent.
@@ -63,7 +63,7 @@ func NewEvidenceGatherer(router *llm.Router, k8sClient *k8s.Client) *EvidenceGat
 }
 
 // SetPrometheusURL configures the Prometheus backend for evidence queries.
-// v3.4.0: When set, evidence queries of type "prometheus" are executed against
+// When set, evidence queries of type "prometheus" are executed against
 // this URL. When empty, prometheus queries return an "not configured" error
 // (same behavior as v3.3.x).
 func (a *EvidenceGatherer) SetPrometheusURL(url string) {
@@ -195,7 +195,7 @@ func (a *EvidenceGatherer) runSingleQuery(ctx context.Context, idx int, q map[st
 }
 
 // executeQuery dispatches to the right backend based on query type.
-// v3.4.0: Prometheus backend now implemented (was returning "not configured").
+// Prometheus backend now implemented (was returning "not configured").
 // Loki and Jaeger remain stubs — they need their own query languages.
 func (a *EvidenceGatherer) executeQuery(ctx context.Context, query map[string]any) map[string]any {
         qtype, _ := query["type"].(string)
@@ -205,7 +205,7 @@ func (a *EvidenceGatherer) executeQuery(ctx context.Context, query map[string]an
         case "k8s":
                 return a.queryK8s(ctx, q)
         case "prometheus":
-                // v3.4.0: Real Prometheus query execution.
+                // Real Prometheus query execution.
                 return a.queryPrometheus(ctx, q)
         case "loki", "jaeger":
                 // Still not implemented — these need their own query languages.
@@ -217,7 +217,7 @@ func (a *EvidenceGatherer) executeQuery(ctx context.Context, query map[string]an
 }
 
 // queryPrometheus executes a PromQL query against the configured Prometheus.
-// v3.4.0: Uses the /api/v1/query endpoint (instant query). Returns the result
+// Uses the /api/v1/query endpoint (instant query). Returns the result
 // as a simplified map — the LLM analyst doesn't need the full Prometheus
 // response format, just the values.
 //

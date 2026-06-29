@@ -7,7 +7,7 @@ import (
 
 // TestGenerateHypotheses_AllLanguages verifies that GenerateHypothesesUniversal
 // produces sensible hypotheses for each supported language.
-// v3.5.0: Expands multi-language test coverage — the parser was tested but
+// Expands multi-language test coverage — the parser was tested but
 // hypothesis generation was only tested for Python and Go.
 func TestGenerateHypotheses_AllLanguages(t *testing.T) {
         tests := []struct {

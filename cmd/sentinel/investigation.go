@@ -6,16 +6,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/karimzakzouk/sentinel/v3/internal/agents"
-	"github.com/karimzakzouk/sentinel/v3/internal/automerge"
-	"github.com/karimzakzouk/sentinel/v3/internal/chatops"
-	"github.com/karimzakzouk/sentinel/v3/internal/config"
-	"github.com/karimzakzouk/sentinel/v3/internal/executors"
-	"github.com/karimzakzouk/sentinel/v3/internal/feedback"
-	"github.com/karimzakzouk/sentinel/v3/internal/k8s"
-	"github.com/karimzakzouk/sentinel/v3/internal/logging"
-	"github.com/karimzakzouk/sentinel/v3/internal/metrics"
-	"github.com/karimzakzouk/sentinel/v3/internal/schemas"
+	"github.com/karimzakzouk/sentinel/internal/agents"
+	"github.com/karimzakzouk/sentinel/internal/automerge"
+	"github.com/karimzakzouk/sentinel/internal/chatops"
+	"github.com/karimzakzouk/sentinel/internal/config"
+	"github.com/karimzakzouk/sentinel/internal/executors"
+	"github.com/karimzakzouk/sentinel/internal/feedback"
+	"github.com/karimzakzouk/sentinel/internal/k8s"
+	"github.com/karimzakzouk/sentinel/internal/logging"
+	"github.com/karimzakzouk/sentinel/internal/metrics"
+	"github.com/karimzakzouk/sentinel/internal/schemas"
 )
 
 // executeFix runs the appropriate executor based on fix type.

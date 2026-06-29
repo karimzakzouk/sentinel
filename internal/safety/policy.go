@@ -2,7 +2,7 @@
 // v3: replaces the OPA Rego sidecar with 5 plain Go if-statements.
 // Same rules as services/safety/policies/sentinel.rego — just no JVM sidecar.
 //
-// v3.8.4: The policy now actually returns VerdictRequireHumanApproval (it
+// The policy now actually returns VerdictRequireHumanApproval (it
 // was previously defined in schemas but never produced by Evaluate, making
 // the human-review branch in main.go dead code). The verdict matrix is:
 //
@@ -15,7 +15,7 @@
 package safety
 
 import (
-        "github.com/karimzakzouk/sentinel/v3/internal/schemas"
+        "github.com/karimzakzouk/sentinel/internal/schemas"
 )
 
 // Policy is the embedded safety policy.
@@ -23,7 +23,7 @@ type Policy struct {
         ProductionNamespaces     map[string]bool
         HighRiskServices         map[string]bool
         ConfidenceAutonomous     float64
-        // v3.8.4: Confidence below which a prod fix is denied outright (not even
+        // Confidence below which a prod fix is denied outright (not even
         // human-reviewed). Between ConfidenceHumanReview and ConfidenceAutonomous,
         // a prod fix goes to VerdictRequireHumanApproval.
         ConfidenceHumanReview float64
@@ -32,7 +32,7 @@ type Policy struct {
 
 // DefaultPolicy returns the default policy.
 //
-// v3.11.0: Removed demo-specific values (audit #5 + obs-1).
+// Removed demo-specific values (audit #5 + obs-1).
 //   - ProductionNamespaces: was {prod, production, payments}. The demo's
 //     "payments" namespace leaked into every install. Now {prod, production}.
 //     NewPolicy() overrides this from cfg.ProductionNamespaces anyway.
@@ -52,9 +52,9 @@ func DefaultPolicy() *Policy {
 }
 
 // NewPolicy creates a policy with custom namespaces + thresholds.
-// v3.8.4: Now accepts confidenceHumanReview in addition to confidenceAutonomous.
+// Now accepts confidenceHumanReview in addition to confidenceAutonomous.
 // Pass 0 to keep the default (0.70).
-// v3.11.0: HighRiskServices is no longer permanently set to the demo values
+// HighRiskServices is no longer permanently set to the demo values
 // (payment-api/billing-api/auth-service). The default HighRiskServices is
 // now empty — operators must explicitly set their own via WithHighRiskServices
 // or NewPolicyWithHighRisk. The previous behavior (NewPolicy could not
@@ -65,7 +65,7 @@ func NewPolicy(productionNamespaces []string, confidenceAutonomous, confidenceHu
         for _, ns := range productionNamespaces {
                 p.ProductionNamespaces[ns] = true
         }
-        // v3.11.0: Reset HighRiskServices to empty — demo values should not
+        // Reset HighRiskServices to empty — demo values should not
         // leak into production installs. Operators set their own via
         // WithHighRiskServices.
         p.HighRiskServices = map[string]bool{}
@@ -121,7 +121,7 @@ type Decision struct {
         RulesEvaluated        []map[string]any
         RollbackBlocked       bool
         RollbackBlockedReason string
-        // v3.8.4: HumanReviewReason is populated when Verdict == RequireHumanApproval
+        // HumanReviewReason is populated when Verdict == RequireHumanApproval
         // so callers can surface *why* human review is required (e.g. "high_risk_service",
         // "blast_radius_exceeded", "low_confidence_in_prod").
         HumanReviewReason string
@@ -129,7 +129,7 @@ type Decision struct {
 
 // Evaluate runs the policy rules and returns a Decision.
 //
-// v3.8.4: Verdict matrix:
+// Verdict matrix:
 //
 //      rollbackBlocked -> VerdictDeny (hard block; can't auto-rollback a schema migration)
 //      non-prod + not rollback-blocked -> VerdictAllow (sandbox/sim is permissive)
@@ -226,7 +226,7 @@ func isSafeFixType(t schemas.FixType) bool {
 // confidence, CI). This is the safety-policy contribution to the auto-merge
 // decision — it's a stricter subset of Evaluate().
 //
-// v4.0.0: Implemented by automerge.SafetyChecker interface.
+// Implemented by automerge.SafetyChecker interface.
 //
 // Rules (any one of these returns false):
 //   - HasSchemaMigration: schema migrations always need human review

@@ -108,7 +108,7 @@ func TestVerifySignature_NoSecret(t *testing.T) {
 
 // TestHandleWebhook_Ping verifies the ping event returns 200 when a
 // valid webhook secret is configured and the signature verifies.
-// v3.8.4: Previous version tested with no secret (which used to skip
+// Previous version tested with no secret (which used to skip
 // verification) — now we require a real secret.
 func TestHandleWebhook_Ping(t *testing.T) {
         secret := "test-webhook-secret"

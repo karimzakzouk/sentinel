@@ -3,7 +3,7 @@ package safety
 import (
         "testing"
 
-        "github.com/karimzakzouk/sentinel/v3/internal/schemas"
+        "github.com/karimzakzouk/sentinel/internal/schemas"
 )
 
 func TestDefaultPolicyAllowNonProd(t *testing.T) {

@@ -1,6 +1,6 @@
 // Package runtimecfg provides hot-reloadable runtime configuration.
-
-// and applied immediately — no restart needed.
+// Settings are loaded from a JSON file on disk and can be edited at runtime
+// via POST /settings — changes are applied immediately without restart.
 package runtimecfg
 
 import (
@@ -11,7 +11,7 @@ import (
         "path/filepath"
         "sync"
 
-        "github.com/karimzakzouk/sentinel/v3/internal/api"
+        "github.com/karimzakzouk/sentinel/internal/api"
 )
 
 // RuntimeConfig holds editable settings. Only non-empty fields override env vars.

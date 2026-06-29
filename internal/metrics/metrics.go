@@ -1,15 +1,12 @@
 // Package metrics provides Prometheus instrumentation for Sentinel.
 //
-
-// "sentinel_incidents_total 0". Now exports real counters/histograms/gauges
-// so Sentinel's own health is observable in Prometheus/Grafana.
-//
-
-// is mutated from multiple goroutines (3 concurrent investigations + N LLM
-// calls + SSE broadcaster), so unsynchronized map writes triggered the race
-// detector under real load. A single sync.Mutex protects every field; the
-// critical sections are tiny (a map increment or a float64 add) so contention
-// is negligible for a single-pod system.
+// Exports real counters/histograms/gauges so Sentinel's own health is
+// observable in Prometheus/Grafana. The metricSet is mutated from multiple
+// goroutines (3 concurrent investigations + N LLM calls + SSE broadcaster),
+// so unsynchronized map writes triggered the race detector under real load.
+// A single sync.Mutex protects every field; the critical sections are tiny
+// (a map increment or a float64 add) so contention is negligible for a
+// single-pod system.
 //
 // Metrics exported:
 //
