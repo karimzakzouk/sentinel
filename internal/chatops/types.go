@@ -279,15 +279,16 @@ type AutoMergeClient interface {
 
 // AutoMergeInput is the input for the auto-merge policy.
 type AutoMergeInput struct {
-        IncidentID         string
-        Service            string
-        Namespace          string
-        FixType            string
-        HasSchemaMigration bool
-        IsHighRisk         bool
-        Confidence         float64
-        SandboxVerified    bool
-        PolicyVerdict      string
+        IncidentID          string
+        Service             string
+        Namespace           string
+        FixType             string
+        HasSchemaMigration  bool
+        IsHighRisk          bool
+        Confidence          float64
+        SandboxVerified     bool
+        PolicyVerdict       string
+        AutoMergeAnnotation bool
 }
 
 // AutoMergeStatus is the public state of the auto-merge policy.
