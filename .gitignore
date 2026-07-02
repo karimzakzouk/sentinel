@@ -43,3 +43,7 @@ dist/
 
 # OS
 Thumbs.db
+
+# Build artifacts (never commit binaries)
+/sentinel
+/sentinelctl
