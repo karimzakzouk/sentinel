@@ -94,7 +94,9 @@ func BuildPRBody(incident *schemas.Incident, sandboxVerified bool, sandboxSummar
                 b.WriteString("| Level | Check | Result |\n|-------|-------|--------|\n")
                 b.WriteString("| 1 | Canary pod starts and becomes Ready | ✅ Passed |\n")
                 b.WriteString("| 2 | All endpoints return 2xx/3xx | ✅ Passed |\n")
-                b.WriteString("| 3 | Original error is gone | ✅ Passed |\n\n")
+                b.WriteString("| 3 | Original error is gone | ✅ Passed |\n")
+                b.WriteString("| 4 | Regression test passes | ✅ Passed |\n")
+                b.WriteString("| 5 | Reproducer script passes | ✅ Passed |\n\n")
                 if canaryImage != "" {
                         b.WriteString(fmt.Sprintf("**Canary image:** `%s`\n\n", canaryImage))
                 }
