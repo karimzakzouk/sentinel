@@ -328,9 +328,9 @@ func (a *App) HandleInstallationEvent(ctx context.Context, payload []byte, webho
                 owner := event.Installation.Account.Login
                 repoName := repo.Name
                 if err := a.RegisterWebhook(ctx, owner, repoName, webhookURL, secret); err != nil {
-                        logging.Error("-app]  failed to register webhook on /", "value", owner, repoName, err)
+                        logging.Error("failed to register webhook", "value", owner, repoName, err)
                 } else {
-                        logging.Info("-app]  webhook registered on /", "value", owner, repoName)
+                        logging.Info("webhook registered", "value", owner, repoName)
                 }
         }
 

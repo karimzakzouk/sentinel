@@ -293,7 +293,7 @@ func (p *Pipeline) Run(ctx context.Context, state *schemas.AgentState) error {
                                 state.RetrievedIncidents = append(state.RetrievedIncidents, map[string]any{
                                         "regression_test": string(testJSON),
                                 })
-                                logging.Info("regression test generated:  (, )", "value", test.TestFile, test.TestFramework, test.TestLanguage)
+                                logging.Info("regression test generated", "value", test.TestFile, test.TestFramework, test.TestLanguage)
                         }
                 }
 
@@ -318,7 +318,7 @@ func (p *Pipeline) Run(ctx context.Context, state *schemas.AgentState) error {
                                 state.RetrievedIncidents = append(state.RetrievedIncidents, map[string]any{
                                         "reproducer": string(reproJSON),
                                 })
-                                logging.Info("reproducer script generated:  ()", "value", reproducer.ScriptFile, reproducer.ScriptLanguage)
+                                logging.Info("reproducer script generated", "value", reproducer.ScriptFile, reproducer.ScriptLanguage)
                         }
                 }
 

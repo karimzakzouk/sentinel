@@ -378,7 +378,7 @@ func (s *Server) handleGitHubApp(w http.ResponseWriter, r *http.Request) {
                         writeJSON(w, 500, map[string]string{"error": err.Error()})
                         return
                 }
-                logging.Info("GitHub App configured via /settings/github-app (app_id=, slug=)", "value", req.AppID, slug)
+                logging.Info("GitHub App configured", "value", req.AppID, slug)
                 writeJSON(w, 200, map[string]string{
                         "status": "configured",
                         "slug":   slug,

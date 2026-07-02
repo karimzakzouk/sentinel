@@ -208,7 +208,7 @@ func (s *Store) migrateSchema() error {
                 if _, err := s.db.Exec(fmt.Sprintf("ALTER TABLE incidents ADD COLUMN %s %s", a.name, a.decl)); err != nil {
                         return fmt.Errorf("alter table add %s: %w", a.name, err)
                 }
-                logging.Info("migration: added column  to incidents table", "name", a.name)
+                logging.Info("migration: added column to incidents table", "name", a.name)
         }
 
         // Add the (pr_repo, pr_number) index if it doesn't exist.

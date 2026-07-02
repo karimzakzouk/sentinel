@@ -196,7 +196,7 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
 
         podLogs, _ := a.k8s.FetchCrashingPodLogs(ctx, cluster.Service, cluster.Namespace)
         if podLogs != "" {
-                logging.Info("fetched  chars of pod logs via K8s API", "value", len(podLogs))
+                logging.Info("fetched pod logs via K8s API", "value", len(podLogs))
                 fullExplanation := cluster.Summary + "\n\n## Pod Logs (full, from K8s API)\n" + podLogs
                 if len(cluster.Anomalies) > 0 {
                         cluster.Anomalies[0].Explanation = fullExplanation
@@ -204,7 +204,7 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
                 state.Cluster = cluster
         } else {
                 podLogs = a.extractPodLogs(cluster)
-                logging.Info("K8s API logs unavailable, using  chars from detection", "value", len(podLogs))
+                logging.Info("K8s API logs unavailable, using detection logs", "value", len(podLogs))
         }
 
         // 0.5 MEMORY LOOP — query HNSW for similar past incidents.
@@ -292,7 +292,7 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
         // 2. Resolve which branch/commit to clone.
 
         branch := a.resolveBranch(ctx, state, repoName)
-        logging.Info("cloning repo @", "value", repoName, branch)
+        logging.Info("cloning repo", "value", repoName, branch)
 
         // 3. Clone the repo locally
 
@@ -311,7 +311,7 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
                 logging.Error("walk tree failed", "err", err)
                 return a.runWithoutRepo(ctx, state, podLogs)
         }
-        logging.Info("file tree:  files", "value", len(fileTree))
+        logging.Info("file tree", "value", len(fileTree))
 
         // 4. Round 1 — ask LLM what to search for
         // podLogs already fetched at the top of Run() via K8s API
@@ -363,7 +363,7 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
                         }
                 }
         }
-        logging.Info("search found  unique files", "value", len(allResults))
+        logging.Info("search found unique files", "value", len(allResults))
 
         // 6. Round 2 — ask LLM for hypotheses + files to read
 
@@ -381,7 +381,7 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
         // 7. Parse hypotheses
 
         rawHyps, _ := round2Result["hypotheses"].([]any)
-        logging.Info("round 2 returned  hypotheses", "value", len(rawHyps))
+        logging.Info("round 2 returned hypotheses", "value", len(rawHyps))
 
         var newHyps []schemas.Hypothesis
 
@@ -465,7 +465,7 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
                 }
         }
 
-        logging.Info("fetched  files", "value", len(fetched), keysOf(fetched))
+        logging.Info("fetched files", "value", len(fetched), keysOf(fetched))
 
         state.Hypotheses = newHyps
         state.FetchedCode = fetched

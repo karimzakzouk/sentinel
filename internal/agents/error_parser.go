@@ -502,7 +502,7 @@ func ExtractSearchQueriesUniversal(logs string) []string {
                 }
         }
 
-        logging.Info("extracted  search queries from  logs", "value", len(unique), parsed.Language, unique)
+        logging.Info("extracted search queries from logs", "value", len(unique), parsed.Language, unique)
         return unique
 }
 

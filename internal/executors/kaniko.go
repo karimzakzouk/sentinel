@@ -204,7 +204,7 @@ func (k *KanikoBuilder) Build(ctx context.Context, repo, branch string, fixedFil
                 fullImage = fmt.Sprintf("%s/%s:%s", k.registry, imageName, imageTag)
         }
 
-        logging.Info("starting build:  (repo=, branch=)", "value", fullImage, repo, branch)
+        logging.Info("starting Kaniko build", "value", fullImage, repo, branch)
 
         // 1. Create ConfigMap with the fixed files + manifest
 

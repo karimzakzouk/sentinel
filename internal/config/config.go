@@ -684,7 +684,7 @@ func loadLLMProviders() []schemas.ProviderConfig {
 			continue
 		}
 		if c.APIKey == "" && c.ProviderType != "ollama" && c.ProviderType != "vllm" {
-			logging.Info("LLM provider / has no apiKey — skipping", "value", c.ID, c.ProviderType)
+			logging.Info("LLM provider has no apiKey, skipping", "value", c.ID, c.ProviderType)
 			continue
 		}
 		valid = append(valid, c)

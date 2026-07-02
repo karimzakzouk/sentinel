@@ -122,7 +122,7 @@ func (m *Manager) Load() {
                 return
         }
         m.config = &cfg
-        logging.Info("loaded from  ( overrides)", "value", m.filePath, countOverrides(&cfg))
+        logging.Info("loaded runtime config", "value", m.filePath, countOverrides(&cfg))
 }
 
 func (m *Manager) Save(cfg *RuntimeConfig) error {
@@ -148,7 +148,7 @@ func (m *Manager) Save(cfg *RuntimeConfig) error {
                 return err
         }
         m.config = cfg
-        logging.Info("saved to  ( overrides)", "value", m.filePath, countOverrides(cfg))
+        logging.Info("saved runtime config", "value", m.filePath, countOverrides(cfg))
 
         // the callback is expected to be a fast field-copy, not I/O. If it
         // panics, the deferred unlock still runs (the panic propagates up

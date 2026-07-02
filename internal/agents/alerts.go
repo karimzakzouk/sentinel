@@ -30,7 +30,7 @@ func NewAlertSender(webhookURL string) *AlertSender {
 
 func (a *AlertSender) SendAlert(service, namespace, reason, prURL string) {
         if a.webhookURL == "" {
-                logging.Info("/ —", "value", namespace, service, reason)
+                logging.Info("alert", "value", namespace, service, reason)
                 return
         }
 
@@ -76,7 +76,7 @@ func (a *AlertSender) SendAlert(service, namespace, reason, prURL string) {
         resp, err := a.httpClient.Post(a.webhookURL, "application/json", bytes.NewReader(body))
         if err != nil {
                 logging.Error("Slack webhook failed:  — logging instead", "err", err)
-                logging.Info("/ —", "value", namespace, service, reason)
+                logging.Info("alert", "value", namespace, service, reason)
                 return
         }
         resp.Body.Close()

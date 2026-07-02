@@ -284,7 +284,7 @@ func (s *Store) ListRecentIncidents(ctx context.Context, limit int) ([]*schemas.
                 }
 
                 if err := json.Unmarshal([]byte(clusterJSON), &inc.Cluster); err != nil {
-                        logging.Info("skipping incident  with corrupt cluster JSON", "value", parsedID, err)
+                        logging.Info("skipping incident with corrupt cluster JSON", "value", parsedID, err)
                         continue
                 }
                 if err := json.Unmarshal([]byte(stateJSON), &inc.State); err != nil {

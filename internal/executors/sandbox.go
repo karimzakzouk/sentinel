@@ -180,7 +180,7 @@ func (s *SandboxRunner) Run(ctx context.Context, inc *schemas.Incident) SandboxR
         // sustainedWindow. During this window, we also stream canary logs to
         // check for the original error type (Level 3 primary oracle).
 
-        logging.Info("Level 1: waiting for canary pod Ready +  sustained window", "sustainedwindow", s.sustainedWindow)
+        logging.Info("Level 1: waiting for canary pod Ready + sustained window", "sustainedwindow", s.sustainedWindow)
         ready, canaryLogs := s.waitForReadyWithLogs(ctx, sandboxNS, fp.TargetService, 240*time.Second)
         if !ready {
                 summary := "canary_pods_not_ready_or_unstable (startup crash not fixed, or pod crashes after going Ready)"
@@ -279,7 +279,7 @@ func (s *SandboxRunner) Run(ctx context.Context, inc *schemas.Incident) SandboxR
                                         logging.Error("Level 5 FAILED but original error type  is gone from reproducer output — fix is correct, reproducer had wrong success criteria", "originalerrortype", originalErrorType)
                                         // Don't block — the fix works. L5 passes with a note.
                                 } else {
-                                        logging.Error("Level 5 FAILED: reproducer script crashed (original error type  still present)", "originalerrortype", originalErrorType)
+                                        logging.Error("Level 5 FAILED: reproducer script crashed", "originalerrortype", originalErrorType)
                                         return SandboxResult{
                                                 Verified:     false,
                                                 Summary:      fmt.Sprintf("reproducer_failed: %s", reproResult.Summary),

@@ -1,7 +1,7 @@
 package agents
 
 import (
-	"github.com/karimzakzouk/sentinel/internal/logging"
+        "github.com/karimzakzouk/sentinel/internal/logging"
         "context"
         "encoding/json"
         "fmt"
@@ -169,8 +169,13 @@ app/main.py
 >>>>>>> REPLACE
 
 Rules:
-- The SEARCH section MUST match the file exactly (whitespace, indentation, comments — everything)
-- Copy the search text character-for-character from the source code provided above
+- CRITICAL: The SEARCH section MUST be COPIED VERBATIM from the source code provided above.
+  Do NOT paraphrase. Do NOT summarize. Do NOT merge lines. Do NOT rename variables.
+  Copy the EXACT text, character-for-character, including all whitespace and indentation.
+  If the source code says "account = ACCOUNTS[account_id]" then your SEARCH block MUST say
+  "account = ACCOUNTS[account_id]" — NOT "balance = ACCOUNTS[account_id]" or any other variant.
+  The SEARCH block is a literal substring match — if even ONE character differs, it will fail.
+- Before writing each SEARCH block, look at the source code above and copy-paste the exact lines.
 - Keep blocks small (2-10 lines) — only the code that needs to change
 - Multiple blocks per file are OK if multiple spots need fixing
 - The file path goes on the line BEFORE <<<<<<< SEARCH
@@ -307,7 +312,7 @@ func (a *FixProposer) Run(ctx context.Context, state *schemas.AgentState) error 
                 }
 
                 attemptCtx, attemptCancel := context.WithTimeout(ctx, 120*time.Second)
-                logging.Info("attempt / (SEARCH/REPLACE format)", "value", attempt+1, maxRetries+1)
+                logging.Info("fix proposer attempt", "value", attempt+1, maxRetries+1)
                 rawOutput, llmErr := a.router.FrontierText(attemptCtx, fixProposerSystemPrompt, userMsg, 8000)
                 attemptCancel()
                 if llmErr != nil {
@@ -316,7 +321,7 @@ func (a *FixProposer) Run(ctx context.Context, state *schemas.AgentState) error 
                         continue
                 }
 
-                logging.Info("attempt : got  chars of output", "value", attempt+1, len(rawOutput))
+                logging.Info("got output", "value", attempt+1, len(rawOutput))
 
                 // Parse metadata JSON from the first line(s)
                 // The LLM outputs {"fix_type":"code_fix",...} before the SEARCH/REPLACE blocks
@@ -354,7 +359,7 @@ func (a *FixProposer) Run(ctx context.Context, state *schemas.AgentState) error 
                 if len(blocks) > 0 {
                         // We have SEARCH/REPLACE blocks — apply them to the source code
 
-                        logging.Info("attempt : parsed  SEARCH/REPLACE block(s)", "value", attempt+1, len(blocks))
+                        logging.Info("parsed SEARCH/REPLACE blocks", "value", attempt+1, len(blocks))
 
                         // Group blocks by file path
 
@@ -416,10 +421,10 @@ func (a *FixProposer) Run(ctx context.Context, state *schemas.AgentState) error 
                         }
 
                         if allApplied && len(files) > 0 {
-                                logging.Info("attempt  succeeded —  file(s),  block(s) applied", "value", attempt+1, len(files), len(blocks))
+                                logging.Info("fix attempt succeeded", "value", attempt+1, len(files), len(blocks))
                                 break
                         }
-                        logging.Error("attempt  failed", "value", attempt+1, lastError)
+                        logging.Error("fix attempt failed", "value", attempt+1, lastError)
                         continue
                 }
 
@@ -433,11 +438,11 @@ func (a *FixProposer) Run(ctx context.Context, state *schemas.AgentState) error 
                 }
 
                 lastError = "no SEARCH/REPLACE blocks or whole-file replacement found in LLM output"
-                logging.Error("attempt  failed", "value", attempt+1, lastError)
+                logging.Error("fix attempt failed", "value", attempt+1, lastError)
         }
 
         if len(files) == 0 {
-                logging.Error("all  attempts failed — no fix proposed", "value", maxRetries+1)
+                logging.Error("all fix attempts failed", "value", maxRetries+1)
                 state.Status = schemas.StatusFailed
                 s := fmt.Sprintf("fix_proposer_no_files_after_%d_attempts: %s", maxRetries+1, lastError)
                 state.Error = &s
@@ -502,26 +507,26 @@ func (a *FixProposer) buildUserMessage(state *schemas.AgentState) string {
         }
         parts = append(parts, "## Confirmed Root Cause")
         if state.RootCause == nil {
-        	return ""
+                return ""
         }
         parts = append(parts, fmt.Sprintf("- statement: %s", state.RootCause.Statement))
         if state.RootCause == nil {
-        	return ""
+                return ""
         }
         parts = append(parts, fmt.Sprintf("- category: %s", state.RootCause.Category))
         if state.RootCause == nil {
-        	return ""
+                return ""
         }
         parts = append(parts, fmt.Sprintf("- confidence: %.3f", state.RootCause.Confidence))
         if state.RootCause == nil {
-        	return ""
+                return ""
         }
         parts = append(parts, fmt.Sprintf("- has_schema_migration: %v", state.RootCause.HasSchemaMigration))
         if len(state.FetchedCode) > 0 {
                 parts = append(parts, fmt.Sprintf("- source_files: %v", keysOf(state.FetchedCode)))
         } else {
                 if state.RootCause == nil {
-                	return ""
+                        return ""
                 }
                 parts = append(parts, fmt.Sprintf("- source_files: %v", state.RootCause.SourceFiles))
         }

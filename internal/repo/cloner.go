@@ -123,13 +123,13 @@ func (c *Cloner) Clone(ctx context.Context, repo, ref string) (string, error) {
                                 Auth:         fetchAuth,
                         })
                         if err != nil && err != git.NoErrAlreadyUpToDate {
-                                logging.Error("fetch failed (), falling back to full clone", "value", c.sanitizeErr(err))
+                                logging.Error("fetch failed, falling back to full clone", "value", c.sanitizeErr(err))
                         } else {
                                 logging.Info("fetch succeeded, reusing existing clone at", "existingdir", existingDir)
                                 return existingDir, nil
                         }
                 } else {
-                        logging.Error("open existing clone failed (), falling back to full clone", "value", c.sanitizeErr(err))
+                        logging.Error("open existing clone failed, falling back to full clone", "value", c.sanitizeErr(err))
                 }
                 // If fetch failed, fall through to full clone below
                 // Clean up the old clone to avoid confusion
@@ -273,7 +273,7 @@ func isHex(s string) bool {
 
 func (c *Cloner) Cleanup(path string) {
         if err := os.RemoveAll(path); err != nil {
-                logging.Error("cleanup failed for", "value", path, err)
+                logging.Error("cleanup failed", "value", path, err)
         }
 }
 

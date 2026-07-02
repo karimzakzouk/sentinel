@@ -102,7 +102,7 @@ func (w *OutcomeWatcher) WatchWithDetails(ctx context.Context, service, namespac
 
         watchKey := fmt.Sprintf("%s/%s/%s", service, namespace, incidentID)
         if _, alreadyWatching := w.activeWatches.LoadOrStore(watchKey, true); alreadyWatching {
-                logging.Info("/ — watch already running, skipping duplicate (incident )", "value", service, namespace, incidentID)
+                logging.Info("watch already running, skipping duplicate", "value", service, namespace, incidentID)
                 return
         }
 

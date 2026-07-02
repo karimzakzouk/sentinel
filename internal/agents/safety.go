@@ -29,6 +29,6 @@ func truncateStr(s string, maxLen int) string {
 
 func recoverPanic(agentName string) {
 	if r := recover(); r != nil {
-		logging.Info("agent  recovered", "value", agentName, r)
+		logging.Info("agent panic recovered", "value", agentName, r)
 	}
 }

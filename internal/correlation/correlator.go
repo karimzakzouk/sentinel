@@ -109,7 +109,7 @@ func (c *Correlator) RegisterDeployment(service, namespace string, ts time.Time)
         defer c.mu.Unlock()
         key := service + "/" + namespace
         c.deployments[key] = ts
-        logging.Info("deployment registered:  at", "value", key, ts)
+        logging.Info("deployment registered", "value", key, ts)
         // Clean old deployments
 
         c.cleanupDeployments(ts)
@@ -172,7 +172,7 @@ func (c *Correlator) checkAndBuildEvent(service, namespace string, ts time.Time)
         // Check cooldown — don't re-emit for the same cascade
 
         if time.Since(c.lastEmission) < c.cooldownDuration {
-                logging.Info("cascade detected ( services) but in cooldown — suppressing", "value", len(distinctServices))
+                logging.Info("cascade detected but in cooldown, suppressing", "value", len(distinctServices))
                 return CorrelationEvent{}, false
         }
 
