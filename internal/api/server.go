@@ -281,13 +281,17 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
                         return
                 }
 
-                // All endpoints except healthz/readyz/metrics require auth.
-                // The embedded UI shows a login gate (token input) on first visit.
-                // If apiToken is empty (not configured), all endpoints are open
-                // (the startup log warns about this).
+                // Public routes: healthz/readyz/metrics (kubelet + Prometheus),
+                // the web UI itself (/ and /index.html), and static assets
+                // (/_next/* — JS/CSS/images). These contain no data — just
+                // HTML/JS that renders the login gate. Data is fetched via
+                // authenticated API calls from the browser.
                 isPublic := r.URL.Path == "/healthz" ||
                         r.URL.Path == "/readyz" ||
-                        r.URL.Path == "/metrics"
+                        r.URL.Path == "/metrics" ||
+                        r.URL.Path == "/" ||
+                        r.URL.Path == "/index.html" ||
+                        strings.HasPrefix(r.URL.Path, "/_next/")
 
                 if isPublic {
                         next.ServeHTTP(w, r)
