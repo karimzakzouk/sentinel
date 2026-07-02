@@ -137,6 +137,7 @@ func parseErrorTypeLine(line, fullLogs string) *ParsedError {
                 pe := &ParsedError{
                         ErrorType: m[1],
                         RawLine:   line,
+				Function:   extractFunction(line),
                 }
                 if len(m) >= 3 {
                         pe.ErrorDetail = strings.TrimSpace(m[2])
@@ -150,6 +151,7 @@ func parseErrorTypeLine(line, fullLogs string) *ParsedError {
                 pe := &ParsedError{
                         ErrorType: m[1],
                         RawLine:   line,
+				Function:   extractFunction(line),
                         Language:  detectLanguage(m[1], fullLogs),
                 }
                 pe.SourceFile, pe.SourceLine = extractFileAndLine(fullLogs)
@@ -163,6 +165,7 @@ func parseErrorTypeLine(line, fullLogs string) *ParsedError {
                 pe := &ParsedError{
                         ErrorType: "panic",
                         RawLine:   line,
+				Function:   extractFunction(line),
                 }
                 if len(m) >= 2 && m[1] != "" {
                         pe.ErrorDetail = strings.TrimSpace(m[1])
@@ -181,6 +184,7 @@ func parseErrorTypeLine(line, fullLogs string) *ParsedError {
                         ErrorType:  m[1],
                         ErrorDetail: strings.TrimSpace(m[2]),
                         RawLine:    line,
+				Function:   extractFunction(line),
                         Language:   detectLanguage(m[1], fullLogs),
                 }
                 pe.SourceFile, pe.SourceLine = extractFileAndLine(fullLogs)
@@ -197,6 +201,7 @@ func parseSignalLine(line, fullLogs string) *ParsedError {
                 pe := &ParsedError{
                         ErrorType: m[1],
                         RawLine:   line,
+				Function:   extractFunction(line),
                         Language:  detectLanguage(m[1], fullLogs),
                 }
                 pe.SourceFile, pe.SourceLine = extractFileAndLine(fullLogs)
@@ -238,6 +243,7 @@ func parseFileLine(line, fullLogs string) *ParsedError {
                 SourceLine: fileLine,
                 Language:   detectLanguage("", fullLogs),
                 RawLine:    line,
+				Function:   extractFunction(line),
         }
 }
 
@@ -587,3 +593,72 @@ func extractMethod(logLine string) string {
         }
         return "GET"
 }
+
+// extractFunction extracts the function/method name from a stack trace
+// frame line. Works universally across all languages by finding the
+// identifier that appears near the file:line reference.
+//
+// How it works — every stack trace frame in every language has a function
+// name positioned predictably relative to the file:line:
+//
+//	Python:  File "app.py", line 70, in get_config        → after "in "
+//	Go:      main.get_config(main.go:70)                   → before "("
+//	Java:    at com.acme.Foo.get_config(Foo.java:70)      → before "("
+//	JS:      at get_config (/app/index.js:70:5)            → before "("
+//	Rust:    at get_config::handler (src/main.rs:70:5)     → before "("
+//	Ruby:    /app/app.rb:70:in `get_config'               → after "in `"
+//	C#:      at get_config() in /app/Program.cs:line 70    → before "()"
+//
+// Universal strategy:
+//  1. Try "in <name>" pattern (Python, Ruby, C#)
+//  2. Try "<name>(" pattern before the file:line (Go, Java, JS, Rust)
+//  3. Try "<name>::" pattern (Rust module paths)
+//  4. Try "at <name>" pattern (Java, JS, C#, Rust)
+func extractFunction(rawLine string) string {
+	if rawLine == "" {
+		return ""
+	}
+
+	// Pattern 1: "in <name>" — Python, Ruby, C#
+	// Python: File "app.py", line 70, in get_config
+	// Ruby:   /app.rb:70:in `get_config'
+	// C#:     at get_config() in /app/Program.cs:line 70 (different — name before "in")
+	if m := inFunctionRe.FindStringSubmatch(rawLine); m != nil {
+		return m[1]
+	}
+
+	// Pattern 2: "<name>(" — Go, Java, JS, Rust, C#
+	// Go:    main.get_config(main.go:70)
+	// Java:  at com.acme.Foo.get_config(Foo.java:70)
+	// JS:    at get_config (/app/index.js:70:5)
+	// Rust:  at get_config::handler (src/main.rs:70)
+	// C#:    at get_config() in /app/Program.cs:line 70
+	if m := callFunctionRe.FindStringSubmatch(rawLine); m != nil {
+		return m[1]
+	}
+
+	// Pattern 3: "<name>::" — Rust module paths without parens
+	// get_config::handler
+	if m := rustFunctionRe.FindStringSubmatch(rawLine); m != nil {
+		return m[1]
+	}
+
+	return ""
+}
+
+// Pre-compiled regexes for function extraction.
+// Three patterns cover ALL languages — not language-specific, just
+// position-specific (where the function name sits relative to file:line).
+var (
+	// "in <name>" — captures the function name after "in " or "in `"
+	// Matches: Python "in get_config", Ruby "in `get_config'", C# "in get_config"
+	inFunctionRe = regexp.MustCompile(`\bin\s+` + "`?" + `([\w.<>]+)` + "`?" + `'?`)
+
+	// "<name>(" — captures the function name before "(" on a frame line
+	// Matches: Go "main.get_config(", Java "Foo.get_config(", JS "get_config ("
+	// Captures the last identifier before "(" (e.g. "main.foo" → "foo")
+	callFunctionRe = regexp.MustCompile(`(?:at\s+)?([\w.<>]+)\s*\(`)
+
+	// "<name>::" — captures Rust module::function paths
+	rustFunctionRe = regexp.MustCompile(`([\w]+::[\w:]+)`)
+)

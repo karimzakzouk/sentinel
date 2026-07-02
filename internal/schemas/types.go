@@ -346,6 +346,11 @@ type ParsedError struct {
 
 	SourceLine string
 
+	// Function is the function/method name extracted from the stack
+	// trace frame (e.g. "get_config", "main.handler", "Foo.bar").
+	// Universal — works across Python, Go, Java, JS, Rust, Ruby, C#.
+	Function string
+
 	// Language is the detected language: "python", "go", "java",
 	// "javascript", "rust", or "unknown".
 
