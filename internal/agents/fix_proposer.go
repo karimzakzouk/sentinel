@@ -311,7 +311,10 @@ func (a *FixProposer) Run(ctx context.Context, state *schemas.AgentState) error 
                         userMsg = a.buildUserMessage(state) + retryHint
                 }
 
-                attemptCtx, attemptCancel := context.WithTimeout(ctx, 120*time.Second)
+                // Per-attempt timeout: use the remaining context time, capped at 300s.
+                // Nemotron Ultra 550B (free) can take 3-5 minutes to generate code.
+                // The old hardcoded 120s was too short for large models.
+                attemptCtx, attemptCancel := context.WithTimeout(ctx, 300*time.Second)
                 logging.Info("fix proposer attempt", "value", attempt+1, maxRetries+1)
                 rawOutput, llmErr := a.router.FrontierText(attemptCtx, fixProposerSystemPrompt, userMsg, 8000)
                 attemptCancel()
