@@ -4,8 +4,8 @@
 package api
 
 import (
-	"github.com/karimzakzouk/sentinel/internal/logging"
-	"net/http/pprof"
+        "github.com/karimzakzouk/sentinel/internal/logging"
+        "net/http/pprof"
         "bytes"
         "encoding/json"
         "fmt"
@@ -22,7 +22,12 @@ import (
 )
 
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
-        writeJSON(w, 200, map[string]string{"status": "ok", "service": "core", "version": version.Version})
+        writeJSON(w, 200, map[string]any{
+                "status":          "ok",
+                "service":         "core",
+                "version":         version.Version,
+                "auth_required":   s.apiToken != "",
+        })
 }
 
 func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
@@ -480,5 +485,5 @@ func (s *Server) handleWebUI(w http.ResponseWriter, r *http.Request) {
 // Usage: `go tool pprof http://sentinel.sentinel.svc:8000/debug/pprof/heap`
 
 func (s *Server) handlePprof(w http.ResponseWriter, r *http.Request) {
-	pprof.Index(w, r)
+        pprof.Index(w, r)
 }

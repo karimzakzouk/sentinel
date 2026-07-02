@@ -16,7 +16,9 @@ import { MetricsSection } from "@/components/sections/metrics";
 import { SettingsSection } from "@/components/sections/settings";
 import { ApiExplorerSection } from "@/components/sections/api-explorer";
 import { useSentinelStore, useSSE, useAutoRefresh, type SectionId } from "@/lib/store";
-import { Clock, Search, Wifi, WifiOff, Activity } from "lucide-react";
+import { LoginGate } from "@/components/sentinel/login-gate";
+import { Clock, Search, Wifi, WifiOff, Activity, LogOut } from "lucide-react";
+import { clearToken } from "@/lib/api";
 
 const titles: Record<SectionId, { title: string; sub: string }> = {
   dashboard: { title: "Dashboard", sub: "Operational overview — last 7 days" },
@@ -76,6 +78,7 @@ export default function Home() {
   const meta = titles[active] ?? titles.dashboard;
 
   return (
+    <LoginGate>
     <div className="flex h-screen overflow-hidden bg-background">
       <Sidebar />
 
@@ -128,6 +131,15 @@ export default function Home() {
               <Clock className="h-3 w-3 text-zinc-500" />
               <ClockBadge />
             </div>
+
+            {/* Logout */}
+            <button
+              onClick={() => { clearToken(); window.location.reload(); }}
+              className="flex items-center gap-1.5 rounded-md border border-zinc-800 bg-zinc-900/60 px-2.5 py-1.5 text-[11px] text-zinc-500 transition-colors hover:border-zinc-700 hover:bg-zinc-900 hover:text-zinc-300"
+              title="Disconnect"
+            >
+              <LogOut className="h-3 w-3" />
+            </button>
           </div>
         </header>
 
@@ -150,5 +162,6 @@ export default function Home() {
 
       <CommandPalette />
     </div>
+    </LoginGate>
   );
 }

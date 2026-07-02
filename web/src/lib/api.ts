@@ -1,4 +1,5 @@
 // Sentinel API client — thin fetch wrapper with SSE support
+// All requests automatically include the API token from localStorage.
 
 import type {
   Incident,
@@ -19,13 +20,36 @@ export type {
   MetricsSummary,
 };
 
-const API_BASE = ""; // same origin (Sentinel serves the UI on the same port as the API)
+const API_BASE = ""; // same origin
+
+const TOKEN_KEY = "sentinel_api_token";
+
+export function getToken(): string | null {
+  if (typeof window === "undefined") return null;
+  return localStorage.getItem(TOKEN_KEY);
+}
+
+export function setToken(token: string): void {
+  if (typeof window === "undefined") return;
+  localStorage.setItem(TOKEN_KEY, token);
+}
+
+export function clearToken(): void {
+  if (typeof window === "undefined") return;
+  localStorage.removeItem(TOKEN_KEY);
+}
+
+function authHeaders(): Record<string, string> {
+  const token = getToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
 
 async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     ...init,
     headers: {
       "Content-Type": "application/json",
+      ...authHeaders(),
       ...(init?.headers || {}),
     },
   });
@@ -34,6 +58,24 @@ async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
     throw new Error(`${res.status} ${res.statusText}: ${text}`);
   }
   return res.json() as Promise<T>;
+}
+
+// ─── Health ─────────────────────────────────────────────────────────────────
+
+export interface HealthResponse {
+  status: string;
+  service?: string;
+  version?: string;
+  auth_required?: boolean;
+}
+
+export async function getHealth(): Promise<HealthResponse> {
+  // Health endpoint is always public — no auth needed
+  const res = await fetch(`${API_BASE}/healthz`);
+  if (!res.ok) {
+    return { status: "error" };
+  }
+  return res.json();
 }
 
 // ─── Incidents ──────────────────────────────────────────────────────────────
@@ -60,26 +102,22 @@ export async function getIncident(id: string): Promise<Incident> {
 export async function triggerInvestigation(
   service: string,
   namespace: string,
-  token?: string,
 ): Promise<{ incident_id: string }> {
   return fetchJSON(`/admin/investigate`, {
     method: "POST",
     body: JSON.stringify({ service, namespace }),
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
 }
 
-export async function pauseAutonomous(durationMin: number, token?: string): Promise<void> {
+export async function pauseAutonomous(durationMin: number): Promise<void> {
   await fetchJSON(`/admin/pause?duration=${durationMin}m`, {
     method: "POST",
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
 }
 
-export async function resumeAutonomous(token?: string): Promise<void> {
+export async function resumeAutonomous(): Promise<void> {
   await fetchJSON(`/admin/resume`, {
     method: "POST",
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
 }
 
@@ -104,12 +142,10 @@ export async function getRuntimeConfig(): Promise<RuntimeConfig> {
 
 export async function updateRuntimeConfig(
   cfg: Partial<RuntimeConfig>,
-  token?: string,
 ): Promise<RuntimeConfig> {
   return fetchJSON<RuntimeConfig>(`/settings`, {
     method: "PUT",
     body: JSON.stringify(cfg),
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
 }
 
@@ -124,12 +160,15 @@ export async function getMetricsSummary(): Promise<MetricsSummary> {
 }
 
 // ─── SSE ────────────────────────────────────────────────────────────────────
+// EventSource can't set Authorization headers, so pass token via query param.
 
 export function subscribeToEvents(
   onEvent: (event: { type: string; data: Record<string, unknown> }) => void,
   onError?: (err: Event) => void,
 ): EventSource {
-  const es = new EventSource(`/events`);
+  const token = getToken();
+  const url = token ? `/events?token=${encodeURIComponent(token)}` : `/events`;
+  const es = new EventSource(url);
   es.onmessage = (msg) => {
     try {
       const parsed = JSON.parse(msg.data);
@@ -144,8 +183,15 @@ export function subscribeToEvents(
   return es;
 }
 
-// ─── Health ─────────────────────────────────────────────────────────────────
+// ─── Auth ───────────────────────────────────────────────────────────────────
 
-export async function getHealth(): Promise<{ status: string; version: string }> {
-  return fetchJSON(`/healthz`);
+export async function validateToken(token: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${API_BASE}/incidents?last=1s`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
 }

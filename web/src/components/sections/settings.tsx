@@ -512,7 +512,7 @@ export function SettingsSection() {
         toast({ title: "No changes to save" });
         return;
       }
-      const updated = await updateRuntimeConfig(diff, apiToken || undefined);
+      const updated = await updateRuntimeConfig(diff);
       useSentinelStore.setState({ runtimeConfig: updated });
       setDraft({ ...updated });
       toast({

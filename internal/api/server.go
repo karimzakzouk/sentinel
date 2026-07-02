@@ -281,22 +281,30 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
                         return
                 }
 
-                isAdmin := strings.HasPrefix(r.URL.Path, "/admin/") ||
-                                strings.HasPrefix(r.URL.Path, "/debug/pprof/")
-                isSettingsWrite := r.URL.Path == "/settings" && r.Method == http.MethodPost
+                // All endpoints except healthz/readyz/metrics require auth.
+                // The embedded UI shows a login gate (token input) on first visit.
+                // If apiToken is empty (not configured), all endpoints are open
+                // (the startup log warns about this).
+                isPublic := r.URL.Path == "/healthz" ||
+                        r.URL.Path == "/readyz" ||
+                        r.URL.Path == "/metrics"
 
-                // repo, branch, PR URL) is sensitive.
-                // access could read every incident.
-
-                isIncidentsRead := strings.HasPrefix(r.URL.Path, "/incidents") ||
-                        r.URL.Path == "/events"
-
-                if !isAdmin && !isSettingsWrite && !isIncidentsRead {
+                if isPublic {
                         next.ServeHTTP(w, r)
                         return
                 }
 
-                // Require bearer token.
+                // SSE (EventSource) can't set Authorization headers, so accept
+                // the token via ?token= query param for /events only.
+                if r.URL.Path == "/events" && s.apiToken != "" {
+                        token := r.URL.Query().Get("token")
+                        if token != "" && secureCompare(token, s.apiToken) {
+                                next.ServeHTTP(w, r)
+                                return
+                        }
+                }
+
+                // Require bearer token for everything else.
 
                 authHeader := r.Header.Get("Authorization")
                 const prefix = "Bearer "
