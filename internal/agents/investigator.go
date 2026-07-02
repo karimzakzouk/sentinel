@@ -5,7 +5,8 @@ import (
         "context"
         "fmt"
         "log"
-        "strings"
+        "regexp"
+	"strings"
 
         "github.com/karimzakzouk/sentinel/internal/depanalysis"
         "github.com/karimzakzouk/sentinel/internal/k8s"
@@ -598,6 +599,58 @@ func (a *Investigator) extractPodLogs(cluster schemas.AnomalyCluster) string {
         return allText
 }
 
+
+// extractCrashLocation extracts the exact crash location from pod logs.
+// Returns a formatted string like:
+//   File: app/main.py
+//   Line: 70
+//   Function: get_config
+//   Error: AttributeError: 'NoneType' object has no attribute 'upper'
+//   Crash line: value = config.get(key).upper()
+//
+// This is placed at the TOP of the investigator prompt so the LLM focuses
+// on the ACTUAL crash, not on other similar-looking code in the file.
+func extractCrashLocation(podLogs string) string {
+	parsed := ParseError(podLogs)
+	if parsed == nil {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString("## CRASH LOCATION (from traceback — THIS is the bug, not other code in the file)\n")
+	sb.WriteString(fmt.Sprintf("- Error type: %s\n", parsed.ErrorType))
+	if parsed.ErrorDetail != "" {
+		sb.WriteString(fmt.Sprintf("- Error detail: %s\n", parsed.ErrorDetail))
+	}
+	if parsed.SourceFile != "" {
+		sb.WriteString(fmt.Sprintf("- Source file: %s\n", parsed.SourceFile))
+	}
+	if parsed.SourceLine != "" {
+		sb.WriteString(fmt.Sprintf("- Source line: %s\n", parsed.SourceLine))
+	}
+	if parsed.RawLine != "" {
+		sb.WriteString(fmt.Sprintf("- Crash line: %s\n", parsed.RawLine))
+	}
+
+	// Try to extract function name from Python traceback
+	// Pattern: File "path", line N, in function_name
+	funcRe := regexp.MustCompile(`File "[^"]+", line \d+, in (\w+)`)
+	if m := funcRe.FindStringSubmatch(podLogs); m != nil {
+		sb.WriteString(fmt.Sprintf("- Function: %s\n", m[1]))
+	}
+
+	// Try to extract function name from Go panic
+	// Pattern: main.function_name(...)
+	goRe := regexp.MustCompile(`main\.(\w+)\(`)
+	if m := goRe.FindStringSubmatch(podLogs); m != nil {
+		sb.WriteString(fmt.Sprintf("- Function: %s\n", m[1]))
+	}
+
+	sb.WriteString("\nIMPORTANT: The crash is in the function/file/line above. Do NOT form hypotheses about OTHER functions in the same file — they may have similar bugs but are NOT the crash you need to fix.\n")
+
+	return sb.String()
+}
+
 func (a *Investigator) buildRound1Message(state *schemas.AgentState, podLogs string, fileTree []string) string {
         var parts []string
         parts = append(parts, fmt.Sprintf("# Service: %s", state.Cluster.Service))
@@ -614,6 +667,10 @@ func (a *Investigator) buildRound1Message(state *schemas.AgentState, podLogs str
                 parts = append(parts, fmt.Sprintf("## Detected Language: %s", lang))
                 parts = append(parts, "")
         }
+	// CRASH LOCATION — focus the LLM on the actual crash, not other code
+	if crashLoc := extractCrashLocation(podLogs); crashLoc != "" {
+		parts = append(parts, crashLoc)
+	}
         parts = append(parts, "## Pod Logs")
         if podLogs != "" {
                 // Cap logs to 4KB for the LLM
@@ -647,6 +704,10 @@ func (a *Investigator) buildRound2Message(state *schemas.AgentState, podLogs str
                 parts = append(parts, fmt.Sprintf("## Detected Language: %s", lang))
                 parts = append(parts, "")
         }
+	// CRASH LOCATION — focus the LLM on the actual crash, not other code
+	if crashLoc := extractCrashLocation(podLogs); crashLoc != "" {
+		parts = append(parts, crashLoc)
+	}
         parts = append(parts, "## Pod Logs")
         if podLogs != "" {
                 if len(podLogs) > 4096 {
