@@ -133,7 +133,13 @@ func (g *TestGenerator) buildUserMessage(state *schemas.AgentState) string {
         // Root cause
 
         parts = append(parts, "## Root Cause")
+        if state.RootCause == nil {
+        	return ""
+        }
         parts = append(parts, fmt.Sprintf("- statement: %s", state.RootCause.Statement))
+        if state.RootCause == nil {
+        	return ""
+        }
         parts = append(parts, fmt.Sprintf("- category: %s", state.RootCause.Category))
         parts = append(parts, "")
 

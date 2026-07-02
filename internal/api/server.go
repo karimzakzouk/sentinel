@@ -2,7 +2,7 @@
 package api
 
 import (
-	"github.com/karimzakzouk/sentinel/internal/logging"
+        "github.com/karimzakzouk/sentinel/internal/logging"
         "context"
         "crypto/subtle"
         "log"
@@ -288,7 +288,8 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
                 // repo, branch, PR URL) is sensitive.
                 // access could read every incident.
 
-                isIncidentsRead := strings.HasPrefix(r.URL.Path, "/incidents")
+                isIncidentsRead := strings.HasPrefix(r.URL.Path, "/incidents") ||
+                        r.URL.Path == "/events"
 
                 if !isAdmin && !isSettingsWrite && !isIncidentsRead {
                         next.ServeHTTP(w, r)

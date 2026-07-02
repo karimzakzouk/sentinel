@@ -148,17 +148,22 @@ func executeCodeFix(
         sandboxSummary := "skipped (sandbox disabled)"
         sandboxRan := false
 
+        LockCfg()
         shouldRunSandbox := cfg.SandboxEnabled
+        skipNonProd := cfg.SkipSandboxNonProd
+        isProd := cfg.IsProductionNamespace(fp.TargetNamespace)
+        hasDockerCreds := cfg.DockerHubToken != ""
+        UnlockCfg()
         if !shouldRunSandbox {
                 sandboxSummary = "skipped (sandbox disabled — fast mode)"
                 logging.Info("sandbox disabled (SENTINEL_SANDBOX_ENABLED=false) — opening PR without verification",
                         "fix_id", fp.FixID)
-        } else if cfg.SkipSandboxNonProd && !cfg.IsProductionNamespace(fp.TargetNamespace) {
+        } else if skipNonProd && !isProd {
                 sandboxSummary = "skipped (non-production namespace — fast mode)"
                 logging.Info("skipping sandbox for non-production namespace (fast mode)",
                         "fix_id", fp.FixID, "namespace", fp.TargetNamespace)
                 shouldRunSandbox = false
-        } else if cfg.DockerHubToken == "" {
+        } else if !hasDockerCreds {
                 sandboxSummary = "skipped (no Docker Hub credentials)"
                 logging.Info("skipping sandbox — no Docker Hub credentials configured",
                         "fix_id", fp.FixID)
@@ -167,7 +172,9 @@ func executeCodeFix(
 
         if shouldRunSandbox {
                 sandboxRan = true
+                LockCfg()
                 maxRetries := cfg.SandboxMaxRetries
+                UnlockCfg()
                 if maxRetries < 0 {
                         maxRetries = 0
                 }
@@ -295,7 +302,10 @@ func executeCodeFix(
                 }
         }
 
-        if sandboxRan && !sandboxVerified && cfg.SandboxRequired {
+        LockCfg()
+        sandboxRequired := cfg.SandboxRequired
+        UnlockCfg()
+        if sandboxRan && !sandboxVerified && sandboxRequired {
                 logging.Error("sandbox verification failed and sandbox is required — not opening PR",
                         "fix_id", fp.FixID, "summary", sandboxSummary)
                 return fmt.Errorf("sandbox_required_and_failed: %s", sandboxSummary)
@@ -377,7 +387,7 @@ func executeCodeFix(
                         PRNumber:         prResult.PRNumber,
                         PRRepo:           repoName,
                         Confidence:       0,
-                        AutoMergeEnabled: cfg.AutoMergeEnabled,
+                        AutoMergeEnabled: func() bool { LockCfg(); v := cfg.AutoMergeEnabled; UnlockCfg(); return v }(),
                 }
                 if incident.State.RootCause != nil {
                         chatopsInc.RootCause = incident.State.RootCause.Statement
@@ -396,7 +406,11 @@ func executeCodeFix(
         // which updates the status comment to "✅ Merged". If we post the initial
         // comment after this, it overwrites "✅ Merged" with "⏳ Queued".
 
-        if merger := getAutoMergeMerger(); merger != nil && repoName != "" && cfg.AutoMergeEnabled {
+        merger := getAutoMergeMerger()
+        LockCfg()
+        autoMergeEnabled := cfg.AutoMergeEnabled
+        UnlockCfg()
+        if merger != nil && repoName != "" && autoMergeEnabled {
                 baseBranch := "main"
                 if fp.BaseBranch != nil {
                         baseBranch = *fp.BaseBranch

@@ -96,3 +96,31 @@ func withPkgWriteLock(fn func()) {
         defer pkgMu.Unlock()
         fn()
 }
+
+// cfgMu protects the *config.Config fields that are mutated at runtime
+// via the runtimecfg callback. Without this, changing settings via the
+// web UI during an active investigation is a data race.
+var cfgMu sync.RWMutex
+
+// LockCfg acquires a read lock on the config. Use when reading multiple
+// cfg fields that must be consistent (e.g. SandboxEnabled + SandboxMaxRetries).
+func LockCfg()   { cfgMu.RLock() }
+func UnlockCfg() { cfgMu.RUnlock() }
+
+// LockCfgWrite acquires a write lock for mutating config fields.
+func LockCfgWrite()   { cfgMu.Lock() }
+func UnlockCfgWrite() { cfgMu.Unlock() }
+
+// getChatopsStatusManager returns the chatops status comment manager under a read lock.
+func getChatopsStatusManager() chatops.StatusCommentManager {
+	pkgMu.RLock()
+	defer pkgMu.RUnlock()
+	return chatopsStatusManager
+}
+
+// setChatopsStatusManager sets the chatops status comment manager under a write lock.
+func setChatopsStatusManager(m chatops.StatusCommentManager) {
+	pkgMu.Lock()
+	defer pkgMu.Unlock()
+	chatopsStatusManager = m
+}

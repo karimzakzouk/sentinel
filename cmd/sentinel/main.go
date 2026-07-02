@@ -1,5 +1,5 @@
-// Package main is the Sentinel v3 single-binary entrypoint.
-// One binary, one process, one pod. ~25MB image.
+// Package main is the Sentinel server entrypoint.
+// One binary, one process, one pod. 36MB image.
 package main
 
 import (
@@ -10,7 +10,8 @@ import (
         "net/http"
         "os"
         "os/signal"
-        "sync"
+        "strings"
+	"sync"
         "sync/atomic"
         "syscall"
         "time"
@@ -79,8 +80,7 @@ func main() {
                 listenAddr = *addr
         }
 
-        // on missing required fields instead of crashing 5-10 minutes later
-        // at the first LLM call.
+                // at the first LLM call.
 
         if errs, warns := cfg.Validate(); len(errs) > 0 || len(warns) > 0 {
                 // Initialize logger first so warnings are structured
@@ -125,8 +125,7 @@ func main() {
                 )
         }
 
-        //json which doesn't exist when
-        // running locally (outside K8s). Defaults to /data/runtime-config.json
+                // running locally (outside K8s). Defaults to /data/runtime-config.json
         // for in-cluster deployments, but operators running locally can set
         // SENTINEL_RUNTIME_CONFIG_PATH=/tmp/runtime-config.json or similar.
 
@@ -229,8 +228,8 @@ func main() {
                         "fast_model", fastModel, "frontier_model", frontierModel,
                         "api_key_set", apiKey != "", "base_url_changed", baseURL != "")
 
-                // silently dropped (the headline feature was dead code via the web UI).
-
+                
+                LockCfgWrite()
                 if rc.SandboxEnabled != nil {
                         cfg.SandboxEnabled = *rc.SandboxEnabled
                         logging.Info("sandbox enabled reconfigured", "enabled", cfg.SandboxEnabled)
@@ -261,6 +260,7 @@ func main() {
                 if rc.LLMMaxRetries > 0 {
                         cfg.LLMMaxRetries = rc.LLMMaxRetries
                 }
+                UnlockCfgWrite()
                 if rc.LogLevel != "" {
                         logging.Init(rc.LogLevel)
                 }
@@ -339,8 +339,7 @@ func main() {
         pipeline.SetGitHost(cfg.GitHost)
         pipeline.SetDefaultBranch(cfg.DefaultBranch)
 
-        // Were hardcoded 0.4 + 5 in analyst.go + schemas/types.go.
-
+        
         pipeline.SetLLMPriorWeight(cfg.LLMPriorWeight)
         pipeline.SetMaxIterations(cfg.MaxPipelineIterations)
 
@@ -352,8 +351,7 @@ func main() {
                 WithHighRiskServices(cfg.HighRiskServices)
 
         // 6. Executors
-        // the GitHub executor ( + #6).
-        // github.com + https://api.github.com + "main" in 14+ sites.
+                // github.com + https://api.github.com + "main" in 14+ sites.
 
         ghExec := executors.NewGitHub(cfg.GitHubToken).
                 WithAPIURL(cfg.GitHubAPIURL).
@@ -410,8 +408,7 @@ func main() {
                 }
         }()
 
-        // LLM API quota exhaustion during incident storms (Claude's review).
-
+        
 
         maxConcurrent := cfg.MaxConcurrentInvestigations
         if maxConcurrent <= 0 {
@@ -484,8 +481,7 @@ func main() {
                         "timestamp": time.Now().UTC().Format(time.RFC3339),
                 })
 
-                // from this handler can be correlated in Datadog/Loki.
-
+                
                 invCtx := logging.WithIncidentID(ctx, incident.IncidentID.String())
 
                 _ = store.AppendEvent(ctx, incident.IncidentID, "reasoning", "investigation_started", nil,
@@ -500,7 +496,10 @@ func main() {
                         "timestamp": time.Now().UTC().Format(time.RFC3339),
                 })
 
-                investigationCtx, cancel := context.WithTimeout(ctx, time.Duration(cfg.InvestigationTimeout)*time.Second)
+                LockCfg()
+                        invTimeout := cfg.InvestigationTimeout
+                        UnlockCfg()
+                        investigationCtx, cancel := context.WithTimeout(ctx, time.Duration(invTimeout)*time.Second)
                 defer cancel()
 
                 if err := pipeline.Run(investigationCtx, &incident.State); err != nil {
@@ -608,7 +607,10 @@ func main() {
                         "timestamp": time.Now().UTC().Format(time.RFC3339),
                 })
 
-                if !cfg.CanWriteTo(fp.TargetNamespace) {
+                LockCfg()
+                        canWrite := cfg.CanWriteTo(fp.TargetNamespace)
+                        UnlockCfg()
+                        if !canWrite {
                         logging.WarnCtx(invCtx, "execution denied — namespace not in allowlist", "namespace", fp.TargetNamespace)
                         incident.Status = schemas.StatusEscalated
                         if err := store.UpsertIncident(ctx, &incident); err != nil {
@@ -685,9 +687,6 @@ func main() {
 
                 // Send Slack alert with PR URL if available
 
-                if incident.State.ExecutionResult != nil && incident.State.ExecutionResult.PRURL != nil {
-                        prURL = *incident.State.ExecutionResult.PRURL
-                }
                 alertSender.SendAlert(incident.Cluster.Service, incident.Cluster.Namespace, incident.Cluster.Summary, prURL)
 
                 // Start outcome watcher (monitors service recovery for 10 min)
@@ -826,7 +825,10 @@ func main() {
 
                 explanation := fmt.Sprintf("Auto-detected incident: %s", reason)
                 if podLogs != "" {
-                        explanation += fmt.Sprintf("\n\n## Pod Logs (preprocessed)\n%s", podLogs)
+                        var explanationSB strings.Builder
+		explanationSB.WriteString(explanation)
+		explanationSB.WriteString(fmt.Sprintf("\n\n## Pod Logs (preprocessed)\n%s", podLogs))
+		explanation = explanationSB.String()
                 }
 
                 cluster := schemas.AnomalyCluster{
@@ -1001,7 +1003,7 @@ func main() {
         withPkgWriteLock(func() { pkgChatopsGH = chatopsGHClient })
         chatopsReactions := chatops.NewReactionsClient(chatopsGHClient)
         chatopsStatus := chatops.NewStatusCommentManager(chatopsGHClient)
-        chatopsStatusManager = chatopsStatus // assign to package var for executeCodeFix
+        setChatopsStatusManager(chatopsStatus)
 
         // Created before chatopsDeps so the deps bag can reference the merger.
 
@@ -1020,10 +1022,9 @@ func main() {
         autoMergeMerger := automerge.NewMerger(autoMergePolicy, autoMergeGH, &autoMergeStoreAdapter{store: store}, &autoMergeOutcomeAdapter{watcher: outcomeWatcher, policy: autoMergePolicy})
         withPkgWriteLock(func() { pkgAutoMergeMerger = autoMergeMerger })
 
-        // after merge/skip.
-
+        
         autoMergeMerger.SetOnMerged(func(repo string, prNumber int) {
-                if chatopsStatusManager != nil {
+                if csm := getChatopsStatusManager(); csm != nil {
                         inc := &chatops.Incident{
                                 AutoMergeEnabled: true,
                                 AutoMergeMerged:  true,
@@ -1033,7 +1034,7 @@ func main() {
                 }
         })
         autoMergeMerger.SetOnSkipped(func(repo string, prNumber int, reason string) {
-                if chatopsStatusManager != nil {
+                if csm := getChatopsStatusManager(); csm != nil {
                         inc := &chatops.Incident{
                                 AutoMergeEnabled: true,
                                 AutoMergeSkipped: reason,
@@ -1061,8 +1062,7 @@ func main() {
         chatopsHandler := chatops.NewWebhookHandler(chatopsDeps, cfg.GitHubWebhookSecret)
         apiServer.SetChatopsHandler(chatopsHandler)
 
-        // so /providers and /automerge endpoints work.
-
+        
         apiServer.SetProvidersStatusGetter(&providersStatusAdapter{router: router})
         apiServer.SetAutoMergeStatusGetter(&autoMergeStatusAdapter{policy: autoMergePolicy, merger: autoMergeMerger})
 
@@ -1173,8 +1173,7 @@ func main() {
                 slackBot.SetBotToken(cfg.SlackBotToken)
         }
 
-        // /sentinel pause + /sentinel resume can pause autonomous mode.
-
+        
         chatopsDeps.PauseController = slackBot
 
         // When autonomous mode is paused via Slack, the clusterer skips emitting
@@ -1207,8 +1206,7 @@ func main() {
 
         cancel()
 
-        // before closing the SQLite store.Exit mid-LLM-call,
-        // leaving half-written incidents and half-applied branches.
+                // leaving half-written incidents and half-applied branches.
 
         done := make(chan struct{})
         go func() {

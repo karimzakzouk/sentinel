@@ -501,13 +501,28 @@ func (a *FixProposer) buildUserMessage(state *schemas.AgentState) string {
                 parts = append(parts, "")
         }
         parts = append(parts, "## Confirmed Root Cause")
+        if state.RootCause == nil {
+        	return ""
+        }
         parts = append(parts, fmt.Sprintf("- statement: %s", state.RootCause.Statement))
+        if state.RootCause == nil {
+        	return ""
+        }
         parts = append(parts, fmt.Sprintf("- category: %s", state.RootCause.Category))
+        if state.RootCause == nil {
+        	return ""
+        }
         parts = append(parts, fmt.Sprintf("- confidence: %.3f", state.RootCause.Confidence))
+        if state.RootCause == nil {
+        	return ""
+        }
         parts = append(parts, fmt.Sprintf("- has_schema_migration: %v", state.RootCause.HasSchemaMigration))
         if len(state.FetchedCode) > 0 {
                 parts = append(parts, fmt.Sprintf("- source_files: %v", keysOf(state.FetchedCode)))
         } else {
+                if state.RootCause == nil {
+                	return ""
+                }
                 parts = append(parts, fmt.Sprintf("- source_files: %v", state.RootCause.SourceFiles))
         }
         parts = append(parts, "")

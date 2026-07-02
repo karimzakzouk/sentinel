@@ -109,6 +109,9 @@ func (g *ReproducerGenerator) buildUserMessage(state *schemas.AgentState) string
         parts = append(parts, "")
 
         parts = append(parts, "## Root Cause")
+        if state.RootCause == nil {
+        	return ""
+        }
         parts = append(parts, fmt.Sprintf("- statement: %s", state.RootCause.Statement))
         parts = append(parts, "")
 

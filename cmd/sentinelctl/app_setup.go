@@ -252,6 +252,11 @@ func (c *client) handleAppSetup(args []string) {
                 os.Exit(1)
         }
         go func() {
+                defer func() {
+                        if r := recover(); r != nil {
+                                errCh <- fmt.Errorf("callback server panic: %v", r)
+                        }
+                }()
                 if err := srv.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
                         errCh <- err
                 }
