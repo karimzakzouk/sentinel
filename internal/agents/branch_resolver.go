@@ -1,8 +1,8 @@
 package agents
 
 import (
+	"github.com/karimzakzouk/sentinel/internal/logging"
         "context"
-        "log"
         "strings"
 
         "github.com/karimzakzouk/sentinel/internal/schemas"
@@ -34,14 +34,14 @@ func (a *Investigator) resolveBranch(ctx context.Context, state *schemas.AgentSt
         // 1. git-commit (highest priority — exact commit)
 
         if commit, ok := annotations["sentinel.io/git-commit"]; ok && commit != "" {
-                log.Printf("[investigator] using git-commit from annotation: %s", commit)
+                logging.Info("using git-commit from annotation", "commit", commit)
                 return commit
         }
 
         // 2. branch
 
         if branch, ok := annotations["sentinel.io/branch"]; ok && branch != "" {
-                log.Printf("[investigator] using branch from annotation: %s", branch)
+                logging.Info("using branch from annotation", "branch", branch)
                 return branch
         }
 
@@ -53,7 +53,7 @@ func (a *Investigator) resolveBranch(ctx context.Context, state *schemas.AgentSt
         if db == "" {
                 db = "main" // safety net — should never fire
         }
-        log.Printf("[investigator] WARNING: no sentinel.io/branch annotation — cloning %s (may not match deployed code)", db)
+        logging.Warn("no sentinel.io/branch annotation — cloning  (may not match deployed code)", "db", db)
         return db
 }
 

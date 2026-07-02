@@ -1,7 +1,7 @@
 package detection
 
 import (
-        "log"
+	"github.com/karimzakzouk/sentinel/internal/logging"
         "sync"
         "time"
 )
@@ -80,7 +80,7 @@ func (t *ActiveTracker) MarkActive(service, namespace string) {
         t.active[key] = &incidentState{
                 startedAt: time.Now(),
         }
-        log.Printf("[tracker] marked active: %s", key)
+        logging.Info("marked active", "key", key)
 }
 
 // MarkResolved marks a service's incident as resolved.
@@ -94,6 +94,6 @@ func (t *ActiveTracker) MarkResolved(service, namespace string, success bool) {
                 state.resolved = true
                 state.resolvedAt = time.Now()
                 state.success = success
-                log.Printf("[tracker] resolved: %s (success=%v, cooldown=%v)", key, success, t.cooldown)
+                logging.Info("resolved:  (success=, cooldown=)", "value", key, success, t.cooldown)
         }
 }

@@ -8,6 +8,7 @@
 package detection
 
 import (
+	"github.com/karimzakzouk/sentinel/internal/logging"
         "bufio"
         "context"
         "fmt"
@@ -175,7 +176,7 @@ func NewWithConfig(clientset *kubernetes.Clientset, handler IncidentHandler, ale
 // Run starts the detection layer. Blocks until ctx is cancelled.
 
 func (d *Detector) Run(ctx context.Context) {
-        log.Printf("[detection] starting autonomous detection layer")
+        logging.Info("starting autonomous detection layer")
 
         go d.cleanupLoop(ctx)
         d.watchPods(ctx)
@@ -184,7 +185,7 @@ func (d *Detector) Run(ctx context.Context) {
 func (d *Detector) watchPods(ctx context.Context) {
         namespaces, err := d.clientset.CoreV1().Namespaces().List(ctx, metav1.ListOptions{})
         if err != nil {
-                log.Printf("[detection] failed to list namespaces: %v", err)
+                logging.Error("failed to list namespaces", "err", err)
                 return
         }
 
@@ -199,7 +200,7 @@ func (d *Detector) watchPods(ctx context.Context) {
 func (d *Detector) watchNamespaces(ctx context.Context) {
         watcher, err := d.clientset.CoreV1().Namespaces().Watch(ctx, metav1.ListOptions{})
         if err != nil {
-                log.Printf("[detection] failed to watch namespaces: %v", err)
+                logging.Error("failed to watch namespaces", "err", err)
                 return
         }
         defer watcher.Stop()
@@ -345,7 +346,7 @@ func (d *Detector) lookupRepoFromOwner(ctx context.Context, pod *corev1.Pod) str
 
                         rs, err := d.clientset.AppsV1().ReplicaSets(pod.Namespace).Get(ctx, ownerRef.Name, metav1.GetOptions{})
                         if err != nil {
-                                log.Printf("[detection] failed to get ReplicaSet %s/%s: %v", pod.Namespace, ownerRef.Name, err)
+                                logging.Error("failed to get ReplicaSet /", "value", pod.Namespace, ownerRef.Name, err)
                                 continue
                         }
                         // Check ReplicaSet annotations
@@ -409,7 +410,7 @@ func (d *Detector) checkPodStatus(ctx context.Context, pod *corev1.Pod, repo str
 
                 if cs.State.Waiting != nil && cs.State.Waiting.Reason == "CrashLoopBackOff" {
                         if d.shouldTrigger(pod.Namespace, d.getServiceFromPod(pod), "CrashLoopBackOff") {
-                                log.Printf("[detection] CrashLoopBackOff: %s/%s", pod.Namespace, pod.Name)
+                                logging.Info("CrashLoopBackOff: /", "value", pod.Namespace, pod.Name)
                                 logs := d.fetchPodLogs(ctx, pod)
                                 reason := fmt.Sprintf("CrashLoopBackOff: %s", cs.State.Waiting.Message)
                                 d.triggerIncident(pod, repo, reason, logs)
@@ -436,7 +437,7 @@ func (d *Detector) checkPodStatus(ctx context.Context, pod *corev1.Pod, repo str
                 }
                 if cs.LastTerminationState.Terminated != nil && cs.LastTerminationState.Terminated.Reason == "OOMKilled" {
                         if d.shouldTrigger(pod.Namespace, d.getServiceFromPod(pod), "OOMKilled") {
-                                log.Printf("[detection] OOMKilled: %s/%s", pod.Namespace, pod.Name)
+                                logging.Info("OOMKilled: /", "value", pod.Namespace, pod.Name)
                                 logs := d.fetchPodLogs(ctx, pod)
                                 d.triggerIncident(pod, repo, "OOMKilled — container exceeded memory limit", logs)
                         }
@@ -444,7 +445,7 @@ func (d *Detector) checkPodStatus(ctx context.Context, pod *corev1.Pod, repo str
                 }
                 if cs.State.Waiting != nil && cs.State.Waiting.Reason == "ImagePullBackOff" {
                         if d.shouldTrigger(pod.Namespace, d.getServiceFromPod(pod), "ImagePullBackOff") {
-                                log.Printf("[detection] ImagePullBackOff: %s/%s", pod.Namespace, pod.Name)
+                                logging.Info("ImagePullBackOff: /", "value", pod.Namespace, pod.Name)
                                 reason := fmt.Sprintf("ImagePullBackOff: %s", cs.State.Waiting.Message)
                                 d.triggerIncident(pod, repo, reason, "")
                         }
@@ -471,7 +472,7 @@ func (d *Detector) startLogStream(ctx context.Context, pod *corev1.Pod, repo str
 
                 defer func() {
                         if r := recover(); r != nil {
-                                log.Printf("[panic] log stream %s/%s recovered: %v", pod.Namespace, pod.Name, r)
+                                logging.Info("log stream / recovered", "value", pod.Namespace, pod.Name, r)
                         }
                 }()
                 defer func() {
@@ -479,7 +480,7 @@ func (d *Detector) startLogStream(ctx context.Context, pod *corev1.Pod, repo str
                         delete(d.streams, podUID)
                         d.streamsMu.Unlock()
                 }()
-                log.Printf("[detection] log stream started: %s/%s", pod.Namespace, pod.Name)
+                logging.Info("log stream started: /", "value", pod.Namespace, pod.Name)
                 d.streamPodLogs(streamCtx, pod, repo)
         }()
 }
@@ -496,7 +497,7 @@ func (d *Detector) stopLogStream(podUID string) {
         d.streamsMu.Unlock()
         if ok {
                 cancel()
-                log.Printf("[detection] log stream stopped for pod UID %s", podUID)
+                logging.Info("log stream stopped for pod UID", "poduid", podUID)
         }
 }
 
@@ -510,7 +511,7 @@ func (d *Detector) StopAllLogStreams() {
                 cancel()
                 delete(d.streams, uid)
         }
-        log.Printf("[detection] stopped all log streams")
+        logging.Info("stopped all log streams")
 }
 
 func (d *Detector) streamPodLogs(ctx context.Context, pod *corev1.Pod, repo string) {
@@ -537,7 +538,7 @@ func (d *Detector) streamPodLogs(ctx context.Context, pod *corev1.Pod, repo stri
                 if err != nil {
 
                         if apierrors.IsNotFound(err) || apierrors.IsGone(err) {
-                                log.Printf("[detection] log stream %s/%s: pod no longer exists, stopping", pod.Namespace, pod.Name)
+                                logging.Info("log stream /: pod no longer exists, stopping", "value", pod.Namespace, pod.Name)
                                 return
                         }
                         select {
@@ -612,7 +613,7 @@ func (d *Detector) streamPodLogs(ctx context.Context, pod *corev1.Pod, repo stri
                                                                         service := d.getServiceFromPod(pod)
                                                                         if d.shouldTrigger(pod.Namespace, service, errorType) {
                                                                                 reason := fmt.Sprintf("Error detected in pod logs: %s", errorType)
-                                                                                log.Printf("[detection] log error: %s/%s — %s", pod.Namespace, pod.Name, errorType)
+                                                                                logging.Error("log error: / —", "value", pod.Namespace, pod.Name, errorType)
                                                                                 d.triggerIncident(pod, repo, reason, logs)
                                                                         }
                                                                 }
@@ -636,7 +637,7 @@ func (d *Detector) streamPodLogs(ctx context.Context, pod *corev1.Pod, repo stri
 
                                         logs := buf.String()
                                         reason := fmt.Sprintf("Error detected in pod logs: %s", errorType)
-                                        log.Printf("[detection] log error: %s/%s — %s", pod.Namespace, pod.Name, errorType)
+                                        logging.Error("log error: / —", "value", pod.Namespace, pod.Name, errorType)
                                         d.triggerIncident(pod, repo, reason, logs)
                                 }
                         }
@@ -710,12 +711,12 @@ func (d *Detector) triggerIncident(pod *corev1.Pod, repo, reason, podLogs string
         if d.alertURL != "" {
                 go d.sendAlert(service, pod.Namespace, reason, podLogs)
         } else {
-                log.Printf("[alert] %s/%s — %s", pod.Namespace, service, reason)
+                logging.Info("/ —", "value", pod.Namespace, service, reason)
         }
 }
 
 func (d *Detector) sendAlert(service, namespace, reason, podLogs string) {
-        log.Printf("[alert] %s/%s — %s", namespace, service, reason)
+        logging.Info("/ —", "value", namespace, service, reason)
 }
 
 func (d *Detector) getServiceFromPod(pod *corev1.Pod) string {

@@ -7,6 +7,7 @@
 package executors
 
 import (
+	"github.com/karimzakzouk/sentinel/internal/logging"
         "context"
         "fmt"
         "log"
@@ -181,7 +182,7 @@ func (s *SandboxRunner) deployCanary(ctx context.Context, inc *schemas.Incident,
         // status (the pod can go Ready with broken config).
 
         if err := CopyConfigMapsAndSecrets(ctx, s.clientset, prodDeploy, fp.TargetNamespace, ns); err != nil {
-                log.Printf("[sandbox] WARNING: CopyConfigMapsAndSecrets had errors: %v (canary may start with missing env vars)", err)
+                logging.Error("CopyConfigMapsAndSecrets had errors:  (canary may start with missing env vars)", "err", err)
         }
 
         // Create a Service so Level 2 verification can reach the canary.
@@ -215,7 +216,7 @@ func (s *SandboxRunner) deployCanary(ctx context.Context, inc *schemas.Incident,
                                 })
                         }
                         sandboxPorts = derived
-                        log.Printf("[sandbox] no prod Service ports — derived %d port(s) from prod Deployment container spec", len(derived))
+                        logging.Info("no prod Service ports — derived  port(s) from prod Deployment container spec", "value", len(derived))
                 }
         }
         sandboxSvc := &corev1.Service{
@@ -264,7 +265,7 @@ func (s *SandboxRunner) cleanup(ctx context.Context, ns string) {
         cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
         defer cancel()
         if err := s.clientset.CoreV1().Namespaces().Delete(cleanupCtx, ns, metav1.DeleteOptions{}); err != nil {
-                log.Printf("[sandbox] cleanup: failed to delete namespace %s: %v", ns, err)
+                logging.Error("cleanup: failed to delete namespace", "value", ns, err)
         }
         _ = ctx // parent ctx accepted for API compat but not used
 }
@@ -285,7 +286,7 @@ func (s *SandboxRunner) ReapStaleSandboxNamespaces(ctx context.Context, maxAge t
                 LabelSelector: "sentinel.io/sandbox=true",
         })
         if err != nil {
-                log.Printf("[sandbox-reaper] failed to list sandbox namespaces: %v", err)
+                logging.Error("-reaper] failed to list sandbox namespaces", "err", err)
                 return 0
         }
 
@@ -299,7 +300,7 @@ func (s *SandboxRunner) ReapStaleSandboxNamespaces(ctx context.Context, maxAge t
                 // Stale — delete it.
 
                 if err := s.clientset.CoreV1().Namespaces().Delete(ctx, ns.Name, metav1.DeleteOptions{}); err != nil {
-                        log.Printf("[sandbox-reaper] failed to delete stale namespace %s: %v", ns.Name, err)
+                        logging.Error("-reaper] failed to delete stale namespace", "value", ns.Name, err)
                         continue
                 }
                 log.Printf("[sandbox-reaper] deleted stale sandbox namespace %s (created %s, age %s)",
@@ -307,7 +308,7 @@ func (s *SandboxRunner) ReapStaleSandboxNamespaces(ctx context.Context, maxAge t
                 reaped++
         }
         if reaped > 0 {
-                log.Printf("[sandbox-reaper] reaped %d stale sandbox namespace(s)", reaped)
+                logging.Info("-reaper] reaped  stale sandbox namespace(s)", "reaped", reaped)
         }
         return reaped
 }
@@ -388,7 +389,7 @@ func patchPodSpec(spec corev1.PodSpec, canaryImage string) corev1.PodSpec {
 
         for i := range spec.Volumes {
                 if spec.Volumes[i].HostPath != nil {
-                        log.Printf("[sandbox] SECURITY: replacing hostPath volume %q with emptyDir (sandbox must not mount host paths)", spec.Volumes[i].Name)
+                        logging.Info("SECURITY: replacing hostPath volume  with emptyDir (sandbox must not mount host paths)", "value", spec.Volumes[i].Name)
                         spec.Volumes[i] = corev1.Volume{
                                 Name: spec.Volumes[i].Name,
                                 VolumeSource: corev1.VolumeSource{

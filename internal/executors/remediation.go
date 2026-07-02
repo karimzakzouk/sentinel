@@ -9,6 +9,7 @@
 package executors
 
 import (
+	"github.com/karimzakzouk/sentinel/internal/logging"
         "context"
         "fmt"
         "log"
@@ -54,12 +55,12 @@ func (r *RemediationController) Run(ctx context.Context, pollInterval time.Durat
         ticker := time.NewTicker(pollInterval)
         defer ticker.Stop()
 
-        log.Printf("[remediation] controller started (poll interval: %v)", pollInterval)
+        logging.Info("controller started (poll interval: )", "pollinterval", pollInterval)
 
         for {
                 select {
                 case <-ctx.Done():
-                        log.Printf("[remediation] controller stopping")
+                        logging.Info("controller stopping")
                         return
                 case <-ticker.C:
                         r.tick(ctx)
@@ -88,14 +89,14 @@ func (r *RemediationController) tick(ctx context.Context) {
 func (r *RemediationController) checkDiskPressure(ctx context.Context) {
         nodes, err := r.clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
         if err != nil {
-                log.Printf("[remediation] failed to list nodes: %v", err)
+                logging.Error("failed to list nodes", "err", err)
                 return
         }
 
         for _, node := range nodes.Items {
                 for _, cond := range node.Status.Conditions {
                         if cond.Type == corev1.NodeDiskPressure && cond.Status == corev1.ConditionTrue {
-                                log.Printf("[remediation] disk pressure on node %s — attempting cleanup", node.Name)
+                                logging.Info("disk pressure on node  — attempting cleanup", "name", node.Name)
                                 r.cleanNodeDisk(ctx, node.Name)
                         }
                 }
@@ -114,7 +115,7 @@ func (r *RemediationController) cleanNodeDisk(ctx context.Context, nodeName stri
                 FieldSelector: fmt.Sprintf("spec.nodeName=%s,status.phase=Failed", nodeName),
         })
         if err != nil {
-                log.Printf("[remediation] failed to list evicted pods on node %s: %v", nodeName, err)
+                logging.Error("failed to list evicted pods on node", "value", nodeName, err)
                 return
         }
 
@@ -133,7 +134,7 @@ func (r *RemediationController) cleanNodeDisk(ctx context.Context, nodeName stri
         }
 
         if deleted > 0 {
-                log.Printf("[remediation] cleaned %d evicted pods on node %s", deleted, nodeName)
+                logging.Info("cleaned  evicted pods on node", "value", deleted, nodeName)
                 r.actionsTaken++
         }
 }
@@ -146,7 +147,7 @@ func (r *RemediationController) cleanNodeDisk(ctx context.Context, nodeName stri
 func (r *RemediationController) checkCrashLoop(ctx context.Context) {
         pods, err := r.clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{})
         if err != nil {
-                log.Printf("[remediation] failed to list pods for CrashLoopBackOff check: %v", err)
+                logging.Error("failed to list pods for CrashLoopBackOff check", "err", err)
                 return
         }
 
@@ -166,7 +167,7 @@ func (r *RemediationController) checkCrashLoop(ctx context.Context) {
                                                 log.Printf("[remediation] pod %s/%s in CrashLoopBackOff (%d restarts, no sentinel annotation) — restarting",
                                                         pod.Namespace, pod.Name, cs.RestartCount)
                                                 if err := r.clientset.CoreV1().Pods(pod.Namespace).Delete(ctx, pod.Name, metav1.DeleteOptions{}); err == nil {
-                                                        log.Printf("[remediation] restarted pod %s/%s (Deployment will recreate it)", pod.Namespace, pod.Name)
+                                                        logging.Info("restarted pod / (Deployment will recreate it)", "value", pod.Namespace, pod.Name)
                                                         r.actionsTaken++
                                                 }
                                         }
@@ -185,7 +186,7 @@ func (r *RemediationController) checkPendingPods(ctx context.Context) {
                 FieldSelector: "status.phase=Pending",
         })
         if err != nil {
-                log.Printf("[remediation] failed to list pending pods: %v", err)
+                logging.Error("failed to list pending pods", "err", err)
                 return
         }
 

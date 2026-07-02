@@ -1,10 +1,10 @@
 package agents
 
 import (
+	"github.com/karimzakzouk/sentinel/internal/logging"
         "bytes"
         "encoding/json"
         "fmt"
-        "log"
         "net/http"
         "time"
 )
@@ -30,7 +30,7 @@ func NewAlertSender(webhookURL string) *AlertSender {
 
 func (a *AlertSender) SendAlert(service, namespace, reason, prURL string) {
         if a.webhookURL == "" {
-                log.Printf("[alert] %s/%s — %s", namespace, service, reason)
+                logging.Info("/ —", "value", namespace, service, reason)
                 return
         }
 
@@ -75,10 +75,10 @@ func (a *AlertSender) SendAlert(service, namespace, reason, prURL string) {
         body, _ := json.Marshal(payload)
         resp, err := a.httpClient.Post(a.webhookURL, "application/json", bytes.NewReader(body))
         if err != nil {
-                log.Printf("[alert] Slack webhook failed: %v — logging instead", err)
-                log.Printf("[alert] %s/%s — %s", namespace, service, reason)
+                logging.Error("Slack webhook failed:  — logging instead", "err", err)
+                logging.Info("/ —", "value", namespace, service, reason)
                 return
         }
         resp.Body.Close()
-        log.Printf("[alert] Slack notification sent for %s/%s", namespace, service)
+        logging.Info("Slack notification sent for /", "value", namespace, service)
 }

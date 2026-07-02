@@ -1,10 +1,10 @@
 package agents
 
 import (
+	"github.com/karimzakzouk/sentinel/internal/logging"
         "context"
         "encoding/json"
         "fmt"
-        "log"
         "path/filepath"
         "strings"
         "time"
@@ -44,7 +44,7 @@ func validateFilePath(path string) string {
                 return ""
         }
         if len(path) > 500 {
-                log.Printf("[fix_proposer] SECURITY: rejecting path (too long): %q", path)
+                logging.Info("SECURITY: rejecting path (too long)", "path", path)
                 return ""
         }
 
@@ -52,7 +52,7 @@ func validateFilePath(path string) string {
 
         for _, r := range path {
                 if r < 0x20 || r == 0x7f {
-                        log.Printf("[fix_proposer] SECURITY: rejecting path (control char): %q", path)
+                        logging.Info("SECURITY: rejecting path (control char)", "path", path)
                         return ""
                 }
         }
@@ -60,17 +60,17 @@ func validateFilePath(path string) string {
         // Reject absolute paths.
 
         if filepath.IsAbs(path) {
-                log.Printf("[fix_proposer] SECURITY: rejecting absolute path: %q", path)
+                logging.Info("SECURITY: rejecting absolute path", "path", path)
                 return ""
         }
 
         clean := filepath.Clean(path)
         if clean == "." {
-                log.Printf("[fix_proposer] SECURITY: rejecting path (resolves to repo root): %q", path)
+                logging.Info("SECURITY: rejecting path (resolves to repo root)", "path", path)
                 return ""
         }
         if strings.HasPrefix(clean, "..") {
-                log.Printf("[fix_proposer] SECURITY: rejecting path traversal: %q", path)
+                logging.Info("SECURITY: rejecting path traversal", "path", path)
                 return ""
         }
 
@@ -112,7 +112,7 @@ func validateFilePath(path string) string {
                 sensitiveReason = "build-chain-sensitive path"
         }
         if sensitive {
-                log.Printf("[fix_proposer] SECURITY: rejecting %s: %q", sensitiveReason, path)
+                logging.Info("SECURITY: rejecting", "value", sensitiveReason, path)
                 return ""
         }
 
@@ -248,7 +248,7 @@ func (a *FixProposer) Run(ctx context.Context, state *schemas.AgentState) error 
         // Don't ask the LLM to write code it can't see — it'll hallucinate.
 
         if len(state.FetchedCode) == 0 {
-                log.Printf("[fix_proposer] no source code fetched — proposing restart fallback")
+                logging.Info("no source code fetched — proposing restart fallback")
                 proposal := &schemas.FixProposal{
                         FixID:             uuid.New(),
                         FixType:           schemas.FixRestart,
@@ -307,16 +307,16 @@ func (a *FixProposer) Run(ctx context.Context, state *schemas.AgentState) error 
                 }
 
                 attemptCtx, attemptCancel := context.WithTimeout(ctx, 120*time.Second)
-                log.Printf("[fix_proposer] attempt %d/%d (SEARCH/REPLACE format)", attempt+1, maxRetries+1)
+                logging.Info("attempt / (SEARCH/REPLACE format)", "value", attempt+1, maxRetries+1)
                 rawOutput, llmErr := a.router.FrontierText(attemptCtx, fixProposerSystemPrompt, userMsg, 8000)
                 attemptCancel()
                 if llmErr != nil {
                         lastError = fmt.Sprintf("LLM call failed: %v", llmErr)
-                        log.Printf("[fix_proposer] attempt %d LLM error: %v", attempt+1, llmErr)
+                        logging.Error("attempt  LLM error", "value", attempt+1, llmErr)
                         continue
                 }
 
-                log.Printf("[fix_proposer] attempt %d: got %d chars of output", attempt+1, len(rawOutput))
+                logging.Info("attempt : got  chars of output", "value", attempt+1, len(rawOutput))
 
                 // Parse metadata JSON from the first line(s)
                 // The LLM outputs {"fix_type":"code_fix",...} before the SEARCH/REPLACE blocks
@@ -354,7 +354,7 @@ func (a *FixProposer) Run(ctx context.Context, state *schemas.AgentState) error 
                 if len(blocks) > 0 {
                         // We have SEARCH/REPLACE blocks — apply them to the source code
 
-                        log.Printf("[fix_proposer] attempt %d: parsed %d SEARCH/REPLACE block(s)", attempt+1, len(blocks))
+                        logging.Info("attempt : parsed  SEARCH/REPLACE block(s)", "value", attempt+1, len(blocks))
 
                         // Group blocks by file path
 
@@ -412,14 +412,14 @@ func (a *FixProposer) Run(ctx context.Context, state *schemas.AgentState) error 
                                         Path:    filePath,
                                         Changes: changes,
                                 })
-                                log.Printf("[fix_proposer] applied %d block(s) to %s", len(fileBlocks), filePath)
+                                logging.Info("applied  block(s) to", "value", len(fileBlocks), filePath)
                         }
 
                         if allApplied && len(files) > 0 {
-                                log.Printf("[fix_proposer] attempt %d succeeded — %d file(s), %d block(s) applied", attempt+1, len(files), len(blocks))
+                                logging.Info("attempt  succeeded —  file(s),  block(s) applied", "value", attempt+1, len(files), len(blocks))
                                 break
                         }
-                        log.Printf("[fix_proposer] attempt %d failed: %s", attempt+1, lastError)
+                        logging.Error("attempt  failed", "value", attempt+1, lastError)
                         continue
                 }
 
@@ -427,17 +427,17 @@ func (a *FixProposer) Run(ctx context.Context, state *schemas.AgentState) error 
 
                 if filePath, content := ParseWholeFileReplacement(rawOutput); filePath != "" && content != "" {
                         filePath = normalizeFilePath(filePath, state.FetchedCode)
-                        log.Printf("[fix_proposer] attempt %d: using whole-file replacement for %s (%d chars)", attempt+1, filePath, len(content))
+                        logging.Info("attempt : using whole-file replacement for  ( chars)", "value", attempt+1, filePath, len(content))
                         files = []schemas.FileChange{{Path: filePath, NewContent: content}}
                         break
                 }
 
                 lastError = "no SEARCH/REPLACE blocks or whole-file replacement found in LLM output"
-                log.Printf("[fix_proposer] attempt %d failed: %s", attempt+1, lastError)
+                logging.Error("attempt  failed", "value", attempt+1, lastError)
         }
 
         if len(files) == 0 {
-                log.Printf("[fix_proposer] all %d attempts failed — no fix proposed", maxRetries+1)
+                logging.Error("all  attempts failed — no fix proposed", "value", maxRetries+1)
                 state.Status = schemas.StatusFailed
                 s := fmt.Sprintf("fix_proposer_no_files_after_%d_attempts: %s", maxRetries+1, lastError)
                 state.Error = &s

@@ -4,13 +4,13 @@
 package executors
 
 import (
+	"github.com/karimzakzouk/sentinel/internal/logging"
         "bytes"
         "context"
         "encoding/base64"
         "encoding/json"
         "fmt"
         "io"
-        "log"
         "net/http"
         "strings"
         "time"
@@ -423,7 +423,7 @@ func (e *GitHubExecutor) do(ctx context.Context, method, url string, body any, o
                 if resp.StatusCode == 429 || (resp.StatusCode == 403 && isGitHubRateLimit(resp)) {
                         resp.Body.Close()
                         lastErr = fmt.Errorf("GitHub API %d: rate limited (attempt %d/%d)", resp.StatusCode, attempt+1, maxRetries+1)
-                        log.Printf("[github] rate limited (attempt %d/%d) — backing off", attempt+1, maxRetries+1)
+                        logging.Info("rate limited (attempt /) — backing off", "value", attempt+1, maxRetries+1)
                         continue
                 }
 

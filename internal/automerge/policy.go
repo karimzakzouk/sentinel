@@ -19,8 +19,8 @@
 package automerge
 
 import (
+	"github.com/karimzakzouk/sentinel/internal/logging"
         "fmt"
-        "log"
         "strings"
         "sync"
         "time"
@@ -284,7 +284,7 @@ func (p *Policy) RecordMerge() {
 
 func (p *Policy) RecordRegression(reason string) {
         p.cooldown.Trigger(reason)
-        log.Printf("[automerge] regression detected — cooldown activated: %s", reason)
+        logging.Info("regression detected — cooldown activated", "reason", reason)
 }
 
 // Status returns the current rate-limiter + cooldown state for the web UI.

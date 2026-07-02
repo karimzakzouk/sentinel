@@ -18,6 +18,7 @@
 package llm
 
 import (
+	"github.com/karimzakzouk/sentinel/internal/logging"
         "context"
         "errors"
         "fmt"
@@ -186,7 +187,7 @@ func (p *Pool) Acquire() *ProviderConfig {
 
         for _, c := range ordered {
                 if c.IsEnabled() {
-                        log.Printf("[llm.pool] all providers tripped — forcing use of %s (priority %d)", c.ID, c.Priority)
+                        logging.Info(".pool] all providers tripped — forcing use of  (priority )", "value", c.ID, c.Priority)
                         return c
                 }
         }
@@ -369,7 +370,7 @@ func (p *Pool) Call(ctx context.Context, fn func(cfg *ProviderConfig) error) err
                 }
 
                 tried[c.ID] = true
-                log.Printf("[llm.pool] trying provider %s (priority %d)", c.ID, c.Priority)
+                logging.Info(".pool] trying provider  (priority )", "value", c.ID, c.Priority)
 
                 err := fn(c)
                 if err == nil {
@@ -379,7 +380,7 @@ func (p *Pool) Call(ctx context.Context, fn func(cfg *ProviderConfig) error) err
 
                 lastErr = err
                 p.MarkFailed(c.ID, err)
-                log.Printf("[llm.pool] provider %s failed: %v — failing over", c.ID, err)
+                logging.Error(".pool] provider  failed:  — failing over", "value", c.ID, err)
 
                 // If context is cancelled, stop immediately.
 
@@ -395,7 +396,7 @@ func (p *Pool) Call(ctx context.Context, fn func(cfg *ProviderConfig) error) err
                 if tried[c.ID] {
                         continue
                 }
-                log.Printf("[llm.pool] fallback: retrying tripped provider %s", c.ID)
+                logging.Info(".pool] fallback: retrying tripped provider", "id", c.ID)
                 err := fn(c)
                 if err == nil {
                         p.MarkSuccess(c.ID)

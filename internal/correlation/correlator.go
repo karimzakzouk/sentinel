@@ -21,6 +21,7 @@
 package correlation
 
 import (
+	"github.com/karimzakzouk/sentinel/internal/logging"
         "log"
         "sync"
         "time"
@@ -108,7 +109,7 @@ func (c *Correlator) RegisterDeployment(service, namespace string, ts time.Time)
         defer c.mu.Unlock()
         key := service + "/" + namespace
         c.deployments[key] = ts
-        log.Printf("[correlation] deployment registered: %s at %v", key, ts)
+        logging.Info("deployment registered:  at", "value", key, ts)
         // Clean old deployments
 
         c.cleanupDeployments(ts)
@@ -171,7 +172,7 @@ func (c *Correlator) checkAndBuildEvent(service, namespace string, ts time.Time)
         // Check cooldown — don't re-emit for the same cascade
 
         if time.Since(c.lastEmission) < c.cooldownDuration {
-                log.Printf("[correlation] cascade detected (%d services) but in cooldown — suppressing", len(distinctServices))
+                logging.Info("cascade detected ( services) but in cooldown — suppressing", "value", len(distinctServices))
                 return CorrelationEvent{}, false
         }
 

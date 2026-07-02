@@ -1,6 +1,7 @@
 package agents
 
 import (
+	"github.com/karimzakzouk/sentinel/internal/logging"
         "context"
         "fmt"
         "log"
@@ -195,7 +196,7 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
 
         podLogs, _ := a.k8s.FetchCrashingPodLogs(ctx, cluster.Service, cluster.Namespace)
         if podLogs != "" {
-                log.Printf("[investigator] fetched %d chars of pod logs via K8s API", len(podLogs))
+                logging.Info("fetched  chars of pod logs via K8s API", "value", len(podLogs))
                 fullExplanation := cluster.Summary + "\n\n## Pod Logs (full, from K8s API)\n" + podLogs
                 if len(cluster.Anomalies) > 0 {
                         cluster.Anomalies[0].Explanation = fullExplanation
@@ -203,7 +204,7 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
                 state.Cluster = cluster
         } else {
                 podLogs = a.extractPodLogs(cluster)
-                log.Printf("[investigator] K8s API logs unavailable, using %d chars from detection", len(podLogs))
+                logging.Info("K8s API logs unavailable, using  chars from detection", "value", len(podLogs))
         }
 
         // 0.5 MEMORY LOOP — query HNSW for similar past incidents.
@@ -215,22 +216,22 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
         if a.vectorStore != nil && podLogs != "" {
                 similar, scores, err := a.vectorStore.Search(ctx, podLogs, 5)
                 if err == nil && len(similar) > 0 {
-                        log.Printf("[memory] found %d similar incidents (top score: %.3f)", len(similar), scores[0])
+                        logging.Info("found  similar incidents (top score: %.3f)", "value", len(similar), scores[0])
 
                         // High similarity + prior success → skip investigation, apply known fix
 
 
                         if scores[0] > 0.85 && similar[0].Outcome == "success" && !a.vectorStore.UsingHashFallback() {
-                                log.Printf("[memory] HIGH MATCH (score=%.3f) — applying known fix from incident %s", scores[0], similar[0].IncidentID)
+                                logging.Info("HIGH MATCH (score=%.3f) — applying known fix from incident", "value", scores[0], similar[0].IncidentID)
                                 return a.applyKnownFix(ctx, state, similar[0], podLogs)
                         } else if scores[0] > 0.85 && a.vectorStore.UsingHashFallback() {
-                                log.Printf("[memory] HIGH MATCH (score=%.3f) but using hash embeddings — skipping applyKnownFix for safety", scores[0])
+                                logging.Info("HIGH MATCH (score=%.3f) but using hash embeddings — skipping applyKnownFix for safety", "value", scores[0])
                         }
 
                         // Medium similarity → use as context for the LLM
 
                         if scores[0] > 0.5 {
-                                log.Printf("[memory] MEDIUM MATCH (score=%.3f) — using incident %s as context", scores[0], similar[0].IncidentID)
+                                logging.Info("MEDIUM MATCH (score=%.3f) — using incident  as context", "value", scores[0], similar[0].IncidentID)
                                 state.RetrievedIncidents = []map[string]any{{
                                         "root_cause":   similar[0].RootCause,
                                         "fix_pattern":  similar[0].FixPattern,
@@ -247,7 +248,7 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
 
         repoName := discoverRepo(state, a.gitHost)
         if repoName == "" {
-                log.Printf("[investigator] no repo discovered — skipping code fetch")
+                logging.Info("no repo discovered — skipping code fetch")
                 return a.runWithoutRepo(ctx, state, podLogs)
         }
 
@@ -257,7 +258,7 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
         // (sending the GitHub PAT to github.com for any repo the PAT can read).
 
         if !a.isRepoAllowed(repoName) {
-                log.Printf("[investigator] SECURITY: repo %q is not in the allowed list — refusing to clone. Set SENTINEL_ALLOWED_GITHUB_REPOS to allow it.", repoName)
+                logging.Info("SECURITY: repo  is not in the allowed list — refusing to clone. Set SENTINEL_ALLOWED_GITHUB_REPOS to allow it.", "reponame", repoName)
                 return a.runWithoutRepo(ctx, state, podLogs)
         }
 
@@ -279,7 +280,7 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
                         // returning an arbitrary string.
 
                         if !a.isRepoAllowed(repoName) {
-                                log.Printf("[investigator] SECURITY: redirected library repo %q is not in the allowed list — refusing to clone.", repoName)
+                                logging.Info("SECURITY: redirected library repo  is not in the allowed list — refusing to clone.", "reponame", repoName)
                                 return a.runWithoutRepo(ctx, state, podLogs)
                         }
                 } else if slf.IsSharedLib {
@@ -291,26 +292,26 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
         // 2. Resolve which branch/commit to clone.
 
         branch := a.resolveBranch(ctx, state, repoName)
-        log.Printf("[investigator] cloning repo %s@%s", repoName, branch)
+        logging.Info("cloning repo @", "value", repoName, branch)
 
         // 3. Clone the repo locally
 
         repoPath, err := a.cloner.Clone(ctx, repoName, branch)
         if err != nil {
-                log.Printf("[investigator] clone failed: %v — falling back to no-repo mode", err)
+                logging.Error("clone failed:  — falling back to no-repo mode", "err", err)
                 return a.runWithoutRepo(ctx, state, podLogs)
         }
         defer a.cloner.Cleanup(repoPath)
-        log.Printf("[investigator] repo cloned to %s", repoPath)
+        logging.Info("repo cloned to", "repopath", repoPath)
 
         // 4. Walk the file tree
 
         fileTree, err := repo.WalkTree(repoPath, 500)
         if err != nil {
-                log.Printf("[investigator] walk tree failed: %v", err)
+                logging.Error("walk tree failed", "err", err)
                 return a.runWithoutRepo(ctx, state, podLogs)
         }
-        log.Printf("[investigator] file tree: %d files", len(fileTree))
+        logging.Info("file tree:  files", "value", len(fileTree))
 
         // 4. Round 1 — ask LLM what to search for
         // podLogs already fetched at the top of Run() via K8s API
@@ -318,7 +319,7 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
         round1Msg := a.buildRound1Message(state, podLogs, fileTree)
         round1Result, err := a.router.FrontierJSON(ctx, investigatorRound1Prompt, round1Msg, 1000)
         if err != nil {
-                log.Printf("[investigator] round 1 LLM failed: %v", err)
+                logging.Error("round 1 LLM failed", "err", err)
                 return a.runWithoutRepo(ctx, state, podLogs)
         }
 
@@ -328,13 +329,13 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
                 // The error type (KeyError, ZeroDivisionError) and the variable name
                 // (DATABASE_URLL) are right there in the traceback.
 
-                log.Printf("[investigator] LLM returned no search queries — extracting from pod logs")
+                logging.Info("LLM returned no search queries — extracting from pod logs")
                 fallbackQueries := ExtractSearchQueriesUniversal(podLogs)
                 for _, q := range fallbackQueries {
                         searchQueries = append(searchQueries, q)
                 }
                 if len(searchQueries) == 0 {
-                        log.Printf("[investigator] no search queries from logs either — falling back")
+                        logging.Info("no search queries from logs either — falling back")
                         return a.runWithoutRepo(ctx, state, podLogs)
                 }
         }
@@ -362,32 +363,32 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
                         }
                 }
         }
-        log.Printf("[investigator] search found %d unique files", len(allResults))
+        logging.Info("search found  unique files", "value", len(allResults))
 
         // 6. Round 2 — ask LLM for hypotheses + files to read
 
         round2Msg := a.buildRound2Message(state, podLogs, fileTree, allResults)
         round2Result, err := a.router.FrontierJSON(ctx, investigatorRound2Prompt, round2Msg, 4000)
         if err != nil {
-                log.Printf("[investigator] round 2 LLM failed: %v", err)
+                logging.Error("round 2 LLM failed", "err", err)
                 return a.runWithoutRepo(ctx, state, podLogs)
         }
 
         // Debug: log what the LLM returned
 
-        log.Printf("[investigator] round 2 LLM returned keys: %v", keysOfAny(round2Result))
+        logging.Info("round 2 LLM returned keys", "value", keysOfAny(round2Result))
 
         // 7. Parse hypotheses
 
         rawHyps, _ := round2Result["hypotheses"].([]any)
-        log.Printf("[investigator] round 2 returned %d hypotheses", len(rawHyps))
+        logging.Info("round 2 returned  hypotheses", "value", len(rawHyps))
 
         var newHyps []schemas.Hypothesis
 
         // generate hypotheses from the error context directly.
 
         if len(rawHyps) == 0 && podLogs != "" {
-                log.Printf("[investigator] LLM returned 0 hypotheses — generating from error context")
+                logging.Error("LLM returned 0 hypotheses — generating from error context")
                 newHyps = GenerateHypothesesUniversal(podLogs, state)
         }
 
@@ -432,7 +433,7 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
                 }
                 content, err := repo.ReadFile(repoPath, path)
                 if err != nil {
-                        log.Printf("[investigator] could not read %s: %v", path, err)
+                        logging.Info("could not read", "value", path, err)
                         continue
                 }
                 fetched[path] = content
@@ -441,7 +442,7 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
         // 9. FALLBACK: If the LLM returned 0 files, try files from the stack trace
 
         if len(fetched) == 0 {
-                log.Printf("[investigator] LLM returned 0 files — falling back to stack trace parsing")
+                logging.Info("LLM returned 0 files — falling back to stack trace parsing")
                 stackFiles := k8s.ParseStackTrace(podLogs)
                 // Also try files from search results
 
@@ -454,7 +455,7 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
                         }
                         content, err := repo.ReadFile(repoPath, path)
                         if err != nil {
-                                log.Printf("[investigator] failed to read stack file %s: %v", path, err)
+                                logging.Error("failed to read stack file", "value", path, err)
                                 continue
                         }
                         fetched[path] = content
@@ -464,7 +465,7 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
                 }
         }
 
-        log.Printf("[investigator] fetched %d files: %v", len(fetched), keysOf(fetched))
+        logging.Info("fetched  files", "value", len(fetched), keysOf(fetched))
 
         state.Hypotheses = newHyps
         state.FetchedCode = fetched
@@ -545,7 +546,7 @@ func (a *Investigator) runWithoutRepo(ctx context.Context, state *schemas.AgentS
 // a FixProposal directly — no LLM calls needed.
 
 func (a *Investigator) applyKnownFix(ctx context.Context, state *schemas.AgentState, meta *VectorMetadata, podLogs string) error {
-        log.Printf("[memory] applying known fix: %s (type=%s)", meta.FixPattern, meta.FixType)
+        logging.Info("applying known fix:  (type=)", "value", meta.FixPattern, meta.FixType)
 
         // Parse the error from the current logs to get the source file
 
@@ -585,7 +586,7 @@ func (a *Investigator) applyKnownFix(ctx context.Context, state *schemas.AgentSt
                 "similarity":  "high",
         })
 
-        log.Printf("[memory] root cause set from memory: %s", meta.RootCause)
+        logging.Info("root cause set from memory", "rootcause", meta.RootCause)
         return nil
 }
 

@@ -1,6 +1,7 @@
 package agents
 
 import (
+	"github.com/karimzakzouk/sentinel/internal/logging"
         "fmt"
         "log"
         "regexp"
@@ -501,7 +502,7 @@ func ExtractSearchQueriesUniversal(logs string) []string {
                 }
         }
 
-        log.Printf("[investigator] extracted %d search queries from %s logs: %v", len(unique), parsed.Language, unique)
+        logging.Info("extracted  search queries from  logs", "value", len(unique), parsed.Language, unique)
         return unique
 }
 

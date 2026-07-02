@@ -1,7 +1,7 @@
 package agents
 
 import (
-	"log"
+	"github.com/karimzakzouk/sentinel/internal/logging"
 )
 
 // truncateErr safely truncates an error message to maxLen characters.
@@ -29,6 +29,6 @@ func truncateStr(s string, maxLen int) string {
 
 func recoverPanic(agentName string) {
 	if r := recover(); r != nil {
-		log.Printf("[panic] agent %s recovered: %v", agentName, r)
+		logging.Info("agent  recovered", "value", agentName, r)
 	}
 }

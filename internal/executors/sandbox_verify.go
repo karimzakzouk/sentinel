@@ -8,6 +8,7 @@
 package executors
 
 import (
+	"github.com/karimzakzouk/sentinel/internal/logging"
         "context"
         "encoding/json"
         "fmt"
@@ -39,7 +40,7 @@ func (s *SandboxRunner) waitForReadyWithLogs(ctx context.Context, ns, name strin
                 if err == nil && deploy.Status.ReadyReplicas >= 1 {
                         if readySince.IsZero() {
                                 readySince = time.Now()
-                                log.Printf("[sandbox] Level 1: canary pod went Ready at %s — sustaining for %s", readySince.Format(time.RFC3339), s.sustainedWindow)
+                                logging.Info("Level 1: canary pod went Ready at  — sustaining for", "value", readySince.Format(time.RFC3339), s.sustainedWindow)
                         }
                         // Capture logs during the sustained window
 
@@ -58,7 +59,7 @@ func (s *SandboxRunner) waitForReadyWithLogs(ctx context.Context, ns, name strin
                         }
                 } else {
                         if !readySince.IsZero() {
-                                log.Printf("[sandbox] Level 1: canary pod dropped below ReadyReplicas=1 before sustaining %s — resetting timer", s.sustainedWindow)
+                                logging.Info("Level 1: canary pod dropped below ReadyReplicas=1 before sustaining  — resetting timer", "sustainedwindow", s.sustainedWindow)
                         }
                         readySince = time.Time{}
                 }
@@ -226,7 +227,7 @@ func (s *SandboxRunner) runRegressionTest(ctx context.Context, sandboxNS string,
 
         test, err := parseGeneratedTest(testJSON)
         if err != nil {
-                log.Printf("[sandbox] Level 4: failed to parse test JSON: %v", err)
+                logging.Error("Level 4: failed to parse test JSON", "err", err)
                 return &TestResult{
                         Overall: true,
                         Summary: "test parse failed (non-blocking): " + err.Error(),
@@ -238,7 +239,7 @@ func (s *SandboxRunner) runRegressionTest(ctx context.Context, sandboxNS string,
         runner := NewTestRunner(s.clientset)
         result, err := runner.RunTest(ctx, canaryImage, sandboxNS, test)
         if err != nil {
-                log.Printf("[sandbox] Level 4: test runner error: %v", err)
+                logging.Error("Level 4: test runner error", "err", err)
                 return &TestResult{
                         Overall: true, // don't block on infra failure
                         Summary: fmt.Sprintf("test runner error (non-blocking): %v", err),
@@ -286,7 +287,7 @@ func (s *SandboxRunner) runReproducer(ctx context.Context, sandboxNS string, inc
 
         var raw map[string]string
         if err := json.Unmarshal([]byte(reproJSON), &raw); err != nil {
-                log.Printf("[sandbox] Level 5: failed to parse reproducer JSON: %v", err)
+                logging.Error("Level 5: failed to parse reproducer JSON", "err", err)
                 return &TestResult{
                         Overall: true,
                         Summary: "reproducer parse failed (non-blocking): " + err.Error(),
@@ -303,7 +304,7 @@ func (s *SandboxRunner) runReproducer(ctx context.Context, sandboxNS string, inc
         runner := NewTestRunner(s.clientset)
         result, err := runner.RunReproducer(ctx, canaryImage, sandboxNS, reproducer)
         if err != nil {
-                log.Printf("[sandbox] Level 5: reproducer runner error: %v", err)
+                logging.Error("Level 5: reproducer runner error", "err", err)
                 return &TestResult{
                         Overall: true,
                         Summary: fmt.Sprintf("reproducer runner error (non-blocking): %v", err),
@@ -377,12 +378,12 @@ func parsePathMethod(entry string) (method, path string) {
 func (s *SandboxRunner) verifyEndpointsWithPaths(ctx context.Context, ns, service string, paths []string) bool {
         svc, err := s.clientset.CoreV1().Services(ns).Get(ctx, service, metav1.GetOptions{})
         if err != nil {
-                log.Printf("[sandbox] Level 2 FAILED: Service %s/%s not found (deployCanary should have created it)", ns, service)
+                logging.Error("Level 2 FAILED: Service / not found (deployCanary should have created it)", "value", ns, service)
                 return false
         }
 
         if len(svc.Spec.Ports) == 0 {
-                log.Printf("[sandbox] Level 2 FAILED: Service %s/%s has no ports", ns, service)
+                logging.Error("Level 2 FAILED: Service / has no ports", "value", ns, service)
                 return false
         }
         svcName := svc.Name
@@ -414,7 +415,7 @@ func (s *SandboxRunner) verifyEndpointsWithPaths(ctx context.Context, ns, servic
                                         // Reset consecutive successes on failure — was NOT being reset (audit H4.8).
 
                                         consecutiveSuccesses = 0
-                                        log.Printf("[sandbox] Level 2: probe %s %s attempt %d failed: %v", method, url, attempt+1, err)
+                                        logging.Error("Level 2: probe   attempt  failed", "value", method, url, attempt+1, err)
                                         continue
                                 }
                                 resp.Body.Close()
@@ -422,7 +423,7 @@ func (s *SandboxRunner) verifyEndpointsWithPaths(ctx context.Context, ns, servic
                                 if resp.StatusCode >= 400 {
                                         consecutiveFailures++
                                         consecutiveSuccesses = 0
-                                        log.Printf("[sandbox] Level 2: probe %s %s attempt %d returned %d (4xx/5xx = failure)", method, url, attempt+1, resp.StatusCode)
+                                        logging.Error("Level 2: probe   attempt  returned  (4xx/5xx = failure)", "value", method, url, attempt+1, resp.StatusCode)
                                         continue
                                 }
                                 consecutiveSuccesses++

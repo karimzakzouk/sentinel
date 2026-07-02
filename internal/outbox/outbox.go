@@ -11,10 +11,10 @@
 package outbox
 
 import (
+	"github.com/karimzakzouk/sentinel/internal/logging"
 	"context"
 	"database/sql"
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/google/uuid"
@@ -187,7 +187,7 @@ func (q *Queue) RecoverPending(ctx context.Context) (int, error) {
 	}
 	n, _ := result.RowsAffected()
 	if n > 0 {
-		log.Printf("[outbox] recovered %d interrupted incidents", n)
+		logging.Info("recovered  interrupted incidents", "n", n)
 	}
 	return int(n), nil
 }

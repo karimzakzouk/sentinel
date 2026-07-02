@@ -9,6 +9,7 @@
 package executors
 
 import (
+	"github.com/karimzakzouk/sentinel/internal/logging"
         "context"
         "fmt"
         "log"
@@ -36,7 +37,7 @@ func (e *GitHubExecutor) applySearchReplace(ctx context.Context, repo, branch, p
                 if matched {
                         content = replacement
                         applied++
-                        log.Printf("[github] block %d: matched (exact)", i)
+                        logging.Info("block : matched (exact)", "i", i)
                         continue
                 }
 
@@ -46,7 +47,7 @@ func (e *GitHubExecutor) applySearchReplace(ctx context.Context, repo, branch, p
                 if matched {
                         content = replacement
                         applied++
-                        log.Printf("[github] block %d: matched (whitespace-insensitive)", i)
+                        logging.Info("block : matched (whitespace-insensitive)", "i", i)
                         continue
                 }
 
@@ -56,7 +57,7 @@ func (e *GitHubExecutor) applySearchReplace(ctx context.Context, repo, branch, p
                 if matched {
                         content = replacement
                         applied++
-                        log.Printf("[github] block %d: matched (fuzzy)", i)
+                        logging.Info("block : matched (fuzzy)", "i", i)
                         continue
                 }
 
@@ -66,7 +67,7 @@ func (e *GitHubExecutor) applySearchReplace(ctx context.Context, repo, branch, p
 
                 if ch.Replace != "" && strings.Contains(content, ch.Replace) {
                         applied++
-                        log.Printf("[github] block %d: already applied (replacement text found in content) — treating as success", i)
+                        logging.Info("block : already applied (replacement text found in content) — treating as success", "i", i)
                         continue
                 }
 
@@ -82,7 +83,7 @@ func (e *GitHubExecutor) applySearchReplace(ctx context.Context, repo, branch, p
                 }
                 errMsg := fmt.Sprintf("block %d: search text not found (tried exact, whitespace-insensitive, fuzzy). Search preview: %q", i, preview)
                 matchErrors = append(matchErrors, errMsg)
-                log.Printf("[github] %s", errMsg)
+                logging.Info("", "errmsg", errMsg)
         }
 
         if applied == 0 {
@@ -122,13 +123,13 @@ func (e *GitHubExecutor) applySearchReplace(ctx context.Context, repo, branch, p
                 if !hasMeaningfulChange {
                         return "", fmt.Errorf("only import-only blocks matched, all meaningful fix blocks failed — not shipping a useless partial fix")
                 }
-                log.Printf("[github] partial fix: %d/%d blocks applied, %d failed (but has meaningful changes)", applied, len(changes), len(failedBlocks))
+                logging.Error("partial fix: / blocks applied,  failed (but has meaningful changes)", "value", applied, len(changes), len(failedBlocks))
         }
 
         // Syntax validation
 
         if syntaxErr := validateSyntax(path, content); syntaxErr != nil {
-                log.Printf("[github] SYNTAX VALIDATION FAILED: %v", syntaxErr)
+                logging.Error("SYNTAX VALIDATION FAILED", "syntaxerr", syntaxErr)
                 // Try applying blocks one at a time, skipping syntax-breaking ones
 
                 content = originalContent
@@ -140,7 +141,7 @@ func (e *GitHubExecutor) applySearchReplace(ctx context.Context, repo, branch, p
                                 continue
                         }
                         if err := validateSyntax(path, trial); err != nil {
-                                log.Printf("[github] block %d produces syntax error — skipping: %v", i, err)
+                                logging.Error("block  produces syntax error — skipping", "value", i, err)
                                 droppedBlocks = append(droppedBlocks, i)
                                 continue
                         }
@@ -159,11 +160,11 @@ func (e *GitHubExecutor) applySearchReplace(ctx context.Context, repo, branch, p
                         log.Printf("[github] WARNING: partial fix — recovered %d/%d blocks, dropped %d due to syntax errors (indices: %v). The PR may not fully resolve the incident.",
                                 goodBlocks, len(changes), len(droppedBlocks), droppedBlocks)
                 }
-                log.Printf("[github] recovered: applied %d/%d blocks after syntax recovery", goodBlocks, len(changes))
+                logging.Info("recovered: applied / blocks after syntax recovery", "value", goodBlocks, len(changes))
                 return content, nil
         }
 
-        log.Printf("[github] applied %d/%d search/replace blocks to %s (syntax validated ✓)", applied, len(changes), path)
+        logging.Info("applied / search/replace blocks to  (syntax validated ✓)", "value", applied, len(changes), path)
         return content, nil
 }
 
@@ -266,7 +267,7 @@ func tryFuzzyMatch(content, search, replace string) (bool, string) {
                 if len(preview) > 80 {
                         preview = preview[:80] + "..."
                 }
-                log.Printf("[github] fuzzy: search line %d: %q", i, preview)
+                logging.Info("fuzzy: search line", "value", i, preview)
         }
 
         bestScore := 0.0
@@ -297,12 +298,12 @@ func tryFuzzyMatch(content, search, replace string) (bool, string) {
                                 if len(filePreview) > 80 { filePreview = filePreview[:80] + "..." }
                                 searchPreview := searchLine
                                 if len(searchPreview) > 80 { searchPreview = searchPreview[:80] + "..." }
-                                log.Printf("[github] fuzzy: line %d diff (%.0f%%): file=%q search=%q", j, sim*100, filePreview, searchPreview)
+                                logging.Info("fuzzy: line  diff (%.0f%%): file= search=", "value", j, sim*100, filePreview, searchPreview)
                         }
                 }
         }
 
-        log.Printf("[github] fuzzy: best score=%.1f%% at line %d (threshold=85%%)", bestScore*100, bestStart+1)
+        logging.Info("fuzzy: best score=%.1f%% at line  (threshold=85%%)", "value", bestScore*100, bestStart+1)
 
         // 10-line search block could be completely wrong and still match, applying
         // the fix to the wrong function (e.g. payment fix applied to refund function).
@@ -313,7 +314,7 @@ func tryFuzzyMatch(content, search, replace string) (bool, string) {
                 return false, content
         }
 
-        log.Printf("[github] fuzzy match: %.1f%% similarity at line %d", bestScore*100, bestStart+1)
+        logging.Info("fuzzy match: %.1f%% similarity at line", "value", bestScore*100, bestStart+1)
 
         // Replace the matched lines with the replacement text.
         // IN ADDITION to the replacement's own indent, producing 4+8=12 spaces

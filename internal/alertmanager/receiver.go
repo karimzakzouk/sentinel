@@ -34,6 +34,7 @@
 package alertmanager
 
 import (
+	"github.com/karimzakzouk/sentinel/internal/logging"
         "context"
         "crypto/subtle"
         "encoding/json"
@@ -126,7 +127,7 @@ func (r *Receiver) ServeHTTP(w http.ResponseWriter, req *http.Request) {
         if r.sharedSecret != "" {
                 sent := req.Header.Get("X-Sentinel-Webhook-Secret")
                 if subtle.ConstantTimeCompare([]byte(sent), []byte(r.sharedSecret)) != 1 {
-                        log.Printf("[alertmanager] rejected webhook: missing or wrong X-Sentinel-Webhook-Secret")
+                        logging.Info("rejected webhook: missing or wrong X-Sentinel-Webhook-Secret")
                         http.Error(w, "unauthorized", http.StatusUnauthorized)
                         return
                 }
@@ -134,7 +135,7 @@ func (r *Receiver) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
         var payload AlertmanagerPayload
         if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
-                log.Printf("[alertmanager] failed to decode payload: %v", err)
+                logging.Error("failed to decode payload", "err", err)
                 http.Error(w, "invalid JSON", http.StatusBadRequest)
                 return
         }

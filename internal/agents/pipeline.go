@@ -6,6 +6,7 @@
 package agents
 
 import (
+	"github.com/karimzakzouk/sentinel/internal/logging"
         "context"
         "encoding/json"
         "fmt"
@@ -200,7 +201,7 @@ func (p *Pipeline) Run(ctx context.Context, state *schemas.AgentState) error {
                         }
                 }
                 if topConfidence >= 0.7 {
-                        log.Printf("[pipeline] top hypothesis confidence %.2f >= 0.7 — skipping evidence gathering (fast path)", topConfidence)
+                        logging.Info("top hypothesis confidence %.2f >= 0.7 — skipping evidence gathering (fast path)", "topconfidence", topConfidence)
                 } else {
                         // 2. Evidence Gatherer
                         evCtx, evSpan := tracing.Start(ctx, "evidence_gatherer.run")
@@ -268,7 +269,7 @@ func (p *Pipeline) Run(ctx context.Context, state *schemas.AgentState) error {
                         test, err := p.testGenerator.Generate(testCtx, state)
                         testCancel()
                         if err != nil {
-                                log.Printf("[pipeline] test generation failed (non-blocking): %v", err)
+                                logging.Error("test generation failed (non-blocking)", "err", err)
                         } else if test != nil {
                                 // Store the test in the agent state for the sandbox to run.
                                 // We store it as a special event so it persists + is visible in the trace.
@@ -292,7 +293,7 @@ func (p *Pipeline) Run(ctx context.Context, state *schemas.AgentState) error {
                                 state.RetrievedIncidents = append(state.RetrievedIncidents, map[string]any{
                                         "regression_test": string(testJSON),
                                 })
-                                log.Printf("[pipeline] regression test generated: %s (%s, %s)", test.TestFile, test.TestFramework, test.TestLanguage)
+                                logging.Info("regression test generated:  (, )", "value", test.TestFile, test.TestFramework, test.TestLanguage)
                         }
                 }
 
@@ -301,7 +302,7 @@ func (p *Pipeline) Run(ctx context.Context, state *schemas.AgentState) error {
                         reproducer, err := p.reproducerGen.Generate(reproCtx, state)
                         reproCancel()
                         if err != nil {
-                                log.Printf("[pipeline] reproducer generation failed (non-blocking): %v", err)
+                                logging.Error("reproducer generation failed (non-blocking)", "err", err)
                         } else if reproducer != nil {
                                 reproJSON, _ := json.Marshal(reproducer)
                                 state.AgentTrace = append(state.AgentTrace, map[string]any{
@@ -317,7 +318,7 @@ func (p *Pipeline) Run(ctx context.Context, state *schemas.AgentState) error {
                                 state.RetrievedIncidents = append(state.RetrievedIncidents, map[string]any{
                                         "reproducer": string(reproJSON),
                                 })
-                                log.Printf("[pipeline] reproducer script generated: %s (%s)", reproducer.ScriptFile, reproducer.ScriptLanguage)
+                                logging.Info("reproducer script generated:  ()", "value", reproducer.ScriptFile, reproducer.ScriptLanguage)
                         }
                 }
 
@@ -339,7 +340,7 @@ func (p *Pipeline) Run(ctx context.Context, state *schemas.AgentState) error {
                         })
 
                         if !secResult.Passed {
-                                log.Printf("[pipeline] SECURITY CHECK FAILED: %s", secResult.Summary)
+                                logging.Error("SECURITY CHECK FAILED", "summary", secResult.Summary)
                                 // Store the security findings in the error field so the PR body
                                 // (if opened) shows them, and the safety policy can block auto-merge.
 
@@ -358,7 +359,7 @@ func (p *Pipeline) Run(ctx context.Context, state *schemas.AgentState) error {
 
                                 return nil
                         }
-                        log.Printf("[pipeline] security check PASSED: %s", secResult.Summary)
+                        logging.Info("security check PASSED", "summary", secResult.Summary)
                 }
 
                 return nil

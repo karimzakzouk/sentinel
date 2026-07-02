@@ -9,6 +9,7 @@
 package executors
 
 import (
+	"github.com/karimzakzouk/sentinel/internal/logging"
         "bytes"
         "context"
         "fmt"
@@ -213,7 +214,7 @@ func (r *TestRunner) RunTest(ctx context.Context, fixCanaryImage, sandboxNS stri
                 result.Summary = fmt.Sprintf("test FAILED: %s\n--- Test Output ---\n%s", test.Description, lastN(podOutput, 2000))
         }
 
-        log.Printf("[testrunner] test %s (passed=%v)", test.TestFile, passed)
+        logging.Info("test  (passed=)", "value", test.TestFile, passed)
         return result, nil
 }
 
@@ -383,7 +384,7 @@ func (r *TestRunner) RunReproducer(ctx context.Context, canaryImage, sandboxNS s
                         lastN(podOutput, 1000)),
         }
 
-        log.Printf("[testrunner] reproducer %s (passed=%v)", reproducer.ScriptFile, passed)
+        logging.Info("reproducer  (passed=)", "value", reproducer.ScriptFile, passed)
         return result, nil
 }
 

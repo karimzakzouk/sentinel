@@ -2,9 +2,10 @@
 package events
 
 type Broadcaster interface {
-        BroadcastEvent(eventType string, data interface{})
+	BroadcastEvent(eventType string, data any)
 }
 
 type noopBroadcaster struct{}
-func (noopBroadcaster) BroadcastEvent(string, interface{}) {}
-func Noop() Broadcaster { return noopBroadcaster{} }
+
+func (noopBroadcaster) BroadcastEvent(string, any) {}
+func Noop() Broadcaster                            { return noopBroadcaster{} }

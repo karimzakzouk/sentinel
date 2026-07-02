@@ -11,8 +11,8 @@ import (
 
 // fakeHandler captures HandleAlert calls for assertions.
 type fakeHandler struct {
-	mu      sync.Mutex
-	calls   []alertCall
+	mu    sync.Mutex
+	calls []alertCall
 }
 
 type alertCall struct {
@@ -106,7 +106,7 @@ func TestReceiver_DedupByFingerprint(t *testing.T) {
 	body, _ := json.Marshal(payload)
 
 	// Send the same alert 3 times
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		req := httptest.NewRequest(http.MethodPost, "/webhook/alertmanager", bytes.NewReader(body))
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, req)
@@ -122,8 +122,8 @@ func TestReceiver_ServiceFallback(t *testing.T) {
 	r := NewReceiver(h)
 
 	tests := []struct {
-		labels    map[string]string
-		wantSvc   string
+		labels  map[string]string
+		wantSvc string
 	}{
 		{map[string]string{"service": "svc"}, "svc"},
 		{map[string]string{"job": "myjob"}, "myjob"},

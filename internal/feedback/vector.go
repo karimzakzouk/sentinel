@@ -2,10 +2,10 @@
 package feedback
 
 import (
+	"github.com/karimzakzouk/sentinel/internal/logging"
         "bytes"
         "context"
         "encoding/json"
-        "log"
         "net/http"
         "sync"
         "time"
@@ -116,7 +116,7 @@ func (v *VectorStore) GenerateEmbedding(ctx context.Context, text string) ([]flo
                         } else if v.model == "" {
                                 reason = "no embedding model configured (set SENTINEL_LLM_EMBEDDING_MODEL)"
                         }
-                        log.Printf("[vector] %s — using permanent hash fallback. Similar-incident retrieval will be disabled.", reason)
+                        logging.Info("— using permanent hash fallback. Similar-incident retrieval will be disabled.", "reason", reason)
                         v.usingHashFallback = true
                         v.hashFallbackPermanent = true
                 }
@@ -137,14 +137,14 @@ func (v *VectorStore) GenerateEmbedding(ctx context.Context, text string) ([]flo
 
         resp, err := v.httpClient.Do(req)
         if err != nil {
-                log.Printf("[vector] embeddings API failed, using transient hash fallback: %v", err)
+                logging.Error("embeddings API failed, using transient hash fallback", "err", err)
                 v.markTransientHashFallback()
                 return hashEmbedding(text, v.embeddingDim), nil
         }
         defer resp.Body.Close()
 
         if resp.StatusCode != 200 {
-                log.Printf("[vector] embeddings API returned HTTP %d — using transient hash fallback", resp.StatusCode)
+                logging.Info("embeddings API returned HTTP  — using transient hash fallback", "statuscode", resp.StatusCode)
                 v.markTransientHashFallback()
                 return hashEmbedding(text, v.embeddingDim), nil
         }
@@ -155,7 +155,7 @@ func (v *VectorStore) GenerateEmbedding(ctx context.Context, text string) ([]flo
                 } `json:"data"`
         }
         if err := json.NewDecoder(resp.Body).Decode(&result); err != nil || len(result.Data) == 0 {
-                log.Printf("[vector] embeddings API returned unparseable body — using transient hash fallback: %v", err)
+                logging.Info("embeddings API returned unparseable body — using transient hash fallback", "err", err)
                 v.markTransientHashFallback()
                 return hashEmbedding(text, v.embeddingDim), nil
         }
@@ -164,7 +164,7 @@ func (v *VectorStore) GenerateEmbedding(ctx context.Context, text string) ([]flo
 
         v.mu.Lock()
         if v.usingHashFallback && !v.hashFallbackPermanent {
-                log.Printf("[vector] embeddings API recovered — clearing hash fallback flag")
+                logging.Info("embeddings API recovered — clearing hash fallback flag")
                 v.usingHashFallback = false
                 v.lastHashFallbackAt = time.Time{}
         }
@@ -302,7 +302,7 @@ func (v *VectorStore) LoadFromDB(ctx context.Context, store *Store) error {
         }
 
         if loaded > 0 {
-                log.Printf("[vector] loaded %d vectors into HNSW index", loaded)
+                logging.Info("loaded  vectors into HNSW index", "loaded", loaded)
         }
         return nil
 }

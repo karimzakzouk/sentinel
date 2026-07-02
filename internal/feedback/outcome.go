@@ -1,6 +1,7 @@
 package feedback
 
 import (
+	"github.com/karimzakzouk/sentinel/internal/logging"
         "bytes"
         "context"
         "fmt"
@@ -101,7 +102,7 @@ func (w *OutcomeWatcher) WatchWithDetails(ctx context.Context, service, namespac
 
         watchKey := fmt.Sprintf("%s/%s/%s", service, namespace, incidentID)
         if _, alreadyWatching := w.activeWatches.LoadOrStore(watchKey, true); alreadyWatching {
-                log.Printf("[outcome] %s/%s — watch already running, skipping duplicate (incident %s)", service, namespace, incidentID)
+                logging.Info("/ — watch already running, skipping duplicate (incident )", "value", service, namespace, incidentID)
                 return
         }
 
@@ -112,7 +113,7 @@ func (w *OutcomeWatcher) WatchWithDetails(ctx context.Context, service, namespac
                 defer w.activeWatches.Delete(watchKey)
                 defer func() {
                         if r := recover(); r != nil {
-                                log.Printf("[panic] outcome watcher recovered: %v", r)
+                                logging.Info("outcome watcher recovered", "r", r)
                         }
                 }()
 
@@ -346,7 +347,7 @@ func (w *OutcomeWatcher) recordOutcome(incidentID, service, namespace string, su
 
         _, _, err := w.store.RecordBetaOutcome(ctx, service, fixType, success)
         if err != nil {
-                log.Printf("[outcome] failed to record beta outcome: %v", err)
+                logging.Error("failed to record beta outcome", "err", err)
         }
 
         // Update the incident's outcome in the vector store
@@ -355,8 +356,8 @@ func (w *OutcomeWatcher) recordOutcome(incidentID, service, namespace string, su
                 `UPDATE incident_vectors SET outcome_verified = 1, outcome_success = ? WHERE incident_id = ?`,
                 boolToInt(success), incidentID)
         if err != nil {
-                log.Printf("[outcome] failed to update vector outcome: %v", err)
+                logging.Error("failed to update vector outcome", "err", err)
         }
 
-        log.Printf("[outcome] recorded: %s/%s success=%v fix_type=%s (%s)", namespace, service, success, fixType, detail)
+        logging.Info("recorded: / success= fix_type= ()", "value", namespace, service, success, fixType, detail)
 }

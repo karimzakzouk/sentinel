@@ -8,6 +8,7 @@
 package chatops
 
 import (
+	"github.com/karimzakzouk/sentinel/internal/logging"
         "context"
         "crypto/hmac"
         "crypto/sha256"
@@ -59,7 +60,7 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
         if h.webhookSecret != "" {
                 sig := r.Header.Get("X-Hub-Signature-256")
                 if !h.verifySignature(body, sig) {
-                        log.Printf("[chatops] webhook signature verification failed")
+                        logging.Error("webhook signature verification failed")
                         http.Error(w, "signature mismatch", http.StatusUnauthorized)
                         return
                 }
@@ -100,7 +101,7 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
                 } `json:"repository"`
         }
         if err := json.Unmarshal(body, &event); err != nil {
-                log.Printf("[chatops] failed to parse issue_comment webhook: %v", err)
+                logging.Error("failed to parse issue_comment webhook", "err", err)
                 http.Error(w, "bad payload", http.StatusBadRequest)
                 return
         }
@@ -162,7 +163,7 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
                 ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
                 defer cancel()
                 if err := Dispatch(ctx, commands, h.deps); err != nil {
-                        log.Printf("[chatops] dispatch error: %v", err)
+                        logging.Error("dispatch error", "err", err)
                 }
         }()
 

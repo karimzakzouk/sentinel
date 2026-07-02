@@ -1,11 +1,11 @@
 package executors
 
 import (
+	"github.com/karimzakzouk/sentinel/internal/logging"
         "bytes"
         "context"
         "errors"
         "fmt"
-        "log"
         "regexp"
         "strings"
         "time"
@@ -204,7 +204,7 @@ func (k *KanikoBuilder) Build(ctx context.Context, repo, branch string, fixedFil
                 fullImage = fmt.Sprintf("%s/%s:%s", k.registry, imageName, imageTag)
         }
 
-        log.Printf("[kaniko] starting build: %s (repo=%s, branch=%s)", fullImage, repo, branch)
+        logging.Info("starting build:  (repo=, branch=)", "value", fullImage, repo, branch)
 
         // 1. Create ConfigMap with the fixed files + manifest
 
@@ -230,12 +230,12 @@ func (k *KanikoBuilder) Build(ctx context.Context, repo, branch string, fixedFil
                 // Get the logs for debugging
 
                 logs, _ := k.getPodLogs(ctx, podName)
-                log.Printf("[kaniko] build failed. Last 500 chars of logs:\n%s", lastN(logs, 500))
+                logging.Error("build failed. Last 500 chars of logs:\n", "value", lastN(logs, 500))
                 k.cleanup(ctx, configmapName, podName)
                 return "", fmt.Errorf("kaniko build failed for %s", fullImage)
         }
 
-        log.Printf("[kaniko] build succeeded: %s", fullImage)
+        logging.Info("build succeeded", "fullimage", fullImage)
         k.cleanup(ctx, configmapName, podName)
         return fullImage, nil
 }
@@ -379,7 +379,7 @@ ls -la /workspace/repo/`
                         "--cache-ttl=168h", // cache layers for 7 days
                 )
         } else {
-                log.Printf("[kaniko] WARNING: no Docker Hub username set — layer caching disabled (set WithDockerHubUsername)")
+                logging.Warn("no Docker Hub username set — layer caching disabled (set WithDockerHubUsername)")
         }
         kanikoArgs = append(kanikoArgs, "--snapshotMode=redo")
 
@@ -633,7 +633,7 @@ func (k *KanikoBuilder) BuildForIncident(ctx context.Context, inc *schemas.Incid
                 // clone the branch and get the fixed file directly.
 
                 if len(fc.Changes) > 0 && fc.NewContent == "" {
-                        log.Printf("[kaniko] file %s uses search/replace — already on branch, skipping overlay", fc.Path)
+                        logging.Info("file  uses search/replace — already on branch, skipping overlay", "path", fc.Path)
                         continue
                 }
                 if fc.NewContent != "" {

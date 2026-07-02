@@ -4,6 +4,7 @@
 package watcher
 
 import (
+	"github.com/karimzakzouk/sentinel/internal/logging"
         "context"
         "fmt"
         "log"
@@ -63,7 +64,7 @@ func (w *Watcher) Run(ctx context.Context) {
 
                 err := w.watchStream(ctx)
                 if err != nil {
-                        log.Printf("[watcher] watch stream error: %v — falling back to poll for 30s", err)
+                        logging.Error("watch stream error:  — falling back to poll for 30s", "err", err)
                         w.pollFallback(ctx, 30*time.Second)
                 }
         }
@@ -145,13 +146,13 @@ func (w *Watcher) handleItem(ctx context.Context, item *unstructured.Unstructure
         }
         repoFromSpec, _ := spec["repo"].(string)
 
-        log.Printf("[watcher] new SentinelIncident %s/%s (service=%s, reason=%s)", namespace, name, service, reason)
+        logging.Info("new SentinelIncident / (service=, reason=)", "value", namespace, name, service, reason)
 
         // Patch CR status to "investigating" so we don't re-trigger.
         // This is the only synchronous K8s API call in the watch loop — fast.
 
         if err := w.k8s.PatchCRStatus(ctx, name, namespace, "investigating"); err != nil {
-                log.Printf("[watcher] could not patch CR status: %v", err)
+                logging.Info("could not patch CR status", "err", err)
         }
 
         // goroutine so the watch loop isn't blocked for ~10s per CR.
@@ -173,16 +174,16 @@ func (w *Watcher) handleItem(ctx context.Context, item *unstructured.Unstructure
                                 annotations["sentinel.io/repo"] = repoFromSpec
                         }
                         if len(annotations) > 0 {
-                                log.Printf("[watcher] discovered annotations: %v", annotations)
+                                logging.Info("discovered annotations", "annotations", annotations)
                         } else {
-                                log.Printf("[watcher] no annotations found on workload %s/%s — set sentinel.io/repo + sentinel.io/branch annotations on the Deployment", svcNs, service)
+                                logging.Info("no annotations found on workload / — set sentinel.io/repo + sentinel.io/branch annotations on the Deployment", "value", svcNs, service)
                         }
 
                         // Fetch REAL pod logs from the crashing pods
 
                         podLogs, _ := w.k8s.FetchCrashingPodLogs(ctx, service, svcNs)
                         if podLogs != "" {
-                                log.Printf("[watcher] fetched %d chars of pod logs for %s", len(podLogs), service)
+                                logging.Info("fetched  chars of pod logs for", "value", len(podLogs), service)
                         }
 
                         // Build the synthetic anomaly cluster

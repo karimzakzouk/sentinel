@@ -15,6 +15,7 @@
 package githubapp
 
 import (
+	"github.com/karimzakzouk/sentinel/internal/logging"
         "bytes"
         "context"
         "crypto/rsa"
@@ -22,7 +23,6 @@ import (
         "encoding/pem"
         "fmt"
         "io"
-        "log"
         "net/http"
         neturl "net/url"
         "strings"
@@ -328,9 +328,9 @@ func (a *App) HandleInstallationEvent(ctx context.Context, payload []byte, webho
                 owner := event.Installation.Account.Login
                 repoName := repo.Name
                 if err := a.RegisterWebhook(ctx, owner, repoName, webhookURL, secret); err != nil {
-                        log.Printf("[github-app]  failed to register webhook on %s/%s: %v", owner, repoName, err)
+                        logging.Error("-app]  failed to register webhook on /", "value", owner, repoName, err)
                 } else {
-                        log.Printf("[github-app]  webhook registered on %s/%s", owner, repoName)
+                        logging.Info("-app]  webhook registered on /", "value", owner, repoName)
                 }
         }
 

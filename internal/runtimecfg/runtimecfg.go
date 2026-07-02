@@ -4,9 +4,9 @@
 package runtimecfg
 
 import (
+	"github.com/karimzakzouk/sentinel/internal/logging"
         "encoding/json"
         "fmt"
-        "log"
         "os"
         "path/filepath"
         "sync"
@@ -112,17 +112,17 @@ func (m *Manager) Load() {
         data, err := os.ReadFile(m.filePath)
         if err != nil {
                 if !os.IsNotExist(err) {
-                        log.Printf("[runtimecfg] read error: %v", err)
+                        logging.Error("read error", "err", err)
                 }
                 return
         }
         var cfg RuntimeConfig
         if err := json.Unmarshal(data, &cfg); err != nil {
-                log.Printf("[runtimecfg] parse error: %v", err)
+                logging.Error("parse error", "err", err)
                 return
         }
         m.config = &cfg
-        log.Printf("[runtimecfg] loaded from %s (%d overrides)", m.filePath, countOverrides(&cfg))
+        logging.Info("loaded from  ( overrides)", "value", m.filePath, countOverrides(&cfg))
 }
 
 func (m *Manager) Save(cfg *RuntimeConfig) error {
@@ -148,7 +148,7 @@ func (m *Manager) Save(cfg *RuntimeConfig) error {
                 return err
         }
         m.config = cfg
-        log.Printf("[runtimecfg] saved to %s (%d overrides)", m.filePath, countOverrides(cfg))
+        logging.Info("saved to  ( overrides)", "value", m.filePath, countOverrides(cfg))
 
         // the callback is expected to be a fast field-copy, not I/O. If it
         // panics, the deferred unlock still runs (the panic propagates up

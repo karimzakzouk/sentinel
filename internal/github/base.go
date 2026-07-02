@@ -10,12 +10,12 @@
 package githubapp
 
 import (
+	"github.com/karimzakzouk/sentinel/internal/logging"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"time"
 )
@@ -112,7 +112,7 @@ func (b *BaseClient) Do(ctx context.Context, method, url string, body any, out a
 			body, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
 			if isRateLimited(resp, body) {
-				log.Printf("[github] rate limited (attempt %d/%d): %s", attempt+1, maxRetries+1, string(body[:min(len(body), 200)]))
+				logging.Info("rate limited (attempt /)", "value", attempt+1, maxRetries+1, string(body[:min(len(body), 200)]))
 				lastErr = fmt.Errorf("rate limited: %s", string(body[:min(len(body), 200)]))
 				continue
 			}

@@ -1,6 +1,7 @@
 package detection
 
 import (
+	"github.com/karimzakzouk/sentinel/internal/logging"
         "context"
         "log"
         "strings"
@@ -112,7 +113,7 @@ func (c *Clusterer) Send(ctx context.Context, sig Signal) {
 
                 defer func() {
                         if r := recover(); r != nil {
-                                log.Printf("[panic] clusterer.emit recovered: %v", r)
+                                logging.Info("clusterer.emit recovered", "r", r)
                         }
                 }()
                 c.emit(key)
@@ -132,7 +133,7 @@ func (c *Clusterer) Stop() {
                 }
                 delete(c.pending, key)
         }
-        log.Printf("[clusterer] stopped — cancelled %d pending clusters", len(c.pending))
+        logging.Info("stopped — cancelled  pending clusters", "value", len(c.pending))
 }
 
 // emit fires the cluster after the grouping window closes.
@@ -149,12 +150,12 @@ func (c *Clusterer) emit(key string) {
         c.mu.Unlock()
 
         if c.tracker.IsActive(pending.signals[0].Service, pending.signals[0].Namespace) {
-                log.Printf("[clusterer] skipping %s — active incident already in progress", key)
+                logging.Info("skipping  — active incident already in progress", "key", key)
                 return
         }
 
         if c.pauseChecker != nil && c.pauseChecker.IsPaused() {
-                log.Printf("[clusterer] skipping %s — autonomous mode paused", key)
+                logging.Info("skipping  — autonomous mode paused", "key", key)
                 return
         }
 
@@ -177,7 +178,7 @@ func (c *Clusterer) emit(key string) {
                 go func() {
                         defer func() {
                                 if r := recover(); r != nil {
-                                        log.Printf("[panic] clusterer.handler recovered: %v", r)
+                                        logging.Info("clusterer.handler recovered", "r", r)
                                 }
                         }()
                         c.handler(sig.Service, sig.Namespace, sig.Reason, "")

@@ -10,10 +10,10 @@
 package repo
 
 import (
+	"github.com/karimzakzouk/sentinel/internal/logging"
         "context"
         "fmt"
         "io/fs"
-        "log"
         "os"
         "path/filepath"
         "regexp"
@@ -101,7 +101,7 @@ func (c *Cloner) Clone(ctx context.Context, repo, ref string) (string, error) {
                 // Found an existing clone — try to fetch updates
 
                 existingDir := matches[0]
-                log.Printf("[cloner] found existing clone at %s, fetching updates", existingDir)
+                logging.Info("found existing clone at , fetching updates", "existingdir", existingDir)
 
                 // Use a token-free URL + Auth option on the fetch.
 
@@ -123,13 +123,13 @@ func (c *Cloner) Clone(ctx context.Context, repo, ref string) (string, error) {
                                 Auth:         fetchAuth,
                         })
                         if err != nil && err != git.NoErrAlreadyUpToDate {
-                                log.Printf("[cloner] fetch failed (%s), falling back to full clone", c.sanitizeErr(err))
+                                logging.Error("fetch failed (), falling back to full clone", "value", c.sanitizeErr(err))
                         } else {
-                                log.Printf("[cloner] fetch succeeded, reusing existing clone at %s", existingDir)
+                                logging.Info("fetch succeeded, reusing existing clone at", "existingdir", existingDir)
                                 return existingDir, nil
                         }
                 } else {
-                        log.Printf("[cloner] open existing clone failed (%s), falling back to full clone", c.sanitizeErr(err))
+                        logging.Error("open existing clone failed (), falling back to full clone", "value", c.sanitizeErr(err))
                 }
                 // If fetch failed, fall through to full clone below
                 // Clean up the old clone to avoid confusion
@@ -273,7 +273,7 @@ func isHex(s string) bool {
 
 func (c *Cloner) Cleanup(path string) {
         if err := os.RemoveAll(path); err != nil {
-                log.Printf("[cloner] cleanup failed for %s: %v", path, err)
+                logging.Error("cleanup failed for", "value", path, err)
         }
 }
 

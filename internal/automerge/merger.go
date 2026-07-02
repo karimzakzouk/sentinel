@@ -3,6 +3,7 @@
 package automerge
 
 import (
+	"github.com/karimzakzouk/sentinel/internal/logging"
         "context"
         "fmt"
         "log"
@@ -129,7 +130,7 @@ func (m *Merger) Track(pr *TrackedPR) {
         }
         pr.AddedAt = time.Now()
         m.tracked[key] = pr
-        log.Printf("[automerge] tracking PR %s#%d (incident %s)", pr.Repo, pr.PRNumber, pr.IncidentID)
+        logging.Info("tracking PR # (incident )", "value", pr.Repo, pr.PRNumber, pr.IncidentID)
 }
 
 // Untrack removes a PR from the watch list. Called when:
@@ -169,15 +170,15 @@ func (m *Merger) Run(ctx context.Context, pollInterval time.Duration) {
         ticker := time.NewTicker(pollInterval)
         defer ticker.Stop()
 
-        log.Printf("[automerge] merger started (poll interval: %v)", pollInterval)
+        logging.Info("merger started (poll interval: )", "pollinterval", pollInterval)
 
         for {
                 select {
                 case <-ctx.Done():
-                        log.Printf("[automerge] merger stopping")
+                        logging.Info("merger stopping")
                         return
                 case <-m.stopCh:
-                        log.Printf("[automerge] merger stopping (stop signal)")
+                        logging.Info("merger stopping (stop signal)")
                         return
                 case <-ticker.C:
                         m.tick(ctx)
@@ -243,12 +244,12 @@ func (m *Merger) evaluateAndMerge(ctx context.Context, pr *TrackedPR) {
 
         ciStatus, err := m.gh.GetCIStatus(ctx, pr.Repo, pr.PRNumber)
         if err != nil {
-                log.Printf("[automerge] failed to get CI status for %s#%d: %v", pr.Repo, pr.PRNumber, err)
+                logging.Error("failed to get CI status for #", "value", pr.Repo, pr.PRNumber, err)
                 return
         }
         labels, err := m.gh.GetLabels(ctx, pr.Repo, pr.PRNumber)
         if err != nil {
-                log.Printf("[automerge] failed to get labels for %s#%d: %v", pr.Repo, pr.PRNumber, err)
+                logging.Error("failed to get labels for #", "value", pr.Repo, pr.PRNumber, err)
                 return
         }
 
@@ -265,7 +266,7 @@ func (m *Merger) evaluateAndMerge(ctx context.Context, pr *TrackedPR) {
         if ciStatus.State == "pending" && !pr.CIWaitStart.IsZero() {
                 timeout := time.Duration(m.policy.cfg.CITimeoutSec) * time.Second
                 if time.Since(pr.CIWaitStart) > timeout {
-                        log.Printf("[automerge] CI timeout for %s#%d — untracking", pr.Repo, pr.PRNumber)
+                        logging.Info("CI timeout for # — untracking", "value", pr.Repo, pr.PRNumber)
                         _ = m.gh.PostComment(ctx, pr.Repo, pr.PRNumber,
                                 fmt.Sprintf("⏱️ Auto-merge cancelled: CI did not complete within %v. Merging manually.", timeout))
                         _ = m.store.UpdateAutoMergeStatus(ctx, pr.IncidentID, "skipped:ci_timeout")
@@ -316,12 +317,12 @@ func (m *Merger) evaluateAndMerge(ctx context.Context, pr *TrackedPR) {
 
         // All gates passed — merge.
 
-        log.Printf("[automerge] merging PR %s#%d (incident %s)", pr.Repo, pr.PRNumber, pr.IncidentID)
+        logging.Info("merging PR # (incident )", "value", pr.Repo, pr.PRNumber, pr.IncidentID)
         commitMsg := fmt.Sprintf("Auto-merged by Sentinel (incident %s, confidence %.2f, sandbox verified)",
                 pr.IncidentID, pr.Input.Confidence)
 
         if err := m.gh.Merge(ctx, pr.Repo, pr.PRNumber, commitMsg); err != nil {
-                log.Printf("[automerge] merge failed for %s#%d: %v", pr.Repo, pr.PRNumber, err)
+                logging.Error("merge failed for #", "value", pr.Repo, pr.PRNumber, err)
                 _ = m.gh.PostComment(ctx, pr.Repo, pr.PRNumber,
                         fmt.Sprintf("❌ Auto-merge failed: %v\n\nThe PR is still open — merge manually or run `/sentinel merge`.", err))
                 _ = m.store.UpdateAutoMergeStatus(ctx, pr.IncidentID, "skipped:merge_failed")
@@ -349,7 +350,7 @@ func (m *Merger) evaluateAndMerge(ctx context.Context, pr *TrackedPR) {
                 m.outcome.WatchPostMerge(ctx, pr.IncidentID, pr.Input.Service, pr.Input.Namespace)
         }
 
-        log.Printf("[automerge] merged PR %s#%d", pr.Repo, pr.PRNumber)
+        logging.Info("merged PR #", "value", pr.Repo, pr.PRNumber)
 }
 
 // containsLabel returns true if the labels slice contains the given label.

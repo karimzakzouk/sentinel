@@ -5,9 +5,9 @@
 package feedback
 
 import (
+	"github.com/karimzakzouk/sentinel/internal/logging"
         "database/sql"
         "fmt"
-        "log"
         "sync"
 
         _ "modernc.org/sqlite"
@@ -208,14 +208,14 @@ func (s *Store) migrateSchema() error {
                 if _, err := s.db.Exec(fmt.Sprintf("ALTER TABLE incidents ADD COLUMN %s %s", a.name, a.decl)); err != nil {
                         return fmt.Errorf("alter table add %s: %w", a.name, err)
                 }
-                log.Printf("[store] migration: added column %s to incidents table", a.name)
+                logging.Info("migration: added column  to incidents table", "name", a.name)
         }
 
         // Add the (pr_repo, pr_number) index if it doesn't exist.
         // SQLite supports CREATE INDEX IF NOT EXISTS so we can do this unconditionally.
 
         if _, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_incidents_pr ON incidents(pr_repo, pr_number) WHERE pr_number IS NOT NULL`); err != nil {
-                log.Printf("[store] WARNING: could not create idx_incidents_pr: %v (continuing)", err)
+                logging.Warn("could not create idx_incidents_pr:  (continuing)", "err", err)
         }
         return nil
 }

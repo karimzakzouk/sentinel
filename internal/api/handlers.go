@@ -4,12 +4,12 @@
 package api
 
 import (
+	"github.com/karimzakzouk/sentinel/internal/logging"
 	"net/http/pprof"
         "bytes"
         "encoding/json"
         "fmt"
         "io"
-        "log"
         "net/http"
         "strconv"
         "strings"
@@ -138,7 +138,7 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
                         writeJSON(w, 500, map[string]string{"error": err.Error()})
                         return
                 }
-                log.Printf("[api] runtime config saved via POST /settings")
+                logging.Info("runtime config saved via POST /settings")
                 writeJSON(w, 200, map[string]string{"status": "saved", "message": "Configuration saved. Some changes may require a restart to take full effect."})
                 return
         }
@@ -378,7 +378,7 @@ func (s *Server) handleGitHubApp(w http.ResponseWriter, r *http.Request) {
                         writeJSON(w, 500, map[string]string{"error": err.Error()})
                         return
                 }
-                log.Printf("[api] GitHub App configured via /settings/github-app (app_id=%s, slug=%s)", req.AppID, slug)
+                logging.Info("GitHub App configured via /settings/github-app (app_id=, slug=)", "value", req.AppID, slug)
                 writeJSON(w, 200, map[string]string{
                         "status": "configured",
                         "slug":   slug,
@@ -391,7 +391,7 @@ func (s *Server) handleGitHubApp(w http.ResponseWriter, r *http.Request) {
                         writeJSON(w, 500, map[string]string{"error": err.Error()})
                         return
                 }
-                log.Printf("[api] GitHub App config removed")
+                logging.Info("GitHub App config removed")
                 writeJSON(w, 200, map[string]string{"status": "removed", "message": "Falling back to PAT."})
 
         default:
@@ -428,7 +428,7 @@ func (s *Server) handleGitHubAppInstall(w http.ResponseWriter, r *http.Request) 
                 writeJSON(w, 500, map[string]string{"error": err.Error()})
                 return
         }
-        log.Printf("[api] GitHub App install ID set: %s", req.InstallID)
+        logging.Info("GitHub App install ID set", "installid", req.InstallID)
         writeJSON(w, 200, map[string]string{"status": "configured", "install_id": req.InstallID})
 }
 

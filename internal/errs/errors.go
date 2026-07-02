@@ -58,7 +58,7 @@ func containsCI(s, substr string) bool {
 	lsub := []byte(substr)
 	for i := 0; i <= len(ls)-len(lsub); i++ {
 		match := true
-		for j := 0; j < len(lsub); j++ {
+		for j := range lsub {
 			c1 := ls[i+j]
 			c2 := lsub[j]
 			if c1 >= 'A' && c1 <= 'Z' {

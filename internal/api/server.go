@@ -2,6 +2,7 @@
 package api
 
 import (
+	"github.com/karimzakzouk/sentinel/internal/logging"
         "context"
         "crypto/subtle"
         "log"
@@ -240,9 +241,9 @@ func New(addr string, store Store, settings SettingsGetter, investigate Investig
 func (s *Server) SetAPIToken(token string) {
         s.apiToken = token
         if token == "" {
-                log.Printf("[api] WARNING: SENTINEL_API_TOKEN is empty — admin API is unauthenticated. Set it in production to prevent unauthorized investigation triggers, pause/resume, and settings changes.")
+                logging.Warn("SENTINEL_API_TOKEN is empty — admin API is unauthenticated. Set it in production to prevent unauthorized investigation triggers, pause/resume, and settings changes.")
         } else {
-                log.Printf("[api] admin API auth enabled (bearer token set)")
+                logging.Info("admin API auth enabled (bearer token set)")
         }
 }
 
@@ -417,7 +418,7 @@ func (s *Server) BroadcastEvent(eventType string, data interface{}) {
 }
 
 func (s *Server) Start() error {
-        log.Printf("[api] listening on %s", s.http.Addr)
+        logging.Info("listening on", "addr", s.http.Addr)
         return s.http.ListenAndServe()
 }
 

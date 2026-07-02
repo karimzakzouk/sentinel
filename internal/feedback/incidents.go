@@ -2,11 +2,11 @@
 package feedback
 
 import (
+	"github.com/karimzakzouk/sentinel/internal/logging"
         "context"
         "database/sql"
         "encoding/json"
         "fmt"
-        "log"
         "strings"
         "time"
 
@@ -264,7 +264,7 @@ func (s *Store) ListRecentIncidents(ctx context.Context, limit int) ([]*schemas.
 
                 parsedID, err := uuid.Parse(incidentIDStr)
                 if err != nil {
-                        log.Printf("[store] skipping row with invalid UUID %q: %v", incidentIDStr, err)
+                        logging.Info("skipping row with invalid UUID", "value", incidentIDStr, err)
                         continue
                 }
                 inc.IncidentID = parsedID
@@ -284,7 +284,7 @@ func (s *Store) ListRecentIncidents(ctx context.Context, limit int) ([]*schemas.
                 }
 
                 if err := json.Unmarshal([]byte(clusterJSON), &inc.Cluster); err != nil {
-                        log.Printf("[store] skipping incident %s with corrupt cluster JSON: %v", parsedID, err)
+                        logging.Info("skipping incident  with corrupt cluster JSON", "value", parsedID, err)
                         continue
                 }
                 if err := json.Unmarshal([]byte(stateJSON), &inc.State); err != nil {
@@ -337,7 +337,7 @@ func (s *Store) FindIncidentByPR(ctx context.Context, repo string, prNumber int)
         for rows.Next() {
                 inc, _, err := scanIncidentRow(rows)
                 if err != nil {
-                        log.Printf("[store] skipping incident row with scan error: %v", err)
+                        logging.Error("skipping incident row with scan error", "err", err)
                         continue
                 }
                 // Check if this incident's PR matches

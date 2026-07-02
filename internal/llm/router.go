@@ -5,10 +5,10 @@
 package llm
 
 import (
+	"github.com/karimzakzouk/sentinel/internal/logging"
         "context"
         "encoding/json"
         "fmt"
-        "log"
         "math"
         "regexp"
         "strings"
@@ -554,7 +554,7 @@ func extractJSON(text string) map[string]any {
 
                 if repaired := repairTruncated(candidate); repaired != "" {
                         if v, ok := tryParse(repaired); ok {
-                                log.Printf("[llm] extractJSON recovered via prose-strip + repair (line %d)", startLine)
+                                logging.Info("extractJSON recovered via prose-strip + repair (line )", "startline", startLine)
                                 return v
                         }
                 }
@@ -574,7 +574,7 @@ func extractJSON(text string) map[string]any {
         if len(preview) > 500 {
                 preview = preview[:500] + "...(truncated)"
         }
-        log.Printf("[llm] extractJSON FAILED — raw response (len=%d): %s", len(text), preview)
+        logging.Error("extractJSON FAILED — raw response (len=)", "value", len(text), preview)
         return map[string]any{}
 }
 

@@ -14,6 +14,7 @@
 package prreview
 
 import (
+	"github.com/karimzakzouk/sentinel/internal/logging"
         "bytes"
         "context"
         "crypto/hmac"
@@ -22,7 +23,6 @@ import (
         "encoding/json"
         "fmt"
         "io"
-        "log"
         "net/http"
         "regexp"
         "strings"
@@ -199,7 +199,7 @@ func (r *Reviewer) VerifySignature(payload []byte, signature string) bool {
                 // No secret configured — refuse to verify. The webhook is
                 // unauthenticated and must not be trusted.
 
-                log.Printf("[prreview] SECURITY: no webhook secret configured — refusing to verify signature. Set sentinel.githubWebhookSecret to enable PR review.")
+                logging.Info("SECURITY: no webhook secret configured — refusing to verify signature. Set sentinel.githubWebhookSecret to enable PR review.")
                 return false
         }
 
@@ -236,7 +236,7 @@ func (r *Reviewer) HandleWebhook(w http.ResponseWriter, req *http.Request) {
 
         sig := req.Header.Get("X-Hub-Signature-256")
         if !r.VerifySignature(payload, sig) {
-                log.Printf("[prreview] signature verification failed")
+                logging.Error("signature verification failed")
                 http.Error(w, "invalid signature", http.StatusUnauthorized)
                 return
         }
@@ -248,7 +248,7 @@ func (r *Reviewer) HandleWebhook(w http.ResponseWriter, req *http.Request) {
         deliveryID := req.Header.Get("X-GitHub-Delivery")
         if deliveryID != "" {
                 if r.isDuplicateDelivery(deliveryID) {
-                        log.Printf("[prreview] duplicate delivery %s — acking without processing", deliveryID)
+                        logging.Info("duplicate delivery  — acking without processing", "deliveryid", deliveryID)
                         w.WriteHeader(http.StatusOK)
                         return
                 }
@@ -259,7 +259,7 @@ func (r *Reviewer) HandleWebhook(w http.ResponseWriter, req *http.Request) {
         case "pull_request":
                 r.handlePullRequest(req.Context(), payload)
         case "ping":
-                log.Printf("[prreview] received ping event")
+                logging.Info("received ping event")
         default:
                 // Ignore other events
 
@@ -302,7 +302,7 @@ func (r *Reviewer) handlePullRequest(ctx context.Context, payload []byte) {
         }
 
         if err := json.Unmarshal(payload, &event); err != nil {
-                log.Printf("[prreview] failed to parse pull_request event: %v", err)
+                logging.Error("failed to parse pull_request event", "err", err)
                 return
         }
 
@@ -316,14 +316,14 @@ func (r *Reviewer) handlePullRequest(ctx context.Context, payload []byte) {
         prNumber := event.PullRequest.Number
         headSHA := event.PullRequest.Head.SHA
 
-        log.Printf("[prreview] reviewing PR #%d in %s (action=%s)", prNumber, repo, event.Action)
+        logging.Info("reviewing PR # in  (action=)", "value", prNumber, repo, event.Action)
 
         // Rebuild the diff URL from the trusted apiURL + repo + PR number.
 
         diffURLOverride := r.apiURL + "/repos/" + repo + "/pulls/" + fmt.Sprintf("%d", prNumber)
         diff, err := r.fetchPRDiff(ctx, diffURLOverride)
         if err != nil {
-                log.Printf("[prreview] failed to fetch diff for PR #%d: %v", prNumber, err)
+                logging.Error("failed to fetch diff for PR #", "value", prNumber, err)
                 return
         }
 
@@ -331,7 +331,7 @@ func (r *Reviewer) handlePullRequest(ctx context.Context, payload []byte) {
 
         chunks := ChunkDiff(diff)
         if len(chunks) == 0 {
-                log.Printf("[prreview] no chunks in PR #%d diff", prNumber)
+                logging.Info("no chunks in PR # diff", "prnumber", prNumber)
                 return
         }
 
@@ -363,7 +363,7 @@ func (r *Reviewer) handlePullRequest(ctx context.Context, payload []byte) {
         }
 
         if len(warnings) == 0 {
-                log.Printf("[prreview] PR #%d: no risky changes detected (checked %d chunks)", prNumber, len(chunks))
+                logging.Info("PR #: no risky changes detected (checked  chunks)", "value", prNumber, len(chunks))
                 return
         }
 
@@ -371,11 +371,11 @@ func (r *Reviewer) handlePullRequest(ctx context.Context, payload []byte) {
 
         comment := r.buildReviewComment(warnings)
         if err := r.postReviewComment(ctx, repo, prNumber, headSHA, comment); err != nil {
-                log.Printf("[prreview] failed to post review comment on PR #%d: %v", prNumber, err)
+                logging.Error("failed to post review comment on PR #", "value", prNumber, err)
                 return
         }
 
-        log.Printf("[prreview] posted review comment on PR #%d: %d warnings", prNumber, len(warnings))
+        logging.Warn("posted review comment on PR #:  warnings", "value", prNumber, len(warnings))
 }
 
 // fetchPRDiff fetches the PR diff text via the GitHub API.
