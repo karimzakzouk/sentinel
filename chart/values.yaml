@@ -4,14 +4,14 @@
 # no UI, no OPA sidecar. 43MB image, ~50MB RAM at idle.
 #
 # Install:
-#   helm install sentinel sentinel/sentinel --version 5.1.0 -n sentinel --create-namespace \
+#   helm install sentinel sentinel/sentinel --version 5.2.0 -n sentinel --create-namespace \
 #     --set sentinel.githubToken=YOUR_GITHUB_TOKEN \
 #     --set sentinel.llm.apiKey=YOUR_LLM_API_KEY
 
 image:
   registry: "docker.io/karimzakzouk"
   repository: "sentinel"
-  tag: "5.1.0"
+  tag: "5.2.0"
   pullPolicy: Always
 
 sentinel:
