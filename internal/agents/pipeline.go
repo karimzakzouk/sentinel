@@ -15,6 +15,7 @@ import (
         "github.com/karimzakzouk/sentinel/internal/k8s"
         "github.com/karimzakzouk/sentinel/internal/llm"
         "github.com/karimzakzouk/sentinel/internal/schemas"
+        "github.com/karimzakzouk/sentinel/internal/tracing"
 )
 
 // Pipeline runs all 4 agents in sequence with rewind support.
@@ -174,13 +175,16 @@ func (p *Pipeline) Run(ctx context.Context, state *schemas.AgentState) error {
                 state.Iterations++
 
                 // 1. Investigator
-
-                invCtx, invCancel := context.WithTimeout(ctx, time.Duration(p.investigatorTimeoutSec)*time.Second)
+                invCtx, invSpan := tracing.Start(ctx, "investigator.run")
+                invCtx, invCancel := context.WithTimeout(invCtx, time.Duration(p.investigatorTimeoutSec)*time.Second)
                 if err := p.investigator.Run(invCtx, state); err != nil {
                         invCancel()
+                        invSpan.End()
                         return fmt.Errorf("investigator: %w", err)
                 }
                 invCancel()
+                invSpan.SetAttribute("hypotheses", fmt.Sprintf("%d", len(state.Hypotheses)))
+                invSpan.End()
                 if state.Status == schemas.StatusFailed || len(state.Hypotheses) == 0 {
                         return nil
                 }
@@ -199,13 +203,15 @@ func (p *Pipeline) Run(ctx context.Context, state *schemas.AgentState) error {
                         log.Printf("[pipeline] top hypothesis confidence %.2f >= 0.7 — skipping evidence gathering (fast path)", topConfidence)
                 } else {
                         // 2. Evidence Gatherer
-
-                        evCtx, evCancel := context.WithTimeout(ctx, time.Duration(p.evidenceGathererTimeoutSec)*time.Second)
+                        evCtx, evSpan := tracing.Start(ctx, "evidence_gatherer.run")
+                        evCtx, evCancel := context.WithTimeout(evCtx, time.Duration(p.evidenceGathererTimeoutSec)*time.Second)
                         if err := p.evidenceGatherer.Run(evCtx, state); err != nil {
                                 evCancel()
+                                evSpan.End()
                                 return fmt.Errorf("evidence_gatherer: %w", err)
                         }
                         evCancel()
+                        evSpan.End()
                         if state.Status == schemas.StatusFailed {
                                 return nil
                         }
