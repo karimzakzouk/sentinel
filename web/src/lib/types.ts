@@ -59,49 +59,39 @@ export interface Incident {
 }
 
 // ─── Provider ───────────────────────────────────────────────────────────────
+// Matches internal/llm/pool.go ProviderStatus struct.
+// API returns: { "enabled": bool, "providers": [...] } or
+// { "enabled": false, "providers": [], "message": "..." }
 
 export interface Provider {
-  name: string;
+  id: string;
+  provider: string;        // provider type (openrouter, groq, etc.)
   priority: number;
-  status: string; // "healthy" | "tripped" | "cooling"
-  model: string;
-  fast_model: string;
-  frontier_model: string;
-  trips_total: number;
-  last_trip?: string;
-  last_trip_reason?: string;
-  circuit_breaker_until?: string;
+  enabled: boolean;
+  tripped: boolean;
+  trippedUntil?: string;
+  lastFailure?: string;
+  lastFailureReason?: string;
+  consecutiveFailures: number;
+  totalCalls: number;
+  totalSuccesses: number;
+  totalFailures: number;
 }
 
 // ─── Auto-merge ─────────────────────────────────────────────────────────────
+// Matches internal/chatops/types.go AutoMergeStatus struct.
+// API returns this directly, or { "enabled": false, "message": "..." }
 
 export interface AutoMergeState {
   enabled: boolean;
-  queue: Array<{
-    incident_id: string;
-    service: string;
-    pr_number: number;
-    pr_repo: string;
-    state: string;
-    gates_passed: string[];
-    gates_failed: string[];
-    queued_at: string;
-  }>;
-  rate_limit: {
-    max_per_hour: number;
-    merged_last_hour: number;
-    remaining: number;
-  };
-  cooldown: {
-    active: boolean;
-    until?: string;
-    reason?: string;
-  };
-  stats: {
-    total_merged: number;
-    total_reverted: number;
-    success_rate: number;
-  };
+  namespaces?: string[];
+  min_confidence?: number;
+  require_ci_green?: boolean;
+  max_per_hour?: number;
+  merges_this_hour?: number;
+  cooldown_active?: boolean;
+  cooldown_reason?: string;
+  message?: string;  // present when not configured
 }
 
 // ─── Settings ───────────────────────────────────────────────────────────────

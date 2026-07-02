@@ -124,8 +124,9 @@ export async function resumeAutonomous(): Promise<void> {
 // ─── Providers ──────────────────────────────────────────────────────────────
 
 export async function listProviders(): Promise<Provider[]> {
-  const data = await fetchJSON<{ providers: Provider[] } | Provider[]>(`/providers`);
-  return Array.isArray(data) ? data : data.providers || [];
+  const data = await fetchJSON<{ enabled: boolean; providers?: Provider[]; message?: string } | Provider[]>(`/providers`);
+  if (Array.isArray(data)) return data;
+  return data.providers || [];
 }
 
 // ─── Auto-merge ─────────────────────────────────────────────────────────────

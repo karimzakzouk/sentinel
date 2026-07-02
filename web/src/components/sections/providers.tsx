@@ -111,7 +111,7 @@ export function ProvidersSection() {
     return Object.values(metrics.llm_total_cost_usd).reduce((a, b) => a + b, 0);
   }, [metrics]);
 
-  const trippedCount = providers.filter((p) => p.status !== "healthy").length;
+  const trippedCount = providers.filter((p) => p.tripped).length;
 
   if (loading && providers.length === 0) {
     return (
@@ -171,11 +171,11 @@ export function ProvidersSection() {
             </TableHeader>
             <TableBody>
               {providers.map((p) => (
-                <TableRow key={p.name} className="border-zinc-800/60 hover:bg-zinc-800/30">
+                <TableRow key={p.id} className="border-zinc-800/60 hover:bg-zinc-800/30">
                   <TableCell className="px-3 py-2">
                     <div className="flex items-center gap-2">
                       <Cpu className="h-3.5 w-3.5 text-zinc-500" />
-                      <span className="text-xs font-medium text-zinc-200">{p.name}</span>
+                      <span className="text-xs font-medium text-zinc-200">{p.id}</span>
                     </div>
                   </TableCell>
                   <TableCell className="px-3 py-2">
@@ -185,39 +185,39 @@ export function ProvidersSection() {
                   </TableCell>
                   <TableCell className="px-3 py-2">
                     <div className="flex items-center gap-1.5">
-                      <span className={cn("h-1.5 w-1.5 rounded-full", statusDot[p.status] ?? "bg-zinc-500")} />
-                      <span className={cn("font-mono text-[11px]", statusText[p.status] ?? "text-zinc-400")}>
-                        {p.status}
+                      <span className={cn("h-1.5 w-1.5 rounded-full", statusDot[p.tripped ? "tripped" : "healthy"] ?? "bg-zinc-500")} />
+                      <span className={cn("font-mono text-[11px]", statusText[p.tripped ? "tripped" : "healthy"] ?? "text-zinc-400")}>
+                        {p.tripped ? "tripped" : "healthy"}
                       </span>
                     </div>
                   </TableCell>
                   <TableCell className="px-3 py-2">
-                    <Mono className="text-[11px] text-zinc-300">{p.model || "—"}</Mono>
+                    <Mono className="text-[11px] text-zinc-300">{p.provider || "—"}</Mono>
                   </TableCell>
                   <TableCell className="px-3 py-2">
-                    <Mono className="text-[11px] text-zinc-400">{p.fast_model || "—"}</Mono>
+                    <Mono className="text-[11px] text-zinc-400">{p.provider || "—"}</Mono>
                   </TableCell>
                   <TableCell className="px-3 py-2">
-                    <Mono className="text-[11px] text-zinc-400">{p.frontier_model || "—"}</Mono>
+                    <Mono className="text-[11px] text-zinc-400">{p.provider || "—"}</Mono>
                   </TableCell>
                   <TableCell className="px-3 py-2">
-                    <Mono className={cn("text-[11px]", p.trips_total > 0 ? "text-rose-400" : "text-zinc-400")}>
-                      {p.trips_total}
+                    <Mono className={cn("text-[11px]", p.totalFailures > 0 ? "text-rose-400" : "text-zinc-400")}>
+                      {p.totalFailures}
                     </Mono>
                   </TableCell>
                   <TableCell className="px-3 py-2">
-                    {p.last_trip ? (
+                    {p.lastFailure ? (
                       <Mono className="text-[11px] text-zinc-400">
-                        {new Date(p.last_trip).toLocaleString("en-US", { hour12: false })}
+                        {new Date(p.lastFailure).toLocaleString("en-US", { hour12: false })}
                       </Mono>
                     ) : (
                       <span className="text-[11px] text-zinc-600">—</span>
                     )}
                   </TableCell>
                   <TableCell className="px-3 py-2 max-w-[200px]">
-                    {p.last_trip_reason ? (
-                      <span className="block truncate text-[11px] text-amber-400" title={p.last_trip_reason}>
-                        {p.last_trip_reason}
+                    {p.lastFailureReason ? (
+                      <span className="block truncate text-[11px] text-amber-400" title={p.lastFailureReason}>
+                        {p.lastFailureReason}
                       </span>
                     ) : (
                       <span className="text-[11px] text-zinc-600">—</span>
@@ -309,25 +309,25 @@ export function ProvidersSection() {
       {/* Per-provider detail cards */}
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
         {providers.map((p) => (
-          <Panel key={p.name}>
+          <Panel key={p.id}>
             <PanelHeader
-              title={p.name}
-              sub={p.model || "—"}
+              title={p.id}
+              sub={p.provider || "—"}
               right={
                 <span className="flex items-center gap-1.5 text-[10px]">
-                  <span className={cn("h-1.5 w-1.5 rounded-full", statusDot[p.status] ?? "bg-zinc-500")} />
-                  <span className={cn(statusText[p.status] ?? "text-zinc-400")}>{p.status}</span>
+                  <span className={cn("h-1.5 w-1.5 rounded-full", statusDot[p.tripped ? "tripped" : "healthy"] ?? "bg-zinc-500")} />
+                  <span className={cn(statusText[p.tripped ? "tripped" : "healthy"] ?? "text-zinc-400")}>{p.tripped ? "tripped" : "healthy"}</span>
                 </span>
               }
             />
             <div className="grid grid-cols-2 gap-px bg-zinc-800">
               {[
                 { label: "Priority", value: `P${p.priority}`, icon: Zap },
-                { label: "Trips total", value: String(p.trips_total), icon: AlertTriangle },
-                { label: "Fast model", value: p.fast_model || "—", icon: Activity },
-                { label: "Frontier model", value: p.frontier_model || "—", icon: Activity },
-                { label: "Last trip", value: p.last_trip ? new Date(p.last_trip).toLocaleDateString() : "—", icon: Clock },
-                { label: "CB until", value: p.circuit_breaker_until ? new Date(p.circuit_breaker_until).toLocaleString("en-US", { hour12: false }) : "—", icon: Clock },
+                { label: "Trips total", value: String(p.totalFailures), icon: AlertTriangle },
+                { label: "Fast model", value: p.provider || "—", icon: Activity },
+                { label: "Frontier model", value: p.provider || "—", icon: Activity },
+                { label: "Last trip", value: p.lastFailure ? new Date(p.lastFailure).toLocaleDateString() : "—", icon: Clock },
+                { label: "CB until", value: p.trippedUntil ? new Date(p.trippedUntil).toLocaleString("en-US", { hour12: false }) : "—", icon: Clock },
               ].map((s) => {
                 const Icon = s.icon;
                 return (
@@ -342,10 +342,10 @@ export function ProvidersSection() {
                 );
               })}
             </div>
-            {p.last_trip_reason && (
+            {p.lastFailureReason && (
               <div className="border-t border-zinc-800 px-3 py-2">
                 <div className="text-[9px] uppercase tracking-wider text-zinc-500">Last trip reason</div>
-                <p className="mt-0.5 font-mono text-[11px] text-amber-300">{p.last_trip_reason}</p>
+                <p className="mt-0.5 font-mono text-[11px] text-amber-300">{p.lastFailureReason}</p>
               </div>
             )}
           </Panel>

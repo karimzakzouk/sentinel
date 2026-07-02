@@ -115,16 +115,16 @@ export function DashboardSection() {
   );
   const prIncidents = useMemo(() => incidents.filter((i) => i.pr_number), [incidents]);
   const healthyProviders = useMemo(
-    () => providers.filter((p) => p.status === "healthy").length,
+    () => providers.filter((p) => !p.tripped).length,
     [providers],
   );
   const trippedProviders = useMemo(
-    () => providers.filter((p) => p.status !== "healthy").length,
+    () => providers.filter((p) => p.tripped).length,
     [providers],
   );
 
-  const successRate = autoMerge?.stats?.success_rate ?? 0;
-  const queueDepth = autoMerge?.queue?.length ?? 0;
+  const successRate = 0;
+  const queueDepth = 0;
 
   // Cost sum across models (when metrics has cost data)
   const totalCost = useMemo(() => {
@@ -242,7 +242,7 @@ export function DashboardSection() {
           pulse={queueDepth > 0}
           sub={
             autoMerge
-              ? `${autoMerge.rate_limit.merged_last_hour}/${autoMerge.rate_limit.max_per_hour} this hour`
+              ? `${(autoMerge?.merges_this_hour || 0)}/${(autoMerge?.max_per_hour || 0)} this hour`
               : "auto-merge not configured"
           }
         />
@@ -274,7 +274,7 @@ export function DashboardSection() {
                       {successRate.toFixed(1)}%
                     </span>
                     <span className="mt-0.5 text-[11px] text-zinc-500">
-                      {autoMerge.stats.total_merged} merged · {autoMerge.stats.total_reverted} reverted
+                      {0} merged · {0} reverted
                     </span>
                   </div>
                 </div>
@@ -446,12 +446,12 @@ export function DashboardSection() {
               </div>
             ) : (
               providers.slice(0, 5).map((p) => {
-                const healthy = p.status === "healthy";
+                const healthy = !p.tripped;
                 return (
-                  <div key={p.name} className="flex items-center justify-between px-4 py-2.5">
+                  <div key={p.id} className="flex items-center justify-between px-4 py-2.5">
                     <div>
                       <div className="flex items-center gap-2">
-                        <span className="text-xs font-medium text-zinc-200">{p.name}</span>
+                        <span className="text-xs font-medium text-zinc-200">{p.id}</span>
                         <span
                           className={cn(
                             "h-1.5 w-1.5 rounded-full",
@@ -459,7 +459,7 @@ export function DashboardSection() {
                           )}
                         />
                       </div>
-                      <Mono className="text-[10px] text-zinc-500">{p.model || "—"}</Mono>
+                      <Mono className="text-[10px] text-zinc-500">{p.provider || "—"}</Mono>
                     </div>
                     <div className="text-right">
                       <Mono
@@ -468,10 +468,10 @@ export function DashboardSection() {
                           healthy ? "text-emerald-400" : "text-rose-400",
                         )}
                       >
-                        {p.status}
+                        {p.tripped ? "tripped" : "healthy"}
                       </Mono>
                       <div className="text-[10px] text-zinc-600">
-                        {p.trips_total > 0 ? `${p.trips_total} trips` : "no trips"}
+                        {p.totalFailures > 0 ? `${p.totalFailures} trips` : "no trips"}
                       </div>
                     </div>
                   </div>

@@ -2,6 +2,12 @@
 
 import { create } from "zustand";
 import { useEffect, useRef } from "react";
+import type {
+  Provider,
+  AutoMergeState,
+  MetricsSummary,
+  RuntimeConfig,
+} from "./types";
 import {
   listIncidents,
   getIncident,
@@ -40,87 +46,6 @@ export interface ActivityEvent {
   icon: string;
 }
 
-interface Provider {
-  name: string;
-  priority: number;
-  status: string;
-  model: string;
-  fast_model: string;
-  frontier_model: string;
-  trips_total: number;
-  last_trip?: string;
-  last_trip_reason?: string;
-  circuit_breaker_until?: string;
-}
-
-interface AutoMergeState {
-  enabled: boolean;
-  queue: Array<{
-    incident_id: string;
-    service: string;
-    pr_number: number;
-    pr_repo: string;
-    state: string;
-    gates_passed: string[];
-    gates_failed: string[];
-    queued_at: string;
-  }>;
-  rate_limit: {
-    max_per_hour: number;
-    merged_last_hour: number;
-    remaining: number;
-  };
-  cooldown: {
-    active: boolean;
-    until?: string;
-    reason?: string;
-  };
-  stats: {
-    total_merged: number;
-    total_reverted: number;
-    success_rate: number;
-  };
-}
-
-interface MetricsSummary {
-  incidents_total: Record<string, number>;
-  investigations_started_total: number;
-  prs_opened_total: number;
-  sandbox_verifications_total: Record<string, number>;
-  llm_calls_total: Record<string, number>;
-  llm_total_cost_usd: Record<string, number>;
-  llm_tokens_total: Record<string, number>;
-  investigation_duration_seconds: Record<string, number[]>;
-  sandbox_level_failures: Record<string, number>;
-  auto_merge_total: Record<string, number>;
-}
-
-interface RuntimeConfig {
-  llm_provider?: string;
-  llm_base_url?: string;
-  llm_api_key?: string;
-  llm_fast_model?: string;
-  llm_frontier_model?: string;
-  llm_embedding_model?: string;
-  investigator_timeout_sec?: number;
-  evidence_gatherer_timeout_sec?: number;
-  analyst_timeout_sec?: number;
-  fix_proposer_timeout_sec?: number;
-  confidence_loop_back_threshold?: number;
-  llm_max_retries?: number;
-  llm_retry_base_delay_ms?: number;
-  skip_sandbox_non_prod?: boolean;
-  sandbox_enabled?: boolean;
-  sandbox_required?: boolean;
-  sandbox_max_retries?: number;
-  prometheus_url?: string;
-  loki_url?: string;
-  jaeger_url?: string;
-  github_app_id?: string;
-  github_app_private_key?: string;
-  github_app_install_id?: string;
-  log_level?: string;
-}
 
 interface SentinelState {
   // Navigation
