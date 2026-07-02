@@ -183,7 +183,7 @@ func extractErrorExcerpt(cluster *schemas.AnomalyCluster) string {
                 if len(excerpt) > 0 {
                         result := strings.Join(excerpt, "\n")
                         if len(result) > 500 {
-                                result = result[:500] + "..."
+                                result = result[:MaxPRBodyExcerptChars] + "..."
                         }
                         return result
                 }

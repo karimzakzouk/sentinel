@@ -1,5 +1,6 @@
 package feedback
 
+
 import (
 	"github.com/karimzakzouk/sentinel/internal/logging"
         "bytes"
@@ -15,6 +16,8 @@ import (
         metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
         "k8s.io/client-go/kubernetes"
 )
+
+var fingerprintCache = sync.Map{}
 
 // OutcomeWatcher monitors a service after a fix is applied (PR opened).
 // Two-phase watching:
@@ -284,10 +287,11 @@ func ExtractErrorFingerprint(podLogs string) string {
                 `(SIGSEGV|SIGABRT|SIGBUS)`,
         }
         for _, p := range patterns {
-                re := regexp.MustCompile(p)
-                if m := re.FindStringSubmatch(podLogs); len(m) >= 2 {
-                        return m[1]
-                }
+                re, _ := fingerprintCache.LoadOrStore(p, regexp.MustCompile(p))
+		re2, _ := re.(*regexp.Regexp)
+		if m := re2.FindStringSubmatch(podLogs); len(m) >= 2 {
+			return m[1]
+		}
         }
         return ""
 }

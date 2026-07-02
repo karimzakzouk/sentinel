@@ -221,16 +221,16 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
                         // High similarity + prior success → skip investigation, apply known fix
 
 
-                        if scores[0] > 0.85 && similar[0].Outcome == "success" && !a.vectorStore.UsingHashFallback() {
+                        if scores[0] > ConfidenceHighMatch && similar[0].Outcome == "success" && !a.vectorStore.UsingHashFallback() {
                                 logging.Info("HIGH MATCH (score=%.3f) — applying known fix from incident", "value", scores[0], similar[0].IncidentID)
                                 return a.applyKnownFix(ctx, state, similar[0], podLogs)
-                        } else if scores[0] > 0.85 && a.vectorStore.UsingHashFallback() {
+                        } else if scores[0] > ConfidenceHighMatch && a.vectorStore.UsingHashFallback() {
                                 logging.Info("HIGH MATCH (score=%.3f) but using hash embeddings — skipping applyKnownFix for safety", "value", scores[0])
                         }
 
                         // Medium similarity → use as context for the LLM
 
-                        if scores[0] > 0.5 {
+                        if scores[0] > ConfidenceMediumMatch {
                                 logging.Info("MEDIUM MATCH (score=%.3f) — using incident  as context", "value", scores[0], similar[0].IncidentID)
                                 state.RetrievedIncidents = []map[string]any{{
                                         "root_cause":   similar[0].RootCause,
@@ -396,7 +396,7 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
 
         if len(newHyps) == 0 {
                 for i, h := range rawHyps {
-                        if i >= 5 {
+                        if i >= MaxStackFilesToRead {
                                 break
                         }
                         hMap, ok := h.(map[string]any)
@@ -459,7 +459,7 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
                                 continue
                         }
                         fetched[path] = content
-                        if len(fetched) >= 5 {
+                        if len(fetched) >= MaxFilesToRead {
                                 break
                         }
                 }
@@ -517,7 +517,7 @@ func (a *Investigator) runWithoutRepo(ctx context.Context, state *schemas.AgentS
         rawHyps, _ := result["hypotheses"].([]any)
         var newHyps []schemas.Hypothesis
         for i, h := range rawHyps {
-                if i >= 5 {
+                if i >= MaxStackFilesToRead {
                         break
                 }
                 hMap, ok := h.(map[string]any)
@@ -665,8 +665,8 @@ func (a *Investigator) buildRound1Message(state *schemas.AgentState, podLogs str
         if podLogs != "" {
                 // Cap logs to 4KB for the LLM
 
-                if len(podLogs) > 4096 {
-                        podLogs = podLogs[:4096]
+                if len(podLogs) > MaxPodLogsBytes {
+                        podLogs = podLogs[:MaxPodLogsBytes]
                 }
                 parts = append(parts, podLogs)
         } else {
@@ -700,8 +700,8 @@ func (a *Investigator) buildRound2Message(state *schemas.AgentState, podLogs str
         }
         parts = append(parts, "## Pod Logs")
         if podLogs != "" {
-                if len(podLogs) > 4096 {
-                        podLogs = podLogs[:4096]
+                if len(podLogs) > MaxPodLogsBytes {
+                        podLogs = podLogs[:MaxPodLogsBytes]
                 }
                 parts = append(parts, podLogs)
         } else {
@@ -715,7 +715,7 @@ func (a *Investigator) buildRound2Message(state *schemas.AgentState, podLogs str
         // Cap at 50 results for the prompt
 
         for i, r := range searchResults {
-                if i >= 50 {
+                if i >= MaxStackFilesToRead {
                         break
                 }
                 parts = append(parts, fmt.Sprintf("- %s:%d — %s", r.Path, r.Line, r.Context))

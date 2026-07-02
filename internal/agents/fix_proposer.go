@@ -539,7 +539,7 @@ func (a *FixProposer) buildUserMessage(state *schemas.AgentState) string {
                 resultJSON, _ := json.Marshal(e.Result)
                 resultStr := string(resultJSON)
                 if len(resultStr) > 300 {
-                        resultStr = resultStr[:300]
+                        resultStr = resultStr[:MaxFixResultChars]
                 }
                 parts = append(parts, fmt.Sprintf("- %s (%s): %s", e.EID, e.Source, resultStr))
         }
@@ -693,7 +693,7 @@ func buildPRBody(state *schemas.AgentState, rc *schemas.RootCause, fixType strin
                 resultJSON, _ := json.Marshal(e.Result)
                 resultStr := string(resultJSON)
                 if len(resultStr) > 300 {
-                        resultStr = resultStr[:300]
+                        resultStr = resultStr[:MaxFixResultChars]
                 }
                 parts = append(parts, fmt.Sprintf("- **%s** (%s): %s", e.EID, e.Source, resultStr))
         }

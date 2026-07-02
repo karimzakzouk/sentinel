@@ -106,8 +106,8 @@ func (a *Analyst) Run(ctx context.Context, state *schemas.AgentState, betaStore 
                 if len(strongContradictions) > 0 {
                         h.Falsified = true
                         h.ContradictingEvidence = strongContradictions
-                        if h.Confidence > 0.05 {
-                                h.Confidence = 0.05
+                        if h.Confidence > ConfidenceFloor {
+                                h.Confidence = ConfidenceFloor
                         }
                 }
                 strongSupports := []string{}
@@ -174,7 +174,7 @@ func (a *Analyst) Run(ctx context.Context, state *schemas.AgentState, betaStore 
         } else {
                 alpha = 1.0
                 beta = 1.0
-                priorMean = 0.5
+                priorMean = ConfidencePriorMean
         }
 
         // Count strong evidence for/against survivor

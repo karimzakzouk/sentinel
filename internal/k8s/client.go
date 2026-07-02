@@ -2,6 +2,7 @@
 // v3: single binary, single client, no Python client-go shim.
 package k8s
 
+
 import (
 	"context"
 	"encoding/json"
@@ -20,6 +21,8 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 )
+
+var fileRePre = regexp.MustCompile(`[a-zA-Z0-9_./-]+\.[a-zA-Z]{1,5}`)
 
 // Sentinel annotation keys we recognize on workloads.
 
@@ -376,7 +379,7 @@ func (c *Client) PatchCRStatusFull(ctx context.Context, name, namespace, phase, 
 // Filters out URLs, image extensions, and stdlib paths.
 
 func ParseStackTrace(text string) []string {
-	fileRe := regexp.MustCompile(`[a-zA-Z0-9_./-]+\.[a-zA-Z]{1,5}`)
+	fileRe := fileRePre
 	candidates := fileRe.FindAllString(text, -1)
 
 	seen := map[string]bool{}

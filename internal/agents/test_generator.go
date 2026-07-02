@@ -194,8 +194,8 @@ func (g *TestGenerator) buildUserMessage(state *schemas.AgentState) string {
         parts = append(parts, "## Error Context (from pod logs)")
         for _, anomaly := range state.Cluster.Anomalies {
                 explanation := anomaly.Explanation
-                if len(explanation) > 2000 {
-                        explanation = explanation[:2000]
+                if len(explanation) > MaxErrorExplanationChars {
+                        explanation = explanation[:MaxErrorExplanationChars]
                 }
                 parts = append(parts, explanation)
         }

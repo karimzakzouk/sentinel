@@ -260,8 +260,8 @@ func (r *ReviewerAgent) buildReviewMessage(state *schemas.AgentState) string {
         parts = append(parts, "## Original Error (from pod logs — may be tampered)")
         for _, anomaly := range state.Cluster.Anomalies {
                 explanation := anomaly.Explanation
-                if len(explanation) > 2000 {
-                        explanation = explanation[:2000]
+                if len(explanation) > MaxErrorExplanationChars {
+                        explanation = explanation[:MaxErrorExplanationChars]
                 }
                 parts = append(parts, explanation)
         }

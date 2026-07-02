@@ -200,8 +200,8 @@ func (p *Pipeline) Run(ctx context.Context, state *schemas.AgentState) error {
                                 topConfidence = h.Confidence
                         }
                 }
-                if topConfidence >= 0.7 {
-                        logging.Info("top hypothesis confidence %.2f >= 0.7 — skipping evidence gathering (fast path)", "topconfidence", topConfidence)
+                if topConfidence >= ConfidenceFastPath {
+                        logging.Info("top hypothesis confidence %.2f >= ConfidenceFastPath — skipping evidence gathering (fast path)", "topconfidence", topConfidence)
                 } else {
                         // 2. Evidence Gatherer
                         evCtx, evSpan := tracing.Start(ctx, "evidence_gatherer.run")

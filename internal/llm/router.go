@@ -350,6 +350,11 @@ var (
         llmCallEndHook   func()
 )
 
+var (
+	jsonBlockRePre = regexp.MustCompile("(?s)" + "```(?:[a-zA-Z]+)?\\s*(\\{.*?\\}|\\[.*?\\])```")
+	bareJSONRePre  = regexp.MustCompile(`(?s)(\{.*\}|\[.*\])`)
+)
+
 // LLMCallStart increments the in-flight gauge (if wired).
 
 func LLMCallStart() {
@@ -583,8 +588,8 @@ var (
         // Some models (gpt-oss-20b:free) return ```jsoncjson or ```jsonc or other
         // language tags. Match any word characters after the opening fence.
 
-        jsonBlockRe = regexp.MustCompile("(?s)" + "```(?:[a-zA-Z]+)?\\s*(\\{.*?\\}|\\[.*?\\])\\s*```")
-        bareJSONRe  = regexp.MustCompile(`(?s)(\{.*\}|\[.*\])`)
+        jsonBlockRe = jsonBlockRePre // pre-compiled("(?s)" + "```(?:[a-zA-Z]+)?\\s*(\\{.*?\\}|\\[.*?\\])\\s*```")
+        bareJSONRe  = bareJSONRePre // pre-compiled(`(?s)(\{.*\}|\[.*\])`)
 )
 
 func tryParse(s string) (map[string]any, bool) {

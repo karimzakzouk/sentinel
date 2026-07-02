@@ -57,6 +57,14 @@ type EditResult struct {
 // editBlockRe matches one SEARCH/REPLACE block.
 // Allows flexible whitespace around the markers.
 
+// Pre-compiled regexes for editblock parsing (avoid recompiling on every call)
+var (
+	thinkRe2      = regexp.MustCompile(`(?s)<think>.*?</think>`)
+	reasoningRe2  = regexp.MustCompile(`(?s)<reasoning>.*?</reasoning>`)
+	whitespaceRe  = regexp.MustCompile(`\s+`)
+	codeBlockRe   = regexp.MustCompile("(?s)```(?:\\w+[/\\.\\w]*)?\\n(.*?)```")
+)
+
 var editBlockRe = regexp.MustCompile(
 	`(?ms)^<<<<<<<\s*SEARCH\s*$\n(.*?)^=======\s*$\n(.*?)^>>>>>>>\s*REPLACE\s*$`,
 )
@@ -112,12 +120,12 @@ func ParseEditBlocks(llmOutput string) []EditBlock {
 func stripReasoning(text string) string {
 	// Remove <think>...</think> blocks
 
-	thinkRe := regexp.MustCompile(`(?s)<think>.*?</think>`)
+	thinkRe := thinkRe2
 	text = thinkRe.ReplaceAllString(text, "")
 
 	// Remove <reasoning>...</reasoning> blocks
 
-	reasoningRe := regexp.MustCompile(`(?s)<reasoning>.*?</reasoning>`)
+	reasoningRe := reasoningRe2
 	text = reasoningRe.ReplaceAllString(text, "")
 
 	// If the output has no SEARCH/REPLACE markers at all, return as-is
@@ -260,7 +268,7 @@ func applyWhitespaceNormalized(content, search, replace string) (string, bool) {
 	normalize := func(s string) string {
 		// Collapse all whitespace runs to single space, trim leading/trailing
 
-		re := regexp.MustCompile(`\s+`)
+		re := whitespaceRe
 		return strings.TrimSpace(re.ReplaceAllString(s, " "))
 	}
 
@@ -390,7 +398,7 @@ func applyFuzzyMatch(content, search, replace string) (string, string, bool) {
 
 	// Require at least 60% similarity to accept the fuzzy match
 
-	if bestScore < 0.6 || bestStart < 0 {
+	if bestScore < FuzzyMatchThreshold || bestStart < 0 {
 		closestMatch := ""
 		if bestStart >= 0 {
 			closestMatch = strings.Join(contentLines[bestStart:bestEnd+1], "\n")
@@ -581,8 +589,7 @@ func ParseWholeFileReplacement(llmOutput string) (string, string) {
 
 	// Also try: just a code block with the path in the fence language
 
-	codeBlockRe := regexp.MustCompile("(?s)```(?:\\w+[/\\.\\w]*)?\\n(.*?)```")
-	matches := codeBlockRe.FindAllStringSubmatch(output, -1)
+		matches := codeBlockRe.FindAllStringSubmatch(output, -1)
 	for _, m := range matches {
 		if len(m) >= 2 && strings.Contains(m[1], "def ") || strings.Contains(m[1], "func ") || strings.Contains(m[1], "class ") {
 			// Looks like code content — but we don't have a file path
