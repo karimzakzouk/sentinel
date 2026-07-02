@@ -16,7 +16,7 @@
 package chatops
 
 import (
-	"log"
+        "log"
         "context"
         "fmt"
         "strconv"
@@ -327,7 +327,9 @@ func cmdInvestigate(ctx context.Context, cmd *Command, deps *Deps) error {
                 "🔄 Re-investigating from scratch (this takes 2-5 minutes)...")
         go func() {
                 defer func() { if r := recover(); r != nil { log.Printf("[chatops] reinvestigate panic recovered: %v", r) } }()
-                if err := deps.Pipeline.Reinvestigate(context.Background(), inc.ID); err != nil {
+                reinvestigateCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+                defer cancel()
+                if err := deps.Pipeline.Reinvestigate(reinvestigateCtx, inc.ID); err != nil {
                         _ = deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
                                 fmt.Sprintf("❌ Re-investigation failed: %v", err))
                         return
@@ -358,7 +360,9 @@ func cmdRetest(ctx context.Context, cmd *Command, deps *Deps) error {
                 "🔄 Re-running LLM pipeline (re-generating fix with same root cause, ~1-2 minutes)...")
         go func() {
                 defer func() { if r := recover(); r != nil { log.Printf("[chatops] retryfix panic recovered: %v", r) } }()
-                if err := deps.Pipeline.RetryFixProposal(context.Background(), inc.ID); err != nil {
+                retryCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+                defer cancel()
+                if err := deps.Pipeline.RetryFixProposal(retryCtx, inc.ID); err != nil {
                         _ = deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
                                 fmt.Sprintf("❌ Retest failed: %v", err))
                         return

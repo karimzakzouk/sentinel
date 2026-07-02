@@ -6,7 +6,7 @@
 package agents
 
 import (
-	"github.com/karimzakzouk/sentinel/internal/logging"
+        "github.com/karimzakzouk/sentinel/internal/logging"
         "context"
         "encoding/json"
         "fmt"
@@ -240,7 +240,12 @@ func (p *Pipeline) Run(ctx context.Context, state *schemas.AgentState) error {
                 }
 
                 // Confidence routing
-
+                if state.RootCause == nil {
+                        log.Printf("[pipeline] root cause is nil after analyst — looping back to investigator")
+                        state.Hypotheses = nil
+                        state.Evidence = nil
+                        continue
+                }
                 if state.RootCause.Confidence < p.confidenceLoopBackThreshold && state.Iterations < 3 {
                         log.Printf("[pipeline] confidence %.2f < %.2f — looping back to investigator (iteration %d)",
                                 state.RootCause.Confidence, p.confidenceLoopBackThreshold, state.Iterations)

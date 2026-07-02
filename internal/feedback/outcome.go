@@ -2,7 +2,7 @@ package feedback
 
 
 import (
-	"github.com/karimzakzouk/sentinel/internal/logging"
+        "github.com/karimzakzouk/sentinel/internal/logging"
         "bytes"
         "context"
         "fmt"
@@ -288,10 +288,10 @@ func ExtractErrorFingerprint(podLogs string) string {
         }
         for _, p := range patterns {
                 re, _ := fingerprintCache.LoadOrStore(p, regexp.MustCompile(p))
-		re2, _ := re.(*regexp.Regexp)
-		if m := re2.FindStringSubmatch(podLogs); len(m) >= 2 {
-			return m[1]
-		}
+                re2, _ := re.(*regexp.Regexp)
+                if m := re2.FindStringSubmatch(podLogs); len(m) >= 2 {
+                        return m[1]
+                }
         }
         return ""
 }
@@ -345,7 +345,8 @@ func (w *OutcomeWatcher) checkService(ctx context.Context, service, namespace st
 // should reflect the REAL outcome, not the sandbox outcome.
 
 func (w *OutcomeWatcher) recordOutcome(incidentID, service, namespace string, success bool, detail string, fixType string) {
-        ctx := context.Background()
+        ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+        defer cancel()
 
         // Update Beta tracker
 

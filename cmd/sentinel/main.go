@@ -11,7 +11,7 @@ import (
         "os"
         "os/signal"
         "strings"
-	"sync"
+        "sync"
         "sync/atomic"
         "syscall"
         "time"
@@ -402,7 +402,8 @@ func main() {
         go func() {
                 defer recoverPanic("vector store loader")
                 time.Sleep(2 * time.Second)
-                loadCtx := context.Background()
+                loadCtx, loadCancel := context.WithTimeout(context.Background(), 60*time.Second)
+                defer loadCancel()
                 if err := vectorStore.LoadFromDB(loadCtx, store); err != nil {
                         logging.Error("vector store load failed", "error", err)
                 }
@@ -826,9 +827,9 @@ func main() {
                 explanation := fmt.Sprintf("Auto-detected incident: %s", reason)
                 if podLogs != "" {
                         var explanationSB strings.Builder
-		explanationSB.WriteString(explanation)
-		explanationSB.WriteString(fmt.Sprintf("\n\n## Pod Logs (preprocessed)\n%s", podLogs))
-		explanation = explanationSB.String()
+                explanationSB.WriteString(explanation)
+                explanationSB.WriteString(fmt.Sprintf("\n\n## Pod Logs (preprocessed)\n%s", podLogs))
+                explanation = explanationSB.String()
                 }
 
                 cluster := schemas.AnomalyCluster{
@@ -1030,7 +1031,9 @@ func main() {
                                 AutoMergeMerged:  true,
                                 Status:           "verified",
                         }
-                        _ = chatopsStatusManager.Update(context.Background(), repo, prNumber, inc, "✅ PR auto-merged. Monitoring deployment...")
+                        statusCtx, statusCancel := context.WithTimeout(context.Background(), 10*time.Second)
+                        defer statusCancel()
+                        _ = csm.Update(statusCtx, repo, prNumber, inc, "✅ PR auto-merged. Monitoring deployment...")
                 }
         })
         autoMergeMerger.SetOnSkipped(func(repo string, prNumber int, reason string) {
@@ -1040,7 +1043,9 @@ func main() {
                                 AutoMergeSkipped: reason,
                                 Status:           "verified",
                         }
-                        _ = chatopsStatusManager.Update(context.Background(), repo, prNumber, inc, "")
+                        statusCtx2, statusCancel2 := context.WithTimeout(context.Background(), 10*time.Second)
+                        defer statusCancel2()
+                        _ = csm.Update(statusCtx2, repo, prNumber, inc, "")
                 }
         })
 
