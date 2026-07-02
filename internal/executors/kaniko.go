@@ -14,7 +14,8 @@ import (
         metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
         "k8s.io/client-go/kubernetes"
 
-        "github.com/karimzakzouk/sentinel/internal/schemas"
+        "github.com/karimzakzouk/sentinel/internal/errs"
+	"github.com/karimzakzouk/sentinel/internal/schemas"
 )
 
 // KanikoBuilder builds Docker images inside Kubernetes without a daemon.
@@ -291,7 +292,7 @@ func (k *KanikoBuilder) createConfigMap(ctx context.Context, name string, files 
                 Data: data,
         }
         _, err := k.clientset.CoreV1().ConfigMaps(k.namespace).Create(ctx, cm, metav1.CreateOptions{})
-        if err != nil && !strings.Contains(err.Error(), "already exists") {
+        if err != nil && !errs.IsAlreadyExists(err) {
                 return err
         }
         return nil

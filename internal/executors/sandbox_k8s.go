@@ -10,7 +10,6 @@ import (
         "context"
         "fmt"
         "log"
-        "strings"
         "time"
 
         appsv1 "k8s.io/api/apps/v1"
@@ -19,7 +18,8 @@ import (
         metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
         "k8s.io/apimachinery/pkg/util/intstr"
 
-        "github.com/karimzakzouk/sentinel/internal/schemas"
+        "github.com/karimzakzouk/sentinel/internal/errs"
+	"github.com/karimzakzouk/sentinel/internal/schemas"
 )
 
 func (s *SandboxRunner) createNamespace(ctx context.Context, ns string) error {
@@ -40,7 +40,7 @@ func (s *SandboxRunner) createNamespace(ctx context.Context, ns string) error {
                         },
                 },
         }, metav1.CreateOptions{})
-        if err != nil && !strings.Contains(err.Error(), "already exists") {
+        if err != nil && !errs.IsAlreadyExists(err) {
                 return err
         }
 
@@ -108,7 +108,7 @@ func (s *SandboxRunner) createSandboxNetworkPolicy(ctx context.Context, ns strin
                 },
         }
         _, err := s.clientset.NetworkingV1().NetworkPolicies(ns).Create(ctx, np, metav1.CreateOptions{})
-        if err != nil && !strings.Contains(err.Error(), "already exists") {
+        if err != nil && !errs.IsAlreadyExists(err) {
                 return err
         }
         return nil
