@@ -11,7 +11,7 @@ import (
         "path/filepath"
         "sync"
 
-        "github.com/karimzakzouk/sentinel/internal/api"
+        "github.com/karimzakzouk/sentinel/internal/schemas"
 )
 
 // RuntimeConfig holds editable settings. Only non-empty fields override env vars.
@@ -305,14 +305,14 @@ func (m *Manager) SetGitHubAppInstall(installID string) error {
 }
 
 // GetGitHubAppStatus returns the current App config.
-// Returns api.GitHubAppStatus so the Manager satisfies api.GitHubAppManager.
+// Returns schemas.GitHubAppStatus so the Manager satisfies api.GitHubAppManager.
 
-func (m *Manager) GetGitHubAppStatus() api.GitHubAppStatus {
+func (m *Manager) GetGitHubAppStatus() schemas.GitHubAppStatus {
         cfg := m.Get()
         if cfg.GitHubAppID == "" || cfg.GitHubAppPrivateKey == "" {
-                return api.GitHubAppStatus{Configured: false}
+                return schemas.GitHubAppStatus{Configured: false}
         }
-        return api.GitHubAppStatus{
+        return schemas.GitHubAppStatus{
                 Configured: true,
                 AppID:      cfg.GitHubAppID,
                 InstallID:  cfg.GitHubAppInstallID,
@@ -333,8 +333,8 @@ func (m *Manager) RemoveGitHubApp() error {
         return m.Save(&cfg)
 }
 
-// GitHubAppStatus — defined in package api. runtimecfg.Manager returns
-// api.GitHubAppStatus from GetGitHubAppStatus() so the types match exactly.
+// GitHubAppStatus — defined in package schemas. runtimecfg.Manager returns
+// schemas.GitHubAppStatus from GetGitHubAppStatus() so the types match exactly.
 // (No type alias needed — runtimecfg imports api transitively via the
 // GitHubAppManager interface in main.go.)
 

@@ -380,3 +380,35 @@ type GeneratedReproducer struct {
 	RunCommand     string `json:"run_command"`
 	Description    string `json:"description"`
 }
+
+// GitHubAppStatus is the status of the GitHub App configuration.
+// Used by both the API layer (GET /settings/github-app) and the runtime
+// config manager. Lives in schemas to avoid a circular dependency between
+// api and runtimecfg.
+type GitHubAppStatus struct {
+	Configured bool   `json:"configured"`
+	AppID      string `json:"app_id"`
+	Slug       string `json:"slug"`
+	InstallID  string `json:"install_id"`
+}
+
+// ProviderConfig is the configuration for a single LLM provider entry.
+// Used by the config layer (env var loading) and the llm layer (pool).
+// Lives in schemas to avoid config → llm circular dependency.
+type ProviderConfig struct {
+	ID            string `json:"id" yaml:"id"`
+	ProviderType  string `json:"provider" yaml:"provider"`
+	BaseURL       string `json:"baseUrl,omitempty" yaml:"baseUrl,omitempty"`
+	APIKey        string `json:"apiKey" yaml:"apiKey"`
+	FastModel     string `json:"fastModel,omitempty" yaml:"fastModel,omitempty"`
+	FrontierModel string `json:"frontierModel,omitempty" yaml:"frontierModel,omitempty"`
+	Priority      int    `json:"priority,omitempty" yaml:"priority,omitempty"`
+	Weight        int    `json:"weight,omitempty" yaml:"weight,omitempty"`
+	Enabled       *bool  `json:"enabled,omitempty" yaml:"enabled,omitempty"`
+	BedrockRegion string `json:"bedrockRegion,omitempty" yaml:"bedrockRegion,omitempty"`
+}
+
+// IsEnabled returns true unless Enabled is explicitly false.
+func (c *ProviderConfig) IsEnabled() bool {
+	return c.Enabled == nil || *c.Enabled
+}

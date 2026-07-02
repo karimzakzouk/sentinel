@@ -11,6 +11,8 @@ import (
         "time"
 
         "github.com/google/uuid"
+
+        "github.com/karimzakzouk/sentinel/internal/schemas"
 )
 
 // ServerEvent is pushed to SSE clients.
@@ -279,7 +281,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
                 }
 
                 isAdmin := strings.HasPrefix(r.URL.Path, "/admin/") ||
-				strings.HasPrefix(r.URL.Path, "/debug/pprof/")
+                                strings.HasPrefix(r.URL.Path, "/debug/pprof/")
                 isSettingsWrite := r.URL.Path == "/settings" && r.Method == http.MethodPost
 
                 // repo, branch, PR URL) is sensitive.
@@ -358,25 +360,14 @@ type GitHubAppManager interface {
         // slug, install_id). slug is fetched lazily from the GitHub API on first
         // call after credentials are set.
 
-        GetGitHubAppStatus() GitHubAppStatus
+        GetGitHubAppStatus() schemas.GitHubAppStatus
         // RemoveGitHubApp clears the App config (falls back to PAT).
 
         RemoveGitHubApp() error
 }
 
 // GitHubAppStatus is the public state of the GitHub App config.
-// Defined in the api package because it's the return type of
-// GitHubAppManager.GetGitHubAppStatus, which is implemented by runtimecfg.
-// runtimecfg returns this type directly (no conversion needed because
-// the api package doesn't import runtimecfg — runtimecfg imports api
-// via the GitHubAppManager interface satisfaction).
-
-type GitHubAppStatus struct {
-        Configured bool   `json:"configured"`
-        AppID      string `json:"app_id"`
-        Slug       string `json:"slug"`
-        InstallID  string `json:"install_id"`
-}
+// GitHubAppStatus is defined in internal/schemas (avoids api ↔ runtimecfg cycle).
 
 // SetGitHubAppManager wires the GitHub App manager. v4.1.0.
 

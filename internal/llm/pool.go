@@ -25,68 +25,16 @@ import (
         "strings"
         "sync"
         "time"
+
+	"github.com/karimzakzouk/sentinel/internal/schemas"
 )
 
 // ProviderConfig describes one LLM provider entry in the pool.
 // Operators stack multiple of these via the sentinel.llm.providers Helm value
 // or the SENTINEL_LLM_PROVIDERS env var (JSON array).
 
-type ProviderConfig struct {
-        // ID is a unique identifier for this provider entry. Used in logs, metrics,
-        // and the web UI. If empty, one is generated from ProviderType + index.
-
-        ID string `json:"id" yaml:"id"`
-
-        // ProviderType is the GoAI provider name: openai, anthropic, bedrock, azure,
-        // google, gemini, vertex, openrouter, groq, mistral, cohere, xai, deepseek,
-        // cerebras, fireworks, together, perplexity, ollama, vllm, zai, custom, litellm.
-
-        ProviderType string `json:"provider" yaml:"provider"`
-
-        // BaseURL is the OpenAI-compatible base URL. Optional — most native providers
-        // derive it automatically. Used for custom, litellm, ollama, vllm, zai.
-
-        BaseURL string `json:"baseUrl,omitempty" yaml:"baseUrl,omitempty"`
-
-        // APIKey is the provider's API key. Required for all providers except ollama.
-
-        APIKey string `json:"apiKey" yaml:"apiKey"`
-
-        // FastModel is the cheaper/faster model used for evidence gathering, error
-        // parsing, etc. If empty, inherits from the global default.
-
-        FastModel string `json:"fastModel,omitempty" yaml:"fastModel,omitempty"`
-
-        // FrontierModel is the more capable model used for investigation, fix
-        // generation. If empty, inherits from the global default.
-
-        FrontierModel string `json:"frontierModel,omitempty" yaml:"frontierModel,omitempty"`
-
-        // Priority is the failover order — lower = tried first. Default = index+1.
-
-        Priority int `json:"priority,omitempty" yaml:"priority,omitempty"`
-
-        // Weight is used for load-balancing among providers with the same priority.
-        // Default 1. Higher weight = more traffic. (Reserved for future use —
-        // current implementation is strict priority, not weighted round-robin.)
-
-        Weight int `json:"weight,omitempty" yaml:"weight,omitempty"`
-
-        // Enabled controls whether this provider is considered. Default true.
-        // Set to false to drain a provider without removing it from config.
-
-        Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty"`
-
-        // BedrockRegion is the AWS region for bedrock providers. Ignored otherwise.
-
-        BedrockRegion string `json:"bedrockRegion,omitempty" yaml:"bedrockRegion,omitempty"`
-}
-
-// IsEnabled returns true unless Enabled is explicitly false.
-
-func (c *ProviderConfig) IsEnabled() bool {
-        return c.Enabled == nil || *c.Enabled
-}
+// ProviderConfig is defined in internal/schemas (avoids config → llm cycle).
+type ProviderConfig = schemas.ProviderConfig
 
 // providerHealth is the circuit-breaker state for one provider.
 

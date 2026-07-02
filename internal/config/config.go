@@ -10,7 +10,7 @@ import (
         "os"
         "strings"
 
-        "github.com/karimzakzouk/sentinel/internal/llm"
+        "github.com/karimzakzouk/sentinel/internal/schemas"
 )
 
 // Config is the immutable-at-startup config. Runtime-mutable settings
@@ -246,7 +246,7 @@ type Config struct {
         // internal/llm/pool.go for the ProviderConfig schema. Empty = legacy
         // single-provider mode (uses LLMProvider + LLMAPIKey above).
 
-        LLMProviders []llm.ProviderConfig
+        LLMProviders []schemas.ProviderConfig
 
         AutoMergeEnabled        bool
         AutoMergeNamespaces     []string
@@ -672,19 +672,19 @@ func splitCSV(s string) []string {
 // For Helm, set via --set-json or a values file. Empty/unset = legacy
 // single-provider mode (uses LLMProvider + LLMAPIKey fields).
 
-func loadLLMProviders() []llm.ProviderConfig {
+func loadLLMProviders() []schemas.ProviderConfig {
         raw := os.Getenv("SENTINEL_LLM_PROVIDERS")
         if raw == "" {
                 return nil
         }
-        var configs []llm.ProviderConfig
+        var configs []schemas.ProviderConfig
         if err := json.Unmarshal([]byte(raw), &configs); err != nil {
                 log.Printf("[config] SENTINEL_LLM_PROVIDERS is set but failed to parse as JSON: %v — ignoring (falling back to single-provider mode)", err)
                 return nil
         }
         // Validate: drop entries with no API key (unless ollama/vllm which don't need one)
 
-        valid := make([]llm.ProviderConfig, 0, len(configs))
+        valid := make([]schemas.ProviderConfig, 0, len(configs))
         for _, c := range configs {
                 if c.ProviderType == "" {
                         log.Printf("[config] LLM provider entry missing 'provider' field — skipping: %+v", c)
