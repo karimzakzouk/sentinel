@@ -9,6 +9,16 @@ import type {
   MetricsSummary,
 } from "./types";
 
+// Re-export types so consumers can `import { listIncidents, type Incident } from "./api"`.
+export type {
+  Incident,
+  Provider,
+  AutoMergeState,
+  RuntimeConfig,
+  StartupConfig,
+  MetricsSummary,
+};
+
 const API_BASE = ""; // same origin (Sentinel serves the UI on the same port as the API)
 
 async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {

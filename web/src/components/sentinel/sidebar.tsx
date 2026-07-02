@@ -17,25 +17,23 @@ import {
   Command,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useSentinel, type SectionId } from "@/lib/store";
+import { useSentinelStore, type SectionId } from "@/lib/store";
 import { PulseDot } from "@/components/sentinel/common";
 
 interface NavItem {
   id: SectionId;
   label: string;
   icon: React.ComponentType<{ className?: string }>;
-  badge?: string;
-  pulse?: boolean;
 }
 
 const nav: NavItem[] = [
   { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { id: "incidents", label: "Incidents", icon: AlertTriangle, badge: "2" },
-  { id: "live", label: "Live Investigation", icon: Radio, pulse: true },
+  { id: "incidents", label: "Incidents", icon: AlertTriangle },
+  { id: "live", label: "Live Investigation", icon: Radio },
   { id: "sandbox", label: "Sandbox", icon: FlaskConical },
-  { id: "prs", label: "Pull Requests", icon: GitPullRequest, badge: "7" },
+  { id: "prs", label: "Pull Requests", icon: GitPullRequest },
   { id: "providers", label: "Providers", icon: Cpu },
-  { id: "automerge", label: "Auto-Merge", icon: Merge, badge: "1" },
+  { id: "automerge", label: "Auto-Merge", icon: Merge },
   { id: "detection", label: "Detection", icon: Eye },
   { id: "chatops", label: "Chatops", icon: MessageSquare },
   { id: "metrics", label: "Metrics", icon: BarChart3 },
@@ -44,9 +42,18 @@ const nav: NavItem[] = [
 ];
 
 export function Sidebar() {
-  const activeSection = useSentinel((s) => s.activeSection);
-  const setActiveSection = useSentinel((s) => s.setActiveSection);
-  const setCommandOpen = useSentinel((s) => s.setCommandOpen);
+  const activeSection = useSentinelStore((s) => s.activeSection);
+  const setActiveSection = useSentinelStore((s) => s.setActiveSection);
+  const setCommandOpen = useSentinelStore((s) => s.setCommandOpen);
+  const version = useSentinelStore((s) => s.version);
+  const healthy = useSentinelStore((s) => s.healthy);
+  const sseConnected = useSentinelStore((s) => s.sseConnected);
+  const incidents = useSentinelStore((s) => s.incidents);
+
+  // Real "live" badge — only pulse when there's an active investigation.
+  const activeIncidents = incidents.filter((i) =>
+    ["investigating", "executing", "fix_proposed", "approved", "root_caused"].includes(i.status),
+  ).length;
 
   return (
     <aside className="flex h-screen w-60 flex-col border-r border-zinc-800 bg-zinc-950">
@@ -57,7 +64,9 @@ export function Sidebar() {
         </div>
         <div className="flex flex-col leading-tight">
           <span className="text-sm font-semibold tracking-tight text-zinc-50">Sentinel</span>
-          <span className="font-mono text-[10px] text-zinc-500">v2.4.1 · prod</span>
+          <span className="font-mono text-[10px] text-zinc-500">
+            {version ? `v${version}` : "connecting…"}
+          </span>
         </div>
       </div>
 
@@ -81,6 +90,8 @@ export function Sidebar() {
           {nav.map((item) => {
             const Icon = item.icon;
             const active = activeSection === item.id;
+            const isLive = item.id === "live";
+            const showLivePulse = isLive && activeIncidents > 0;
             return (
               <li key={item.id}>
                 <button
@@ -89,26 +100,26 @@ export function Sidebar() {
                     "group flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-sm transition-colors",
                     active
                       ? "bg-cyan-500/10 text-cyan-300 ring-1 ring-cyan-500/20"
-                      : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200"
+                      : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200",
                   )}
                 >
                   <span className="relative">
                     <Icon className={cn("h-4 w-4", active && "text-cyan-400")} />
-                    {item.pulse && (
+                    {showLivePulse && (
                       <span className="absolute -right-0.5 -top-0.5">
                         <PulseDot color="bg-cyan-400" className="h-1.5 w-1.5" />
                       </span>
                     )}
                   </span>
                   <span className="flex-1 text-left">{item.label}</span>
-                  {item.badge && (
+                  {item.id === "incidents" && activeIncidents > 0 && (
                     <span
                       className={cn(
                         "rounded px-1.5 py-0.5 font-mono text-[10px] font-medium",
-                        active ? "bg-cyan-500/20 text-cyan-300" : "bg-zinc-800 text-zinc-400"
+                        active ? "bg-cyan-500/20 text-cyan-300" : "bg-zinc-800 text-zinc-400",
                       )}
                     >
-                      {item.badge}
+                      {activeIncidents}
                     </span>
                   )}
                 </button>
@@ -118,26 +129,44 @@ export function Sidebar() {
         </ul>
       </nav>
 
-      {/* Footer status */}
+      {/* Footer status — real health + SSE + incident counts only */}
       <div className="border-t border-zinc-800 p-3">
         <div className="space-y-2 rounded-md bg-zinc-900/50 p-2.5">
           <div className="flex items-center justify-between text-[11px]">
-            <span className="text-zinc-500">Cluster</span>
-            <span className="flex items-center gap-1.5 font-mono text-emerald-400">
-              <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
-              prod-us-east-1
+            <span className="text-zinc-500">API</span>
+            <span className="flex items-center gap-1.5 font-mono">
+              {healthy ? (
+                <>
+                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                  <span className="text-emerald-400">healthy</span>
+                </>
+              ) : (
+                <>
+                  <span className="h-1.5 w-1.5 rounded-full bg-rose-400" />
+                  <span className="text-rose-400">down</span>
+                </>
+              )}
             </span>
           </div>
           <div className="flex items-center justify-between text-[11px]">
-            <span className="text-zinc-500">Autonomous</span>
-            <span className="flex items-center gap-1.5 font-mono text-emerald-400">
-              <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse-dot" />
-              running
+            <span className="text-zinc-500">SSE</span>
+            <span className="flex items-center gap-1.5 font-mono">
+              {sseConnected ? (
+                <>
+                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse-dot" />
+                  <span className="text-emerald-400">streaming</span>
+                </>
+              ) : (
+                <>
+                  <span className="h-1.5 w-1.5 rounded-full bg-zinc-600" />
+                  <span className="text-zinc-400">disconnected</span>
+                </>
+              )}
             </span>
           </div>
           <div className="flex items-center justify-between text-[11px]">
-            <span className="text-zinc-500">Uptime</span>
-            <span className="font-mono text-zinc-300">42d 18h</span>
+            <span className="text-zinc-500">Incidents (7d)</span>
+            <span className="font-mono text-zinc-300">{incidents.length}</span>
           </div>
         </div>
       </div>

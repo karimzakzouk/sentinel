@@ -27,8 +27,7 @@ import {
   Pause,
   Search,
 } from "lucide-react";
-import { useSentinel, startLiveSimulation, type SectionId } from "@/lib/store";
-import { incidents } from "@/lib/mock-data";
+import { useSentinelStore, type SectionId } from "@/lib/store";
 import { useToast } from "@/hooks/use-toast";
 
 const sections: { id: SectionId; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
@@ -47,19 +46,38 @@ const sections: { id: SectionId; label: string; icon: React.ComponentType<{ clas
 ];
 
 export function CommandPalette() {
-  const open = useSentinel((s) => s.commandOpen);
-  const setOpen = useSentinel((s) => s.setCommandOpen);
-  const setActiveSection = useSentinel((s) => s.setActiveSection);
-  const setSelectedIncident = useSentinel((s) => s.setSelectedIncident);
-  const toggleDetection = useSentinel((s) => s.toggleDetection);
-  const detectionPaused = useSentinel((s) => s.detectionPaused);
+  const open = useSentinelStore((s) => s.commandOpen);
+  const setOpen = useSentinelStore((s) => s.setCommandOpen);
+  const setActiveSection = useSentinelStore((s) => s.setActiveSection);
+  const setSelectedIncident = useSentinelStore((s) => s.setSelectedIncident);
+  const incidents = useSentinelStore((s) => s.incidents);
+  const pauseAutonomous = useSentinelStore((s) => s.pauseAutonomous);
+  const resumeAutonomous = useSentinelStore((s) => s.resumeAutonomous);
+  const healthy = useSentinelStore((s) => s.healthy);
   const { toast } = useToast();
 
-  // Ensure simulation runs once on the client
-  if (typeof window !== "undefined") startLiveSimulation();
+  const paused = !healthy;
 
   const goTo = (id: SectionId) => {
     setActiveSection(id);
+    setOpen(false);
+  };
+
+  const onTogglePause = async () => {
+    try {
+      if (paused) {
+        await resumeAutonomous();
+        toast({ title: "Detection resumed", description: "Autonomous detection is running" });
+      } else {
+        await pauseAutonomous(30);
+        toast({ title: "Detection paused", description: "Autonomous detection paused for 30m" });
+      }
+    } catch (err) {
+      toast({
+        title: "Action failed",
+        description: err instanceof Error ? err.message : "Unknown error",
+      });
+    }
     setOpen(false);
   };
 
@@ -84,37 +102,35 @@ export function CommandPalette() {
         <CommandSeparator />
 
         <CommandGroup heading="Search Incidents">
-          {incidents.slice(0, 6).map((inc) => (
+          {incidents.slice(0, 8).map((inc) => (
             <CommandItem
-              key={inc.id}
+              key={inc.incident_id}
               onSelect={() => {
-                setSelectedIncident(inc.id);
+                setSelectedIncident(inc.incident_id);
                 setActiveSection("incidents");
                 setOpen(false);
               }}
             >
               <Search className="h-4 w-4 text-zinc-400" />
-              <span className="font-mono text-xs text-zinc-300">{inc.id}</span>
-              <span className="text-zinc-500">— {inc.service} · {inc.errorType}</span>
+              <span className="font-mono text-xs text-zinc-300">{inc.incident_id.slice(0, 8)}</span>
+              <span className="text-zinc-500">
+                — {inc.cluster?.service ?? "unknown"} · {inc.status}
+              </span>
             </CommandItem>
           ))}
+          {incidents.length === 0 && (
+            <CommandItem disabled>
+              <span className="text-xs text-zinc-600">No incidents yet</span>
+            </CommandItem>
+          )}
         </CommandGroup>
 
         <CommandSeparator />
 
         <CommandGroup heading="Actions">
-          <CommandItem
-            onSelect={() => {
-              toggleDetection();
-              toast({
-                title: detectionPaused ? "Detection resumed" : "Detection paused",
-                description: detectionPaused ? "Autonomous detection is now running" : "Autonomous detection paused for 30m",
-              });
-              setOpen(false);
-            }}
-          >
-            {detectionPaused ? <Play className="h-4 w-4 text-emerald-400" /> : <Pause className="h-4 w-4 text-amber-400" />}
-            <span>{detectionPaused ? "Resume detection" : "Pause detection"}</span>
+          <CommandItem onSelect={onTogglePause}>
+            {paused ? <Play className="h-4 w-4 text-emerald-400" /> : <Pause className="h-4 w-4 text-amber-400" />}
+            <span>{paused ? "Resume detection" : "Pause detection (30m)"}</span>
             <CommandShortcut>⌘P</CommandShortcut>
           </CommandItem>
           <CommandItem
@@ -124,7 +140,7 @@ export function CommandPalette() {
             }}
           >
             <Radio className="h-4 w-4 text-cyan-400" />
-            <span>Trigger new investigation</span>
+            <span>Open live investigation</span>
             <CommandShortcut>⌘I</CommandShortcut>
           </CommandItem>
         </CommandGroup>

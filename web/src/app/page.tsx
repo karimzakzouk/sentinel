@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Sidebar } from "@/components/sentinel/sidebar";
 import { CommandPalette } from "@/components/sentinel/command-palette";
 import { DashboardSection } from "@/components/sections/dashboard";
@@ -15,10 +15,10 @@ import { ChatopsSection } from "@/components/sections/chatops";
 import { MetricsSection } from "@/components/sections/metrics";
 import { SettingsSection } from "@/components/sections/settings";
 import { ApiExplorerSection } from "@/components/sections/api-explorer";
-import { useSentinel, startLiveSimulation } from "@/lib/store";
-import { Bell, Activity, Clock, Search } from "lucide-react";
+import { useSentinelStore, useSSE, useAutoRefresh, type SectionId } from "@/lib/store";
+import { Clock, Search, Wifi, WifiOff, Activity } from "lucide-react";
 
-const titles: Record<string, { title: string; sub: string }> = {
+const titles: Record<SectionId, { title: string; sub: string }> = {
   dashboard: { title: "Dashboard", sub: "Operational overview — last 7 days" },
   incidents: { title: "Incidents", sub: "All detected and remediated incidents" },
   live: { title: "Live Investigation", sub: "Real-time agent execution pipeline" },
@@ -26,22 +26,40 @@ const titles: Record<string, { title: string; sub: string }> = {
   prs: { title: "Pull Requests", sub: "Sentinel-generated PRs and auto-merge gates" },
   providers: { title: "Providers", sub: "LLM pool, circuit breakers, and cost" },
   automerge: { title: "Auto-Merge", sub: "Queue, rate limits, and gate status" },
-  detection: { title: "Detection", sub: "Log streams, pod watchers, Alertmanager" },
+  detection: { title: "Detection", sub: "Autonomous mode, SSE, Alertmanager" },
   chatops: { title: "Chatops", sub: "Commands and audit log" },
   metrics: { title: "Metrics", sub: "Aggregate operational and cost metrics" },
-  settings: { title: "Settings", sub: "Sentinel configuration — 18 sections" },
+  settings: { title: "Settings", sub: "Runtime + startup configuration" },
   api: { title: "API Explorer", sub: "REST endpoints with interactive try-it" },
 };
 
-export default function Home() {
-  const active = useSentinel((s) => s.activeSection);
-  const setCommandOpen = useSentinel((s) => s.setCommandOpen);
-  const activityFeed = useSentinel((s) => s.activityFeed);
-
-  // Start live simulation on mount
+function ClockBadge() {
+  const [now, setNow] = useState<string>("");
   useEffect(() => {
-    startLiveSimulation();
+    const tick = () =>
+      setNow(new Date().toLocaleTimeString("en-US", { hour12: false }));
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
   }, []);
+  return (
+    <span className="font-mono text-zinc-300">
+      {now || "—"}
+    </span>
+  );
+}
+
+export default function Home() {
+  const active = useSentinelStore((s) => s.activeSection);
+  const setCommandOpen = useSentinelStore((s) => s.setCommandOpen);
+  const version = useSentinelStore((s) => s.version);
+  const sseConnected = useSentinelStore((s) => s.sseConnected);
+  const healthy = useSentinelStore((s) => s.healthy);
+
+  // Boot SSE + auto-refresh on mount — these are the only data sources for the
+  // whole dashboard. The hooks are idempotent (subscribe, fetch, reconnect).
+  useSSE();
+  useAutoRefresh(30_000);
 
   // Cmd+K shortcut
   useEffect(() => {
@@ -75,34 +93,40 @@ export default function Home() {
               className="flex items-center gap-2 rounded-md border border-zinc-800 bg-zinc-900/60 px-2.5 py-1.5 text-xs text-zinc-500 transition-colors hover:border-zinc-700 hover:bg-zinc-900"
             >
               <Search className="h-3 w-3" />
-              <span>Search or run a command</span>
+              <span className="hidden sm:inline">Search or run a command</span>
               <kbd className="rounded border border-zinc-700 bg-zinc-800 px-1 font-mono text-[10px] text-zinc-400">⌘K</kbd>
             </button>
 
+            {/* Version badge (from /healthz) */}
             <div className="hidden items-center gap-1.5 rounded-md border border-zinc-800 bg-zinc-900/60 px-2.5 py-1.5 text-[11px] text-zinc-400 md:flex">
-              <Activity className="h-3 w-3 text-emerald-400" />
-              <span className="font-mono">live</span>
-              <span className="mx-1 h-3 w-px bg-zinc-700" />
-              <Clock className="h-3 w-3 text-zinc-500" />
-              <span className="font-mono text-zinc-300">
-                {new Date().toLocaleTimeString("en-US", { hour12: false })}
+              <Activity className="h-3 w-3 text-cyan-400" />
+              <span className="font-mono">
+                v{version || "—"}
               </span>
             </div>
 
-            <div className="relative">
-              <button className="flex h-8 w-8 items-center justify-center rounded-md border border-zinc-800 bg-zinc-900/60 text-zinc-400 transition-colors hover:bg-zinc-900 hover:text-zinc-200">
-                <Bell className="h-3.5 w-3.5" />
-              </button>
-              {activityFeed.length > 0 && (
-                <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-cyan-400 ring-2 ring-zinc-950" />
+            {/* SSE connection indicator */}
+            <div
+              className="flex items-center gap-1.5 rounded-md border border-zinc-800 bg-zinc-900/60 px-2.5 py-1.5 text-[11px] md:flex"
+              title={sseConnected ? "SSE connected — receiving live events" : "SSE disconnected — reconnecting"}
+            >
+              {sseConnected ? (
+                <Wifi className="h-3 w-3 text-emerald-400" />
+              ) : (
+                <WifiOff className="h-3 w-3 text-rose-400" />
+              )}
+              <span className={`font-mono ${sseConnected ? "text-emerald-400" : "text-rose-400"}`}>
+                {sseConnected ? "live" : "offline"}
+              </span>
+              {!healthy && (
+                <span className="ml-1 text-[10px] text-rose-400">·api down</span>
               )}
             </div>
 
-            <div className="flex h-8 items-center gap-2 rounded-md border border-zinc-800 bg-zinc-900/60 px-2">
-              <div className="flex h-5 w-5 items-center justify-center rounded-full bg-gradient-to-br from-cyan-500 to-cyan-700 font-mono text-[10px] font-semibold text-zinc-950">
-                SR
-              </div>
-              <span className="font-mono text-[11px] text-zinc-300">sre-oncall</span>
+            {/* Real clock */}
+            <div className="hidden items-center gap-1.5 rounded-md border border-zinc-800 bg-zinc-900/60 px-2.5 py-1.5 text-[11px] text-zinc-400 md:flex">
+              <Clock className="h-3 w-3 text-zinc-500" />
+              <ClockBadge />
             </div>
           </div>
         </header>

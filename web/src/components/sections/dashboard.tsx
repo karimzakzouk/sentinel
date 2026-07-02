@@ -1,9 +1,19 @@
 "use client";
 
+import { useMemo } from "react";
 import { Card, CardContent } from "@/components/ui/card";
-import { Panel, PanelHeader, PulseDot, Mono, timeAgo } from "@/components/sentinel/common";
-import { useSentinel } from "@/lib/store";
-import { incidentHeatmap, heatmapDays, metrics7d } from "@/lib/mock-data";
+import { Button } from "@/components/ui/button";
+import {
+  Panel,
+  PanelHeader,
+  PulseDot,
+  Mono,
+  timeAgo,
+  EmptyState,
+  ErrorState,
+} from "@/components/sentinel/common";
+import { useSentinelStore } from "@/lib/store";
+import type { Incident } from "@/lib/types";
 import {
   AlertTriangle,
   GitPullRequest,
@@ -12,44 +22,40 @@ import {
   Cpu,
   Merge,
   Radio,
-  FlaskConical as Flask,
-  Eye,
+  Inbox,
   ArrowUpRight,
   ArrowDownRight,
+  Activity as ActivityIcon,
 } from "lucide-react";
 import {
   RadialBarChart,
   RadialBar,
   ResponsiveContainer,
   PolarAngleAxis,
-  AreaChart,
-  Area,
-  XAxis,
-  YAxis,
-  Tooltip,
 } from "recharts";
 import * as Icons from "lucide-react";
+import { cn } from "@/lib/utils";
 
 function KpiCard({
   label,
   value,
   unit,
   icon: Icon,
-  trend,
-  trendUp,
   accent,
   pulse,
   sub,
+  trend,
+  trendUp,
 }: {
   label: string;
   value: string | number;
   unit?: string;
   icon: React.ComponentType<{ className?: string }>;
-  trend?: string;
-  trendUp?: boolean;
   accent: string;
   pulse?: boolean;
   sub?: string;
+  trend?: string;
+  trendUp?: boolean;
 }) {
   return (
     <Card className="gap-0 border-zinc-800 bg-zinc-900/50 py-0">
@@ -57,7 +63,7 @@ function KpiCard({
         <div className="flex items-start justify-between">
           <div className="flex flex-col gap-2">
             <div className="flex items-center gap-2">
-              <Icon className={`h-3.5 w-3.5 ${accent}`} />
+              <Icon className={cn("h-3.5 w-3.5", accent)} />
               <span className="text-[11px] font-medium uppercase tracking-wider text-zinc-500">{label}</span>
             </div>
             <div className="flex items-baseline gap-1">
@@ -69,9 +75,10 @@ function KpiCard({
           </div>
           {trend && (
             <span
-              className={`flex items-center gap-0.5 font-mono text-[11px] ${
-                trendUp ? "text-emerald-400" : "text-rose-400"
-              }`}
+              className={cn(
+                "flex items-center gap-0.5 font-mono text-[11px]",
+                trendUp ? "text-emerald-400" : "text-rose-400",
+              )}
             >
               {trendUp ? <ArrowUpRight className="h-3 w-3" /> : <ArrowDownRight className="h-3 w-3" />}
               {trend}
@@ -83,186 +90,256 @@ function KpiCard({
   );
 }
 
-function heatColor(v: number): string {
-  // 0..8 intensity
-  if (v === 0) return "bg-zinc-900";
-  if (v <= 1) return "bg-cyan-500/10";
-  if (v <= 2) return "bg-cyan-500/25";
-  if (v <= 3) return "bg-cyan-500/40";
-  if (v <= 4) return "bg-cyan-500/55";
-  if (v <= 5) return "bg-amber-500/60";
-  if (v <= 6) return "bg-amber-500/75";
-  return "bg-rose-500/80";
+function isInvestigating(i: Incident): boolean {
+  return ["investigating", "executing", "fix_proposed", "approved", "root_caused"].includes(i.status);
 }
 
 export function DashboardSection() {
-  const activityFeed = useSentinel((s) => s.activityFeed);
-  const tick = useSentinel((s) => s.tick);
+  const incidents = useSentinelStore((s) => s.incidents);
+  const providers = useSentinelStore((s) => s.providers);
+  const autoMerge = useSentinelStore((s) => s.autoMerge);
+  const metrics = useSentinelStore((s) => s.metrics);
+  const activityFeed = useSentinelStore((s) => s.activityFeed);
+  const loading = useSentinelStore((s) => s.loading);
+  const error = useSentinelStore((s) => s.error);
+  const fetchIncidents = useSentinelStore((s) => s.fetchIncidents);
 
-  const successData = [{ name: "success", value: 89.2, fill: "#06B6D4" }];
+  const activeIncidents = useMemo(() => incidents.filter(isInvestigating), [incidents]);
+  const resolvedIncidents = useMemo(
+    () => incidents.filter((i) => ["verified", "resolved"].includes(i.status)),
+    [incidents],
+  );
+  const failedIncidents = useMemo(
+    () => incidents.filter((i) => ["failed", "rejected", "escalated"].includes(i.status)),
+    [incidents],
+  );
+  const prIncidents = useMemo(() => incidents.filter((i) => i.pr_number), [incidents]);
+  const healthyProviders = useMemo(
+    () => providers.filter((p) => p.status === "healthy").length,
+    [providers],
+  );
+  const trippedProviders = useMemo(
+    () => providers.filter((p) => p.status !== "healthy").length,
+    [providers],
+  );
+
+  const successRate = autoMerge?.stats?.success_rate ?? 0;
+  const queueDepth = autoMerge?.queue?.length ?? 0;
+
+  // Cost sum across models (when metrics has cost data)
+  const totalCost = useMemo(() => {
+    if (!metrics?.llm_total_cost_usd) return 0;
+    return Object.values(metrics.llm_total_cost_usd).reduce((a, b) => a + b, 0);
+  }, [metrics]);
+
+  // Sandbox verifications from metrics (verified → count)
+  const sandboxVerified = useMemo(() => {
+    if (!metrics?.sandbox_verifications_total) return { passed: 0, total: 0 };
+    const entries = Object.entries(metrics.sandbox_verifications_total);
+    const passed = entries
+      .filter(([k]) => k === "true" || k === "pass" || k === "passed" || k === "1")
+      .reduce((a, [, v]) => a + v, 0);
+    const total = entries.reduce((a, [, v]) => a + v, 0);
+    return { passed, total };
+  }, [metrics]);
+
+  if (loading && incidents.length === 0) {
+    return (
+      <div className="space-y-4 p-6">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <div key={i} className="h-20 animate-pulse rounded-lg border border-zinc-800 bg-zinc-900/50" />
+          ))}
+        </div>
+        <div className="grid grid-cols-1 gap-3 lg:grid-cols-12">
+          <div className="h-64 animate-pulse rounded-lg border border-zinc-800 bg-zinc-900/50 lg:col-span-3" />
+          <div className="h-64 animate-pulse rounded-lg border border-zinc-800 bg-zinc-900/50 lg:col-span-6" />
+          <div className="h-64 animate-pulse rounded-lg border border-zinc-800 bg-zinc-900/50 lg:col-span-3" />
+        </div>
+      </div>
+    );
+  }
+
+  if (error && incidents.length === 0) {
+    return (
+      <div className="p-6">
+        <ErrorState message={error} onRetry={fetchIncidents} />
+      </div>
+    );
+  }
+
+  const successData = [{ name: "success", value: successRate, fill: "#06B6D4" }];
+  const hasAnyData = incidents.length > 0 || providers.length > 0 || !!autoMerge || !!metrics;
 
   return (
     <div className="p-6">
-      {/* KPI grid */}
+      {/* KPI grid — all values computed from real store data */}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
         <KpiCard
           label="Active Incidents"
-          value={2}
+          value={activeIncidents.length}
           icon={AlertTriangle}
           accent="text-amber-400"
-          pulse
-          trend="+1 (1h)"
-          trendUp={false}
-          sub="1 investigating · 1 escalated"
+          pulse={activeIncidents.length > 0}
+          sub={
+            activeIncidents.length > 0
+              ? `${activeIncidents.length} investigating`
+              : "no active investigations"
+          }
         />
         <KpiCard
-          label="PRs Opened Today"
-          value={7}
+          label="PRs Opened (7d)"
+          value={prIncidents.length}
           icon={GitPullRequest}
           accent="text-cyan-400"
-          trend="+3 vs avg"
-          trendUp
-          sub="5 merged · 1 queued · 1 closed"
+          sub={
+            prIncidents.length > 0
+              ? `${prIncidents.length} PRs from incidents`
+              : "no PRs yet"
+          }
         />
         <KpiCard
           label="Sandbox Verifications"
-          value="5/7"
+          value={
+            sandboxVerified.total > 0
+              ? `${sandboxVerified.passed}/${sandboxVerified.total}`
+              : "0"
+          }
           icon={FlaskConical}
           accent="text-emerald-400"
-          trend="71% pass"
-          trendUp
-          sub="2 in progress"
+          sub={
+            sandboxVerified.total > 0
+              ? `${Math.round((sandboxVerified.passed / sandboxVerified.total) * 100)}% pass`
+              : "no sandbox data yet"
+          }
         />
         <KpiCard
-          label="LLM Cost Today"
-          value="$0.14"
+          label="LLM Cost (cumulative)"
+          value={totalCost.toFixed(2)}
+          unit="USD"
           icon={DollarSign}
           accent="text-cyan-400"
-          trend="-$0.04"
-          trendUp
-          sub="94.2k tokens consumed"
+          sub={totalCost > 0 ? "across all models" : "no LLM calls recorded"}
         />
         <KpiCard
           label="Provider Health"
-          value="2/3"
+          value={`${healthyProviders}/${providers.length || 0}`}
           icon={Cpu}
-          accent="text-amber-400"
-          sub="Groq circuit open"
+          accent={trippedProviders > 0 ? "text-amber-400" : "text-emerald-400"}
+          sub={
+            providers.length === 0
+              ? "no providers configured"
+              : trippedProviders > 0
+              ? `${trippedProviders} tripped`
+              : "all healthy"
+          }
         />
         <KpiCard
           label="Auto-Merge Queue"
-          value={1}
+          value={queueDepth}
           icon={Merge}
           accent="text-cyan-400"
-          sub="1 pending · rate 2/3hr"
+          pulse={queueDepth > 0}
+          sub={
+            autoMerge
+              ? `${autoMerge.rate_limit.merged_last_hour}/${autoMerge.rate_limit.max_per_hour} this hour`
+              : "auto-merge not configured"
+          }
         />
       </div>
 
-      {/* Second row: success gauge + heatmap + activity */}
+      {/* Second row: success gauge + status breakdown + activity feed */}
       <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-12">
         {/* Success rate gauge */}
         <Panel className="lg:col-span-3">
-          <PanelHeader title="7-day Success Rate" sub="Rolling auto-merge success" />
+          <PanelHeader title="Auto-Merge Success" sub="Rolling success rate" />
           <div className="px-4 py-3">
-            <div className="relative h-44">
-              <ResponsiveContainer width="100%" height="100%">
-                <RadialBarChart
-                  innerRadius="68%"
-                  outerRadius="100%"
-                  data={successData}
-                  startAngle={90}
-                  endAngle={-270}
-                >
-                  <PolarAngleAxis type="number" domain={[0, 100]} tick={false} />
-                  <RadialBar dataKey="value" cornerRadius={6} background={{ fill: "#27272A" }} />
-                </RadialBarChart>
-              </ResponsiveContainer>
-              <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
-                <span className="font-mono text-3xl font-semibold text-zinc-50">89.2%</span>
-                <span className="mt-0.5 text-[11px] text-zinc-500">38 merged · 2 reverted</span>
-              </div>
-            </div>
-            <div className="mt-2 flex items-center justify-between border-t border-zinc-800 pt-2 text-[11px]">
-              <span className="text-zinc-500">Target</span>
-              <span className="font-mono text-emerald-400">≥ 85.0%</span>
-            </div>
+            {autoMerge ? (
+              <>
+                <div className="relative h-44">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <RadialBarChart
+                      innerRadius="68%"
+                      outerRadius="100%"
+                      data={successData}
+                      startAngle={90}
+                      endAngle={-270}
+                    >
+                      <PolarAngleAxis type="number" domain={[0, 100]} tick={false} />
+                      <RadialBar dataKey="value" cornerRadius={6} background={{ fill: "#27272A" }} />
+                    </RadialBarChart>
+                  </ResponsiveContainer>
+                  <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
+                    <span className="font-mono text-3xl font-semibold text-zinc-50">
+                      {successRate.toFixed(1)}%
+                    </span>
+                    <span className="mt-0.5 text-[11px] text-zinc-500">
+                      {autoMerge.stats.total_merged} merged · {autoMerge.stats.total_reverted} reverted
+                    </span>
+                  </div>
+                </div>
+                <div className="mt-2 flex items-center justify-between border-t border-zinc-800 pt-2 text-[11px]">
+                  <span className="text-zinc-500">Target</span>
+                  <span className="font-mono text-emerald-400">≥ 85.0%</span>
+                </div>
+              </>
+            ) : (
+              <EmptyState
+                title="Auto-merge not configured"
+                description="Enable auto-merge in settings to see success metrics."
+                icon={Merge}
+                className="border-0 bg-transparent py-8"
+              />
+            )}
           </div>
         </Panel>
 
-        {/* Heatmap */}
+        {/* Incident status breakdown */}
         <Panel className="lg:col-span-6">
-          <PanelHeader
-            title="Incident Heatmap"
-            sub="7 days × 24 hours · color = incident volume"
-            right={
-              <div className="flex items-center gap-1 text-[10px] text-zinc-500">
-                <span>low</span>
-                <div className="flex gap-0.5">
-                  <div className="h-2.5 w-3 bg-zinc-900" />
-                  <div className="h-2.5 w-3 bg-cyan-500/25" />
-                  <div className="h-2.5 w-3 bg-cyan-500/55" />
-                  <div className="h-2.5 w-3 bg-amber-500/60" />
-                  <div className="h-2.5 w-3 bg-rose-500/80" />
-                </div>
-                <span>high</span>
-              </div>
-            }
-          />
+          <PanelHeader title="Incidents by Status" sub={`${incidents.length} total · last 7 days`} />
           <div className="px-4 py-3">
-            <div className="flex">
-              {/* Day labels */}
-              <div className="mr-1 flex flex-col gap-1">
-                <div className="h-3 text-[9px] text-zinc-600" />
-                {heatmapDays.map((d) => (
-                  <div key={d} className="flex h-3 items-center text-[9px] text-zinc-500">
-                    {d}
-                  </div>
-                ))}
-              </div>
-              <div className="flex-1">
-                {/* Hour labels */}
-                <div className="mb-1 flex gap-0.5 text-[9px] text-zinc-600">
-                  {[0, 4, 8, 12, 16, 20, 23].map((h) => (
-                    <div key={h} className="w-3.5 text-center">
-                      {String(h).padStart(2, "0")}
+            {incidents.length === 0 ? (
+              <EmptyState
+                title="No incidents yet"
+                description="When Sentinel detects an anomaly, it will appear here automatically."
+                icon={Inbox}
+                className="border-0 bg-transparent py-8"
+              />
+            ) : (
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+                {[
+                  { label: "investigating", color: "bg-amber-500", count: activeIncidents.length },
+                  { label: "verified", color: "bg-emerald-500", count: resolvedIncidents.length },
+                  { label: "failed", color: "bg-rose-500", count: failedIncidents.length },
+                  {
+                    label: "with PR",
+                    color: "bg-cyan-500",
+                    count: prIncidents.length,
+                  },
+                  {
+                    label: "w/ root cause",
+                    color: "bg-violet-500",
+                    count: incidents.filter((i) => i.state?.root_cause).length,
+                  },
+                ].map((s) => (
+                  <div key={s.label} className="rounded-md border border-zinc-800 bg-zinc-950/50 px-3 py-2.5">
+                    <div className="flex items-center gap-1.5">
+                      <span className={cn("h-2 w-2 rounded-sm", s.color)} />
+                      <span className="text-[10px] uppercase tracking-wider text-zinc-500">{s.label}</span>
                     </div>
-                  ))}
-                </div>
-                {incidentHeatmap.map((day, di) => (
-                  <div key={di} className="mb-0.5 flex gap-0.5">
-                    {day.map((v, hi) => (
-                      <div
-                        key={hi}
-                        className={`h-3 w-3.5 rounded-sm ${heatColor(v)} ${v >= 5 ? "ring-1 ring-rose-500/40" : ""}`}
-                        title={`${heatmapDays[di]} ${String(hi).padStart(2, "0")}:00 — ${v} incidents`}
-                      />
-                    ))}
+                    <Mono className="mt-1 block text-xl text-zinc-100">{s.count}</Mono>
                   </div>
                 ))}
               </div>
-            </div>
-            <div className="mt-3 grid grid-cols-3 gap-2 border-t border-zinc-800 pt-2 text-[11px]">
-              <div>
-                <div className="text-zinc-500">Peak hour</div>
-                <div className="font-mono text-zinc-300">14:00–15:00 UTC</div>
-              </div>
-              <div>
-                <div className="text-zinc-500">Total (7d)</div>
-                <div className="font-mono text-zinc-300">142 incidents</div>
-              </div>
-              <div>
-                <div className="text-zinc-500">Mean/day</div>
-                <div className="font-mono text-zinc-300">20.3</div>
-              </div>
-            </div>
+            )}
           </div>
         </Panel>
 
-        {/* Activity feed */}
+        {/* Activity feed — live SSE */}
         <Panel className="lg:col-span-3">
           <PanelHeader
             title="Activity Feed"
-            sub="Live events"
+            sub="Live SSE events"
             right={
               <span className="flex items-center gap-1 text-[10px] text-emerald-400">
                 <PulseDot color="bg-emerald-400" className="h-1.5 w-1.5" />
@@ -271,107 +348,159 @@ export function DashboardSection() {
             }
           />
           <div className="max-h-80 overflow-y-auto scrollbar-thin">
-            {activityFeed.slice(0, 12).map((e) => {
-              const Icon = (Icons as unknown as Record<string, React.ComponentType<{ className?: string }>>)[e.icon] ?? Radio;
-              return (
-                <div
-                  key={e.id}
-                  className="flex items-start gap-2.5 border-b border-zinc-800/50 px-4 py-2 last:border-0"
-                >
-                  <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded bg-zinc-800/80">
-                    <Icon className="h-3 w-3 text-zinc-400" />
+            {activityFeed.length === 0 ? (
+              <div className="px-4 py-8 text-center text-xs text-zinc-600">
+                {hasAnyData ? "Waiting for events…" : "No activity yet"}
+              </div>
+            ) : (
+              activityFeed.slice(0, 12).map((e) => {
+                const Icon =
+                  (Icons as unknown as Record<string, React.ComponentType<{ className?: string }>>)[e.icon] ??
+                  Radio;
+                return (
+                  <div
+                    key={e.id}
+                    className="flex items-start gap-2.5 border-b border-zinc-800/50 px-4 py-2 last:border-0"
+                  >
+                    <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded bg-zinc-800/80">
+                      <Icon className="h-3 w-3 text-zinc-400" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[12px] leading-tight text-zinc-300">{e.message}</p>
+                      <p className="mt-0.5 font-mono text-[10px] text-zinc-600">{timeAgo(e.time)}</p>
+                    </div>
                   </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-[12px] leading-tight text-zinc-300">{e.message}</p>
-                    <p className="mt-0.5 font-mono text-[10px] text-zinc-600">{timeAgo(e.time)}</p>
-                  </div>
-                </div>
-              );
-            })}
+                );
+              })
+            )}
           </div>
         </Panel>
       </div>
 
-      {/* Third row: 7-day activity sparkline + provider mini-status */}
+      {/* Third row: recent incidents table + provider mini-status */}
       <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-12">
         <Panel className="lg:col-span-8">
           <PanelHeader
-            title="Daily Incident Volume"
-            sub="By status · last 7 days"
+            title="Recent Incidents"
+            sub="Latest 5 from the API"
             right={
-              <div className="flex items-center gap-3 text-[10px]">
-                <span className="flex items-center gap-1 text-amber-400"><span className="h-2 w-2 rounded-sm bg-amber-400" />investigating</span>
-                <span className="flex items-center gap-1 text-emerald-400"><span className="h-2 w-2 rounded-sm bg-emerald-400" />verified</span>
-                <span className="flex items-center gap-1 text-rose-400"><span className="h-2 w-2 rounded-sm bg-rose-400" />failed</span>
-                <span className="flex items-center gap-1 text-cyan-400"><span className="h-2 w-2 rounded-sm bg-cyan-400" />resolved</span>
-              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 border-zinc-700 bg-zinc-900 text-[11px] text-zinc-300"
+                onClick={() => useSentinelStore.getState().setActiveSection("incidents")}
+              >
+                View all →
+              </Button>
             }
           />
-          <div className="px-4 py-3" data-tick={tick}>
-            <div className="h-44">
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={metrics7d} margin={{ top: 5, right: 5, left: -20, bottom: 0 }}>
-                  <defs>
-                    <linearGradient id="gResolved" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#06B6D4" stopOpacity={0.5} />
-                      <stop offset="100%" stopColor="#06B6D4" stopOpacity={0} />
-                    </linearGradient>
-                    <linearGradient id="gVerified" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#22C55E" stopOpacity={0.4} />
-                      <stop offset="100%" stopColor="#22C55E" stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <XAxis dataKey="day" tick={{ fill: "#71717A", fontSize: 10 }} axisLine={false} tickLine={false} />
-                  <YAxis tick={{ fill: "#71717A", fontSize: 10 }} axisLine={false} tickLine={false} />
-                  <Tooltip
-                    contentStyle={{
-                      background: "#18181B",
-                      border: "1px solid #27272A",
-                      borderRadius: 6,
-                      fontSize: 11,
-                    }}
-                    labelStyle={{ color: "#FAFAFA" }}
+          <div className="divide-y divide-zinc-800/60">
+            {incidents.length === 0 ? (
+              <div className="px-4 py-8 text-center text-xs text-zinc-600">No incidents yet</div>
+            ) : (
+              incidents.slice(0, 5).map((inc) => (
+                <button
+                  key={inc.incident_id}
+                  onClick={() => {
+                    useSentinelStore.getState().setSelectedIncident(inc.incident_id);
+                    useSentinelStore.getState().setActiveSection("incidents");
+                  }}
+                  className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-zinc-800/30"
+                >
+                  <AlertTriangle
+                    className={cn(
+                      "h-3.5 w-3.5 shrink-0",
+                      isInvestigating(inc) ? "text-amber-400" : "text-zinc-500",
+                    )}
                   />
-                  <Area type="monotone" dataKey="resolved" stackId="1" stroke="#06B6D4" strokeWidth={1.5} fill="url(#gResolved)" />
-                  <Area type="monotone" dataKey="verified" stackId="1" stroke="#22C55E" strokeWidth={1.5} fill="url(#gVerified)" />
-                  <Area type="monotone" dataKey="investigating" stackId="1" stroke="#EAB308" strokeWidth={1.5} fill="#EAB30820" />
-                  <Area type="monotone" dataKey="failed" stackId="1" stroke="#EF4444" strokeWidth={1.5} fill="#EF444420" />
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <Mono className="text-[11px] text-cyan-400">
+                        {inc.incident_id.slice(0, 8)}
+                      </Mono>
+                      <span className="truncate text-xs text-zinc-200">
+                        {inc.cluster?.service ?? "unknown"}
+                      </span>
+                    </div>
+                    <p className="mt-0.5 truncate text-[11px] text-zinc-500">
+                      {inc.cluster?.summary || "—"}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <span className="font-mono text-[10px] text-zinc-400">{inc.status}</span>
+                    {isInvestigating(inc) && <PulseDot color="bg-amber-400" className="h-1.5 w-1.5" />}
+                    <span className="font-mono text-[10px] text-zinc-600">{timeAgo(inc.created_at)}</span>
+                  </div>
+                </button>
+              ))
+            )}
           </div>
         </Panel>
 
         <Panel className="lg:col-span-4">
           <PanelHeader title="Provider Pool" sub="Live circuit breaker states" />
           <div className="divide-y divide-zinc-800/60">
-            {[
-              { name: "OpenRouter", model: "claude-sonnet-4.5", state: "closed", color: "emerald" },
-              { name: "Groq", model: "llama-3.3-70b", state: "open", color: "rose" },
-              { name: "Nemotron", model: "nemotron-70b", state: "closed", color: "emerald" },
-            ].map((p) => (
-              <div key={p.name} className="flex items-center justify-between px-4 py-2.5">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-medium text-zinc-200">{p.name}</span>
-                    <span className={`h-1.5 w-1.5 rounded-full ${p.color === "emerald" ? "bg-emerald-400" : "bg-rose-400 animate-pulse-dot"}`} />
-                  </div>
-                  <Mono className="text-[10px] text-zinc-500">{p.model}</Mono>
-                </div>
-                <div className="text-right">
-                  <Mono className={`text-[11px] ${p.color === "emerald" ? "text-emerald-400" : "text-rose-400"}`}>
-                    {p.state}
-                  </Mono>
-                  <div className="text-[10px] text-zinc-600">circuit</div>
-                </div>
+            {providers.length === 0 ? (
+              <div className="px-4 py-8 text-center text-xs text-zinc-600">
+                No providers configured
               </div>
-            ))}
+            ) : (
+              providers.slice(0, 5).map((p) => {
+                const healthy = p.status === "healthy";
+                return (
+                  <div key={p.name} className="flex items-center justify-between px-4 py-2.5">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-medium text-zinc-200">{p.name}</span>
+                        <span
+                          className={cn(
+                            "h-1.5 w-1.5 rounded-full",
+                            healthy ? "bg-emerald-400" : "bg-rose-400 animate-pulse-dot",
+                          )}
+                        />
+                      </div>
+                      <Mono className="text-[10px] text-zinc-500">{p.model || "—"}</Mono>
+                    </div>
+                    <div className="text-right">
+                      <Mono
+                        className={cn(
+                          "text-[11px]",
+                          healthy ? "text-emerald-400" : "text-rose-400",
+                        )}
+                      >
+                        {p.status}
+                      </Mono>
+                      <div className="text-[10px] text-zinc-600">
+                        {p.trips_total > 0 ? `${p.trips_total} trips` : "no trips"}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })
+            )}
           </div>
-          <div className="border-t border-zinc-800 px-4 py-2">
-            <button className="text-[11px] text-cyan-400 hover:text-cyan-300">View all providers →</button>
-          </div>
+          {providers.length > 0 && (
+            <div className="border-t border-zinc-800 px-4 py-2">
+              <button
+                onClick={() => useSentinelStore.getState().setActiveSection("providers")}
+                className="text-[11px] text-cyan-400 hover:text-cyan-300"
+              >
+                View all providers →
+              </button>
+            </div>
+          )}
         </Panel>
       </div>
+
+      {/* Footer note when no data */}
+      {!hasAnyData && (
+        <div className="mt-4 flex items-center gap-3 rounded-lg border border-cyan-500/20 bg-cyan-500/5 px-4 py-3">
+          <ActivityIcon className="h-4 w-4 shrink-0 text-cyan-400" />
+          <p className="text-xs text-zinc-300">
+            Sentinel is connected and ready. Once incidents are detected, they will appear here in real time via SSE.
+          </p>
+        </div>
+      )}
     </div>
   );
 }

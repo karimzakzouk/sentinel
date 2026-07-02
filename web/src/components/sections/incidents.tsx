@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Table,
   TableBody,
@@ -25,28 +25,31 @@ import {
 } from "@/components/ui/sheet";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { StatusBadge, ConfidenceBar, LevelBadge, timeAgo, timeMDHM, Mono, Panel } from "@/components/sentinel/common";
-import { useSentinel } from "@/lib/store";
-import { incidents, type Incident, type AgentNode } from "@/lib/mock-data";
+import {
+  StatusBadge,
+  ConfidenceBar,
+  Mono,
+  Panel,
+  timeAgo,
+  timeMDHM,
+  EmptyState,
+  ErrorState,
+} from "@/components/sentinel/common";
+import { useSentinelStore } from "@/lib/store";
+import type { Incident, Hypothesis, FixProposal } from "@/lib/types";
 import {
   Search,
   Filter,
   ChevronRight,
-  ChevronDown,
-  FileCode2,
-  GitBranch,
-  AlertTriangle,
-  CheckCircle2,
-  XCircle,
-  Clock,
-  Brain,
-  Terminal,
-  Wrench,
   GitPullRequest,
+  AlertTriangle,
+  Brain,
+  Wrench,
   Activity,
+  FileCode2,
+  Inbox,
+  Loader2,
 } from "lucide-react";
-import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { cn } from "@/lib/utils";
 
 const statusOptions = [
@@ -56,82 +59,139 @@ const statusOptions = [
   { value: "failed", label: "Failed" },
   { value: "escalated", label: "Escalated" },
   { value: "resolved", label: "Resolved" },
+  { value: "root_caused", label: "Root caused" },
+  { value: "fix_proposed", label: "Fix proposed" },
+  { value: "executing", label: "Executing" },
 ];
 
-function AgentTraceNode({ node, depth = 0 }: { node: AgentNode; depth?: number }) {
-  const expanded = useSentinel((s) => s.traceExpandedNodes.has(node.id));
-  const toggle = useSentinel((s) => s.toggleTraceNode);
-  const hasChildren = (node.children?.length ?? 0) > 0;
+// ─── Agent trace rendering ──────────────────────────────────────────────────
+// agent_trace is `Array<Record<string, unknown>>` — we render each entry as a
+// flat list showing the phase / agent / duration / tokens / cost when present,
+// plus a JSON fallback for everything else.
+
+function TraceEntry({ entry, idx }: { entry: Record<string, unknown>; idx: number }) {
+  const phase = typeof entry.phase === "string" ? entry.phase : "";
+  const agent = typeof entry.agent === "string" ? entry.agent : "";
+  const status = typeof entry.status === "string" ? entry.status : "";
+  const duration = typeof entry.duration === "string" || typeof entry.duration === "number" ? String(entry.duration) : "";
+  const tokens = typeof entry.tokens === "number" ? entry.tokens : undefined;
+  const cost = typeof entry.cost === "number" ? entry.cost : undefined;
+  const message = typeof entry.message === "string" ? entry.message : "";
 
   const statusColor =
-    node.status === "completed"
+    status === "completed" || status === "ok" || status === "success"
       ? "text-emerald-400"
-      : node.status === "running"
+      : status === "running" || status === "in_progress"
       ? "text-cyan-400"
-      : "text-rose-400";
+      : status === "failed" || status === "error"
+      ? "text-rose-400"
+      : "text-zinc-400";
 
-  const statusIcon =
-    node.status === "completed" ? <CheckCircle2 className="h-3 w-3" /> :
-    node.status === "running" ? (
-      <span className="relative flex h-3 w-3 items-center justify-center">
-        <span className="absolute inline-flex h-2 w-2 animate-ping rounded-full bg-cyan-400 opacity-75" />
-        <span className="relative h-2 w-2 rounded-full bg-cyan-400" />
-      </span>
-    ) : <XCircle className="h-3 w-3" />;
+  // Filter out the fields we've already rendered
+  const restEntries = Object.entries(entry).filter(
+    ([k]) => !["phase", "agent", "status", "duration", "tokens", "cost", "message"].includes(k),
+  );
 
   return (
-    <div className="select-none">
-      <div
-        className={cn(
-          "group flex items-center gap-2 rounded px-2 py-1.5 hover:bg-zinc-800/40",
-          expanded && "bg-zinc-800/30"
+    <div className="border-l border-zinc-800 pl-3">
+      <div className="flex flex-wrap items-center gap-2 py-1.5">
+        <span className="font-mono text-[10px] text-zinc-600">#{idx + 1}</span>
+        {phase && (
+          <Badge variant="outline" className="font-mono text-[10px] border-zinc-700 bg-zinc-900 text-zinc-300">
+            {phase}
+          </Badge>
         )}
-        style={{ paddingLeft: `${depth * 16 + 8}px` }}
-        onClick={() => hasChildren && toggle(node.id)}
-      >
-        {hasChildren ? (
-          expanded ? <ChevronDown className="h-3 w-3 text-zinc-500" /> : <ChevronRight className="h-3 w-3 text-zinc-500" />
-        ) : (
-          <span className="w-3" />
+        {agent && (
+          <Badge variant="outline" className="font-mono text-[10px] border-zinc-700 bg-zinc-900 text-zinc-400">
+            {agent}
+          </Badge>
         )}
-        <span className={statusColor}>{statusIcon}</span>
-        <span className="text-xs text-zinc-200">{node.name}</span>
-        <Badge variant="outline" className="ml-1 font-mono text-[10px] text-zinc-400 border-zinc-700 bg-zinc-900">
-          {node.agent}
-        </Badge>
-        <span className="ml-auto flex items-center gap-3 font-mono text-[10px] text-zinc-500">
-          <span>{node.duration}</span>
-          <span>{(node.tokens / 1000).toFixed(1)}k tok</span>
-          <span className="text-cyan-400">${node.cost.toFixed(3)}</span>
-        </span>
+        {status && (
+          <span className={cn("font-mono text-[10px]", statusColor)}>{status}</span>
+        )}
+        {duration && <Mono className="text-[10px] text-zinc-500">{duration}</Mono>}
+        {tokens !== undefined && <Mono className="text-[10px] text-zinc-500">{tokens.toLocaleString()} tok</Mono>}
+        {cost !== undefined && <Mono className="text-[10px] text-cyan-400">${cost.toFixed(3)}</Mono>}
       </div>
-      {expanded && node.llmOutput && (
-        <div
-          className="mt-1 mb-2 space-y-2 rounded-md border border-zinc-800 bg-zinc-950 p-2.5"
-          style={{ marginLeft: `${depth * 16 + 24}px` }}
-        >
-          {node.llmInput && (
-            <div>
-              <div className="mb-1 flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-zinc-500">
-                <Terminal className="h-3 w-3" /> LLM Input
-              </div>
-              <p className="font-mono text-[11px] leading-relaxed text-zinc-400 line-clamp-2">{node.llmInput}</p>
-            </div>
-          )}
-          <div>
-            <div className="mb-1 flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-zinc-500">
-              <Brain className="h-3 w-3" /> LLM Output
-            </div>
-            <pre className="max-h-60 overflow-y-auto whitespace-pre-wrap font-mono text-[11px] leading-relaxed text-zinc-300 scrollbar-thin">
-              {node.llmOutput}
-            </pre>
-          </div>
-        </div>
+      {message && <p className="text-[11px] leading-relaxed text-zinc-400">{message}</p>}
+      {restEntries.length > 0 && (
+        <pre className="mt-1 overflow-x-auto rounded border border-zinc-800 bg-zinc-950 p-2 font-mono text-[10px] text-zinc-500 scrollbar-thin">
+          {JSON.stringify(Object.fromEntries(restEntries), null, 2)}
+        </pre>
       )}
-      {expanded && hasChildren && (
-        <div className="border-l border-zinc-800 ml-3">
-          {node.children!.map((c) => (
-            <AgentTraceNode key={c.id} node={c} depth={depth + 1} />
+    </div>
+  );
+}
+
+function HypothesisRow({ h }: { h: Hypothesis }) {
+  return (
+    <div
+      className={cn(
+        "flex items-center gap-3 rounded-md border border-zinc-800 bg-zinc-950 px-3 py-2",
+        h.falsified && "opacity-50",
+      )}
+    >
+      <Badge variant="outline" className="font-mono text-[10px] border-zinc-700 bg-zinc-900 text-zinc-400">
+        {h.h_id}
+      </Badge>
+      <span className={cn("flex-1 text-[12px] text-zinc-300", h.falsified && "line-through")}>
+        {h.statement}
+      </span>
+      {h.falsified ? (
+        <Badge variant="outline" className="border-rose-500/30 bg-rose-500/10 font-mono text-[10px] text-rose-400">
+          falsified
+        </Badge>
+      ) : (
+        <ConfidenceBar value={h.confidence} />
+      )}
+    </div>
+  );
+}
+
+function FixProposalView({ fix }: { fix: FixProposal }) {
+  return (
+    <div className="rounded-md border border-zinc-800 bg-zinc-950 p-3">
+      <div className="mb-2 flex items-center gap-2">
+        <Badge variant="outline" className="font-mono text-[10px] border-cyan-500/30 bg-cyan-500/10 text-cyan-400">
+          {fix.fix_type}
+        </Badge>
+        {fix.repo && <Mono className="text-[11px] text-zinc-400">{fix.repo}</Mono>}
+        {fix.branch_name && <Mono className="text-[11px] text-zinc-500">→ {fix.branch_name}</Mono>}
+      </div>
+      <p className="text-[12px] leading-relaxed text-zinc-300">{fix.description}</p>
+      <div className="mt-2 flex items-center gap-2 border-t border-zinc-800 pt-2">
+        <span className="text-[10px] uppercase tracking-wider text-zinc-500">Confidence</span>
+        <ConfidenceBar value={fix.proposed_confidence} />
+      </div>
+      {fix.files_to_change.length > 0 && (
+        <div className="mt-3 space-y-2">
+          <div className="text-[10px] uppercase tracking-wider text-zinc-500">
+            Files ({fix.files_to_change.length})
+          </div>
+          {fix.files_to_change.map((f, i) => (
+            <div key={i} className="rounded border border-zinc-800 bg-zinc-950">
+              <div className="flex items-center justify-between border-b border-zinc-800 bg-zinc-900 px-2.5 py-1.5">
+                <Mono className="text-[11px] text-zinc-300">{f.path}</Mono>
+                <div className="text-[10px] text-zinc-500">
+                  {f.new_content ? `${f.new_content.length} chars` : f.changes?.length ? `${f.changes.length} edits` : "—"}
+                </div>
+              </div>
+              {f.new_content && (
+                <pre className="max-h-60 overflow-y-auto whitespace-pre-wrap p-2 font-mono text-[10.5px] leading-relaxed text-zinc-300 scrollbar-thin">
+                  {f.new_content}
+                </pre>
+              )}
+              {f.changes && f.changes.length > 0 && (
+                <div className="space-y-1 p-2">
+                  {f.changes.map((c, j) => (
+                    <div key={j} className="rounded border border-zinc-800 p-1.5">
+                      <div className="text-[10px] text-rose-400">- {c.search}</div>
+                      <div className="text-[10px] text-emerald-400">+ {c.replace}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           ))}
         </div>
       )}
@@ -139,49 +199,72 @@ function AgentTraceNode({ node, depth = 0 }: { node: AgentNode; depth?: number }
   );
 }
 
-function IncidentDetail({ incident }: { incident: Incident }) {
+function IncidentDetail({ incident, loading }: { incident: Incident | null; loading: boolean }) {
+  if (loading && !incident) {
+    return (
+      <div className="flex items-center justify-center px-4 py-12">
+        <Loader2 className="h-5 w-5 animate-spin text-zinc-500" />
+      </div>
+    );
+  }
+  if (!incident) {
+    return (
+      <div className="px-4 py-12 text-center text-xs text-zinc-600">
+        Incident not found.
+      </div>
+    );
+  }
+
+  const cluster = incident.cluster;
+  const state = incident.state;
+  const rootCause = state?.root_cause;
+  const hypotheses = state?.hypotheses ?? [];
+  const fix = state?.fix_proposal;
+  const trace = state?.agent_trace ?? [];
+
   return (
     <div className="space-y-5 px-4 py-4">
-      {/* Crash location */}
+      {/* Cluster summary */}
       <section>
         <h4 className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
-          <FileCode2 className="h-3 w-3" /> Crash Location
+          <AlertTriangle className="h-3 w-3" /> Cluster Summary
         </h4>
         <div className="rounded-md border border-zinc-800 bg-zinc-950 p-3">
           <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-[11px]">
-            <div className="text-zinc-500">File</div>
-            <div className="font-mono text-zinc-200">{incident.crashFile}:{incident.crashLine}</div>
-            <div className="text-zinc-500">Function</div>
-            <div className="font-mono text-zinc-200">{incident.crashFunction}()</div>
-            <div className="text-zinc-500">Error type</div>
-            <div className="font-mono text-rose-400">{incident.errorType}</div>
+            <div className="text-zinc-500">Service</div>
+            <div className="font-mono text-zinc-200">{cluster?.service ?? "—"}</div>
             <div className="text-zinc-500">Namespace</div>
-            <div className="font-mono text-zinc-200">{incident.namespace}</div>
+            <div className="font-mono text-zinc-200">{cluster?.namespace ?? "—"}</div>
+            <div className="text-zinc-500">Severity</div>
+            <div className="font-mono text-zinc-200">{cluster?.severity ?? "—"}</div>
+            <div className="text-zinc-500">Created</div>
+            <div className="font-mono text-zinc-200">{timeMDHM(incident.created_at)}</div>
+            <div className="text-zinc-500">Updated</div>
+            <div className="font-mono text-zinc-200">{timeMDHM(incident.updated_at)}</div>
           </div>
-        </div>
-      </section>
-
-      {/* Error excerpt */}
-      <section>
-        <h4 className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
-          <AlertTriangle className="h-3 w-3" /> Error Excerpt
-        </h4>
-        <div className="overflow-hidden rounded-md border border-zinc-800">
-          <SyntaxHighlighter
-            language="python"
-            style={vscDarkPlus}
-            customStyle={{
-              margin: 0,
-              background: "#09090B",
-              padding: "12px",
-              fontSize: "11px",
-              lineHeight: "1.5",
-            }}
-            showLineNumbers
-            lineNumberStyle={{ color: "#3F3F46", paddingRight: "12px", minWidth: "2em" }}
-          >
-            {incident.errorExcerpt}
-          </SyntaxHighlighter>
+          {cluster?.summary && (
+            <p className="mt-2 border-t border-zinc-800 pt-2 text-[12px] leading-relaxed text-zinc-300">
+              {cluster.summary}
+            </p>
+          )}
+          {cluster?.anomalies && cluster.anomalies.length > 0 && (
+            <div className="mt-2 space-y-1 border-t border-zinc-800 pt-2">
+              <div className="text-[10px] uppercase tracking-wider text-zinc-500">
+                Anomalies ({cluster.anomalies.length})
+              </div>
+              {cluster.anomalies.map((a, i) => (
+                <div key={i} className="rounded border border-zinc-800 bg-zinc-950 p-2">
+                  <div className="flex items-center justify-between">
+                    <Mono className="text-[11px] text-zinc-300">{a.detector}</Mono>
+                    <Mono className="text-[11px] text-amber-400">{a.score.toFixed(2)}</Mono>
+                  </div>
+                  {a.explanation && (
+                    <p className="mt-1 text-[11px] text-zinc-500">{a.explanation}</p>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </section>
 
@@ -190,45 +273,53 @@ function IncidentDetail({ incident }: { incident: Incident }) {
         <h4 className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
           <Brain className="h-3 w-3" /> Root Cause
         </h4>
-        <div className="rounded-md border border-zinc-800 bg-zinc-950 p-3">
-          <p className="text-[12px] leading-relaxed text-zinc-300">{incident.rootCause}</p>
-          <div className="mt-2 flex items-center gap-2 border-t border-zinc-800 pt-2">
-            <span className="text-[10px] uppercase tracking-wider text-zinc-500">Confidence</span>
-            <ConfidenceBar value={incident.rootCauseConfidence} />
+        {rootCause ? (
+          <div className="rounded-md border border-zinc-800 bg-zinc-950 p-3">
+            <p className="text-[12px] leading-relaxed text-zinc-300">{rootCause.statement}</p>
+            <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-zinc-800 pt-2">
+              <span className="text-[10px] uppercase tracking-wider text-zinc-500">Confidence</span>
+              <ConfidenceBar value={rootCause.confidence} />
+              {rootCause.category && (
+                <Badge variant="outline" className="ml-auto font-mono text-[10px] border-zinc-700 bg-zinc-900 text-zinc-400">
+                  {rootCause.category}
+                </Badge>
+              )}
+            </div>
+            {rootCause.source_files && rootCause.source_files.length > 0 && (
+              <div className="mt-2 space-y-1">
+                <div className="text-[10px] uppercase tracking-wider text-zinc-500">Source files</div>
+                {rootCause.source_files.map((f, i) => (
+                  <Mono key={i} className="block text-[11px] text-cyan-400">
+                    <FileCode2 className="mr-1 inline h-3 w-3" />
+                    {f}
+                  </Mono>
+                ))}
+              </div>
+            )}
           </div>
-        </div>
+        ) : (
+          <div className="rounded-md border border-dashed border-zinc-800 bg-zinc-950/50 p-3 text-center text-[11px] text-zinc-600">
+            Root cause not yet determined.
+          </div>
+        )}
       </section>
 
       {/* Hypotheses */}
       <section>
         <h4 className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
-          <GitBranch className="h-3 w-3" /> Hypotheses ({incident.hypotheses.length})
+          <Activity className="h-3 w-3" /> Hypotheses ({hypotheses.length})
         </h4>
-        <div className="space-y-1.5">
-          {incident.hypotheses.map((h) => (
-            <div
-              key={h.id}
-              className={cn(
-                "flex items-center gap-3 rounded-md border border-zinc-800 bg-zinc-950 px-3 py-2",
-                h.falsified && "opacity-50"
-              )}
-            >
-              <Badge variant="outline" className="font-mono text-[10px] border-zinc-700 bg-zinc-900 text-zinc-400">
-                {h.id}
-              </Badge>
-              <span className={cn("flex-1 text-[12px] text-zinc-300", h.falsified && "line-through")}>
-                {h.statement}
-              </span>
-              {h.falsified ? (
-                <Badge variant="outline" className="border-rose-500/30 bg-rose-500/10 font-mono text-[10px] text-rose-400">
-                  falsified
-                </Badge>
-              ) : (
-                <ConfidenceBar value={h.confidence} />
-              )}
-            </div>
-          ))}
-        </div>
+        {hypotheses.length === 0 ? (
+          <div className="rounded-md border border-dashed border-zinc-800 bg-zinc-950/50 p-3 text-center text-[11px] text-zinc-600">
+            No hypotheses generated yet.
+          </div>
+        ) : (
+          <div className="space-y-1.5">
+            {hypotheses.map((h) => (
+              <HypothesisRow key={h.h_id} h={h} />
+            ))}
+          </div>
+        )}
       </section>
 
       {/* Fix proposal */}
@@ -236,80 +327,70 @@ function IncidentDetail({ incident }: { incident: Incident }) {
         <h4 className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
           <Wrench className="h-3 w-3" /> Fix Proposal
         </h4>
-        <div className="rounded-md border border-zinc-800 bg-zinc-950 p-3">
-          <p className="text-[12px] leading-relaxed text-zinc-300">{incident.fixProposal.description}</p>
-          {incident.fixProposal.filesChanged.length > 0 && (
-            <div className="mt-3 space-y-2">
-              {incident.fixProposal.filesChanged.map((f) => (
-                <div key={f.path} className="overflow-hidden rounded border border-zinc-800">
-                  <div className="flex items-center justify-between border-b border-zinc-800 bg-zinc-900 px-2.5 py-1.5">
-                    <Mono className="text-[11px] text-zinc-300">{f.path}</Mono>
-                    <div className="flex items-center gap-2 text-[10px] font-mono">
-                      <span className="text-emerald-400">+{f.additions}</span>
-                      <span className="text-rose-400">−{f.deletions}</span>
-                    </div>
-                  </div>
-                  <SyntaxHighlighter
-                    language="typescript"
-                    style={vscDarkPlus}
-                    customStyle={{
-                      margin: 0,
-                      background: "#09090B",
-                      padding: "10px",
-                      fontSize: "10.5px",
-                      lineHeight: "1.45",
-                    }}
-                  >
-                    {f.diff}
-                  </SyntaxHighlighter>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+        {fix ? (
+          <FixProposalView fix={fix} />
+        ) : (
+          <div className="rounded-md border border-dashed border-zinc-800 bg-zinc-950/50 p-3 text-center text-[11px] text-zinc-600">
+            No fix proposed yet.
+          </div>
+        )}
       </section>
 
-      {/* Sandbox levels */}
-      <section>
-        <h4 className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
-          <CheckCircle2 className="h-3 w-3" /> Sandbox Verification (L1–L5)
-        </h4>
-        <div className="flex items-center gap-2">
-          {incident.sandboxLevels.map((lvl, i) => (
-            <LevelBadge key={i} status={lvl} level={i + 1} />
-          ))}
-        </div>
-      </section>
+      {/* Pull request */}
+      {incident.pr_url && (
+        <section>
+          <h4 className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
+            <GitPullRequest className="h-3 w-3" /> Pull Request
+          </h4>
+          <a
+            href={incident.pr_url}
+            target="_blank"
+            rel="noreferrer"
+            className="flex items-center gap-2 rounded-md border border-cyan-500/30 bg-cyan-500/5 px-3 py-2 text-[12px] text-cyan-300 hover:bg-cyan-500/10"
+          >
+            <GitPullRequest className="h-3.5 w-3.5" />
+            <Mono className="text-[11px]">
+              #{incident.pr_number} · {incident.pr_repo}
+            </Mono>
+            <ChevronRight className="ml-auto h-3 w-3" />
+          </a>
+        </section>
+      )}
 
       {/* Agent trace */}
       <section>
         <h4 className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
-          <Activity className="h-3 w-3" /> Agent Trace
+          <Activity className="h-3 w-3" /> Agent Trace ({trace.length})
         </h4>
-        <div className="rounded-md border border-zinc-800 bg-zinc-950 p-1">
-          <AgentTraceNode node={incident.agentTrace} />
-        </div>
+        {trace.length === 0 ? (
+          <div className="rounded-md border border-dashed border-zinc-800 bg-zinc-950/50 p-3 text-center text-[11px] text-zinc-600">
+            No agent trace events yet.
+          </div>
+        ) : (
+          <div className="space-y-2 rounded-md border border-zinc-800 bg-zinc-950 p-2.5">
+            {trace.map((entry, i) => (
+              <TraceEntry key={i} entry={entry} idx={i} />
+            ))}
+          </div>
+        )}
       </section>
 
-      {/* Events timeline */}
+      {/* Beta distribution */}
       <section>
         <h4 className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
-          <Clock className="h-3 w-3" /> Events Timeline
+          Beta Distribution (confidence prior)
         </h4>
-        <div className="relative pl-4">
-          <div className="absolute left-1.5 top-0 bottom-0 w-px bg-zinc-800" />
-          {incident.events.map((e, i) => (
-            <div key={i} className="relative mb-2.5 last:mb-0">
-              <span className="absolute -left-[10px] top-1 h-2 w-2 rounded-full border border-zinc-700 bg-zinc-900" />
-              <div className="flex items-baseline gap-2">
-                <span className="font-mono text-[10px] text-zinc-600">{new Date(e.time).toLocaleTimeString("en-US", { hour12: false })}</span>
-                <Badge variant="outline" className="font-mono text-[10px] border-zinc-700 bg-zinc-900 text-zinc-400">
-                  {e.phase}
-                </Badge>
-                <span className="text-[11px] text-zinc-300">{e.message}</span>
-              </div>
+        <div className="rounded-md border border-zinc-800 bg-zinc-950 p-3">
+          <div className="grid grid-cols-2 gap-3 text-[11px]">
+            <div>
+              <span className="text-zinc-500">α (alpha)</span>
+              <Mono className="ml-2 text-zinc-300">{incident.beta_alpha.toFixed(2)}</Mono>
             </div>
-          ))}
+            <div>
+              <span className="text-zinc-500">β (beta)</span>
+              <Mono className="ml-2 text-zinc-300">{incident.beta_beta.toFixed(2)}</Mono>
+            </div>
+          </div>
         </div>
       </section>
     </div>
@@ -320,41 +401,59 @@ export function IncidentsSection() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [serviceFilter, setServiceFilter] = useState<string>("all");
-  const selectedId = useSentinel((s) => s.selectedIncidentId);
-  const setSelectedIncident = useSentinel((s) => s.setSelectedIncident);
-  const drawerOpen = useSentinel((s) => s.drawerOpen);
-  const setDrawerOpen = useSentinel((s) => s.setDrawerOpen);
+  const incidents = useSentinelStore((s) => s.incidents);
+  const loading = useSentinelStore((s) => s.loading);
+  const error = useSentinelStore((s) => s.error);
+  const fetchIncidents = useSentinelStore((s) => s.fetchIncidents);
+  const fetchIncident = useSentinelStore((s) => s.fetchIncident);
+  const selectedId = useSentinelStore((s) => s.selectedIncidentId);
+  const setSelectedIncident = useSentinelStore((s) => s.setSelectedIncident);
+  const drawerOpen = useSentinelStore((s) => s.drawerOpen);
+  const setDrawerOpen = useSentinelStore((s) => s.setDrawerOpen);
 
-  const services = useMemo(() => ["all", ...Array.from(new Set(incidents.map((i) => i.service)))], []);
+  const [detailLoading, setDetailLoading] = useState(false);
+
+  // Fetch full incident detail when one is selected — list view may have
+  // a partial state object.
+  useEffect(() => {
+    if (!selectedId) return;
+    setDetailLoading(true);
+    fetchIncident(selectedId).finally(() => setDetailLoading(false));
+  }, [selectedId, fetchIncident]);
+
+  const services = useMemo(
+    () => ["all", ...Array.from(new Set(incidents.map((i) => i.cluster?.service).filter(Boolean) as string[]))],
+    [incidents],
+  );
 
   const filtered = useMemo(() => {
     return incidents.filter((i) => {
       if (statusFilter !== "all" && i.status !== statusFilter) return false;
-      if (serviceFilter !== "all" && i.service !== serviceFilter) return false;
+      if (serviceFilter !== "all" && i.cluster?.service !== serviceFilter) return false;
       if (search) {
         const q = search.toLowerCase();
         return (
-          i.id.toLowerCase().includes(q) ||
-          i.service.toLowerCase().includes(q) ||
-          i.errorType.toLowerCase().includes(q) ||
-          i.crashFile.toLowerCase().includes(q)
+          i.incident_id.toLowerCase().includes(q) ||
+          (i.cluster?.service ?? "").toLowerCase().includes(q) ||
+          (i.cluster?.summary ?? "").toLowerCase().includes(q) ||
+          i.status.toLowerCase().includes(q)
         );
       }
       return true;
     });
-  }, [search, statusFilter, serviceFilter]);
+  }, [incidents, search, statusFilter, serviceFilter]);
 
-  const selected = incidents.find((i) => i.id === selectedId) ?? null;
+  const selected = incidents.find((i) => i.incident_id === selectedId) ?? null;
 
   return (
     <div className="p-6">
       <Panel>
         {/* Filter bar */}
         <div className="flex flex-wrap items-center gap-2 border-b border-zinc-800 px-4 py-3">
-          <div className="relative flex-1 min-w-[200px]">
+          <div className="relative min-w-[200px] flex-1">
             <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-500" />
             <Input
-              placeholder="Search incidents, services, error types..."
+              placeholder="Search incidents, services, summaries..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="h-8 bg-zinc-900 pl-8 font-mono text-xs"
@@ -386,69 +485,83 @@ export function IncidentsSection() {
           </Badge>
         </div>
 
-        {/* Table */}
-        <div className="overflow-x-auto scrollbar-thin">
-          <Table>
-            <TableHeader>
-              <TableRow className="border-zinc-800 hover:bg-transparent">
-                <TableHead className="h-8 px-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">ID</TableHead>
-                <TableHead className="h-8 px-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Service</TableHead>
-                <TableHead className="h-8 px-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Status</TableHead>
-                <TableHead className="h-8 px-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Error Type</TableHead>
-                <TableHead className="h-8 px-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Confidence</TableHead>
-                <TableHead className="h-8 px-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">PR</TableHead>
-                <TableHead className="h-8 px-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">TTF</TableHead>
-                <TableHead className="h-8 px-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Created</TableHead>
-                <TableHead className="h-8 px-3" />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {filtered.map((inc) => (
-                <TableRow
-                  key={inc.id}
-                  onClick={() => setSelectedIncident(inc.id)}
-                  className="cursor-pointer border-zinc-800/60 hover:bg-zinc-800/30"
-                >
-                  <TableCell className="px-3 py-2">
-                    <Mono className="text-[11px] text-cyan-400">#{inc.id}</Mono>
-                  </TableCell>
-                  <TableCell className="px-3 py-2">
-                    <div className="flex flex-col">
-                      <span className="text-xs text-zinc-200">{inc.service}</span>
-                      <Mono className="text-[10px] text-zinc-500">{inc.namespace}</Mono>
-                    </div>
-                  </TableCell>
-                  <TableCell className="px-3 py-2"><StatusBadge status={inc.status} /></TableCell>
-                  <TableCell className="px-3 py-2">
-                    <Mono className="text-[11px] text-rose-400">{inc.errorType.split(":")[0]}</Mono>
-                  </TableCell>
-                  <TableCell className="px-3 py-2"><ConfidenceBar value={inc.confidence} /></TableCell>
-                  <TableCell className="px-3 py-2">
-                    {inc.prNumber ? (
-                      <Mono className="text-[11px] text-cyan-400">#{inc.prNumber}</Mono>
-                    ) : (
-                      <span className="text-[11px] text-zinc-600">—</span>
-                    )}
-                  </TableCell>
-                  <TableCell className="px-3 py-2">
-                    {inc.timeToFix ? (
-                      <Mono className="text-[11px] text-zinc-300">{inc.timeToFix}</Mono>
-                    ) : (
-                      <span className="text-[11px] text-zinc-600">—</span>
-                    )}
-                  </TableCell>
-                  <TableCell className="px-3 py-2">
-                    <Mono className="text-[11px] text-zinc-400">{timeMDHM(inc.created)}</Mono>
-                    <div className="text-[10px] text-zinc-600">{timeAgo(inc.created)}</div>
-                  </TableCell>
-                  <TableCell className="px-3 py-2 text-right">
-                    <ChevronRight className="h-3.5 w-3.5 text-zinc-600" />
-                  </TableCell>
+        {/* Loading / error / empty / table */}
+        {loading && incidents.length === 0 ? (
+          <div className="space-y-2 p-4">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <div key={i} className="h-10 animate-pulse rounded bg-zinc-800/60" />
+            ))}
+          </div>
+        ) : error && incidents.length === 0 ? (
+          <div className="p-4">
+            <ErrorState message={error} onRetry={fetchIncidents} />
+          </div>
+        ) : incidents.length === 0 ? (
+          <div className="p-4">
+            <EmptyState
+              title="No incidents yet"
+              description="When Sentinel detects an anomaly (log pattern, pod crash, or Alertmanager webhook), an incident will appear here."
+              icon={Inbox}
+            />
+          </div>
+        ) : filtered.length === 0 ? (
+          <div className="p-8 text-center text-xs text-zinc-500">
+            No incidents match your filters.
+          </div>
+        ) : (
+          <div className="overflow-x-auto scrollbar-thin">
+            <Table>
+              <TableHeader>
+                <TableRow className="border-zinc-800 hover:bg-transparent">
+                  <TableHead className="h-8 px-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">ID</TableHead>
+                  <TableHead className="h-8 px-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Service</TableHead>
+                  <TableHead className="h-8 px-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Status</TableHead>
+                  <TableHead className="h-8 px-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Severity</TableHead>
+                  <TableHead className="h-8 px-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">PR</TableHead>
+                  <TableHead className="h-8 px-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Updated</TableHead>
+                  <TableHead className="h-8 px-3" />
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
+              </TableHeader>
+              <TableBody>
+                {filtered.map((inc) => (
+                  <TableRow
+                    key={inc.incident_id}
+                    onClick={() => setSelectedIncident(inc.incident_id)}
+                    className="cursor-pointer border-zinc-800/60 hover:bg-zinc-800/30"
+                  >
+                    <TableCell className="px-3 py-2">
+                      <Mono className="text-[11px] text-cyan-400">{inc.incident_id.slice(0, 8)}</Mono>
+                    </TableCell>
+                    <TableCell className="px-3 py-2">
+                      <div className="flex flex-col">
+                        <span className="text-xs text-zinc-200">{inc.cluster?.service ?? "—"}</span>
+                        <Mono className="text-[10px] text-zinc-500">{inc.cluster?.namespace ?? "—"}</Mono>
+                      </div>
+                    </TableCell>
+                    <TableCell className="px-3 py-2"><StatusBadge status={inc.status} /></TableCell>
+                    <TableCell className="px-3 py-2">
+                      <Mono className="text-[11px] text-zinc-300">{inc.cluster?.severity ?? "—"}</Mono>
+                    </TableCell>
+                    <TableCell className="px-3 py-2">
+                      {inc.pr_number ? (
+                        <Mono className="text-[11px] text-cyan-400">#{inc.pr_number}</Mono>
+                      ) : (
+                        <span className="text-[11px] text-zinc-600">—</span>
+                      )}
+                    </TableCell>
+                    <TableCell className="px-3 py-2">
+                      <Mono className="text-[11px] text-zinc-400">{timeMDHM(inc.updated_at)}</Mono>
+                      <div className="text-[10px] text-zinc-600">{timeAgo(inc.updated_at)}</div>
+                    </TableCell>
+                    <TableCell className="px-3 py-2 text-right">
+                      <ChevronRight className="h-3.5 w-3.5 text-zinc-600" />
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        )}
       </Panel>
 
       {/* Drawer */}
@@ -461,38 +574,35 @@ export function IncidentsSection() {
                   <div className="flex flex-col gap-1.5">
                     <SheetTitle className="flex items-center gap-2 font-mono text-base text-zinc-50">
                       <AlertTriangle className="h-4 w-4 text-amber-400" />
-                      {selected.id}
+                      {selected.incident_id.slice(0, 8)}
                     </SheetTitle>
                     <div className="flex flex-wrap items-center gap-2">
                       <StatusBadge status={selected.status} />
                       <Badge variant="outline" className="font-mono text-[10px] border-zinc-700 bg-zinc-900 text-zinc-300">
-                        {selected.service}
+                        {selected.cluster?.service ?? "—"}
                       </Badge>
                       <Badge variant="outline" className="font-mono text-[10px] border-zinc-700 bg-zinc-900 text-zinc-400">
-                        {selected.namespace}
+                        {selected.cluster?.namespace ?? "—"}
                       </Badge>
-                      {selected.prNumber && (
+                      {selected.pr_number && (
                         <Badge variant="outline" className="font-mono text-[10px] border-cyan-500/30 bg-cyan-500/10 text-cyan-400">
-                          <GitPullRequest className="h-3 w-3" /> PR #{selected.prNumber}
+                          <GitPullRequest className="h-3 w-3" /> PR #{selected.pr_number}
                         </Badge>
                       )}
                     </div>
                   </div>
                 </div>
               </SheetHeader>
-              <IncidentDetail incident={selected} />
+              <IncidentDetail incident={selected} loading={detailLoading} />
               <div className="border-t border-zinc-800 p-4">
-                <div className="flex gap-2">
-                  <Button variant="outline" size="sm" className="h-8 border-zinc-700 bg-zinc-900 text-xs text-zinc-300 hover:bg-zinc-800">
-                    Pause investigation
-                  </Button>
-                  <Button variant="outline" size="sm" className="h-8 border-zinc-700 bg-zinc-900 text-xs text-zinc-300 hover:bg-zinc-800">
-                    Escalate to human
-                  </Button>
-                  <Button size="sm" className="h-8 bg-cyan-500 text-xs text-zinc-950 hover:bg-cyan-400">
-                    Trigger sandbox run
-                  </Button>
-                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 border-zinc-700 bg-zinc-900 text-xs text-zinc-300 hover:bg-zinc-800"
+                  onClick={() => setDrawerOpen(false)}
+                >
+                  Close
+                </Button>
               </div>
             </>
           )}

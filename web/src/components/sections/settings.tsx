@@ -1,12 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { Slider } from "@/components/ui/slider";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -17,54 +15,61 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { Brain, Clock, Target, FlaskConical, Merge, Eye, Boxes, Activity, GitBranch, MessageSquare, Container, HardDrive, Bell, Database, Server, Wrench, MessageCircle, Zap, RotateCcw } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { useSentinelStore } from "@/lib/store";
+import { updateRuntimeConfig } from "@/lib/api";
+import type { RuntimeConfig } from "@/lib/types";
+import { Mono } from "@/components/sentinel/common";
+import {
+  Brain,
+  Clock,
+  Target,
+  FlaskConical,
+  Activity,
+  Eye,
+  Boxes,
+  GitBranch,
+  MessageSquare,
+  Container,
+  HardDrive,
+  Bell,
+  Database,
+  Server,
+  Wrench,
+  MessageCircle,
+  Zap,
+  RotateCcw,
+  Save,
+  Loader2,
+  Lock,
+  AlertCircle,
+} from "lucide-react";
 
-interface FieldBase {
+// ─── Field schema definitions ───────────────────────────────────────────────
+// "live" fields map directly to a RuntimeConfig key (editable + saveable via
+// PUT /settings). "startup" fields are read-only — they're set at boot time
+// and require a server restart to change.
+
+interface LiveField {
+  kind: "live";
+  key: keyof RuntimeConfig;
   label: string;
-  live?: boolean;
-  restart?: boolean;
+  type: "text" | "password" | "url" | "number" | "toggle" | "select";
+  options?: string[];
+  min?: number;
+  max?: number;
+  step?: number;
+  unit?: string;
   hint?: string;
 }
 
-interface TextField extends FieldBase {
-  type: "text" | "password" | "url" | "csv";
-  defaultValue: string;
-  placeholder?: string;
+interface StartupField {
+  kind: "startup";
+  label: string;
+  type: "text" | "password" | "url" | "csv" | "textarea";
+  hint?: string;
 }
 
-interface TextareaField extends FieldBase {
-  type: "textarea";
-  defaultValue: string;
-}
-
-interface SelectField extends FieldBase {
-  type: "select";
-  defaultValue: string;
-  options: string[];
-}
-
-interface SliderField extends FieldBase {
-  type: "slider";
-  defaultValue: number;
-  min: number;
-  max: number;
-  step?: number;
-  unit?: string;
-}
-
-interface ToggleField extends FieldBase {
-  type: "toggle";
-  defaultValue: boolean;
-}
-
-interface MultiSelectField extends FieldBase {
-  type: "multiselect";
-  defaultValue: string[];
-  options: string[];
-}
-
-type Field = TextField | TextareaField | SelectField | SliderField | ToggleField | MultiSelectField;
+type Field = LiveField | StartupField;
 
 interface SettingsCardDef {
   id: string;
@@ -79,12 +84,14 @@ const cards: SettingsCardDef[] = [
     title: "LLM",
     icon: Brain,
     fields: [
-      { type: "select", label: "Provider", defaultValue: "openrouter", options: ["openrouter", "openai", "anthropic", "groq", "nemotron"], live: true },
-      { type: "url", label: "Base URL", defaultValue: "https://openrouter.ai/api/v1", live: true, hint: "OpenAI-compatible endpoint" },
-      { type: "password", label: "API Key", defaultValue: "sk-or-v1-9f2a••••••••••••••••", live: true },
-      { type: "text", label: "Fast Model", defaultValue: "anthropic/claude-haiku-3.5", live: true },
-      { type: "text", label: "Frontier Model", defaultValue: "anthropic/claude-sonnet-4.5", live: true },
-      { type: "text", label: "Embedding Model", defaultValue: "text-embedding-3-small", restart: true },
+      { kind: "live", key: "llm_provider", label: "Provider", type: "select", options: ["openrouter", "openai", "anthropic", "groq", "nemotron", "ollama", "azure", "custom"], hint: "OpenAI-compatible provider name" },
+      { kind: "live", key: "llm_base_url", label: "Base URL", type: "url", hint: "OpenAI-compatible endpoint" },
+      { kind: "live", key: "llm_api_key", label: "API Key", type: "password" },
+      { kind: "live", key: "llm_fast_model", label: "Fast Model", type: "text" },
+      { kind: "live", key: "llm_frontier_model", label: "Frontier Model", type: "text" },
+      { kind: "live", key: "llm_embedding_model", label: "Embedding Model", type: "text" },
+      { kind: "live", key: "llm_max_retries", label: "Max Retries", type: "number", min: 0, max: 10, step: 1 },
+      { kind: "live", key: "llm_retry_base_delay_ms", label: "Retry Base Delay", type: "number", min: 0, max: 10000, step: 100, unit: "ms" },
     ],
   },
   {
@@ -92,11 +99,10 @@ const cards: SettingsCardDef[] = [
     title: "Timeouts",
     icon: Clock,
     fields: [
-      { type: "slider", label: "Investigator", defaultValue: 180, min: 30, max: 600, step: 15, unit: "s", live: true },
-      { type: "slider", label: "Evidence Collector", defaultValue: 120, min: 30, max: 600, step: 15, unit: "s", live: true },
-      { type: "slider", label: "Analyst", defaultValue: 240, min: 60, max: 900, step: 15, unit: "s", live: true },
-      { type: "slider", label: "Fix Proposer", defaultValue: 300, min: 60, max: 1200, step: 30, unit: "s", live: true },
-      { type: "slider", label: "Total Investigation", defaultValue: 900, min: 300, max: 3600, step: 60, unit: "s", live: true },
+      { kind: "live", key: "investigator_timeout_sec", label: "Investigator", type: "number", min: 30, max: 600, step: 15, unit: "s" },
+      { kind: "live", key: "evidence_gatherer_timeout_sec", label: "Evidence Collector", type: "number", min: 30, max: 600, step: 15, unit: "s" },
+      { kind: "live", key: "analyst_timeout_sec", label: "Analyst", type: "number", min: 60, max: 900, step: 15, unit: "s" },
+      { kind: "live", key: "fix_proposer_timeout_sec", label: "Fix Proposer", type: "number", min: 60, max: 1200, step: 30, unit: "s" },
     ],
   },
   {
@@ -104,10 +110,7 @@ const cards: SettingsCardDef[] = [
     title: "Confidence Thresholds",
     icon: Target,
     fields: [
-      { type: "slider", label: "Autonomous Action", defaultValue: 85, min: 50, max: 99, step: 1, unit: "%", live: true },
-      { type: "slider", label: "Human Review", defaultValue: 60, min: 30, max: 90, step: 1, unit: "%", live: true },
-      { type: "slider", label: "Loop Back Threshold", defaultValue: 40, min: 10, max: 80, step: 1, unit: "%", live: true },
-      { type: "slider", label: "Prior Weight", defaultValue: 30, min: 0, max: 100, step: 5, unit: "%", live: true },
+      { kind: "live", key: "confidence_loop_back_threshold", label: "Loop-Back Threshold", type: "number", min: 0, max: 100, step: 1, unit: "%", hint: "Below this confidence, the analyst loops back to gather more evidence" },
     ],
   },
   {
@@ -115,47 +118,10 @@ const cards: SettingsCardDef[] = [
     title: "Sandbox",
     icon: FlaskConical,
     fields: [
-      { type: "toggle", label: "Auto-Run on Fix", defaultValue: true, live: true },
-      { type: "toggle", label: "Require L5 Pass", defaultValue: true, live: true },
-      { type: "toggle", label: "Parallel Levels", defaultValue: false, restart: true },
-      { type: "slider", label: "Sustained Window", defaultValue: 5, min: 1, max: 30, step: 1, unit: "m", live: true },
-      { type: "csv", label: "Allowed Repos", defaultValue: "acme/checkout-api,acme/auth-service,acme/search-indexer", live: true },
-    ],
-  },
-  {
-    id: "automerge",
-    title: "Auto-Merge",
-    icon: Merge,
-    fields: [
-      { type: "toggle", label: "Enable Auto-Merge", defaultValue: true, live: true },
-      { type: "slider", label: "Max Per Hour", defaultValue: 3, min: 1, max: 20, step: 1, unit: "/hr", live: true },
-      { type: "slider", label: "Cooldown Duration", defaultValue: 30, min: 5, max: 240, step: 5, unit: "m", live: true },
-      { type: "slider", label: "Diff Size Limit", defaultValue: 500, min: 50, max: 2000, step: 50, unit: "lines", live: true },
-      { type: "slider", label: "Confidence Required", defaultValue: 85, min: 50, max: 99, step: 1, unit: "%", live: true },
-      { type: "toggle", label: "Require Code Review", defaultValue: false, live: true },
-      { type: "multiselect", label: "Required Gates", defaultValue: ["ci-green", "sandbox-l5", "confidence-threshold"], options: ["ci-green", "code-review", "sandbox-l5", "confidence-threshold", "diff-size", "no-new-deps", "static-analysis", "license-scan", "rate-limit", "cooldown-clear", "branch-protection"], live: true },
-    ],
-  },
-  {
-    id: "detection",
-    title: "Detection",
-    icon: Eye,
-    fields: [
-      { type: "slider", label: "Error Rate Threshold", defaultValue: 1, min: 0, max: 10, step: 0.1, unit: "%", live: true },
-      { type: "slider", label: "Min Errors", defaultValue: 5, min: 1, max: 100, step: 1, live: true },
-      { type: "slider", label: "Window Size", defaultValue: 60, min: 10, max: 600, step: 10, unit: "s", live: true },
-      { type: "slider", label: "Cooldown", defaultValue: 300, min: 60, max: 3600, step: 60, unit: "s", live: true },
-    ],
-  },
-  {
-    id: "k8s",
-    title: "Kubernetes",
-    icon: Boxes,
-    fields: [
-      { type: "csv", label: "Namespaces", defaultValue: "payments-prod,identity-prod,search-prod,notify-prod,billing-prod,media-prod", restart: true },
-      { type: "csv", label: "Services", defaultValue: "checkout-api,auth-service,search-indexer,notifications-worker,billing-cron,image-resizer", restart: true },
-      { type: "csv", label: "Excluded Pods", defaultValue: "kafka-*,zookeeper-*,prometheus-*", restart: true },
-      { type: "csv", label: "Labels Required", defaultValue: "app.kubernetes.io/name,app.kubernetes.io/team", restart: true },
+      { kind: "live", key: "sandbox_enabled", label: "Sandbox Enabled", type: "toggle" },
+      { kind: "live", key: "sandbox_required", label: "Sandbox Required", type: "toggle", hint: "Block auto-merge if sandbox verification hasn't passed" },
+      { kind: "live", key: "sandbox_max_retries", label: "Max Retries", type: "number", min: 0, max: 10, step: 1 },
+      { kind: "live", key: "skip_sandbox_non_prod", label: "Skip Sandbox in Non-Prod", type: "toggle" },
     ],
   },
   {
@@ -163,23 +129,10 @@ const cards: SettingsCardDef[] = [
     title: "Observability",
     icon: Activity,
     fields: [
-      { type: "url", label: "Loki URL", defaultValue: "http://loki.observability.svc:3100", restart: true },
-      { type: "url", label: "Tempo URL", defaultValue: "http://tempo.observability.svc:3200", restart: true },
-      { type: "url", label: "Prometheus URL", defaultValue: "http://prometheus.observability.svc:9090", restart: true },
-      { type: "select", label: "Log Level", defaultValue: "info", options: ["debug", "info", "warn", "error"], live: true },
-    ],
-  },
-  {
-    id: "github",
-    title: "GitHub",
-    icon: GitBranch,
-    fields: [
-      { type: "password", label: "Token", defaultValue: "ghp_9f2a••••••••••••••••••••••", restart: true },
-      { type: "url", label: "API URL", defaultValue: "https://api.github.com", restart: true },
-      { type: "text", label: "Git Host", defaultValue: "github.com", restart: true },
-      { type: "text", label: "Default Branch", defaultValue: "main", live: true },
-      { type: "password", label: "Webhook Secret", defaultValue: "whsec_••••••••••••", restart: true },
-      { type: "csv", label: "Allowed Repos", defaultValue: "acme/checkout-api,acme/auth-service,acme/search-indexer,acme/notifications-worker,acme/billing-cron,acme/image-resizer", restart: true },
+      { kind: "live", key: "prometheus_url", label: "Prometheus URL", type: "url" },
+      { kind: "live", key: "loki_url", label: "Loki URL", type: "url" },
+      { kind: "live", key: "jaeger_url", label: "Jaeger URL", type: "url" },
+      { kind: "live", key: "log_level", label: "Log Level", type: "select", options: ["debug", "info", "warn", "error"] },
     ],
   },
   {
@@ -187,183 +140,262 @@ const cards: SettingsCardDef[] = [
     title: "GitHub App",
     icon: GitBranch,
     fields: [
-      { type: "text", label: "App ID", defaultValue: "284719", restart: true },
-      { type: "text", label: "Installation ID", defaultValue: "39281047", restart: true },
-      { type: "textarea", label: "Private Key (PEM)", defaultValue: "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA9f2a8B7c...\n[truncated for display]\n-----END RSA PRIVATE KEY-----", restart: true },
+      { kind: "live", key: "github_app_id", label: "App ID", type: "text" },
+      { kind: "live", key: "github_app_install_id", label: "Installation ID", type: "text" },
+      { kind: "live", key: "github_app_private_key", label: "Private Key (PEM)", type: "password", hint: "Paste the full PEM contents — stored encrypted" },
+    ],
+  },
+  // Startup-only cards (read-only in the UI)
+  {
+    id: "detection",
+    title: "Detection (startup)",
+    icon: Eye,
+    fields: [
+      { kind: "startup", label: "Detection Cooldown (sec)", type: "text", hint: "Set via DETECTION_COOLDOWN_SEC at boot" },
+      { kind: "startup", label: "Detection Tail Lines", type: "text", hint: "Set via DETECTION_TAIL_LINES at boot" },
+      { kind: "startup", label: "Max Concurrent Investigations", type: "text", hint: "Set via MAX_CONCURRENT_INVESTIGATIONS at boot" },
+      { kind: "startup", label: "Max Pipeline Iterations", type: "text", hint: "Set via MAX_PIPELINE_ITERATIONS at boot" },
     ],
   },
   {
-    id: "slack",
-    title: "Slack",
-    icon: MessageSquare,
+    id: "k8s",
+    title: "Kubernetes (startup)",
+    icon: Boxes,
     fields: [
-      { type: "url", label: "Webhook URL", defaultValue: "https://hooks.slack.com/services/T0/B0/••••", restart: true },
-      { type: "password", label: "Bot Token", defaultValue: "xoxb-9f2a••••••••••••", restart: true },
-      { type: "text", label: "Bot User ID", defaultValue: "U047KB9F2A", restart: true },
-      { type: "password", label: "Signing Secret", defaultValue: "8f7e6d5c••••••••••••", restart: true },
+      { kind: "startup", label: "Namespace", type: "text" },
+      { kind: "startup", label: "Release Name", type: "text" },
+      { kind: "startup", label: "Production Namespaces", type: "csv" },
+      { kind: "startup", label: "Write Namespaces", type: "csv" },
+      { kind: "startup", label: "Skip Namespaces", type: "csv" },
+      { kind: "startup", label: "High-Risk Services", type: "csv" },
     ],
   },
   {
-    id: "kaniko",
-    title: "Kaniko",
-    icon: Container,
+    id: "confidence-thresholds",
+    title: "Confidence Thresholds (startup)",
+    icon: Target,
     fields: [
-      { type: "text", label: "Registry", defaultValue: "registry.acme.io", restart: true },
-      { type: "text", label: "Executor Image", defaultValue: "gcr.io/kaniko-project/executor:v1.23.2", restart: true },
-      { type: "text", label: "Init Image", defaultValue: "gcr.io/kaniko-project/warmer:v1.23.2", restart: true },
+      { kind: "startup", label: "Autonomous Action Threshold", type: "text", hint: "Set via CONFIDENCE_THRESHOLD_AUTONOMOUS at boot" },
+      { kind: "startup", label: "Human Review Threshold", type: "text", hint: "Set via CONFIDENCE_THRESHOLD_HUMAN_REVIEW at boot" },
+      { kind: "startup", label: "Loop-Back Threshold (startup)", type: "text", hint: "Set via CONFIDENCE_LOOP_BACK at boot" },
     ],
   },
   {
-    id: "dockerhub",
-    title: "Docker Hub",
-    icon: HardDrive,
+    id: "sandbox-startup",
+    title: "Sandbox (startup)",
+    icon: FlaskConical,
     fields: [
-      { type: "text", label: "Username", defaultValue: "acme-bot", restart: true },
-      { type: "password", label: "Token", defaultValue: "dckr_pat_9f2a••••••••••", restart: true },
+      { kind: "startup", label: "Sandbox Namespace Prefix", type: "text" },
+      { kind: "startup", label: "Sandbox Probe Paths", type: "csv" },
+      { kind: "startup", label: "Enable Traffic Mirroring", type: "text" },
     ],
   },
   {
-    id: "alertmanager",
-    title: "Alertmanager",
-    icon: Bell,
+    id: "automerge-startup",
+    title: "Auto-Merge (startup)",
+    icon: GitBranch,
     fields: [
-      { type: "password", label: "Webhook Secret", defaultValue: "am_9f2a••••••••••", restart: true },
-    ],
-  },
-  {
-    id: "storage",
-    title: "Storage",
-    icon: Database,
-    fields: [
-      { type: "text", label: "SQLite Path", defaultValue: "/var/lib/sentinel/sentinel.db", restart: true },
-    ],
-  },
-  {
-    id: "api",
-    title: "API",
-    icon: Server,
-    fields: [
-      { type: "text", label: "Host", defaultValue: "0.0.0.0", restart: true },
-      { type: "text", label: "Port", defaultValue: "8080", restart: true },
-      { type: "password", label: "Admin Token", defaultValue: "stl_admin_9f2a••••••••••", restart: true },
+      { kind: "startup", label: "Auto-Merge Enabled (startup)", type: "text" },
+      { kind: "startup", label: "Max Per Hour", type: "text" },
+      { kind: "startup", label: "Cooldown (min)", type: "text" },
+      { kind: "startup", label: "Min Confidence", type: "text" },
+      { kind: "startup", label: "Require CI", type: "text" },
+      { kind: "startup", label: "CI Timeout (sec)", type: "text" },
+      { kind: "startup", label: "Auto-Merge Namespaces", type: "csv" },
     ],
   },
   {
     id: "auto-remediation",
-    title: "Auto-Remediation",
+    title: "Auto-Remediation (startup)",
     icon: Wrench,
     fields: [
-      { type: "toggle", label: "Enable Auto-Remediation", defaultValue: true, live: true },
-      { type: "text", label: "Max Concurrent", defaultValue: "3", live: true },
-      { type: "text", label: "Rollback Window", defaultValue: "300s", live: true },
-      { type: "text", label: "Notification Channel", defaultValue: "#sre-oncall", live: true },
+      { kind: "startup", label: "Auto-Remediation Enabled", type: "text" },
+      { kind: "startup", label: "Scale-Fix Replicas", type: "text" },
+      { kind: "startup", label: "Panic CPU Threshold (%)", type: "text" },
+      { kind: "startup", label: "Panic Connections Threshold", type: "text" },
+    ],
+  },
+  {
+    id: "github",
+    title: "GitHub (startup)",
+    icon: GitBranch,
+    fields: [
+      { kind: "startup", label: "GitHub Token", type: "password" },
+      { kind: "startup", label: "GitHub API URL", type: "url" },
+      { kind: "startup", label: "Git Host", type: "text" },
+      { kind: "startup", label: "Default Branch", type: "text" },
+      { kind: "startup", label: "GitHub Webhook Secret", type: "password" },
+      { kind: "startup", label: "Allowed Repos", type: "csv" },
+    ],
+  },
+  {
+    id: "slack",
+    title: "Slack (startup)",
+    icon: MessageSquare,
+    fields: [
+      { kind: "startup", label: "Slack Webhook URL", type: "url" },
+      { kind: "startup", label: "Slack Bot Token", type: "password" },
+      { kind: "startup", label: "Slack Bot User ID", type: "text" },
+      { kind: "startup", label: "Slack Signing Secret", type: "password" },
+    ],
+  },
+  {
+    id: "kaniko",
+    title: "Kaniko (startup)",
+    icon: Container,
+    fields: [
+      { kind: "startup", label: "Registry", type: "text" },
+      { kind: "startup", label: "Executor Image", type: "text" },
+      { kind: "startup", label: "Init Image", type: "text" },
+    ],
+  },
+  {
+    id: "dockerhub",
+    title: "Docker Hub (startup)",
+    icon: HardDrive,
+    fields: [
+      { kind: "startup", label: "Username", type: "text" },
+      { kind: "startup", label: "Token", type: "password" },
+    ],
+  },
+  {
+    id: "alertmanager",
+    title: "Alertmanager (startup)",
+    icon: Bell,
+    fields: [
+      { kind: "startup", label: "Webhook Secret", type: "password" },
+    ],
+  },
+  {
+    id: "storage",
+    title: "Storage (startup)",
+    icon: Database,
+    fields: [
+      { kind: "startup", label: "SQLite Path", type: "text" },
+    ],
+  },
+  {
+    id: "api",
+    title: "API (startup)",
+    icon: Server,
+    fields: [
+      { kind: "startup", label: "Host", type: "text" },
+      { kind: "startup", label: "Admin Token", type: "password", hint: "SENTINEL_API_TOKEN — required for /admin/* and POST /settings" },
     ],
   },
   {
     id: "feedback",
-    title: "Feedback Loop",
+    title: "Feedback Loop (startup)",
     icon: MessageCircle,
     fields: [
-      { type: "url", label: "Feedback Webhook", defaultValue: "https://feedback.acme.io/sentinel", live: true },
-      { type: "text", label: "Min Samples", defaultValue: "10", live: true },
+      { kind: "startup", label: "Outcome Watch Duration (min)", type: "text" },
+      { kind: "startup", label: "Outcome Check Interval (sec)", type: "text" },
+      { kind: "startup", label: "LLM Prior Weight", type: "text" },
     ],
   },
 ];
 
-function FieldRenderer({ field, cardId }: { field: Field; cardId: string }) {
+// ─── Field renderer ─────────────────────────────────────────────────────────
+
+function FieldRenderer({
+  field,
+  cardId,
+  value,
+  onChange,
+}: {
+  field: Field;
+  cardId: string;
+  value: string | number | boolean | undefined;
+  onChange: (v: string | number | boolean) => void;
+}) {
   const id = `${cardId}-${field.label.replace(/\s+/g, "-").toLowerCase()}`;
+  const isStartup = field.kind === "startup";
+
   return (
     <div className="space-y-1.5">
       <div className="flex items-center justify-between">
-        <Label htmlFor={id} className="text-xs text-zinc-300">{field.label}</Label>
+        <Label htmlFor={id} className="text-xs text-zinc-300">
+          {field.label}
+        </Label>
         <div className="flex items-center gap-1">
-          {field.live && (
+          {field.kind === "live" && (
             <Badge variant="outline" className="border-emerald-500/30 bg-emerald-500/10 font-mono text-[9px] text-emerald-400">
               <Zap className="h-2.5 w-2.5" /> live
             </Badge>
           )}
-          {field.restart && (
+          {isStartup && (
             <Badge variant="outline" className="border-amber-500/30 bg-amber-500/10 font-mono text-[9px] text-amber-400">
-              <RotateCcw className="h-2.5 w-2.5" /> restart
+              <RotateCcw className="h-2.5 w-2.5" /> startup
             </Badge>
           )}
         </div>
       </div>
-      {field.type === "text" || field.type === "password" || field.type === "url" || field.type === "csv" ? (
+
+      {isStartup ? (
+        // Startup fields are read-only
         <Input
           id={id}
-          type={field.type === "password" ? "password" : field.type === "url" ? "url" : "text"}
-          defaultValue={field.defaultValue}
-          placeholder={field.placeholder}
+          type={field.type === "password" ? "password" : "text"}
+          value={typeof value === "string" ? value : ""}
+          readOnly
+          placeholder="— set at boot —"
+          className="h-8 bg-zinc-950 font-mono text-xs text-zinc-500"
+        />
+      ) : field.type === "text" || field.type === "password" || field.type === "url" || field.type === "number" ? (
+        <Input
+          id={id}
+          type={field.type === "password" ? "password" : field.type === "url" ? "url" : field.type === "number" ? "number" : "text"}
+          value={typeof value === "string" || typeof value === "number" ? String(value) : ""}
+          onChange={(e) =>
+            onChange(field.type === "number" ? Number(e.target.value) : e.target.value)
+          }
           className="h-8 bg-zinc-950 font-mono text-xs"
         />
-      ) : field.type === "textarea" ? (
-        <Textarea
-          id={id}
-          defaultValue={field.defaultValue}
-          className="min-h-[80px] bg-zinc-950 font-mono text-xs"
-        />
       ) : field.type === "select" ? (
-        <Select defaultValue={field.defaultValue}>
+        <Select value={String(value ?? "")} onValueChange={onChange}>
           <SelectTrigger id={id} size="sm" className="h-8 w-full border-zinc-800 bg-zinc-950 font-mono text-xs">
-            <SelectValue />
+            <SelectValue placeholder="—" />
           </SelectTrigger>
           <SelectContent>
-            {field.options.map((o) => (
-              <SelectItem key={o} value={o} className="font-mono text-xs">{o}</SelectItem>
+            {field.options?.map((o) => (
+              <SelectItem key={o} value={o} className="font-mono text-xs">
+                {o}
+              </SelectItem>
             ))}
           </SelectContent>
         </Select>
-      ) : field.type === "slider" ? (
-        <div className="space-y-1">
-          <Slider
-            id={id}
-            defaultValue={[field.defaultValue]}
-            min={field.min}
-            max={field.max}
-            step={field.step ?? 1}
-          />
-          <div className="flex items-center justify-between font-mono text-[10px] text-zinc-500">
-            <span>{field.min}{field.unit}</span>
-            <span className="text-cyan-400">{field.defaultValue}{field.unit}</span>
-            <span>{field.max}{field.unit}</span>
-          </div>
-        </div>
       ) : field.type === "toggle" ? (
         <div className="flex items-center gap-2 pt-1">
-          <Switch id={id} defaultChecked={field.defaultValue} />
-          <span className="font-mono text-[10px] text-zinc-500">{field.defaultValue ? "enabled" : "disabled"}</span>
-        </div>
-      ) : field.type === "multiselect" ? (
-        <div className="flex flex-wrap gap-1 rounded-md border border-zinc-800 bg-zinc-950 p-2">
-          {field.options.map((opt) => {
-            const selected = field.defaultValue.includes(opt);
-            return (
-              <button
-                key={opt}
-                className={cn(
-                  "rounded border px-1.5 py-0.5 font-mono text-[10px] transition-colors",
-                  selected
-                    ? "border-cyan-500/40 bg-cyan-500/10 text-cyan-400"
-                    : "border-zinc-700 bg-zinc-900 text-zinc-500 hover:text-zinc-300"
-                )}
-              >
-                {opt}
-              </button>
-            );
-          })}
+          <Switch
+            id={id}
+            checked={Boolean(value)}
+            onCheckedChange={onChange}
+          />
+          <span className="font-mono text-[10px] text-zinc-500">
+            {value ? "enabled" : "disabled"}
+          </span>
         </div>
       ) : null}
+
       {field.hint && <p className="text-[10px] text-zinc-600">{field.hint}</p>}
     </div>
   );
 }
 
-function SettingsCard({ card }: { card: SettingsCardDef }) {
-  const { toast } = useToast();
+// ─── Card ───────────────────────────────────────────────────────────────────
+
+function SettingsCard({
+  card,
+  values,
+  onChange,
+}: {
+  card: SettingsCardDef;
+  values: RuntimeConfig;
+  onChange: (key: keyof RuntimeConfig, v: string | number | boolean) => void;
+}) {
   const Icon = card.icon;
-  const liveCount = card.fields.filter((f) => f.live).length;
-  const restartCount = card.fields.filter((f) => f.restart).length;
+  const liveCount = card.fields.filter((f) => f.kind === "live").length;
+  const startupCount = card.fields.filter((f) => f.kind === "startup").length;
 
   return (
     <Card className="gap-0 border-zinc-800 bg-zinc-900/50 py-0">
@@ -378,44 +410,148 @@ function SettingsCard({ card }: { card: SettingsCardDef }) {
               {liveCount} live
             </Badge>
           )}
-          {restartCount > 0 && (
+          {startupCount > 0 && (
             <Badge variant="outline" className="border-amber-500/30 bg-amber-500/10 font-mono text-[9px] text-amber-400">
-              {restartCount} restart
+              {startupCount} startup
             </Badge>
           )}
         </div>
       </div>
       <div className="space-y-3 px-4 py-4">
-        {card.fields.map((field) => (
-          <FieldRenderer key={field.label} field={field} cardId={card.id} />
-        ))}
-      </div>
-      <div className="flex items-center justify-end gap-2 border-t border-zinc-800 px-4 py-2.5">
-        <Button variant="outline" size="sm" className="h-7 border-zinc-700 bg-zinc-900 text-[11px] text-zinc-400 hover:text-zinc-200">
-          Reset
-        </Button>
-        <Button
-          size="sm"
-          className="h-7 bg-cyan-500 text-[11px] text-zinc-950 hover:bg-cyan-400"
-          onClick={() =>
-            toast({
-              title: `${card.title} saved`,
-              description: `${liveCount} hot-reloaded · ${restartCount} require restart`,
-            })
-          }
-        >
-          Save
-        </Button>
+        {card.fields.map((field) => {
+          const value =
+            field.kind === "live"
+              ? values[field.key]
+              : undefined; // startup fields have no value from runtime config
+          return (
+            <FieldRenderer
+              key={field.label}
+              field={field}
+              cardId={card.id}
+              value={value}
+              onChange={(v) => field.kind === "live" && onChange(field.key, v)}
+            />
+          );
+        })}
       </div>
     </Card>
   );
 }
 
+// ─── Main section ───────────────────────────────────────────────────────────
+
 export function SettingsSection() {
+  const runtimeConfig = useSentinelStore((s) => s.runtimeConfig);
+  const refreshSettings = useSentinelStore((s) => s.refreshSettings);
+  const { toast } = useToast();
+
   const [search, setSearch] = useState("");
-  const filtered = cards.filter((c) => c.title.toLowerCase().includes(search.toLowerCase()));
-  const totalLive = cards.reduce((acc, c) => acc + c.fields.filter((f) => f.live).length, 0);
-  const totalRestart = cards.reduce((acc, c) => acc + c.fields.filter((f) => f.restart).length, 0);
+  const [draft, setDraft] = useState<RuntimeConfig>({});
+  const [apiToken, setApiToken] = useState<string>("");
+  const [saving, setSaving] = useState(false);
+
+  // Load runtime config on mount
+  useEffect(() => {
+    refreshSettings();
+  }, [refreshSettings]);
+
+  // When runtimeConfig loads, seed the draft
+  useEffect(() => {
+    if (runtimeConfig) {
+      setDraft({ ...runtimeConfig });
+    }
+  }, [runtimeConfig]);
+
+  // Load API token from localStorage (optional convenience)
+  useEffect(() => {
+    const t = typeof window !== "undefined" ? window.localStorage.getItem("sentinel_api_token") : null;
+    if (t) setApiToken(t);
+  }, []);
+
+  const onApiTokenChange = (v: string) => {
+    setApiToken(v);
+    if (typeof window !== "undefined") {
+      if (v) window.localStorage.setItem("sentinel_api_token", v);
+      else window.localStorage.removeItem("sentinel_api_token");
+    }
+  };
+
+  const filtered = useMemo(
+    () => cards.filter((c) => c.title.toLowerCase().includes(search.toLowerCase())),
+    [search],
+  );
+
+  const totalLive = cards.reduce((acc, c) => acc + c.fields.filter((f) => f.kind === "live").length, 0);
+  const totalRestart = cards.reduce((acc, c) => acc + c.fields.filter((f) => f.kind === "startup").length, 0);
+
+  const dirty = useMemo(() => {
+    if (!runtimeConfig) return false;
+    for (const k of Object.keys(draft) as Array<keyof RuntimeConfig>) {
+      if (draft[k] !== runtimeConfig[k]) return true;
+    }
+    return false;
+  }, [draft, runtimeConfig]);
+
+  const onChange = (key: keyof RuntimeConfig, v: string | number | boolean) => {
+    setDraft((d) => ({ ...d, [key]: v }));
+  };
+
+  const onSave = async () => {
+    if (!runtimeConfig) return;
+    setSaving(true);
+    try {
+      // Only send changed fields
+      const diff: Partial<RuntimeConfig> = {};
+      for (const k of Object.keys(draft) as Array<keyof RuntimeConfig>) {
+        if (draft[k] !== runtimeConfig[k]) {
+          // @ts-expect-error — partial assignment
+          diff[k] = draft[k];
+        }
+      }
+      if (Object.keys(diff).length === 0) {
+        toast({ title: "No changes to save" });
+        return;
+      }
+      const updated = await updateRuntimeConfig(diff, apiToken || undefined);
+      useSentinelStore.setState({ runtimeConfig: updated });
+      setDraft({ ...updated });
+      toast({
+        title: "Settings saved",
+        description: `${Object.keys(diff).length} field(s) updated via PUT /settings`,
+      });
+    } catch (err) {
+      toast({
+        title: "Save failed",
+        description: err instanceof Error ? err.message : "Unknown error",
+        variant: "destructive",
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const onReset = () => {
+    if (runtimeConfig) setDraft({ ...runtimeConfig });
+  };
+
+  if (!runtimeConfig) {
+    return (
+      <div className="space-y-3 p-6">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="h-8 w-64 animate-pulse rounded bg-zinc-800/60" />
+          <div className="flex gap-2">
+            <div className="h-8 w-24 animate-pulse rounded bg-zinc-800/60" />
+            <div className="h-8 w-24 animate-pulse rounded bg-zinc-800/60" />
+          </div>
+        </div>
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <div key={i} className="h-48 animate-pulse rounded-lg border border-zinc-800 bg-zinc-900/50" />
+          ))}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-3 p-6">
@@ -437,16 +573,103 @@ export function SettingsSection() {
             <Zap className="h-3 w-3" /> {totalLive} hot-reload
           </Badge>
           <Badge variant="outline" className="border-amber-500/30 bg-amber-500/10 font-mono text-[10px] text-amber-400">
-            <RotateCcw className="h-3 w-3" /> {totalRestart} restart-required
+            <RotateCcw className="h-3 w-3" /> {totalRestart} startup-only
           </Badge>
+        </div>
+      </div>
+
+      {/* API token input (for /settings POST auth) */}
+      <Card className="gap-0 border-amber-500/30 bg-amber-500/5 py-0">
+        <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+          <div className="flex items-center gap-2">
+            <Lock className="h-4 w-4 text-amber-400" />
+            <div>
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-zinc-200">
+                API Token (for saving)
+              </h3>
+              <p className="mt-0.5 text-[11px] text-zinc-500">
+                Required when SENTINEL_API_TOKEN is set on the server. Sent as{" "}
+                <Mono className="text-zinc-400">Authorization: Bearer …</Mono> with PUT /settings.
+              </p>
+            </div>
+          </div>
+          <Input
+            type="password"
+            placeholder="stl_admin_…"
+            value={apiToken}
+            onChange={(e) => onApiTokenChange(e.target.value)}
+            className="h-8 w-[280px] bg-zinc-950 font-mono text-xs"
+          />
+        </div>
+      </Card>
+
+      {/* Save / reset bar */}
+      <div className="flex items-center justify-between rounded-lg border border-zinc-800 bg-zinc-900/50 px-4 py-2">
+        <div className="flex items-center gap-2 text-[11px] text-zinc-500">
+          {dirty ? (
+            <>
+              <AlertCircle className="h-3 w-3 text-amber-400" />
+              <span>You have unsaved changes.</span>
+            </>
+          ) : (
+            <>
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+              <span>All changes saved.</span>
+            </>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 border-zinc-700 bg-zinc-900 text-[11px] text-zinc-400 hover:text-zinc-200"
+            onClick={onReset}
+            disabled={!dirty || saving}
+          >
+            Reset
+          </Button>
+          <Button
+            size="sm"
+            className="h-8 bg-cyan-500 text-[11px] text-zinc-950 hover:bg-cyan-400"
+            onClick={onSave}
+            disabled={!dirty || saving}
+          >
+            {saving ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <Save className="h-3 w-3" />
+            )}
+            Save changes
+          </Button>
         </div>
       </div>
 
       {/* Cards grid */}
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
         {filtered.map((card) => (
-          <SettingsCard key={card.id} card={card} />
+          <SettingsCard
+            key={card.id}
+            card={card}
+            values={draft}
+            onChange={onChange}
+          />
         ))}
+      </div>
+
+      {/* Helper note */}
+      <div className="flex items-start gap-3 rounded-lg border border-zinc-800 bg-zinc-900/50 px-4 py-3 text-[11px] text-zinc-500">
+        <RotateCcw className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" />
+        <div>
+          <p>
+            <span className="font-semibold text-zinc-300">Live fields</span> are saved via{" "}
+            <Mono className="text-cyan-400">PUT /settings</Mono> and apply immediately (no restart needed).
+          </p>
+          <p className="mt-1">
+            <span className="font-semibold text-zinc-300">Startup fields</span> are read-only here — they're
+            set via environment variables at boot time. Edit your deployment's env vars or{" "}
+            <Mono className="text-zinc-400">values.yaml</Mono> to change them.
+          </p>
+        </div>
       </div>
     </div>
   );
