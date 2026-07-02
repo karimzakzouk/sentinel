@@ -15,6 +15,8 @@ import (
         "strings"
         "time"
 
+	githubapp "github.com/karimzakzouk/sentinel/internal/github"
+
         "github.com/karimzakzouk/sentinel/internal/schemas"
 )
 
@@ -25,33 +27,20 @@ import (
 // Implemented by githubapp.App — when wired, PRs + comments appear as
 // the "Sentinel" bot instead of the PAT owner. v4.0.0.
 
-type TokenProvider interface {
-        GetInstallToken(ctx context.Context) (string, error)
-}
+type TokenProvider = githubapp.TokenProvider
 
 type GitHubExecutor struct {
-        token        string
-        http         *http.Client
-        apiURL       string
-        gitHost      string
-        defaultBranch string
-
-        // over the static token — every API call fetches a fresh installation token
-        // (cached internally by the App). Falls back to the static token on error.
-
-        tokenProvider TokenProvider
+	*githubapp.BaseClient
+	gitHost      string
+	defaultBranch string
 }
 
 // NewGitHub creates a GitHubExecutor.
 
 func NewGitHub(token string) *GitHubExecutor {
-        return &GitHubExecutor{
-                token:         token,
-                http:          &http.Client{Timeout: 30 * time.Second},
-                apiURL:        "https://api.github.com",
-                gitHost:       "github.com",
-                defaultBranch: "main",
-        }
+	return &GitHubExecutor{
+		BaseClient: githubapp.NewBaseClient(token, ""),
+	}
 }
 
 // WithTokenProvider wires a GitHub App token provider. v4.0.0.
@@ -60,22 +49,14 @@ func NewGitHub(token string) *GitHubExecutor {
 // PAT on error.
 
 func (e *GitHubExecutor) WithTokenProvider(tp TokenProvider) *GitHubExecutor {
-        e.tokenProvider = tp
-        return e
+	e.BaseClient.WithTokenProvider(tp)
+	return e
 }
 
 // authToken returns the token to use for an API call. v4.0.0.
 // Prefers the GitHub App installation token (verified bot identity) when
 // configured, falls back to the PAT.
 
-func (e *GitHubExecutor) authToken(ctx context.Context) string {
-        if e.tokenProvider != nil {
-                if token, err := e.tokenProvider.GetInstallToken(ctx); err == nil && token != "" {
-                        return token
-                }
-        }
-        return e.token
-}
 
 // WithAPIURL sets the GitHub API base URL. v3.11.0: Replaces the hardcoded
 // "https://api.github.com" in 8 sites within this file.
@@ -84,7 +65,7 @@ func (e *GitHubExecutor) authToken(ctx context.Context) string {
 
 func (e *GitHubExecutor) WithAPIURL(url string) *GitHubExecutor {
         if url != "" {
-                e.apiURL = strings.TrimRight(url, "/")
+                e.APIURL = strings.TrimRight(url, "/")
         }
         return e
 }
@@ -128,7 +109,7 @@ type BranchInfo struct {
 
 func (e *GitHubExecutor) PrepareBranch(ctx context.Context, inc *schemas.Incident) BranchInfo {
         fp := inc.State.FixProposal
-        if fp == nil || e.token == "" {
+        if fp == nil || e.Token == "" {
                 return BranchInfo{Success: false, Error: "no_fix_proposal_or_no_github_token"}
         }
         if fp.Repo == nil || *fp.Repo == "" {
@@ -223,7 +204,7 @@ func (e *GitHubExecutor) OpenPR(ctx context.Context, inc *schemas.Incident, bran
         if !branch.Success {
                 return &PRResult{Success: false, Error: fmt.Sprintf("branch_preparation_failed: %s", branch.Error)}
         }
-        if e.token == "" {
+        if e.Token == "" {
                 return &PRResult{Success: false, Error: "no_github_token"}
         }
 
@@ -270,7 +251,7 @@ func (e *GitHubExecutor) OpenPR(ctx context.Context, inc *schemas.Incident, bran
 
 
 func (e *GitHubExecutor) getBranchSHA(ctx context.Context, repo, branch string) (string, error) {
-        url := fmt.Sprintf("%s/repos/%s/branches/%s", e.apiURL, repo, branch)
+        url := fmt.Sprintf("%s/repos/%s/branches/%s", e.APIURL, repo, branch)
         var resp struct {
                 Commit struct {
                         SHA string `json:"sha"`
@@ -283,7 +264,7 @@ func (e *GitHubExecutor) getBranchSHA(ctx context.Context, repo, branch string) 
 }
 
 func (e *GitHubExecutor) createBranch(ctx context.Context, repo, branch, sha string) error {
-        url := fmt.Sprintf("%s/repos/%s/git/refs", e.apiURL, repo)
+        url := fmt.Sprintf("%s/repos/%s/git/refs", e.APIURL, repo)
         body := map[string]any{
                 "ref": fmt.Sprintf("refs/heads/%s", branch),
                 "sha": sha,
@@ -296,7 +277,7 @@ func (e *GitHubExecutor) upsertFile(ctx context.Context, repo, branch, path, con
 
         existingSHA, _ := e.getFileSHA(ctx, repo, path, branch)
 
-        url := fmt.Sprintf("%s/repos/%s/contents/%s", e.apiURL, repo, path)
+        url := fmt.Sprintf("%s/repos/%s/contents/%s", e.APIURL, repo, path)
         body := map[string]any{
                 "message": fmt.Sprintf("[Sentinel] Update %s", path),
                 "content": base64.StdEncoding.EncodeToString([]byte(content)),
@@ -309,7 +290,7 @@ func (e *GitHubExecutor) upsertFile(ctx context.Context, repo, branch, path, con
 }
 
 func (e *GitHubExecutor) getFileSHA(ctx context.Context, repo, path, ref string) (string, error) {
-        url := fmt.Sprintf("%s/repos/%s/contents/%s?ref=%s", e.apiURL, repo, path, ref)
+        url := fmt.Sprintf("%s/repos/%s/contents/%s?ref=%s", e.APIURL, repo, path, ref)
         var resp struct {
                 SHA  string `json:"sha"`
                 Type string `json:"type"`
@@ -330,7 +311,7 @@ func (e *GitHubExecutor) getFileSHA(ctx context.Context, repo, path, ref string)
 // the current code, not the original.
 
 func (e *GitHubExecutor) GetFileContent(ctx context.Context, repo, path, ref string) (string, error) {
-        url := fmt.Sprintf("%s/repos/%s/contents/%s?ref=%s", e.apiURL, repo, path, ref)
+        url := fmt.Sprintf("%s/repos/%s/contents/%s?ref=%s", e.APIURL, repo, path, ref)
         var resp struct {
                 Content  string `json:"content"`
                 Encoding string `json:"encoding"`
@@ -366,7 +347,7 @@ func (e *GitHubExecutor) GetFileContent(ctx context.Context, repo, path, ref str
 
 
 func (e *GitHubExecutor) createPR(ctx context.Context, repo, title, body, head, base string) (int, string, error) {
-        url := fmt.Sprintf("%s/repos/%s/pulls", e.apiURL, repo)
+        url := fmt.Sprintf("%s/repos/%s/pulls", e.APIURL, repo)
         body_ := map[string]any{
                 "title": title,
                 "body":  body,
@@ -384,7 +365,7 @@ func (e *GitHubExecutor) createPR(ctx context.Context, repo, title, body, head, 
 }
 
 func (e *GitHubExecutor) addLabels(ctx context.Context, repo string, prNumber int, labels []string) error {
-        url := fmt.Sprintf("%s/repos/%s/issues/%d/labels", e.apiURL, repo, prNumber)
+        url := fmt.Sprintf("%s/repos/%s/issues/%d/labels", e.APIURL, repo, prNumber)
         body := map[string]any{"labels": labels}
         return e.do(ctx, "POST", url, body, nil)
 }
@@ -424,14 +405,14 @@ func (e *GitHubExecutor) do(ctx context.Context, method, url string, body any, o
                 if err != nil {
                         return err
                 }
-                req.Header.Set("Authorization", "Bearer "+e.authToken(ctx))
+                req.Header.Set("Authorization", "Bearer "+e.AuthToken(ctx))
                 req.Header.Set("Accept", "application/vnd.github+json")
                 req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
                 if body != nil {
                         req.Header.Set("Content-Type", "application/json")
                 }
 
-                resp, err := e.http.Do(req)
+                resp, err := e.HTTP.Do(req)
                 if err != nil {
                         lastErr = err
                         continue // network error — retry

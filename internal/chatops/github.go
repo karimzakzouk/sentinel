@@ -6,27 +6,21 @@
 package chatops
 
 import (
+	"strings"
         "bytes"
         "context"
         "encoding/json"
         "fmt"
         "io"
         "net/http"
-        "strings"
-        "time"
+
+	githubapp "github.com/karimzakzouk/sentinel/internal/github"
 )
 
 // GitHubClientImpl is the default GitHubClient implementation.
 
 type GitHubClientImpl struct {
-        token   string
-        apiURL  string // default "https://api.github.com"
-        http    *http.Client
-        // Optional GitHub App token provider. When set, all API calls
-        // (comments, reactions, labels, merges) use the App's installation token,
-        // making them appear as the "Sentinel" bot identity.
-
-        tokenProvider TokenProvider
+	*githubapp.BaseClient
 }
 
 // TokenProvider returns a fresh GitHub API token. v4.0.0.
@@ -42,15 +36,9 @@ type TokenProvider interface {
 // Enterprise, set to "https://gh.mycorp.internal/api/v3".
 
 func NewGitHubClient(token, apiURL string) *GitHubClientImpl {
-        if apiURL == "" {
-                apiURL = "https://api.github.com"
-        }
-        apiURL = strings.TrimRight(apiURL, "/")
-        return &GitHubClientImpl{
-                token:  token,
-                apiURL: apiURL,
-                http:   &http.Client{Timeout: 30 * time.Second},
-        }
+	return &GitHubClientImpl{
+		BaseClient: githubapp.NewBaseClient(token, apiURL),
+	}
 }
 
 // WithTokenProvider wires a GitHub App token provider. v4.0.0.
@@ -58,20 +46,12 @@ func NewGitHubClient(token, apiURL string) *GitHubClientImpl {
 // merges) use the App's installation token, appearing as "Sentinel[bot]".
 
 func (g *GitHubClientImpl) WithTokenProvider(tp TokenProvider) *GitHubClientImpl {
-        g.tokenProvider = tp
-        return g
+	g.BaseClient.WithTokenProvider(tp)
+	return g
 }
 
 // authToken returns the token to use for an API call. v4.0.0.
 
-func (g *GitHubClientImpl) authToken(ctx context.Context) string {
-        if g.tokenProvider != nil {
-                if token, err := g.tokenProvider.GetInstallToken(ctx); err == nil && token != "" {
-                        return token
-                }
-        }
-        return g.token
-}
 
 // ReactComment adds an emoji reaction to a PR comment.
 // GitHub dedupes reactions from the same user — calling this twice with the
@@ -80,13 +60,13 @@ func (g *GitHubClientImpl) authToken(ctx context.Context) string {
 func (g *GitHubClientImpl) ReactComment(ctx context.Context, repo string, commentID int64, reaction string) error {
         body, _ := json.Marshal(map[string]string{"content": reaction})
         req, err := http.NewRequestWithContext(ctx, "POST",
-                fmt.Sprintf("%s/repos/%s/issues/comments/%d/reactions", g.apiURL, repo, commentID),
+                fmt.Sprintf("%s/repos/%s/issues/comments/%d/reactions", g.APIURL, repo, commentID),
                 bytes.NewReader(body))
         if err != nil {
                 return err
         }
         g.setHeaders(req)
-        resp, err := g.http.Do(req)
+        resp, err := g.HTTP.Do(req)
         if err != nil {
                 return err
         }
@@ -107,12 +87,12 @@ func (g *GitHubClientImpl) RemoveReaction(ctx context.Context, repo string, comm
         // List reactions on the comment to find ours.
 
         req, err := http.NewRequestWithContext(ctx, "GET",
-                fmt.Sprintf("%s/repos/%s/issues/comments/%d/reactions", g.apiURL, repo, commentID), nil)
+                fmt.Sprintf("%s/repos/%s/issues/comments/%d/reactions", g.APIURL, repo, commentID), nil)
         if err != nil {
                 return err
         }
         g.setHeaders(req)
-        resp, err := g.http.Do(req)
+        resp, err := g.HTTP.Do(req)
         if err != nil {
                 return err
         }
@@ -141,9 +121,9 @@ func (g *GitHubClientImpl) RemoveReaction(ctx context.Context, repo string, comm
         for _, r := range reactions {
                 if r.Content == reaction {
                         delReq, _ := http.NewRequestWithContext(ctx, "DELETE",
-                                fmt.Sprintf("%s/repos/%s/issues/comments/%d/reactions/%d", g.apiURL, repo, commentID, r.ID), nil)
+                                fmt.Sprintf("%s/repos/%s/issues/comments/%d/reactions/%d", g.APIURL, repo, commentID, r.ID), nil)
                         g.setHeaders(delReq)
-                        delResp, err := g.http.Do(delReq)
+                        delResp, err := g.HTTP.Do(delReq)
                         if err != nil {
                                 return err
                         }
@@ -169,13 +149,13 @@ func (g *GitHubClientImpl) PostComment(ctx context.Context, repo string, prNumbe
 func (g *GitHubClientImpl) PostCommentWithID(ctx context.Context, repo string, prNumber int, body string) (int64, error) {
         payload, _ := json.Marshal(map[string]string{"body": body})
         req, err := http.NewRequestWithContext(ctx, "POST",
-                fmt.Sprintf("%s/repos/%s/issues/%d/comments", g.apiURL, repo, prNumber),
+                fmt.Sprintf("%s/repos/%s/issues/%d/comments", g.APIURL, repo, prNumber),
                 bytes.NewReader(payload))
         if err != nil {
                 return 0, err
         }
         g.setHeaders(req)
-        resp, err := g.http.Do(req)
+        resp, err := g.HTTP.Do(req)
         if err != nil {
                 return 0, err
         }
@@ -199,12 +179,12 @@ func (g *GitHubClientImpl) PostCommentWithID(ctx context.Context, repo string, p
 
 func (g *GitHubClientImpl) FindStatusComment(ctx context.Context, repo string, prNumber int) (int64, string, error) {
         req, err := http.NewRequestWithContext(ctx, "GET",
-                fmt.Sprintf("%s/repos/%s/issues/%d/comments?per_page=100", g.apiURL, repo, prNumber), nil)
+                fmt.Sprintf("%s/repos/%s/issues/%d/comments?per_page=100", g.APIURL, repo, prNumber), nil)
         if err != nil {
                 return 0, "", err
         }
         g.setHeaders(req)
-        resp, err := g.http.Do(req)
+        resp, err := g.HTTP.Do(req)
         if err != nil {
                 return 0, "", err
         }
@@ -235,13 +215,13 @@ func (g *GitHubClientImpl) FindStatusComment(ctx context.Context, repo string, p
 func (g *GitHubClientImpl) UpdateComment(ctx context.Context, repo string, commentID int64, body string) error {
         payload, _ := json.Marshal(map[string]string{"body": body})
         req, err := http.NewRequestWithContext(ctx, "PATCH",
-                fmt.Sprintf("%s/repos/%s/issues/comments/%d", g.apiURL, repo, commentID),
+                fmt.Sprintf("%s/repos/%s/issues/comments/%d", g.APIURL, repo, commentID),
                 bytes.NewReader(payload))
         if err != nil {
                 return err
         }
         g.setHeaders(req)
-        resp, err := g.http.Do(req)
+        resp, err := g.HTTP.Do(req)
         if err != nil {
                 return err
         }
@@ -258,12 +238,12 @@ func (g *GitHubClientImpl) UpdateComment(ctx context.Context, repo string, comme
 
 func (g *GitHubClientImpl) GetPermission(ctx context.Context, repo, username string) (string, error) {
         req, err := http.NewRequestWithContext(ctx, "GET",
-                fmt.Sprintf("%s/repos/%s/collaborators/%s/permission", g.apiURL, repo, username), nil)
+                fmt.Sprintf("%s/repos/%s/collaborators/%s/permission", g.APIURL, repo, username), nil)
         if err != nil {
                 return "", err
         }
         g.setHeaders(req)
-        resp, err := g.http.Do(req)
+        resp, err := g.HTTP.Do(req)
         if err != nil {
                 return "", err
         }
@@ -294,7 +274,7 @@ func (g *GitHubClientImpl) GetPermission(ctx context.Context, repo, username str
 func (g *GitHubClientImpl) setHeaders(req *http.Request) {
         ctx := req.Context()
         req.Header.Set("Accept", "application/vnd.github+json")
-        req.Header.Set("Authorization", "Bearer "+g.authToken(ctx))
+        req.Header.Set("Authorization", "Bearer "+g.AuthToken(ctx))
         req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
         req.Header.Set("Content-Type", "application/json")
 }
@@ -305,13 +285,13 @@ func (g *GitHubClientImpl) setHeaders(req *http.Request) {
 func (g *GitHubClientImpl) SetLabels(ctx context.Context, repo string, prNumber int, labels []string) error {
         payload, _ := json.Marshal(map[string][]string{"labels": labels})
         req, err := http.NewRequestWithContext(ctx, "POST",
-                fmt.Sprintf("%s/repos/%s/issues/%d/labels", g.apiURL, repo, prNumber),
+                fmt.Sprintf("%s/repos/%s/issues/%d/labels", g.APIURL, repo, prNumber),
                 bytes.NewReader(payload))
         if err != nil {
                 return err
         }
         g.setHeaders(req)
-        resp, err := g.http.Do(req)
+        resp, err := g.HTTP.Do(req)
         if err != nil {
                 return err
         }
@@ -327,12 +307,12 @@ func (g *GitHubClientImpl) SetLabels(ctx context.Context, repo string, prNumber 
 
 func (g *GitHubClientImpl) RemoveLabel(ctx context.Context, repo string, prNumber int, label string) error {
         req, err := http.NewRequestWithContext(ctx, "DELETE",
-                fmt.Sprintf("%s/repos/%s/issues/%d/labels/%s", g.apiURL, repo, prNumber, label), nil)
+                fmt.Sprintf("%s/repos/%s/issues/%d/labels/%s", g.APIURL, repo, prNumber, label), nil)
         if err != nil {
                 return err
         }
         g.setHeaders(req)
-        resp, err := g.http.Do(req)
+        resp, err := g.HTTP.Do(req)
         if err != nil {
                 return err
         }
@@ -350,12 +330,12 @@ func (g *GitHubClientImpl) RemoveLabel(ctx context.Context, repo string, prNumbe
 
 func (g *GitHubClientImpl) GetLabels(ctx context.Context, repo string, prNumber int) ([]string, error) {
         req, err := http.NewRequestWithContext(ctx, "GET",
-                fmt.Sprintf("%s/repos/%s/issues/%d/labels?per_page=100", g.apiURL, repo, prNumber), nil)
+                fmt.Sprintf("%s/repos/%s/issues/%d/labels?per_page=100", g.APIURL, repo, prNumber), nil)
         if err != nil {
                 return nil, err
         }
         g.setHeaders(req)
-        resp, err := g.http.Do(req)
+        resp, err := g.HTTP.Do(req)
         if err != nil {
                 return nil, err
         }
@@ -386,13 +366,13 @@ func (g *GitHubClientImpl) Merge(ctx context.Context, repo string, prNumber int,
                 "merge_method":   "squash",
         })
         req, err := http.NewRequestWithContext(ctx, "PUT",
-                fmt.Sprintf("%s/repos/%s/pulls/%d/merge", g.apiURL, repo, prNumber),
+                fmt.Sprintf("%s/repos/%s/pulls/%d/merge", g.APIURL, repo, prNumber),
                 bytes.NewReader(body))
         if err != nil {
                 return err
         }
         g.setHeaders(req)
-        resp, err := g.http.Do(req)
+        resp, err := g.HTTP.Do(req)
         if err != nil {
                 return err
         }
@@ -410,12 +390,12 @@ func (g *GitHubClientImpl) Merge(ctx context.Context, repo string, prNumber int,
 
 func (g *GitHubClientImpl) FindCommentByMarker(ctx context.Context, repo string, prNumber int, marker string) (string, error) {
         req, err := http.NewRequestWithContext(ctx, "GET",
-                fmt.Sprintf("%s/repos/%s/issues/%d/comments?per_page=100", g.apiURL, repo, prNumber), nil)
+                fmt.Sprintf("%s/repos/%s/issues/%d/comments?per_page=100", g.APIURL, repo, prNumber), nil)
         if err != nil {
                 return "", err
         }
         g.setHeaders(req)
-        resp, err := g.http.Do(req)
+        resp, err := g.HTTP.Do(req)
         if err != nil {
                 return "", err
         }

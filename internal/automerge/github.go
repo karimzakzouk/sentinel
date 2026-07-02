@@ -13,60 +13,37 @@ import (
         "fmt"
         "io"
         "net/http"
-        "strings"
-        "time"
+
+	githubapp "github.com/karimzakzouk/sentinel/internal/github"
 )
 
 // GitHubClientImpl is the default GitHubClient implementation.
 
 type GitHubClientImpl struct {
-        token  string
-        apiURL string
-        http   *http.Client
-        // Optional GitHub App token provider. When set, all API calls
-        // (CI status, labels, merge, comments) use the App's installation token,
-        // making them appear as the "Sentinel" bot identity.
-
-        tokenProvider TokenProvider
+	*githubapp.BaseClient
 }
 
 // TokenProvider returns a fresh GitHub API token. v4.0.0.
 
-type TokenProvider interface {
-        GetInstallToken(ctx context.Context) (string, error)
-}
+type TokenProvider = githubapp.TokenProvider
 
 // NewGitHubClient creates a GitHubClientImpl.
 
 func NewGitHubClient(token, apiURL string) *GitHubClientImpl {
-        if apiURL == "" {
-                apiURL = "https://api.github.com"
-        }
-        apiURL = strings.TrimRight(apiURL, "/")
-        return &GitHubClientImpl{
-                token:  token,
-                apiURL: apiURL,
-                http:   &http.Client{Timeout: 30 * time.Second},
-        }
+	return &GitHubClientImpl{
+		BaseClient: githubapp.NewBaseClient(token, apiURL),
+	}
 }
 
 // WithTokenProvider wires a GitHub App token provider. v4.0.0.
 
 func (g *GitHubClientImpl) WithTokenProvider(tp TokenProvider) *GitHubClientImpl {
-        g.tokenProvider = tp
-        return g
+	g.BaseClient.WithTokenProvider(tp)
+	return g
 }
 
 // authToken returns the token to use for an API call. v4.0.0.
 
-func (g *GitHubClientImpl) authToken(ctx context.Context) string {
-        if g.tokenProvider != nil {
-                if token, err := g.tokenProvider.GetInstallToken(ctx); err == nil && token != "" {
-                        return token
-                }
-        }
-        return g.token
-}
 
 // GetCIStatus aggregates the CI check state for a PR. Combines:
 //   - check_runs (GitHub Actions, CI systems that use Checks API)
@@ -149,12 +126,12 @@ func (g *GitHubClientImpl) GetCIStatus(ctx context.Context, repo string, prNumbe
 
 func (g *GitHubClientImpl) getPRHeadSHA(ctx context.Context, repo string, prNumber int) (string, error) {
         req, err := http.NewRequestWithContext(ctx, "GET",
-                fmt.Sprintf("%s/repos/%s/pulls/%d", g.apiURL, repo, prNumber), nil)
+                fmt.Sprintf("%s/repos/%s/pulls/%d", g.APIURL, repo, prNumber), nil)
         if err != nil {
                 return "", err
         }
         g.setHeaders(req)
-        resp, err := g.http.Do(req)
+        resp, err := g.HTTP.Do(req)
         if err != nil {
                 return "", err
         }
@@ -181,12 +158,12 @@ type checkRun struct {
 
 func (g *GitHubClientImpl) getCheckRuns(ctx context.Context, repo, sha string) ([]checkRun, error) {
         req, err := http.NewRequestWithContext(ctx, "GET",
-                fmt.Sprintf("%s/repos/%s/commits/%s/check-runs?per_page=100", g.apiURL, repo, sha), nil)
+                fmt.Sprintf("%s/repos/%s/commits/%s/check-runs?per_page=100", g.APIURL, repo, sha), nil)
         if err != nil {
                 return nil, err
         }
         g.setHeaders(req)
-        resp, err := g.http.Do(req)
+        resp, err := g.HTTP.Do(req)
         if err != nil {
                 return nil, err
         }
@@ -210,12 +187,12 @@ type status struct {
 
 func (g *GitHubClientImpl) getStatuses(ctx context.Context, repo, sha string) ([]status, error) {
         req, err := http.NewRequestWithContext(ctx, "GET",
-                fmt.Sprintf("%s/repos/%s/commits/%s/statuses?per_page=100", g.apiURL, repo, sha), nil)
+                fmt.Sprintf("%s/repos/%s/commits/%s/statuses?per_page=100", g.APIURL, repo, sha), nil)
         if err != nil {
                 return nil, err
         }
         g.setHeaders(req)
-        resp, err := g.http.Do(req)
+        resp, err := g.HTTP.Do(req)
         if err != nil {
                 return nil, err
         }
@@ -234,12 +211,12 @@ func (g *GitHubClientImpl) getStatuses(ctx context.Context, repo, sha string) ([
 
 func (g *GitHubClientImpl) GetLabels(ctx context.Context, repo string, prNumber int) ([]string, error) {
         req, err := http.NewRequestWithContext(ctx, "GET",
-                fmt.Sprintf("%s/repos/%s/issues/%d/labels?per_page=100", g.apiURL, repo, prNumber), nil)
+                fmt.Sprintf("%s/repos/%s/issues/%d/labels?per_page=100", g.APIURL, repo, prNumber), nil)
         if err != nil {
                 return nil, err
         }
         g.setHeaders(req)
-        resp, err := g.http.Do(req)
+        resp, err := g.HTTP.Do(req)
         if err != nil {
                 return nil, err
         }
@@ -268,13 +245,13 @@ func (g *GitHubClientImpl) Merge(ctx context.Context, repo string, prNumber int,
                 "merge_method":   "squash", // squash is the safest default — single commit on main
         })
         req, err := http.NewRequestWithContext(ctx, "PUT",
-                fmt.Sprintf("%s/repos/%s/pulls/%d/merge", g.apiURL, repo, prNumber),
+                fmt.Sprintf("%s/repos/%s/pulls/%d/merge", g.APIURL, repo, prNumber),
                 bytes.NewReader(body))
         if err != nil {
                 return err
         }
         g.setHeaders(req)
-        resp, err := g.http.Do(req)
+        resp, err := g.HTTP.Do(req)
         if err != nil {
                 return err
         }
@@ -291,13 +268,13 @@ func (g *GitHubClientImpl) Merge(ctx context.Context, repo string, prNumber int,
 func (g *GitHubClientImpl) PostComment(ctx context.Context, repo string, prNumber int, body string) error {
         payload, _ := json.Marshal(map[string]string{"body": body})
         req, err := http.NewRequestWithContext(ctx, "POST",
-                fmt.Sprintf("%s/repos/%s/issues/%d/comments", g.apiURL, repo, prNumber),
+                fmt.Sprintf("%s/repos/%s/issues/%d/comments", g.APIURL, repo, prNumber),
                 bytes.NewReader(payload))
         if err != nil {
                 return err
         }
         g.setHeaders(req)
-        resp, err := g.http.Do(req)
+        resp, err := g.HTTP.Do(req)
         if err != nil {
                 return err
         }
@@ -314,13 +291,13 @@ func (g *GitHubClientImpl) PostComment(ctx context.Context, repo string, prNumbe
 func (g *GitHubClientImpl) SetLabels(ctx context.Context, repo string, prNumber int, labels []string) error {
         payload, _ := json.Marshal(map[string][]string{"labels": labels})
         req, err := http.NewRequestWithContext(ctx, "POST",
-                fmt.Sprintf("%s/repos/%s/issues/%d/labels", g.apiURL, repo, prNumber),
+                fmt.Sprintf("%s/repos/%s/issues/%d/labels", g.APIURL, repo, prNumber),
                 bytes.NewReader(payload))
         if err != nil {
                 return err
         }
         g.setHeaders(req)
-        resp, err := g.http.Do(req)
+        resp, err := g.HTTP.Do(req)
         if err != nil {
                 return err
         }
@@ -336,12 +313,12 @@ func (g *GitHubClientImpl) SetLabels(ctx context.Context, repo string, prNumber 
 
 func (g *GitHubClientImpl) RemoveLabel(ctx context.Context, repo string, prNumber int, label string) error {
         req, err := http.NewRequestWithContext(ctx, "DELETE",
-                fmt.Sprintf("%s/repos/%s/issues/%d/labels/%s", g.apiURL, repo, prNumber, label), nil)
+                fmt.Sprintf("%s/repos/%s/issues/%d/labels/%s", g.APIURL, repo, prNumber, label), nil)
         if err != nil {
                 return err
         }
         g.setHeaders(req)
-        resp, err := g.http.Do(req)
+        resp, err := g.HTTP.Do(req)
         if err != nil {
                 return err
         }
@@ -358,7 +335,7 @@ func (g *GitHubClientImpl) RemoveLabel(ctx context.Context, repo string, prNumbe
 func (g *GitHubClientImpl) setHeaders(req *http.Request) {
         ctx := req.Context()
         req.Header.Set("Accept", "application/vnd.github+json")
-        req.Header.Set("Authorization", "Bearer "+g.authToken(ctx)) // v4.0.0: GitHub App token when configured
+        req.Header.Set("Authorization", "Bearer "+g.AuthToken(ctx)) // v4.0.0: GitHub App token when configured
         req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
         req.Header.Set("Content-Type", "application/json")
 }
