@@ -1,7 +1,7 @@
 package executors
 
 import (
-	"github.com/karimzakzouk/sentinel/internal/logging"
+        "github.com/karimzakzouk/sentinel/internal/logging"
         "context"
         "fmt"
         "net/http"
@@ -273,10 +273,43 @@ func (s *SandboxRunner) Run(ctx context.Context, inc *schemas.Incident) SandboxR
                                 // is GONE, the fix worked — the reproducer just had wrong success
                                 // criteria (e.g. expected 200 but got 404, which is the correct
                                 // behavior for a non-existent resource).
+                                //
+                                // IMPORTANT: Only check the reproducer's CRASH OUTPUT, not the
+                                // description text. The reproducer description often mentions
+                                // the original error type (e.g. "was KeyError, should now handle
+                                // missing env var gracefully") — that's not the error recurring,
+                                // it's just describing what the test does.
                                 originalErrorType := s.extractOriginalErrorType(inc)
                                 reproOutput := reproResult.Summary
-                                if originalErrorType != "" && !strings.Contains(reproOutput, originalErrorType) {
-                                        logging.Error("Level 5 FAILED but original error type  is gone from reproducer output — fix is correct, reproducer had wrong success criteria", "originalerrortype", originalErrorType)
+
+                                // Extract just the output section (after "--- Output ---")
+                                // to avoid matching the description text
+                                actualOutput := reproOutput
+                                if idx := strings.Index(reproOutput, "--- Output ---"); idx >= 0 {
+                                        actualOutput = reproOutput[idx:]
+                                }
+
+                                // Also check: does the output contain a CRASH/traceback with the
+                                // original error type? If the reproducer says "CRASH: KeyError"
+                                // or has a traceback, the error is still there. If it says
+                                // "CRASH: HTTPException: 404" the original error is GONE.
+                                originalErrorStillPresent := false
+                                if originalErrorType != "" {
+                                        // Check if the actual output (not description) contains the
+                                        // original error type as an actual error (not just mentioned)
+                                        lowerOutput := strings.ToLower(actualOutput)
+                                        lowerErrorType := strings.ToLower(originalErrorType)
+                                        // Look for patterns like "KeyError:", "KeyError '", "raise KeyError"
+                                        if strings.Contains(lowerOutput, lowerErrorType+":") ||
+                                                strings.Contains(lowerOutput, lowerErrorType+" '") ||
+                                                strings.Contains(lowerOutput, lowerErrorType+"(") ||
+                                                strings.Contains(lowerOutput, "raise "+lowerErrorType) {
+                                                originalErrorStillPresent = true
+                                        }
+                                }
+
+                                if originalErrorType != "" && !originalErrorStillPresent {
+                                        logging.Error("Level 5 FAILED but original error type is gone from reproducer output — fix is correct, reproducer had wrong success criteria", "originalerrortype", originalErrorType)
                                         // Don't block — the fix works. L5 passes with a note.
                                 } else {
                                         logging.Error("Level 5 FAILED: reproducer script crashed", "originalerrortype", originalErrorType)
