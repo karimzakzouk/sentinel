@@ -267,6 +267,9 @@ export function useSSE() {
           } else if (eventType === "pipeline") {
             icon = "Radio";
             feedMsg = `${service} — ${phase}: ${status}`;
+          } else if (eventType === "connected") {
+            // Initial connection ack — don't add to feed, just mark live.
+            return;
           }
 
           pushActivity({
@@ -287,6 +290,10 @@ export function useSSE() {
           // Reconnect with exponential backoff
           if (reconnectRef.current) clearTimeout(reconnectRef.current);
           reconnectRef.current = setTimeout(connect, 3000);
+        },
+        () => {
+          // onopen — flip to live immediately
+          setSSE(true);
         },
       );
       esRef.current = es;

@@ -54,11 +54,32 @@ function formatRemaining(iso: string | null | undefined): string {
 export function AutoMergeSection() {
   const autoMerge = useSentinelStore((s) => s.autoMerge);
   const refreshAutoMerge = useSentinelStore((s) => s.refreshAutoMerge);
+  const incidents = useSentinelStore((s) => s.incidents);
 
-  // Recent merges aren't directly returned by /automerge — derive a "recent
-  // Auto-merge queue/outcomes aren't available via the API (the /automerge
-  // endpoint returns config + rate limit, not a queue). Derive from incidents.
-  const recentOutcomes: { pr: number; inc: string; svc: string; outcome: string }[] = [];
+  // /automerge returns only config + rate limit, not a queue. Derive a
+  // queue/outcome view from incidents that have a PR attached. Status
+  // mapping: any non-resolved/non-verified incident with a PR is "queued"
+  // (waiting for auto-merge gates); resolved = merged; rejected/failed =
+  // reverted/rejected.
+  const recentOutcomes = useMemo(() => {
+    return incidents
+      .filter((inc) => inc.pr_number && inc.pr_url)
+      .map((inc) => {
+        let outcome = "queued";
+        if (inc.status === "resolved" || inc.status === "verified") outcome = "merged";
+        else if (inc.status === "rejected" || inc.status === "failed") outcome = "reverted";
+        else if (inc.auto_merge_status) outcome = inc.auto_merge_status;
+        return {
+          pr: inc.pr_number as number,
+          inc: inc.incident_id.slice(0, 8),
+          svc: inc.cluster?.service ?? "—",
+          outcome,
+          url: inc.pr_url as string,
+          updated: inc.updated_at,
+        };
+      })
+      .sort((a, b) => (a.updated > b.updated ? -1 : 1));
+  }, [incidents]);
 
   if (!autoMerge) {
     return (
@@ -162,10 +183,15 @@ export function AutoMergeSection() {
                       <TableCell className="px-3 py-2 text-xs text-zinc-300">{q.svc}</TableCell>
                       <TableCell className="px-3 py-2">
                         {q.pr ? (
-                          <span className="flex items-center gap-1">
+                          <a
+                            href={q.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="flex items-center gap-1 hover:underline"
+                          >
                             <GitPullRequest className="h-3 w-3 text-zinc-500" />
                             <Mono className="text-[11px] text-cyan-400">#{q.pr}</Mono>
-                          </span>
+                          </a>
                         ) : (
                           <span className="text-[11px] text-zinc-600">—</span>
                         )}

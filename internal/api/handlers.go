@@ -18,6 +18,7 @@ import (
         "github.com/google/uuid"
 
         "github.com/karimzakzouk/sentinel/internal/metrics"
+        "github.com/karimzakzouk/sentinel/internal/schemas"
         "github.com/karimzakzouk/sentinel/internal/version"
 )
 
@@ -77,6 +78,14 @@ func (s *Server) handleIncidents(w http.ResponseWriter, r *http.Request) {
                 writeJSON(w, 500, map[string]string{"error": err.Error()})
                 return
         }
+        // Mirror pr_number/pr_url/etc from state.execution_result → top-level
+        // fields so the frontend's PRs tab + incident detail can read them
+        // without digging into the nested state object.
+        for _, inc := range incidents {
+                if typed, ok := inc.(*schemas.Incident); ok {
+                        enrichIncidentPRFields(typed)
+                }
+        }
         writeJSON(w, 200, incidents)
 }
 
@@ -99,6 +108,9 @@ func (s *Server) handleIncident(w http.ResponseWriter, r *http.Request) {
                         writeJSON(w, 404, map[string]string{"error": "incident not found"})
                         return
                 }
+                if typed, ok := incident.(*schemas.Incident); ok {
+                        enrichIncidentPRFields(typed)
+                }
                 writeJSON(w, 200, incident)
                 return
         }
@@ -120,7 +132,46 @@ func (s *Server) handleIncident(w http.ResponseWriter, r *http.Request) {
                 writeJSON(w, 404, map[string]string{"error": "no incident matches that ID prefix (need at least 4 chars)"})
                 return
         }
+        if typed, ok := incident.(*schemas.Incident); ok {
+                enrichIncidentPRFields(typed)
+        }
         writeJSON(w, 200, incident)
+}
+
+// enrichIncidentPRFields mirrors pr_number/pr_url/pr_repo/pr_branch +
+// auto_merge_status from the nested state.execution_result (which is what
+// the agents write to) onto the top-level Incident fields (which is what
+// the frontend reads for the PRs tab + incident detail modal). The v4.0.0
+// DB migration also added dedicated columns for these, but the scan path
+// doesn't read them — this enrichment keeps the JSON contract stable
+// without rewriting every SELECT.
+func enrichIncidentPRFields(inc *schemas.Incident) {
+        if inc == nil {
+                return
+        }
+        if er := inc.State.ExecutionResult; er != nil {
+                if inc.PRNumber == nil && er.PRNumber != nil {
+                        inc.PRNumber = er.PRNumber
+                }
+                if inc.PRURL == "" && er.PRURL != nil {
+                        inc.PRURL = *er.PRURL
+                }
+                if inc.PRBranch == "" && er.PRBranch != nil {
+                        inc.PRBranch = *er.PRBranch
+                }
+                if inc.SandboxSummary == "" && er.SandboxSummary != nil {
+                        inc.SandboxSummary = *er.SandboxSummary
+                }
+                if !inc.SandboxVerified && er.SandboxVerified {
+                        inc.SandboxVerified = er.SandboxVerified
+                }
+        }
+        // FixType is on FixProposal — mirror for frontend convenience.
+        if fp := inc.State.FixProposal; fp != nil {
+                if inc.FixType == "" {
+                        inc.FixType = string(fp.FixType)
+                }
+        }
 }
 
 func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
@@ -259,7 +310,14 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
                 s.eventSubsMu.Unlock()
         }()
 
-        fmt.Fprintf(w, "event: connected\ndata: {\"status\":\"connected\"}\n\n")
+        // Send events as unnamed SSE messages (no `event:` line) so the
+        // frontend's `EventSource.onmessage` handler fires for every event.
+        // The event type is embedded in the JSON payload's `type` field, so
+        // we don't lose any information by dropping the SSE-level `event:`
+        // marker. (Previously we sent `event: <type>\n` which meant the
+        // frontend needed addEventListener per type — but it only had
+        // onmessage, so zero events were ever delivered.)
+        fmt.Fprintf(w, "data: {\"type\":\"connected\",\"status\":\"connected\"}\n\n")
         flusher.Flush()
 
         ticker := time.NewTicker(15 * time.Second)
@@ -271,7 +329,7 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
                         return
                 case event := <-ch:
                         data, _ := json.Marshal(event)
-                        fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event.Type, data)
+                        fmt.Fprintf(w, "data: %s\n\n", data)
                         flusher.Flush()
                 case <-ticker.C:
                         fmt.Fprintf(w, ": ping\n\n")

@@ -184,9 +184,19 @@ function FixProposalView({ fix }: { fix: FixProposal }) {
               {f.changes && f.changes.length > 0 && (
                 <div className="space-y-1 p-2">
                   {f.changes.map((c, j) => (
-                    <div key={j} className="rounded border border-zinc-800 p-1.5">
-                      <div className="text-[10px] text-rose-400">- {c.search}</div>
-                      <div className="text-[10px] text-emerald-400">+ {c.replace}</div>
+                    <div key={j} className="rounded border border-zinc-800 overflow-hidden">
+                      <pre className="whitespace-pre-wrap break-words font-mono text-[10.5px] leading-relaxed text-rose-300 bg-rose-950/20 p-2 m-0 overflow-x-auto scrollbar-thin">
+                        {String(c.search ?? "")
+                          .split("\n")
+                          .map((line, i) => `- ${line}`)
+                          .join("\n")}
+                      </pre>
+                      <pre className="whitespace-pre-wrap break-words font-mono text-[10.5px] leading-relaxed text-emerald-300 bg-emerald-950/20 p-2 m-0 overflow-x-auto scrollbar-thin">
+                        {String(c.replace ?? "")
+                          .split("\n")
+                          .map((line, i) => `+ ${line}`)
+                          .join("\n")}
+                      </pre>
                     </div>
                   ))}
                 </div>
@@ -564,9 +574,9 @@ export function IncidentsSection() {
         )}
       </Panel>
 
-      {/* Drawer */}
+      {/* Full-screen incident detail (replaces the old narrow drawer) */}
       <Sheet open={drawerOpen} onOpenChange={setDrawerOpen}>
-        <SheetContent side="right" className="w-full overflow-y-auto border-zinc-800 bg-zinc-950 p-0 sm:max-w-2xl scrollbar-thin">
+        <SheetContent side="right" className="w-screen overflow-y-auto border-zinc-800 bg-zinc-950 p-0 sm:max-w-none scrollbar-thin">
           {selected && (
             <>
               <SheetHeader className="border-b border-zinc-800 p-4">

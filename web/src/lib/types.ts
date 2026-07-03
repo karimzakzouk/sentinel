@@ -56,6 +56,10 @@ export interface Incident {
   pr_branch?: string;
   pr_url?: string;
   auto_merge_status?: string;
+  // Mirrored from state.execution_result + state.fix_proposal for convenience.
+  sandbox_verified?: boolean;
+  sandbox_summary?: string;
+  fix_type?: string;
 }
 
 // ─── Provider ───────────────────────────────────────────────────────────────

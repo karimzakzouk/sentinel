@@ -166,16 +166,32 @@ export async function getMetricsSummary(): Promise<MetricsSummary> {
 export function subscribeToEvents(
   onEvent: (event: { type: string; data: Record<string, unknown> }) => void,
   onError?: (err: Event) => void,
+  onOpen?: () => void,
 ): EventSource {
   const token = getToken();
   const url = token ? `/events?token=${encodeURIComponent(token)}` : `/events`;
   const es = new EventSource(url);
+  // Flip the "live" indicator the moment the stream opens — don't wait for
+  // the first event (which previously never arrived because the backend
+  // was sending named SSE events and we only listened on `onmessage`).
+  es.onopen = () => {
+    onOpen?.();
+  };
+  // Backend sends all events as unnamed `data:` lines (no `event:` prefix),
+  // so onmessage fires for every one of them. The event type is in the
+  // JSON payload's `type` field.
   es.onmessage = (msg) => {
     try {
       const parsed = JSON.parse(msg.data);
-      onEvent(parsed);
+      // Backend sends {type, data}. If for any reason the shape is flat,
+      // normalize it.
+      const ev =
+        parsed && typeof parsed === "object" && "type" in parsed
+          ? parsed
+          : { type: "message", data: parsed };
+      onEvent(ev);
     } catch {
-      // ignore non-JSON keepalives
+      // ignore non-JSON keepalives (e.g. `: ping` comments)
     }
   };
   es.onerror = (err) => {

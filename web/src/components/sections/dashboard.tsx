@@ -99,6 +99,7 @@ export function DashboardSection() {
   const providers = useSentinelStore((s) => s.providers);
   const autoMerge = useSentinelStore((s) => s.autoMerge);
   const metrics = useSentinelStore((s) => s.metrics);
+  const sseConnected = useSentinelStore((s) => s.sseConnected);
   const activityFeed = useSentinelStore((s) => s.activityFeed);
   const loading = useSentinelStore((s) => s.loading);
   const error = useSentinelStore((s) => s.error);
@@ -341,9 +342,18 @@ export function DashboardSection() {
             title="Activity Feed"
             sub="Live SSE events"
             right={
-              <span className="flex items-center gap-1 text-[10px] text-emerald-400">
-                <PulseDot color="bg-emerald-400" className="h-1.5 w-1.5" />
-                streaming
+              <span
+                className={
+                  sseConnected
+                    ? "flex items-center gap-1 text-[10px] text-emerald-400"
+                    : "flex items-center gap-1 text-[10px] text-zinc-500"
+                }
+              >
+                <PulseDot
+                  color={sseConnected ? "bg-emerald-400" : "bg-zinc-500"}
+                  className="h-1.5 w-1.5"
+                />
+                {sseConnected ? "streaming" : "disconnected"}
               </span>
             }
           />

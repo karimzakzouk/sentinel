@@ -28,6 +28,7 @@ import {
   Zap,
   Radio,
   Play,
+  XCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -46,13 +47,59 @@ const PIPELINE_PHASES = [
   "Auto-Merge",
 ] as const;
 
+// Map backend agent_trace `agent` values → pipeline phases shown in the UI.
+// Backend trace entries use `{"agent": "investigator", ...}` (NOT `phase`),
+// so we map by agent name. The investigation can fast-path skip evidence
+// gatherer, and may have no test_generator entry — both are fine.
+const AGENT_TO_PHASE: Record<string, string> = {
+  investigator: "investigation",
+  evidence_gatherer: "evidence",
+  analyst: "analysis",
+  fix_proposer: "governance", // fix proposer runs after governance approval
+  test_generator: "governance",
+  reproducer_generator: "governance",
+  security_scanner: "governance",
+  sandbox: "sandbox",
+  executor: "execution",
+  pr_opener: "pr",
+  automerge: "auto-merge",
+};
+
 function tracePhases(incident: Incident): Set<string> {
   const set = new Set<string>();
   for (const entry of incident.state?.agent_trace ?? []) {
-    const phase = typeof entry.phase === "string" ? entry.phase.toLowerCase() : "";
+    // Prefer explicit phase if backend ever sets it; fall back to agent mapping.
+    const phase =
+      (typeof entry.phase === "string" && entry.phase.toLowerCase()) ||
+      AGENT_TO_PHASE[typeof entry.agent === "string" ? entry.agent.toLowerCase() : ""] ||
+      "";
     if (phase) set.add(phase);
   }
+  // If fix_proposer produced a fix, mark governance complete.
+  if (incident.state?.fix_proposal) {
+    set.add("governance");
+  }
+  // If PR was opened, mark pr complete.
+  if (incident.pr_url) {
+    set.add("pr");
+  }
+  // If sandbox verified, mark sandbox complete.
+  if (incident.sandbox_summary || incident.sandbox_verified) {
+    set.add("sandbox");
+  }
   return set;
+}
+
+function isInvestigating(incident: Incident | null): boolean {
+  if (!incident) return false;
+  return [
+    "investigating",
+    "executing",
+    "fix_proposed",
+    "approved",
+    "root_caused",
+    "verifying",
+  ].includes(incident.status);
 }
 
 function activePhaseIndex(incident: Incident): number {
@@ -428,9 +475,19 @@ function FixDiffViewer({ incident }: { incident: Incident }) {
                 {f.changes && f.changes.length > 0 && (
                   <div className="space-y-1 bg-zinc-950 p-2">
                     {f.changes.map((c, j) => (
-                      <div key={j} className="rounded border border-zinc-800 p-1.5">
-                        <div className="font-mono text-[10.5px] text-rose-400">- {c.search}</div>
-                        <div className="mt-0.5 font-mono text-[10.5px] text-emerald-400">+ {c.replace}</div>
+                      <div key={j} className="rounded border border-zinc-800 overflow-hidden">
+                        <pre className="whitespace-pre-wrap break-words font-mono text-[10.5px] leading-relaxed text-rose-300 bg-rose-950/20 p-2 m-0 overflow-x-auto scrollbar-thin">
+                          {String(c.search ?? "")
+                            .split("\n")
+                            .map((line) => `- ${line}`)
+                            .join("\n")}
+                        </pre>
+                        <pre className="whitespace-pre-wrap break-words font-mono text-[10.5px] leading-relaxed text-emerald-300 bg-emerald-950/20 p-2 m-0 overflow-x-auto scrollbar-thin">
+                          {String(c.replace ?? "")
+                            .split("\n")
+                            .map((line) => `+ ${line}`)
+                            .join("\n")}
+                        </pre>
                       </div>
                     ))}
                   </div>
@@ -452,12 +509,16 @@ export function LiveInvestigationSection() {
   const triggerInvestigation = useSentinelStore((s) => s.triggerInvestigation);
   const [triggering, setTriggering] = useState(false);
 
-  // Refresh incidents every 10s while viewing this section so the live view
-  // stays current.
+  // Refresh incidents aggressively while there's an active investigation (2s),
+  // and back off to 10s when idle. Combined with SSE event-driven refetch,
+  // this gives a near-real-time view of the pipeline without hammering the
+  // API when nothing's happening.
   useEffect(() => {
-    const id = setInterval(() => fetchIncidents(), 10_000);
+    const hasActive = incidents.some((i) => isInvestigating(i));
+    const interval = hasActive ? 2_000 : 10_000;
+    const id = setInterval(() => fetchIncidents(), interval);
     return () => clearInterval(id);
-  }, [fetchIncidents]);
+  }, [fetchIncidents, incidents]);
 
   // Find the most recent "active" incident — investigating/executing/etc.
   const activeIncident = useMemo(() => {
@@ -573,7 +634,15 @@ export function LiveInvestigationSection() {
           <div className="px-4 py-3">
             <div className="text-[10px] uppercase tracking-wider text-zinc-500">Status</div>
             <div className="mt-1 flex items-center gap-2">
-              <Loader2 className="h-3.5 w-3.5 animate-spin text-cyan-400" />
+              {isInvestigating(incident) ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-cyan-400" />
+              ) : incident.status === "resolved" || incident.status === "verified" ? (
+                <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
+              ) : incident.status === "failed" || incident.status === "rejected" ? (
+                <XCircle className="h-3.5 w-3.5 text-rose-400" />
+              ) : (
+                <Circle className="h-3.5 w-3.5 text-zinc-500" />
+              )}
               <span className="font-mono text-sm text-cyan-300">{incident.status}</span>
             </div>
             <div className="mt-2">

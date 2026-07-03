@@ -43,16 +43,27 @@ function incidentToSandboxRun(inc: Incident) {
   // An incident "has sandbox data" if it has a fix_proposal OR a pr_url OR
   // the status suggests sandbox verification ran.
   const hasSandbox =
-    !!fix || !!inc.pr_url || ["verified", "failed", "rejected", "resolved"].includes(inc.status);
+    !!fix || !!inc.pr_url || !!inc.sandbox_summary || ["verified", "failed", "rejected", "resolved"].includes(inc.status);
   if (!hasSandbox) return null;
 
-  // Infer L1-L5 levels from incident status + presence of fix/PR.
-  // - "verified" / "resolved" with PR = all pass
-  // - "failed" / "rejected" = some level failed
-  // - "investigating" + fix_proposed = some levels pending
+  // Prefer the REAL sandbox_summary from the backend (mirrored from
+  // state.execution_result.sandbox_summary by the API enricher). The summary
+  // contains text like "all_checks_passed (pod ready + sustained + ...)" or
+  // a description of which level failed. Parse it for L1-L5 outcomes.
+  const realSummary = inc.sandbox_summary ?? "";
   let levels: Array<"pass" | "fail" | "pending" | "skip">;
-  if (["verified", "resolved"].includes(inc.status) && inc.pr_url) {
+  if (inc.sandbox_verified) {
+    // Backend explicitly says sandbox_verified=true → all levels pass.
     levels = ["pass", "pass", "pass", "pass", "pass"];
+  } else if (realSummary.toLowerCase().includes("level") && /fail|not.*ready|error.*log|test.*fail/i.test(realSummary)) {
+    // Backend reported a failure at some level — try to identify which.
+    // Default to L3 (original error still in logs) which is the most common
+    // failure point. If we can match "Level N", use that.
+    const m = realSummary.match(/level\s*(\d)/i);
+    const failedLevel = m ? parseInt(m[1], 10) - 1 : 2; // L3 default (0-indexed: 2)
+    levels = ["pass", "pass", "pass", "pass", "pass"].map((v, i) =>
+      i < failedLevel ? "pass" : i === failedLevel ? "fail" : "skip",
+    ) as Array<"pass" | "fail" | "pending" | "skip">;
   } else if (["failed", "rejected"].includes(inc.status)) {
     levels = ["pass", "pass", "fail", "skip", "skip"];
   } else if (inc.status === "investigating" || inc.status === "executing") {
@@ -88,6 +99,8 @@ function incidentToSandboxRun(inc: Incident) {
     prUrl: inc.pr_url ?? null,
     branch: inc.pr_branch ?? null,
     agentTrace: inc.state?.agent_trace ?? [],
+    sandboxSummary: realSummary || null,
+    sandboxVerified: !!inc.sandbox_verified,
   };
 }
 
@@ -111,6 +124,29 @@ function ExpandedRow({ run }: { run: ReturnType<typeof incidentToSandboxRun> & o
             <div className="mb-1 text-[10px] uppercase tracking-wider text-zinc-500">Cluster Summary</div>
             <p className="text-[11px] leading-relaxed text-zinc-400">{run.summary}</p>
           </div>
+          {run.sandboxSummary && (
+            <div
+              className={
+                run.sandboxVerified
+                  ? "rounded-md border border-emerald-500/30 bg-emerald-500/5 p-2"
+                  : "rounded-md border border-amber-500/30 bg-amber-500/5 p-2"
+              }
+            >
+              <div
+                className={
+                  run.sandboxVerified
+                    ? "mb-0.5 flex items-center gap-1 text-[10px] uppercase tracking-wider text-emerald-400"
+                    : "mb-0.5 flex items-center gap-1 text-[10px] uppercase tracking-wider text-amber-400"
+                }
+              >
+                {run.sandboxVerified ? <CheckCircle2 className="h-3 w-3" /> : <AlertCircle className="h-3 w-3" />}
+                Sandbox Verification
+              </div>
+              <p className="font-mono text-[11px] leading-relaxed text-zinc-300 break-words whitespace-pre-wrap">
+                {run.sandboxSummary}
+              </p>
+            </div>
+          )}
           {run.infraError && (
             <div className="rounded-md border border-rose-500/30 bg-rose-500/5 p-2">
               <div className="mb-0.5 flex items-center gap-1 text-[10px] uppercase tracking-wider text-rose-400">
