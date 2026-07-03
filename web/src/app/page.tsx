@@ -15,6 +15,7 @@ import { ChatopsSection } from "@/components/sections/chatops";
 import { MetricsSection } from "@/components/sections/metrics";
 import { SettingsSection } from "@/components/sections/settings";
 import { ApiExplorerSection } from "@/components/sections/api-explorer";
+import { ErrorBoundary } from "@/components/sentinel/error-boundary";
 import { useSentinelStore, useSSE, useAutoRefresh, type SectionId } from "@/lib/store";
 import { LoginGate } from "@/components/sentinel/login-gate";
 import { Clock, Search, Wifi, WifiOff, Activity, LogOut } from "lucide-react";
@@ -143,20 +144,69 @@ export default function Home() {
           </div>
         </header>
 
-        {/* Main content */}
+        {/* Main content — each section wrapped in an ErrorBoundary so a render
+            crash in one section doesn't white-screen the entire dashboard. */}
         <main className="flex-1 overflow-y-auto scrollbar-thin">
-          {active === "dashboard" && <DashboardSection />}
-          {active === "incidents" && <IncidentsSection />}
-          {active === "live" && <LiveInvestigationSection />}
-          {active === "sandbox" && <SandboxSection />}
-          {active === "prs" && <PullRequestsSection />}
-          {active === "providers" && <ProvidersSection />}
-          {active === "automerge" && <AutoMergeSection />}
-          {active === "detection" && <DetectionSection />}
-          {active === "chatops" && <ChatopsSection />}
-          {active === "metrics" && <MetricsSection />}
-          {active === "settings" && <SettingsSection />}
-          {active === "api" && <ApiExplorerSection />}
+          {active === "dashboard" && (
+            <ErrorBoundary sectionName="Dashboard">
+              <DashboardSection />
+            </ErrorBoundary>
+          )}
+          {active === "incidents" && (
+            <ErrorBoundary sectionName="Incidents">
+              <IncidentsSection />
+            </ErrorBoundary>
+          )}
+          {active === "live" && (
+            <ErrorBoundary sectionName="Live Investigation">
+              <LiveInvestigationSection />
+            </ErrorBoundary>
+          )}
+          {active === "sandbox" && (
+            <ErrorBoundary sectionName="Sandbox">
+              <SandboxSection />
+            </ErrorBoundary>
+          )}
+          {active === "prs" && (
+            <ErrorBoundary sectionName="Pull Requests">
+              <PullRequestsSection />
+            </ErrorBoundary>
+          )}
+          {active === "providers" && (
+            <ErrorBoundary sectionName="Providers">
+              <ProvidersSection />
+            </ErrorBoundary>
+          )}
+          {active === "automerge" && (
+            <ErrorBoundary sectionName="Auto-Merge">
+              <AutoMergeSection />
+            </ErrorBoundary>
+          )}
+          {active === "detection" && (
+            <ErrorBoundary sectionName="Detection">
+              <DetectionSection />
+            </ErrorBoundary>
+          )}
+          {active === "chatops" && (
+            <ErrorBoundary sectionName="Chatops">
+              <ChatopsSection />
+            </ErrorBoundary>
+          )}
+          {active === "metrics" && (
+            <ErrorBoundary sectionName="Metrics">
+              <MetricsSection />
+            </ErrorBoundary>
+          )}
+          {active === "settings" && (
+            <ErrorBoundary sectionName="Settings">
+              <SettingsSection />
+            </ErrorBoundary>
+          )}
+          {active === "api" && (
+            <ErrorBoundary sectionName="API Explorer">
+              <ApiExplorerSection />
+            </ErrorBoundary>
+          )}
         </main>
       </div>
 

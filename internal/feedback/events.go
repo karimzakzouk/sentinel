@@ -188,6 +188,25 @@ func boolToInt(b bool) int {
         return 0
 }
 
+// UpdateVectorOutcome marks an incident's vector entry as outcome-verified
+// with the given success flag. Called by OutcomeWatcher.recordOutcome after
+// the recovery check completes.
+//
+// H4 fix: previously recordOutcome executed this UPDATE directly against
+// s.db WITHOUT acquiring s.mu, breaking the Store's concurrency invariant
+// ("all DB access goes through the mutex"). With SetMaxOpenConns(1) the
+// actual race was serialized, but the invariant was broken. This method
+// restores the invariant by acquiring the lock.
+
+func (s *Store) UpdateVectorOutcome(ctx context.Context, incidentID string, success bool) error {
+        s.mu.Lock()
+        defer s.mu.Unlock()
+        _, err := s.db.ExecContext(ctx,
+                `UPDATE incident_vectors SET outcome_verified = 1, outcome_success = ? WHERE incident_id = ?`,
+                boolToInt(success), incidentID)
+        return err
+}
+
 // FindIncidentByPR looks up an incident by its associated PR number + repo.
 // Used by chatops command handlers to resolve "/sentinel <cmd>" on a PR
 // comment to the underlying incident. Returns nil if no incident matches.

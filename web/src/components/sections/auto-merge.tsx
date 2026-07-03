@@ -93,6 +93,12 @@ export function AutoMergeSection() {
     );
   }
 
+  // Derive KPIs from recentOutcomes (was hardcoded to 0).
+  const totalMerged = recentOutcomes.filter((o) => o.outcome === "merged").length;
+  const totalReverted = recentOutcomes.filter((o) => o.outcome === "reverted").length;
+  const totalDecided = totalMerged + totalReverted;
+  const successRate = totalDecided > 0 ? (totalMerged / totalDecided) * 100 : 0;
+
   const rateUsed = autoMerge.merges_this_hour || 0;
   const rateLimit = autoMerge.max_per_hour || 0;
   const ratePct = rateLimit > 0 ? (rateUsed / rateLimit) * 100 : 0;
@@ -109,7 +115,7 @@ export function AutoMergeSection() {
             <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-zinc-500">
               <CheckCircle2 className="h-3 w-3 text-emerald-400" /> Total Merged
             </div>
-            <Mono className="mt-1 block text-xl text-zinc-100">{0}</Mono>
+            <Mono className="mt-1 block text-xl text-zinc-100">{totalMerged}</Mono>
             <div className="text-[10px] text-zinc-500">cumulative</div>
           </div>
         </Panel>
@@ -118,7 +124,7 @@ export function AutoMergeSection() {
             <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-zinc-500">
               <XCircle className="h-3 w-3 text-rose-400" /> Total Reverted
             </div>
-            <Mono className="mt-1 block text-xl text-zinc-100">{0}</Mono>
+            <Mono className="mt-1 block text-xl text-zinc-100">{totalReverted}</Mono>
             <div className="text-[10px] text-zinc-500">auto-reverted by sandbox</div>
           </div>
         </Panel>
@@ -127,7 +133,7 @@ export function AutoMergeSection() {
             <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-zinc-500">
               <Activity className="h-3 w-3 text-cyan-400" /> Success Rate
             </div>
-            <Mono className="mt-1 block text-xl text-emerald-400">{(0).toFixed(1)}%</Mono>
+            <Mono className="mt-1 block text-xl text-emerald-400">{successRate.toFixed(1)}%</Mono>
             <div className="text-[10px] text-zinc-500">target ≥ 85%</div>
           </div>
         </Panel>

@@ -356,10 +356,10 @@ func (w *OutcomeWatcher) recordOutcome(incidentID, service, namespace string, su
         }
 
         // Update the incident's outcome in the vector store
+        // H4 fix: route through the mutex-protected Store.UpdateVectorOutcome
+        // method instead of executing the UPDATE directly against s.db.
 
-        _, err = w.store.db.ExecContext(ctx,
-                `UPDATE incident_vectors SET outcome_verified = 1, outcome_success = ? WHERE incident_id = ?`,
-                boolToInt(success), incidentID)
+        err = w.store.UpdateVectorOutcome(ctx, incidentID, success)
         if err != nil {
                 logging.Error("failed to update vector outcome", "err", err)
         }

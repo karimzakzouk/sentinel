@@ -1,7 +1,7 @@
 package executors
 
 import (
-	"github.com/karimzakzouk/sentinel/internal/logging"
+        "github.com/karimzakzouk/sentinel/internal/logging"
         "bytes"
         "context"
         "errors"
@@ -15,7 +15,7 @@ import (
         "k8s.io/client-go/kubernetes"
 
         "github.com/karimzakzouk/sentinel/internal/errs"
-	"github.com/karimzakzouk/sentinel/internal/schemas"
+        "github.com/karimzakzouk/sentinel/internal/schemas"
 )
 
 // KanikoBuilder builds Docker images inside Kubernetes without a daemon.
@@ -330,7 +330,14 @@ func (k *KanikoBuilder) buildPodSpec(podName, repo, branch, configmapName, fullI
         // cfg.GitHost, which is set by the operator at deploy time — NOT from
         // pod annotations (which would be an injection vector).
 
-        initScript := `set -ex
+        // SECURITY (C1 fix): Use `set -e` WITHOUT `-x`. The previous `set -ex`
+        // caused the GitHub PAT to be leaked to pod logs — bash prints every
+        // command with variables expanded before executing it, so the
+        // `echo "https://x-access-token:${SENTINEL_GITHUB_TOKEN}@..."` line
+        // appeared in `kubectl logs` output with the token fully expanded.
+        // Anyone with kubectl logs access in the Sentinel namespace could
+        // read the PAT.
+        initScript := `set -e
 
 # Repo and branch arrive as env vars — they cannot inject shell
 # metacharacters even if a malicious value slipped past validation.
@@ -343,7 +350,8 @@ func (k *KanikoBuilder) buildPodSpec(podName, repo, branch, configmapName, fullI
 # leak via pod logs). Empty token = anonymous clone (public repos only).
 if [ -n "$SENTINEL_GITHUB_TOKEN" ]; then
   git config --global credential.helper store
-  echo "https://x-access-token:${SENTINEL_GITHUB_TOKEN}@` + k.gitHost + `" > ~/.git-credentials
+  printf '%s\n' "https://x-access-token:${SENTINEL_GITHUB_TOKEN}@` + k.gitHost + `" > ~/.git-credentials
+  chmod 600 ~/.git-credentials
 fi
 git clone --depth 1 --branch "$SENTINEL_BRANCH" "https://` + k.gitHost + `/$SENTINEL_REPO.git" /workspace/repo
 cd /workspace/repo

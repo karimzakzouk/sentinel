@@ -541,7 +541,27 @@ func (s *Server) handleWebUI(w http.ResponseWriter, r *http.Request) {
 // handlePprof delegates to net/http/pprof for production profiling.
 // Protected by the apiToken auth middleware (same as /admin/* endpoints).
 // Usage: `go tool pprof http://sentinel.sentinel.svc:8000/debug/pprof/heap`
+//
+// H3 fix: previously all pprof routes dispatched to pprof.Index, which only
+// renders the HTML index page. So `go tool pprof .../debug/pprof/heap`
+// returned HTML instead of a heap profile. Now we dispatch based on the
+// URL path to the correct pprof function.
 
 func (s *Server) handlePprof(w http.ResponseWriter, r *http.Request) {
-        pprof.Index(w, r)
+        switch r.URL.Path {
+        case "/debug/pprof/cmdline":
+                pprof.Cmdline(w, r)
+        case "/debug/pprof/profile":
+                pprof.Profile(w, r)
+        case "/debug/pprof/symbol":
+                pprof.Symbol(w, r)
+        case "/debug/pprof/trace":
+                pprof.Trace(w, r)
+        default:
+                // /debug/pprof/ (index) + /debug/pprof/heap + /debug/pprof/goroutine
+                // + /debug/pprof/threadcreate + /debug/pprof/block + /debug/pprof/mutex
+                // — all of these are handled by pprof.Index, which dispatches
+                // internally based on the path.
+                pprof.Index(w, r)
+        }
 }

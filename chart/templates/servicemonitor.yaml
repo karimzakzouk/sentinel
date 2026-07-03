@@ -1,6 +1,9 @@
 {{/* v3.18.0: H32 — ServiceMonitor for Prometheus Operator.
    /metrics is already served (api/server.go), but kube-prometheus-stack
-   users got zero metrics auto-discovered without this template. */}}
+   users got zero metrics auto-discovered without this template.
+   H7 fix: selector now matches the Service's actual labels (literal
+   "sentinel" for app.kubernetes.io/name) instead of {{ .Release.Name }},
+   which only worked if the release was named exactly "sentinel". */}}
 {{- if .Values.metrics.serviceMonitor.enabled }}
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
@@ -15,8 +18,8 @@ metadata:
 spec:
   selector:
     matchLabels:
-      sentinel.io/managed: "true"
-      app.kubernetes.io/name: {{ .Release.Name }}
+      app.kubernetes.io/name: sentinel
+      app.kubernetes.io/instance: {{ .Release.Name }}
   endpoints:
     - port: http
       path: /metrics

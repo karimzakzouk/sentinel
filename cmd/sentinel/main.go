@@ -66,6 +66,23 @@ var chatopsStatusManager chatops.StatusCommentManager
 
 var _ alertmanager.SignalHandler = (*alertmanagerAdapter)(nil)
 
+// isRealCR returns true if crName refers to an actual SentinelIncident CR
+// (created via kubectl apply or the watcher). Auto-detected incidents pass
+// crName="auto-detected"; manual API triggers pass "manual"; Slack triggers
+// pass "slack". None of these correspond to a real CR object, so patching
+// their status generates a 404 + spurious error log.
+//
+// H5 fix: callers should gate PatchCRStatus/PatchCRStatusFull calls on this
+// helper to avoid the spurious error logs.
+
+func isRealCR(crName string) bool {
+        switch crName {
+        case "", "auto-detected", "manual", "slack", "alertmanager":
+                return false
+        }
+        return true
+}
+
 func main() {
         addr := flag.String("addr", "", "HTTP listen address (overrides env)")
         dbPath := flag.String("db", "", "SQLite DB path (overrides env)")
@@ -511,8 +528,10 @@ func main() {
                         if err := store.UpsertIncident(ctx, &incident); err != nil {
                                 logging.ErrorCtx(invCtx, "save incident (pipeline-error) failed", "error", err)
                         }
-                        if err := k8sClient.PatchCRStatus(ctx, crName, crNamespace, "failed"); err != nil {
-                                logging.ErrorCtx(invCtx, "patch CR status (failed) failed", "error", err)
+                        if isRealCR(crName) {
+                                if err := k8sClient.PatchCRStatus(ctx, crName, crNamespace, "failed"); err != nil {
+                                        logging.ErrorCtx(invCtx, "patch CR status (failed) failed", "error", err)
+                                }
                         }
                         return
                 }
@@ -542,9 +561,11 @@ func main() {
                         if incident.State.RootCause != nil {
                                 rootCause = incident.State.RootCause.Statement
                         }
-                        if err := k8sClient.PatchCRStatusFull(ctx, crName, crNamespace, string(incident.Status),
-                                incident.IncidentID.String(), rootCause, 0, ""); err != nil {
-                                logging.ErrorCtx(invCtx, "patch CR status (no-fix) failed", "error", err)
+                        if isRealCR(crName) {
+                                if err := k8sClient.PatchCRStatusFull(ctx, crName, crNamespace, string(incident.Status),
+                                        incident.IncidentID.String(), rootCause, 0, ""); err != nil {
+                                        logging.ErrorCtx(invCtx, "patch CR status (no-fix) failed", "error", err)
+                                }
                         }
                         return
                 }
@@ -592,8 +613,10 @@ func main() {
                         } else {
                                 logging.WarnCtx(invCtx, "denied by safety", "verdict", decision.Verdict)
                         }
-                        if err := k8sClient.PatchCRStatus(ctx, crName, crNamespace, string(incident.Status)); err != nil {
-                                logging.ErrorCtx(invCtx, "patch CR status (denied) failed", "error", err)
+                        if isRealCR(crName) {
+                                if err := k8sClient.PatchCRStatus(ctx, crName, crNamespace, string(incident.Status)); err != nil {
+                                        logging.ErrorCtx(invCtx, "patch CR status (denied) failed", "error", err)
+                                }
                         }
                         return
                 }
@@ -617,8 +640,10 @@ func main() {
                         if err := store.UpsertIncident(ctx, &incident); err != nil {
                                 logging.ErrorCtx(invCtx, "save incident (rbac-deny) failed", "error", err)
                         }
-                        if err := k8sClient.PatchCRStatus(ctx, crName, crNamespace, "escalated"); err != nil {
-                                logging.ErrorCtx(invCtx, "patch CR status (escalated) failed", "error", err)
+                        if isRealCR(crName) {
+                                if err := k8sClient.PatchCRStatus(ctx, crName, crNamespace, "escalated"); err != nil {
+                                        logging.ErrorCtx(invCtx, "patch CR status (escalated) failed", "error", err)
+                                }
                         }
                         return
                 }
@@ -733,9 +758,11 @@ func main() {
                 }
                 // prURL is already in scope (declared above in the resolved path).
 
-                if err := k8sClient.PatchCRStatusFull(ctx, crName, crNamespace, string(incident.Status),
-                        incident.IncidentID.String(), rootCause, confidence, prURL); err != nil {
-                        logging.ErrorCtx(invCtx, "patch CR status (resolved) failed", "error", err)
+                if isRealCR(crName) {
+                        if err := k8sClient.PatchCRStatusFull(ctx, crName, crNamespace, string(incident.Status),
+                                incident.IncidentID.String(), rootCause, confidence, prURL); err != nil {
+                                logging.ErrorCtx(invCtx, "patch CR status (resolved) failed", "error", err)
+                        }
                 }
         }
 

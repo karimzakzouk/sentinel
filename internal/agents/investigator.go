@@ -470,7 +470,11 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
         state.Hypotheses = newHyps
         state.FetchedCode = fetched
         state.SourceFiles = keysOf(fetched)
-        state.Iterations++
+        // H2 fix: removed `state.Iterations++` here — the pipeline loop in
+        // pipeline.go:176 already increments state.Iterations on each pass.
+        // Double-incrementing meant effective max iterations was
+        // MaxIterations/2 (e.g. configured 5 → actual 2-3). The trace
+        // entry below reads state.Iterations which is now correct.
 
         trace := map[string]any{
                 "agent":            "investigator",
