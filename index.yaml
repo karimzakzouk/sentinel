@@ -2,8 +2,29 @@ apiVersion: v1
 entries:
   sentinel:
   - apiVersion: v2
+    appVersion: 5.9.5
+    created: "2026-07-03T21:39:38.450919304Z"
+    description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, 43MB.
+    digest: 0c6f58c5fadbe577a593bd41b49021808c7193770077b0ebf8476b4656f74cb6
+    home: https://github.com/karimzakzouk/sentinel
+    keywords:
+    - sre
+    - ai
+    - automation
+    - kubernetes
+    - self-healing
+    maintainers:
+    - name: Sentinel
+    name: sentinel
+    sources:
+    - https://github.com/karimzakzouk/sentinel
+    type: application
+    urls:
+    - https://karimzakzouk.github.io/sentinel/sentinel-5.9.5.tgz
+    version: 5.9.5
+  - apiVersion: v2
     appVersion: 5.9.4
-    created: "2026-07-03T07:45:00.514132558Z"
+    created: "2026-07-03T21:39:38.450199574Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, 43MB.
     digest: 999ff5edca3d3267468945a89f0e061f9b3af9f56d0b380a660552cd7b4f6c2c
     home: https://github.com/karimzakzouk/sentinel
@@ -24,7 +45,7 @@ entries:
     version: 5.9.4
   - apiVersion: v2
     appVersion: 5.9.3
-    created: "2026-07-03T07:45:00.513433219Z"
+    created: "2026-07-03T21:39:38.449451061Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, 43MB.
     digest: 7b3412c4a427780385f6d3e92bf45c8b12c97604707a033a8b46a0ec0b064e59
     home: https://github.com/karimzakzouk/sentinel
@@ -45,7 +66,7 @@ entries:
     version: 5.9.3
   - apiVersion: v2
     appVersion: 5.9.1
-    created: "2026-07-03T07:45:00.512727458Z"
+    created: "2026-07-03T21:39:38.448005341Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, 43MB.
     digest: dd6fc96beaaf6c7014010b2ebf22db6cc663f6625c168ae630716dc38c4a352c
     home: https://github.com/karimzakzouk/sentinel
@@ -66,7 +87,7 @@ entries:
     version: 5.9.1
   - apiVersion: v2
     appVersion: 5.9.0
-    created: "2026-07-03T07:45:00.512020494Z"
+    created: "2026-07-03T21:39:38.446415107Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, 43MB.
     digest: 0a40dda896eca95a68625d5c35117d3d8c3a31bac4e7c6975e46c6568a26ddfb
     home: https://github.com/karimzakzouk/sentinel
@@ -87,7 +108,7 @@ entries:
     version: 5.9.0
   - apiVersion: v2
     appVersion: 5.8.1
-    created: "2026-07-03T07:45:00.511339929Z"
+    created: "2026-07-03T21:39:38.44569076Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, 43MB.
     digest: 358a81d0c0e3666996b0c4e1c47fd1cc56543e83e0606b19329375bcfe9e357c
     home: https://github.com/karimzakzouk/sentinel
@@ -108,7 +129,7 @@ entries:
     version: 5.8.1
   - apiVersion: v2
     appVersion: 5.8.0
-    created: "2026-07-03T07:45:00.510638827Z"
+    created: "2026-07-03T21:39:38.444960634Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, 43MB.
     digest: 77dfe7f232407c8621c767898eef0b496f004fb199456e300f704e5a29b2cc25
     home: https://github.com/karimzakzouk/sentinel
@@ -129,7 +150,7 @@ entries:
     version: 5.8.0
   - apiVersion: v2
     appVersion: 5.7.0
-    created: "2026-07-03T07:45:00.50992461Z"
+    created: "2026-07-03T21:39:38.444213543Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, 43MB.
     digest: 9c1bfa317e964d3dfb44b4f63c4ddee7d1aa77dc51841e6ec1e58d79ff6cc4a6
     home: https://github.com/karimzakzouk/sentinel
@@ -150,7 +171,7 @@ entries:
     version: 5.7.0
   - apiVersion: v2
     appVersion: 5.6.0
-    created: "2026-07-03T07:45:00.509229438Z"
+    created: "2026-07-03T21:39:38.443475456Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, 43MB.
     digest: 2cf119b8474921e324e67cc8d69a9abce0b13849fc5e4e763c382917d0367a89
     home: https://github.com/karimzakzouk/sentinel
@@ -171,7 +192,7 @@ entries:
     version: 5.6.0
   - apiVersion: v2
     appVersion: 5.5.0
-    created: "2026-07-03T07:45:00.508488752Z"
+    created: "2026-07-03T21:39:38.442747563Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, 43MB.
     digest: d0835c942d24ae82784a9a84e0f1d817c415499a405b582eb71420c2f5a9b5e3
     home: https://github.com/karimzakzouk/sentinel
@@ -192,7 +213,7 @@ entries:
     version: 5.5.0
   - apiVersion: v2
     appVersion: 5.4.1
-    created: "2026-07-03T07:45:00.50707753Z"
+    created: "2026-07-03T21:39:38.442008545Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, 43MB.
     digest: 23f7544c0a6e02f2349389731f172814b32c6bd0061ba98b570e64d3c1f82dfe
     home: https://github.com/karimzakzouk/sentinel
@@ -213,7 +234,7 @@ entries:
     version: 5.4.1
   - apiVersion: v2
     appVersion: 5.4.0
-    created: "2026-07-03T07:45:00.505541349Z"
+    created: "2026-07-03T21:39:38.441302525Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, 43MB.
     digest: 100344aead73e04c2d663da23b5f1aa6d8c34ab4125a16d326e83b54ef37856a
     home: https://github.com/karimzakzouk/sentinel
@@ -234,7 +255,7 @@ entries:
     version: 5.4.0
   - apiVersion: v2
     appVersion: 5.3.1
-    created: "2026-07-03T07:45:00.504823546Z"
+    created: "2026-07-03T21:39:38.440564628Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, 43MB.
     digest: 44703ffe5857611631d6514d4ca3b927b211efef7ca44a1aa32694cf5c582939
     home: https://github.com/karimzakzouk/sentinel
@@ -255,7 +276,7 @@ entries:
     version: 5.3.1
   - apiVersion: v2
     appVersion: 5.3.0
-    created: "2026-07-03T07:45:00.504023761Z"
+    created: "2026-07-03T21:39:38.43979316Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, 43MB.
     digest: 5037a41d138aef5a9970e7916576427850f9108c7ed1a8daf707cb35aa020946
     home: https://github.com/karimzakzouk/sentinel
@@ -276,7 +297,7 @@ entries:
     version: 5.3.0
   - apiVersion: v2
     appVersion: 5.2.0
-    created: "2026-07-03T07:45:00.503346252Z"
+    created: "2026-07-03T21:39:38.438365427Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, 43MB.
     digest: 09e71eef063597b3995f55c56023669cd71d4d7b6cb91e1362ca94a5b4c579b3
     home: https://github.com/karimzakzouk/sentinel
@@ -297,7 +318,7 @@ entries:
     version: 5.2.0
   - apiVersion: v2
     appVersion: 5.1.0
-    created: "2026-07-03T07:45:00.50263992Z"
+    created: "2026-07-03T21:39:38.436798307Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, 43MB.
     digest: d051d79c8ba19bf65b9f0f71734acc7018c25d3a7ba19bd39b106cee762197e2
     home: https://github.com/karimzakzouk/sentinel
@@ -318,7 +339,7 @@ entries:
     version: 5.1.0
   - apiVersion: v2
     appVersion: 5.0.0
-    created: "2026-07-03T07:45:00.501933648Z"
+    created: "2026-07-03T21:39:38.436092698Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, 43MB.
     digest: ff909ad532213d7c06495c1bfedbb93bf8450a3f5192ef9632f06475ac8a8c1b
     home: https://github.com/karimzakzouk/sentinel
@@ -339,7 +360,7 @@ entries:
     version: 5.0.0
   - apiVersion: v2
     appVersion: 4.9.0
-    created: "2026-07-03T07:45:00.501252501Z"
+    created: "2026-07-03T21:39:38.435374961Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, 43MB.
     digest: 20e048cd5b7cb799c126476283d5167f48426d016148d4d9dc3109d7d2ed0bbf
     home: https://github.com/karimzakzouk/sentinel
@@ -360,7 +381,7 @@ entries:
     version: 4.9.0
   - apiVersion: v2
     appVersion: 4.8.0
-    created: "2026-07-03T07:45:00.500551228Z"
+    created: "2026-07-03T21:39:38.434630444Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, 43MB.
     digest: a8f894b4958e3d8b199cef0ce68226d75ffb397b29e0ad794ddfcf4c1cfb7293
     home: https://github.com/karimzakzouk/sentinel
@@ -381,7 +402,7 @@ entries:
     version: 4.8.0
   - apiVersion: v2
     appVersion: 4.7.1
-    created: "2026-07-03T07:45:00.499831251Z"
+    created: "2026-07-03T21:39:38.433853589Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, 43MB.
     digest: 3624ab640d584b91e353a2fb1383b26e6ac9f5edaa0a6557d02d8489a68695e2
     home: https://github.com/karimzakzouk/sentinel
@@ -402,7 +423,7 @@ entries:
     version: 4.7.1
   - apiVersion: v2
     appVersion: 4.7.0
-    created: "2026-07-03T07:45:00.499113087Z"
+    created: "2026-07-03T21:39:38.433130153Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, 43MB.
     digest: 8bcb7aa34cbd3b4f257b2d429b867fd2f847e9171afcbf99db45a7e0ffc44aa3
     home: https://github.com/karimzakzouk/sentinel
@@ -423,7 +444,7 @@ entries:
     version: 4.7.0
   - apiVersion: v2
     appVersion: 4.6.0
-    created: "2026-07-03T07:45:00.497374329Z"
+    created: "2026-07-03T21:39:38.432394098Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, 43MB.
     digest: 4aa6a69b3ac95969d00c6bbcb966fdaadc1ab1e3e6942a7bdf57128679814998
     home: https://github.com/karimzakzouk/sentinel
@@ -444,7 +465,7 @@ entries:
     version: 4.6.0
   - apiVersion: v2
     appVersion: 4.5.0
-    created: "2026-07-03T07:45:00.496166444Z"
+    created: "2026-07-03T21:39:38.431652396Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, 43MB.
     digest: 99aa7f20b38078b748d7a9772fbbe32d8f66c9e51cbdd41768c3a6418c6913eb
     home: https://github.com/karimzakzouk/sentinel
@@ -465,7 +486,7 @@ entries:
     version: 4.5.0
   - apiVersion: v2
     appVersion: 4.4.0
-    created: "2026-07-03T07:45:00.495463948Z"
+    created: "2026-07-03T21:39:38.430856752Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, 43MB.
     digest: f95417ff57928ea61921f73daf702607c19b94fa68d02f2be0ab0394664ba149
     home: https://github.com/karimzakzouk/sentinel
@@ -486,7 +507,7 @@ entries:
     version: 4.4.0
   - apiVersion: v2
     appVersion: 4.3.2
-    created: "2026-07-03T07:45:00.494755863Z"
+    created: "2026-07-03T21:39:38.430019157Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, 43MB.
     digest: 6f238a9b15b1fddfab0c58a10225e8f660497f4bbdab51880d786e8460da3eb5
     home: https://github.com/karimzakzouk/sentinel
@@ -507,7 +528,7 @@ entries:
     version: 4.3.2
   - apiVersion: v2
     appVersion: 4.3.1
-    created: "2026-07-03T07:45:00.494001692Z"
+    created: "2026-07-03T21:39:38.428284938Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, 43MB.
     digest: 1529fef28b04ea7a7e051c70c5d96a2e437b0650b7ff1533fa1021499afd5db2
     home: https://github.com/karimzakzouk/sentinel
@@ -528,7 +549,7 @@ entries:
     version: 4.3.1
   - apiVersion: v2
     appVersion: 4.3.0
-    created: "2026-07-03T07:45:00.493323171Z"
+    created: "2026-07-03T21:39:38.426721103Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, 43MB.
     digest: 3c50fc5a0db96a892495f294d5860b9d81273c40a4f273809b8ccbcc5f9fcf9d
     home: https://github.com/karimzakzouk/sentinel
@@ -549,7 +570,7 @@ entries:
     version: 4.3.0
   - apiVersion: v2
     appVersion: 4.2.6
-    created: "2026-07-03T07:45:00.492619363Z"
+    created: "2026-07-03T21:39:38.425996435Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, 43MB.
     digest: 52c17f369414a485bfa941b363dbdb8183eecc43d7b3a2361ea57f86379be294
     home: https://github.com/karimzakzouk/sentinel
@@ -570,7 +591,7 @@ entries:
     version: 4.2.6
   - apiVersion: v2
     appVersion: 4.2.5
-    created: "2026-07-03T07:45:00.491909935Z"
+    created: "2026-07-03T21:39:38.425287821Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, 43MB.
     digest: b825ac3b7b1dde0a4956d451fb2001302124516200edb2c4836478731236c4d5
     home: https://github.com/karimzakzouk/sentinel
@@ -591,7 +612,7 @@ entries:
     version: 4.2.5
   - apiVersion: v2
     appVersion: 4.2.4
-    created: "2026-07-03T07:45:00.491222568Z"
+    created: "2026-07-03T21:39:38.424546128Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, 43MB.
     digest: feaf1430aceea4c85e4da2b75ed4c2589bfdc9045523800a25e52f354b7b7b4d
     home: https://github.com/karimzakzouk/sentinel
@@ -612,7 +633,7 @@ entries:
     version: 4.2.4
   - apiVersion: v2
     appVersion: 4.2.3
-    created: "2026-07-03T07:45:00.490506427Z"
+    created: "2026-07-03T21:39:38.423786058Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, 43MB.
     digest: a95a8a73481b3f211df02827a1aa99a099630766b3dcb22257c7ff0609c2e745
     home: https://github.com/karimzakzouk/sentinel
@@ -633,7 +654,7 @@ entries:
     version: 4.2.3
   - apiVersion: v2
     appVersion: 4.2.2
-    created: "2026-07-03T07:45:00.48974845Z"
+    created: "2026-07-03T21:39:38.423053459Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, 43MB.
     digest: 994e968d413d92539536c9968726eaadac1f67a9f5a0b4fa9965206ce52a592c
     home: https://github.com/karimzakzouk/sentinel
@@ -654,7 +675,7 @@ entries:
     version: 4.2.2
   - apiVersion: v2
     appVersion: 4.2.1
-    created: "2026-07-03T07:45:00.487901564Z"
+    created: "2026-07-03T21:39:38.422333528Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, 43MB.
     digest: 837989ac1764d2d62c3c91e151e0c86715c62a09b60e158fcf1c65bc2f602f6e
     home: https://github.com/karimzakzouk/sentinel
@@ -675,7 +696,7 @@ entries:
     version: 4.2.1
   - apiVersion: v2
     appVersion: 4.2.0
-    created: "2026-07-03T07:45:00.48682648Z"
+    created: "2026-07-03T21:39:38.421597354Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, 43MB.
     digest: 81cb42c9db63688ec9c3a4763b4dcb3de4ce654947544065a887e56c609cbd9f
     home: https://github.com/karimzakzouk/sentinel
@@ -696,7 +717,7 @@ entries:
     version: 4.2.0
   - apiVersion: v2
     appVersion: 4.1.3
-    created: "2026-07-03T07:45:00.486139414Z"
+    created: "2026-07-03T21:39:38.420849462Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, 43MB.
     digest: d615e6d02dd0d672e8fe0a3dacd5f40bacd728feb981440d9f43acfa55ee8c7d
     home: https://github.com/karimzakzouk/sentinel
@@ -717,7 +738,7 @@ entries:
     version: 4.1.3
   - apiVersion: v2
     appVersion: 4.1.2
-    created: "2026-07-03T07:45:00.485439263Z"
+    created: "2026-07-03T21:39:38.420096552Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, 43MB.
     digest: 198f6946307933f316e4421fe01f0fd740d195f505749930e5370522e3f87ca4
     home: https://github.com/karimzakzouk/sentinel
@@ -738,7 +759,7 @@ entries:
     version: 4.1.2
   - apiVersion: v2
     appVersion: 4.1.1
-    created: "2026-07-03T07:45:00.4847277Z"
+    created: "2026-07-03T21:39:38.418854656Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, 43MB.
     digest: 318abcfcd9e6ddde99548728b8a77d9edfacdf988ed4819bbfc2befe5353910a
     home: https://github.com/karimzakzouk/sentinel
@@ -759,7 +780,7 @@ entries:
     version: 4.1.1
   - apiVersion: v2
     appVersion: 4.1.0
-    created: "2026-07-03T07:45:00.483978559Z"
+    created: "2026-07-03T21:39:38.417274125Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, 43MB.
     digest: df22764e45351e5b5de72ccbf47ca7233c8382baf6e62c14a79065379e2638db
     home: https://github.com/karimzakzouk/sentinel
@@ -780,7 +801,7 @@ entries:
     version: 4.1.0
   - apiVersion: v2
     appVersion: 4.0.1
-    created: "2026-07-03T07:45:00.4832958Z"
+    created: "2026-07-03T21:39:38.416365945Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, 43MB.
     digest: 85f8cfa8c89b09a766991111b6a5904b783e6f504a1e79e9647255c6f9e72481
     home: https://github.com/karimzakzouk/sentinel
@@ -801,7 +822,7 @@ entries:
     version: 4.0.1
   - apiVersion: v2
     appVersion: 4.0.0
-    created: "2026-07-03T07:45:00.482578949Z"
+    created: "2026-07-03T21:39:38.415626576Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, 43MB.
     digest: b1b71f827aeae79c25e0f54208c5e411bb69e09916d242eb9073ad7ee31f12ee
     home: https://github.com/karimzakzouk/sentinel
@@ -822,7 +843,7 @@ entries:
     version: 4.0.0
   - apiVersion: v2
     appVersion: 3.18.0
-    created: "2026-07-03T07:45:00.459473906Z"
+    created: "2026-07-03T21:39:38.393006461Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, 43MB.
     digest: 27beeb397f8872d387968e47ee4ad590cfadb5bdc835ce2232a883e574bf6240
     home: https://github.com/karimzakzouk/sentinel
@@ -843,7 +864,7 @@ entries:
     version: 3.18.0
   - apiVersion: v2
     appVersion: 3.17.0
-    created: "2026-07-03T07:45:00.458829769Z"
+    created: "2026-07-03T21:39:38.392156076Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, 43MB.
     digest: 7fad2cd73bece3bf1dead08e9a00ef5785d8b9884ebc28933dd46d0b0e7497eb
     home: https://github.com/karimzakzouk/sentinel
@@ -864,7 +885,7 @@ entries:
     version: 3.17.0
   - apiVersion: v2
     appVersion: 3.16.0
-    created: "2026-07-03T07:45:00.458256992Z"
+    created: "2026-07-03T21:39:38.391374123Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, 43MB.
     digest: 8bad0c309a899ed353903ced2839638bc3acbb9cbe0d4cc30f998c4ced0e55af
     home: https://github.com/karimzakzouk/sentinel
@@ -885,7 +906,7 @@ entries:
     version: 3.16.0
   - apiVersion: v2
     appVersion: 3.15.0
-    created: "2026-07-03T07:45:00.457663208Z"
+    created: "2026-07-03T21:39:38.390723386Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: 1cbc862ab4b27a96c967c0759264453d1c1d7a414300327d11352e1448b2fbca
     home: https://github.com/karimzakzouk/sentinel
@@ -906,7 +927,7 @@ entries:
     version: 3.15.0
   - apiVersion: v2
     appVersion: 3.14.5
-    created: "2026-07-03T07:45:00.45706767Z"
+    created: "2026-07-03T21:39:38.390119037Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: ad3a60c488a699197e92c872673c971045374967d4fd787097379fc40cb00fe2
     home: https://github.com/karimzakzouk/sentinel
@@ -927,7 +948,7 @@ entries:
     version: 3.14.5
   - apiVersion: v2
     appVersion: 3.14.4
-    created: "2026-07-03T07:45:00.456497909Z"
+    created: "2026-07-03T21:39:38.389500247Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: bdebf4be91b83cf6821e812099d909a202e32ddd845d2ade5a2de2b95258a05f
     home: https://github.com/karimzakzouk/sentinel
@@ -948,7 +969,7 @@ entries:
     version: 3.14.4
   - apiVersion: v2
     appVersion: 3.14.3
-    created: "2026-07-03T07:45:00.455894346Z"
+    created: "2026-07-03T21:39:38.388842609Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: 12f7ff9c47ea57ed6e589f6eaac577d3ed9358d7764fb89b371261626c09537e
     home: https://github.com/karimzakzouk/sentinel
@@ -969,7 +990,7 @@ entries:
     version: 3.14.3
   - apiVersion: v2
     appVersion: 3.14.2
-    created: "2026-07-03T07:45:00.455313846Z"
+    created: "2026-07-03T21:39:38.387978264Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: 306c96142d1013c2eee68994d3898a16c24b9b06812303d8af8ccf5dc0f56853
     home: https://github.com/karimzakzouk/sentinel
@@ -990,7 +1011,7 @@ entries:
     version: 3.14.2
   - apiVersion: v2
     appVersion: 3.14.1
-    created: "2026-07-03T07:45:00.454670219Z"
+    created: "2026-07-03T21:39:38.386804569Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: 809d310b861e1dfdfef3e1d7b2f4b8c1fb83ea5ed68e19e00bdb0e287e746081
     home: https://github.com/karimzakzouk/sentinel
@@ -1011,7 +1032,7 @@ entries:
     version: 3.14.1
   - apiVersion: v2
     appVersion: 3.14.0
-    created: "2026-07-03T07:45:00.453222632Z"
+    created: "2026-07-03T21:39:38.385564225Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: dc65556ab2c4c06723c52daa3be1aef963fda098a090474abe8c65f4281a4f61
     home: https://github.com/karimzakzouk/sentinel
@@ -1032,7 +1053,7 @@ entries:
     version: 3.14.0
   - apiVersion: v2
     appVersion: 3.13.0
-    created: "2026-07-03T07:45:00.451491358Z"
+    created: "2026-07-03T21:39:38.384194948Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: f8d81e326cc0663081b04ea0c67b04f81ed2d6ab5fea1e128ffe1d4274378ad3
     home: https://github.com/karimzakzouk/sentinel
@@ -1053,7 +1074,7 @@ entries:
     version: 3.13.0
   - apiVersion: v2
     appVersion: 3.12.0
-    created: "2026-07-03T07:45:00.450914454Z"
+    created: "2026-07-03T21:39:38.383508578Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: 8afde270a3dada4eece4cd4d6f85a98997de346b48c94a09c1f511a37060f31a
     home: https://github.com/karimzakzouk/sentinel
@@ -1074,7 +1095,7 @@ entries:
     version: 3.12.0
   - apiVersion: v2
     appVersion: 3.11.0
-    created: "2026-07-03T07:45:00.450366213Z"
+    created: "2026-07-03T21:39:38.38290468Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: a61558e8e2c767f34b21743b6599fd5fd025a5ad31957ee6abdc26e9bed3db23
     home: https://github.com/karimzakzouk/sentinel
@@ -1095,7 +1116,7 @@ entries:
     version: 3.11.0
   - apiVersion: v2
     appVersion: 3.10.2
-    created: "2026-07-03T07:45:00.449794589Z"
+    created: "2026-07-03T21:39:38.382281213Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: 98ab6255724b354cbfbdeb6868b9f086ede19d6e17b2cdfb03cabcf6c780ecf2
     home: https://github.com/karimzakzouk/sentinel
@@ -1116,7 +1137,7 @@ entries:
     version: 3.10.2
   - apiVersion: v2
     appVersion: 3.10.1
-    created: "2026-07-03T07:45:00.449351743Z"
+    created: "2026-07-03T21:39:38.381816221Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: d37d9c80c6f49dde7e482cebee0b4fdf8a1d136ca2911506e4424349fd680965
     home: https://github.com/karimzakzouk/sentinel
@@ -1137,7 +1158,7 @@ entries:
     version: 3.10.1
   - apiVersion: v2
     appVersion: 3.10.0
-    created: "2026-07-03T07:45:00.448886445Z"
+    created: "2026-07-03T21:39:38.381370989Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: f1aa3162a7b604bc55ef59c17c97cd3f38984b7814d2618fbad424cb2546b17a
     home: https://github.com/karimzakzouk/sentinel
@@ -1158,7 +1179,7 @@ entries:
     version: 3.10.0
   - apiVersion: v2
     appVersion: 3.9.9
-    created: "2026-07-03T07:45:00.481528241Z"
+    created: "2026-07-03T21:39:38.414393652Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: c9196fbafbbf2f4551102dbe881216f24a6c5299273e55b5b63c8de2a3701217
     home: https://github.com/karimzakzouk/sentinel
@@ -1179,7 +1200,7 @@ entries:
     version: 3.9.9
   - apiVersion: v2
     appVersion: 3.9.8
-    created: "2026-07-03T07:45:00.481027478Z"
+    created: "2026-07-03T21:39:38.41385435Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: 7bea0f5fde7cde6255163e7d2a22ad61dd848e60ba63a38a3f0a85c2fd06ddcf
     home: https://github.com/karimzakzouk/sentinel
@@ -1200,7 +1221,7 @@ entries:
     version: 3.9.8
   - apiVersion: v2
     appVersion: 3.9.7
-    created: "2026-07-03T07:45:00.479971853Z"
+    created: "2026-07-03T21:39:38.413413545Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: c3a19cd4e90dfcd822b97142db82bf0d6d8a1d7145f1e6524db7a8c20749aeb6
     home: https://github.com/karimzakzouk/sentinel
@@ -1221,7 +1242,7 @@ entries:
     version: 3.9.7
   - apiVersion: v2
     appVersion: 3.9.6
-    created: "2026-07-03T07:45:00.478959757Z"
+    created: "2026-07-03T21:39:38.412950957Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: fbeb392e3a88712d0ba3269c2bafbf34dea9eb96ef5c71087593efd1d133d968
     home: https://github.com/karimzakzouk/sentinel
@@ -1242,7 +1263,7 @@ entries:
     version: 3.9.6
   - apiVersion: v2
     appVersion: 3.9.5
-    created: "2026-07-03T07:45:00.478164569Z"
+    created: "2026-07-03T21:39:38.412489701Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: 7ac7be72b3b0c1a18306e4c8e2bdc855df2604a389bc84ca6b251202dc5d55fd
     home: https://github.com/karimzakzouk/sentinel
@@ -1263,7 +1284,7 @@ entries:
     version: 3.9.5
   - apiVersion: v2
     appVersion: 3.9.3
-    created: "2026-07-03T07:45:00.477709951Z"
+    created: "2026-07-03T21:39:38.412015346Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: f0f11b3894c4e40c88910be8f4dc58c3bb25de2afa3f30c640de0853cef8a22c
     home: https://github.com/karimzakzouk/sentinel
@@ -1284,7 +1305,7 @@ entries:
     version: 3.9.3
   - apiVersion: v2
     appVersion: 3.9.2
-    created: "2026-07-03T07:45:00.477269529Z"
+    created: "2026-07-03T21:39:38.411556524Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: 251b3e253473157a1c404ac115402de96ed7284d56101843dabc17d009b67844
     home: https://github.com/karimzakzouk/sentinel
@@ -1305,7 +1326,7 @@ entries:
     version: 3.9.2
   - apiVersion: v2
     appVersion: 3.9.1
-    created: "2026-07-03T07:45:00.476805523Z"
+    created: "2026-07-03T21:39:38.411055178Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: 1ac1ad7c1f9a53f5a1588db7306d78bf7014fad82b1f88ebccb4c870ddb514a8
     home: https://github.com/karimzakzouk/sentinel
@@ -1326,7 +1347,7 @@ entries:
     version: 3.9.1
   - apiVersion: v2
     appVersion: 3.9.0
-    created: "2026-07-03T07:45:00.476362035Z"
+    created: "2026-07-03T21:39:38.410587503Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: 1c817764b8c78ce9ec4841515d18aac0edcdbb7c142afa0aa7e8b4e42d9f81b3
     home: https://github.com/karimzakzouk/sentinel
@@ -1347,7 +1368,7 @@ entries:
     version: 3.9.0
   - apiVersion: v2
     appVersion: 3.8.9
-    created: "2026-07-03T07:45:00.475882081Z"
+    created: "2026-07-03T21:39:38.410005107Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: baba05273a60547f1fb4d17e092833756f4b20c9570056fedf620aed466d13fc
     home: https://github.com/karimzakzouk/sentinel
@@ -1368,7 +1389,7 @@ entries:
     version: 3.8.9
   - apiVersion: v2
     appVersion: 3.8.8
-    created: "2026-07-03T07:45:00.475435537Z"
+    created: "2026-07-03T21:39:38.408639567Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: 24bedfc047d1564a5ece14f2bda20112c98679718172f465d1968c3202798803
     home: https://github.com/karimzakzouk/sentinel
@@ -1389,7 +1410,7 @@ entries:
     version: 3.8.8
   - apiVersion: v2
     appVersion: 3.8.7
-    created: "2026-07-03T07:45:00.474968586Z"
+    created: "2026-07-03T21:39:38.407514974Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: 8ea94b4fd24abc68cff1790c94f5baae8ac20c49438cb06623078e0f9bd28ac8
     home: https://github.com/karimzakzouk/sentinel
@@ -1410,7 +1431,7 @@ entries:
     version: 3.8.7
   - apiVersion: v2
     appVersion: 3.8.6
-    created: "2026-07-03T07:45:00.4745203Z"
+    created: "2026-07-03T21:39:38.407055931Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: 9746e5e893cd14c889355143fd6c76bbb391820003bfd93ad99735570d5e63c3
     home: https://github.com/karimzakzouk/sentinel
@@ -1431,7 +1452,7 @@ entries:
     version: 3.8.6
   - apiVersion: v2
     appVersion: 3.8.5
-    created: "2026-07-03T07:45:00.473923089Z"
+    created: "2026-07-03T21:39:38.406622467Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: 16316caf72370072e9c7b2309f3d7bd255517220ff9e63ac99258856719d8ca9
     home: https://github.com/karimzakzouk/sentinel
@@ -1452,7 +1473,7 @@ entries:
     version: 3.8.5
   - apiVersion: v2
     appVersion: 3.8.4
-    created: "2026-07-03T07:45:00.473477787Z"
+    created: "2026-07-03T21:39:38.406184656Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: 36d53dd65826681347b3d8bea7990e34236d02155ba80899b46a64afc6008f25
     home: https://github.com/karimzakzouk/sentinel
@@ -1473,7 +1494,7 @@ entries:
     version: 3.8.4
   - apiVersion: v2
     appVersion: 3.8.3
-    created: "2026-07-03T07:45:00.473017278Z"
+    created: "2026-07-03T21:39:38.405740385Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: 67deef44c9d15f222a669d781504d36d748b24bb7aad5d89a56ba0f0e3f0d277
     home: https://github.com/karimzakzouk/sentinel
@@ -1494,7 +1515,7 @@ entries:
     version: 3.8.3
   - apiVersion: v2
     appVersion: 3.8.2
-    created: "2026-07-03T07:45:00.472610929Z"
+    created: "2026-07-03T21:39:38.405350065Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: 7972207c61c7f3edf96dce7e6ac70152a3f662df883a1ce52d84a269b3648325
     home: https://github.com/karimzakzouk/sentinel
@@ -1515,7 +1536,7 @@ entries:
     version: 3.8.2
   - apiVersion: v2
     appVersion: 3.8.1
-    created: "2026-07-03T07:45:00.472180806Z"
+    created: "2026-07-03T21:39:38.404937762Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: 803b5099f11ef4265ed176f16f1035801b95c6784309eeea3346080a286439a4
     home: https://github.com/karimzakzouk/sentinel
@@ -1536,7 +1557,7 @@ entries:
     version: 3.8.1
   - apiVersion: v2
     appVersion: 3.8.0
-    created: "2026-07-03T07:45:00.470948524Z"
+    created: "2026-07-03T21:39:38.404538829Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: f19bcb269c5e355b1718a3b0c56ddcbd363b4c99c28ceeb4dc769f1a43e9adde
     home: https://github.com/karimzakzouk/sentinel
@@ -1557,7 +1578,7 @@ entries:
     version: 3.8.0
   - apiVersion: v2
     appVersion: 3.7.1
-    created: "2026-07-03T07:45:00.469818472Z"
+    created: "2026-07-03T21:39:38.404098814Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: e502ca7ce68a33a1bd463afb917e7c501c184687e8fa7e5931d7f7bd4723972f
     home: https://github.com/karimzakzouk/sentinel
@@ -1578,7 +1599,7 @@ entries:
     version: 3.7.1
   - apiVersion: v2
     appVersion: 3.7.0
-    created: "2026-07-03T07:45:00.469428282Z"
+    created: "2026-07-03T21:39:38.403703116Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: 43a432d14c9aba1dc9cb057a1ea14c909b24fa7737fd121c5cc4f25e4cc6b629
     home: https://github.com/karimzakzouk/sentinel
@@ -1599,7 +1620,7 @@ entries:
     version: 3.7.0
   - apiVersion: v2
     appVersion: 3.6.5
-    created: "2026-07-03T07:45:00.469011604Z"
+    created: "2026-07-03T21:39:38.403312125Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: a868a018de3e22c486317022783e77caba9ad7bce3d294c478bfd5aa2fbdc8cc
     home: https://github.com/karimzakzouk/sentinel
@@ -1620,7 +1641,7 @@ entries:
     version: 3.6.5
   - apiVersion: v2
     appVersion: 3.6.4
-    created: "2026-07-03T07:45:00.468621375Z"
+    created: "2026-07-03T21:39:38.402897017Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: 5b27c294247b5b9115c05b7174ae14402da37ec1d9b752e34cd0382601d6f57b
     home: https://github.com/karimzakzouk/sentinel
@@ -1641,7 +1662,7 @@ entries:
     version: 3.6.4
   - apiVersion: v2
     appVersion: 3.6.3
-    created: "2026-07-03T07:45:00.468231446Z"
+    created: "2026-07-03T21:39:38.402500868Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: 147ea74581a66758ae66d5a88175fd6490f0c63dac601df3e4a595c583d677f2
     home: https://github.com/karimzakzouk/sentinel
@@ -1662,7 +1683,7 @@ entries:
     version: 3.6.3
   - apiVersion: v2
     appVersion: 3.6.2
-    created: "2026-07-03T07:45:00.467816962Z"
+    created: "2026-07-03T21:39:38.402088735Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: f1fcac424316fb4dcd58996f7fdad98d97f56cdadb919a604d6939a46212cc8c
     home: https://github.com/karimzakzouk/sentinel
@@ -1683,7 +1704,7 @@ entries:
     version: 3.6.2
   - apiVersion: v2
     appVersion: 3.6.1
-    created: "2026-07-03T07:45:00.467420961Z"
+    created: "2026-07-03T21:39:38.401681149Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: 802ed0a2c5ec2a469be992a7b8a3751e6a28bfed86b87dbfb5f288a01fbf3e34
     home: https://github.com/karimzakzouk/sentinel
@@ -1704,7 +1725,7 @@ entries:
     version: 3.6.1
   - apiVersion: v2
     appVersion: 3.6.0
-    created: "2026-07-03T07:45:00.467003542Z"
+    created: "2026-07-03T21:39:38.401276287Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: f6c65191c04b0f4a55c626fe0334c2b68ac8ba9859ebcdafaca75de60e64535e
     home: https://github.com/karimzakzouk/sentinel
@@ -1725,7 +1746,7 @@ entries:
     version: 3.6.0
   - apiVersion: v2
     appVersion: 3.5.4
-    created: "2026-07-03T07:45:00.466609054Z"
+    created: "2026-07-03T21:39:38.400824866Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: 0beb97a95127310bef3ed0b76d4fbeb2bd6116cf9d7462f73f4f9fc6c31dd2ba
     home: https://github.com/karimzakzouk/sentinel
@@ -1746,7 +1767,7 @@ entries:
     version: 3.5.4
   - apiVersion: v2
     appVersion: 3.5.3
-    created: "2026-07-03T07:45:00.466211Z"
+    created: "2026-07-03T21:39:38.400374857Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: 7b45e6072e69e4df375097c2b7b1f0f1c5eccc6f6349c206343f49aa102549d2
     home: https://github.com/karimzakzouk/sentinel
@@ -1767,7 +1788,7 @@ entries:
     version: 3.5.3
   - apiVersion: v2
     appVersion: 3.5.2
-    created: "2026-07-03T07:45:00.465771891Z"
+    created: "2026-07-03T21:39:38.399686524Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: 00d3ff8ca4d2ce55a2c844afb858976caa7117b55baed5b955ca8686124cd3db
     home: https://github.com/karimzakzouk/sentinel
@@ -1788,7 +1809,7 @@ entries:
     version: 3.5.2
   - apiVersion: v2
     appVersion: 3.5.1
-    created: "2026-07-03T07:45:00.465373947Z"
+    created: "2026-07-03T21:39:38.399152279Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: 7c8c9e7de2a8e1e3ef19af72767074ec3105c1e341d1674c097aba4cfa2ac344
     home: https://github.com/karimzakzouk/sentinel
@@ -1809,7 +1830,7 @@ entries:
     version: 3.5.1
   - apiVersion: v2
     appVersion: 3.5.0
-    created: "2026-07-03T07:45:00.464937452Z"
+    created: "2026-07-03T21:39:38.398578226Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: bdd53b6b5b8fa52006cd941b2182401bab456ed61ca390e728d9cb51b5892b58
     home: https://github.com/karimzakzouk/sentinel
@@ -1830,7 +1851,7 @@ entries:
     version: 3.5.0
   - apiVersion: v2
     appVersion: 3.4.0
-    created: "2026-07-03T07:45:00.464531814Z"
+    created: "2026-07-03T21:39:38.397432412Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: 85e2345cd38054bbed3cd02ca67adb2198e54a5b626bff02fb2c4d6ab03bb6d6
     home: https://github.com/karimzakzouk/sentinel
@@ -1851,7 +1872,7 @@ entries:
     version: 3.4.0
   - apiVersion: v2
     appVersion: 3.3.1
-    created: "2026-07-03T07:45:00.4640954Z"
+    created: "2026-07-03T21:39:38.396588047Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: a7543b862707af7725cd28f91ee8792f5ef4f7402639650629bc558e1edcc125
     home: https://github.com/karimzakzouk/sentinel
@@ -1872,7 +1893,7 @@ entries:
     version: 3.3.1
   - apiVersion: v2
     appVersion: 3.3.0
-    created: "2026-07-03T07:45:00.463668993Z"
+    created: "2026-07-03T21:39:38.395650112Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: 2e71f1b77aecf1a712b27038f02de3f38e663306711d5c7427f526ad94cc1d35
     home: https://github.com/karimzakzouk/sentinel
@@ -1893,7 +1914,7 @@ entries:
     version: 3.3.0
   - apiVersion: v2
     appVersion: 3.2.5
-    created: "2026-07-03T07:45:00.462808997Z"
+    created: "2026-07-03T21:39:38.395308684Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: 55b978fb9736c15024e70562bcd0060342652df816233d209b9a15fcf0a1b271
     home: https://github.com/karimzakzouk/sentinel
@@ -1914,7 +1935,7 @@ entries:
     version: 3.2.5
   - apiVersion: v2
     appVersion: 3.2.4
-    created: "2026-07-03T07:45:00.462014553Z"
+    created: "2026-07-03T21:39:38.394947016Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: 507af2d96825038065de7b2fb392439ecb425cc601f2d2096e57306a3b35a17d
     home: https://github.com/karimzakzouk/sentinel
@@ -1935,7 +1956,7 @@ entries:
     version: 3.2.4
   - apiVersion: v2
     appVersion: 3.2.3
-    created: "2026-07-03T07:45:00.461044232Z"
+    created: "2026-07-03T21:39:38.394605468Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: dae17753680d1098b3274b2d83ef22e773afb135ca9ca9bafdcf44b02a0f2237
     home: https://github.com/karimzakzouk/sentinel
@@ -1956,7 +1977,7 @@ entries:
     version: 3.2.3
   - apiVersion: v2
     appVersion: 3.2.2
-    created: "2026-07-03T07:45:00.460519995Z"
+    created: "2026-07-03T21:39:38.394057674Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: f66f0c94fc0413d0b5680309604dd36d6bd8a25ee0ef9ebed24d08b5fc577e2c
     home: https://github.com/karimzakzouk/sentinel
@@ -1977,7 +1998,7 @@ entries:
     version: 3.2.2
   - apiVersion: v2
     appVersion: 3.2.1
-    created: "2026-07-03T07:45:00.460179007Z"
+    created: "2026-07-03T21:39:38.393726671Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: 86b80afc8e67cac0d3cedfa2b4e952ba79904a5f22af954106ac234cb2f982af
     home: https://github.com/karimzakzouk/sentinel
@@ -1998,7 +2019,7 @@ entries:
     version: 3.2.1
   - apiVersion: v2
     appVersion: 3.2.0
-    created: "2026-07-03T07:45:00.459816238Z"
+    created: "2026-07-03T21:39:38.393384423Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: 8e6bbbca84947989035c632f0e0773cb3f6238e6b47f7c7934d3078093e344dd
     home: https://github.com/karimzakzouk/sentinel
@@ -2019,7 +2040,7 @@ entries:
     version: 3.2.0
   - apiVersion: v2
     appVersion: 3.1.1
-    created: "2026-07-03T07:45:00.448443147Z"
+    created: "2026-07-03T21:39:38.380900129Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: 98113c9b0a308631fd9ad44a9a65532bd1c887131692c576721f9d4347baea65
     home: https://github.com/karimzakzouk/sentinel
@@ -2040,7 +2061,7 @@ entries:
     version: 3.1.1
   - apiVersion: v2
     appVersion: 3.1.0
-    created: "2026-07-03T07:45:00.448080499Z"
+    created: "2026-07-03T21:39:38.380573604Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: 4f2dcc7b94e323b4dfe3fed8a9c2a2fe53bb5dac3d16ab11423728953de45b16
     home: https://github.com/karimzakzoukz/sentinel
@@ -2061,7 +2082,7 @@ entries:
     version: 3.1.0
   - apiVersion: v2
     appVersion: 3.0.7
-    created: "2026-07-03T07:45:00.447745791Z"
+    created: "2026-07-03T21:39:38.38023482Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: e9fffcb3b29205ae92477be6c714c917014aa2fd04f9dc7362b1dd7feb05d932
     home: https://github.com/karimzakzoukz/sentinel
@@ -2082,7 +2103,7 @@ entries:
     version: 3.0.7
   - apiVersion: v2
     appVersion: 3.0.6
-    created: "2026-07-03T07:45:00.447405734Z"
+    created: "2026-07-03T21:39:38.379887553Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: 9bc335dd9f7f155195c7a36fdf45384c8929858e1e7689c5d46c2721371421ef
     home: https://github.com/karimzakzoukz/sentinel
@@ -2103,7 +2124,7 @@ entries:
     version: 3.0.6
   - apiVersion: v2
     appVersion: 3.0.5
-    created: "2026-07-03T07:45:00.447030823Z"
+    created: "2026-07-03T21:39:38.379549731Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: ebc33e5bdee8a550d0f5385fe8c1f036c589c4b9c07536798e9e595cce9ac3e2
     home: https://github.com/karimzakzoukz/sentinel
@@ -2124,7 +2145,7 @@ entries:
     version: 3.0.5
   - apiVersion: v2
     appVersion: 3.0.4
-    created: "2026-07-03T07:45:00.446685857Z"
+    created: "2026-07-03T21:39:38.379202034Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: abc67544ad6c647a81ac86668766621d44dec4360763c0b0814201d6c40d24ca
     home: https://github.com/karimzakzoukz/sentinel
@@ -2145,7 +2166,7 @@ entries:
     version: 3.0.4
   - apiVersion: v2
     appVersion: 3.0.3
-    created: "2026-07-03T07:45:00.446335391Z"
+    created: "2026-07-03T21:39:38.378818233Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: 3caec4f2ebf9712a8be7a701485a185743aa77de562c8a71b68f9514e396bd9d
     home: https://github.com/karimzakzoukz/sentinel
@@ -2166,7 +2187,7 @@ entries:
     version: 3.0.3
   - apiVersion: v2
     appVersion: 3.0.2
-    created: "2026-07-03T07:45:00.445924193Z"
+    created: "2026-07-03T21:39:38.378453882Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: ae6b52c08a0b73258ddd339d1ff3a18f7986f22a9ea3318fda0f12d14f97f1c5
     home: https://github.com/karimzakzoukz/sentinel
@@ -2187,7 +2208,7 @@ entries:
     version: 3.0.2
   - apiVersion: v2
     appVersion: 3.0.1
-    created: "2026-07-03T07:45:00.445443005Z"
+    created: "2026-07-03T21:39:38.377461927Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~25MB.
     digest: fd6f37fa11bf3a6544daadec389984c471f260b0f3ac2c51843af82271627b1a
     home: https://github.com/karimzakzoukz/sentinel
@@ -2208,7 +2229,7 @@ entries:
     version: 3.0.1
   - apiVersion: v2
     appVersion: "3"
-    created: "2026-07-03T07:45:00.481873047Z"
+    created: "2026-07-03T21:39:38.414901698Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~20MB.
     digest: 34375ed973e2a2c5093baaebe838e9e06e9af694fb1c6e62def8b4b3b1292612
     home: https://github.com/karimzakzoukz/sentinel
@@ -2229,7 +2250,7 @@ entries:
     version: "3"
   - apiVersion: v2
     appVersion: 3.0.0
-    created: "2026-07-03T07:45:00.444267217Z"
+    created: "2026-07-03T21:39:38.376709558Z"
     description: Sentinel v3 — The Autonomous AI SRE. One binary, one pod, ~20MB.
     digest: 7a0e52050724b4fa5a9bd8ab348335c7ce52eddbd4c366fbb614aa404574aef8
     home: https://github.com/karimzakzoukz/sentinel
@@ -2250,7 +2271,7 @@ entries:
     version: 3.0.0
   - apiVersion: v2
     appVersion: 2.0.1
-    created: "2026-07-03T07:45:00.443422302Z"
+    created: "2026-07-03T21:39:38.375757953Z"
     dependencies:
     - condition: weaviate.enabled
       name: weaviate
@@ -2278,7 +2299,7 @@ entries:
     version: 2.0.1
   - apiVersion: v2
     appVersion: 2.0.0
-    created: "2026-07-03T07:45:00.439050859Z"
+    created: "2026-07-03T21:39:38.371451509Z"
     dependencies:
     - condition: weaviate.enabled
       name: weaviate
@@ -2306,7 +2327,7 @@ entries:
     version: 2.0.0
   - apiVersion: v2
     appVersion: 1.5.43
-    created: "2026-07-03T07:45:00.388389948Z"
+    created: "2026-07-03T21:39:38.318523348Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -2338,7 +2359,7 @@ entries:
     version: 1.5.43
   - apiVersion: v2
     appVersion: 1.5.42
-    created: "2026-07-03T07:45:00.378829921Z"
+    created: "2026-07-03T21:39:38.308854841Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -2370,7 +2391,7 @@ entries:
     version: 1.5.42
   - apiVersion: v2
     appVersion: 1.5.41
-    created: "2026-07-03T07:45:00.369560131Z"
+    created: "2026-07-03T21:39:38.299003974Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -2402,7 +2423,7 @@ entries:
     version: 1.5.41
   - apiVersion: v2
     appVersion: 1.5.40
-    created: "2026-07-03T07:45:00.360175938Z"
+    created: "2026-07-03T21:39:38.289355617Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -2434,7 +2455,7 @@ entries:
     version: 1.5.40
   - apiVersion: v2
     appVersion: 1.5.39
-    created: "2026-07-03T07:45:00.341183938Z"
+    created: "2026-07-03T21:39:38.269736024Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -2466,7 +2487,7 @@ entries:
     version: 1.5.39
   - apiVersion: v2
     appVersion: 1.5.38
-    created: "2026-07-03T07:45:00.331663084Z"
+    created: "2026-07-03T21:39:38.260032775Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -2498,7 +2519,7 @@ entries:
     version: 1.5.38
   - apiVersion: v2
     appVersion: 1.5.37
-    created: "2026-07-03T07:45:00.322138182Z"
+    created: "2026-07-03T21:39:38.250306994Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -2530,7 +2551,7 @@ entries:
     version: 1.5.37
   - apiVersion: v2
     appVersion: 1.5.36
-    created: "2026-07-03T07:45:00.312588602Z"
+    created: "2026-07-03T21:39:38.240476777Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -2562,7 +2583,7 @@ entries:
     version: 1.5.36
   - apiVersion: v2
     appVersion: 1.5.35
-    created: "2026-07-03T07:45:00.302468694Z"
+    created: "2026-07-03T21:39:38.230684676Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -2594,7 +2615,7 @@ entries:
     version: 1.5.35
   - apiVersion: v2
     appVersion: 1.5.34
-    created: "2026-07-03T07:45:00.292668512Z"
+    created: "2026-07-03T21:39:38.220843423Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -2626,7 +2647,7 @@ entries:
     version: 1.5.34
   - apiVersion: v2
     appVersion: 1.5.31
-    created: "2026-07-03T07:45:00.283428535Z"
+    created: "2026-07-03T21:39:38.211009691Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -2658,7 +2679,7 @@ entries:
     version: 1.5.31
   - apiVersion: v2
     appVersion: 1.5.30
-    created: "2026-07-03T07:45:00.274099705Z"
+    created: "2026-07-03T21:39:38.20111649Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -2690,7 +2711,7 @@ entries:
     version: 1.5.30
   - apiVersion: v2
     appVersion: 1.5.29
-    created: "2026-07-03T07:45:00.264804698Z"
+    created: "2026-07-03T21:39:38.191054939Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -2722,7 +2743,7 @@ entries:
     version: 1.5.29
   - apiVersion: v2
     appVersion: 1.5.28
-    created: "2026-07-03T07:45:00.255280326Z"
+    created: "2026-07-03T21:39:38.180955812Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -2754,7 +2775,7 @@ entries:
     version: 1.5.28
   - apiVersion: v2
     appVersion: 1.5.27
-    created: "2026-07-03T07:45:00.240322957Z"
+    created: "2026-07-03T21:39:38.171063783Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -2786,7 +2807,7 @@ entries:
     version: 1.5.27
   - apiVersion: v2
     appVersion: 1.5.26
-    created: "2026-07-03T07:45:00.223642902Z"
+    created: "2026-07-03T21:39:38.161251132Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -2818,7 +2839,7 @@ entries:
     version: 1.5.26
   - apiVersion: v2
     appVersion: 1.5.25
-    created: "2026-07-03T07:45:00.214142282Z"
+    created: "2026-07-03T21:39:38.151309169Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -2850,7 +2871,7 @@ entries:
     version: 1.5.25
   - apiVersion: v2
     appVersion: 1.5.22
-    created: "2026-07-03T07:45:00.204895733Z"
+    created: "2026-07-03T21:39:38.140864979Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -2882,7 +2903,7 @@ entries:
     version: 1.5.22
   - apiVersion: v2
     appVersion: 1.5.21
-    created: "2026-07-03T07:45:00.195643483Z"
+    created: "2026-07-03T21:39:38.130612464Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -2914,7 +2935,7 @@ entries:
     version: 1.5.21
   - apiVersion: v2
     appVersion: 1.5.19
-    created: "2026-07-03T07:45:00.186409098Z"
+    created: "2026-07-03T21:39:38.120758472Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -2946,7 +2967,7 @@ entries:
     version: 1.5.19
   - apiVersion: v2
     appVersion: 1.5.18
-    created: "2026-07-03T07:45:00.177148934Z"
+    created: "2026-07-03T21:39:38.110910778Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -2978,7 +2999,7 @@ entries:
     version: 1.5.18
   - apiVersion: v2
     appVersion: 1.5.17
-    created: "2026-07-03T07:45:00.167941134Z"
+    created: "2026-07-03T21:39:38.101102364Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -3010,7 +3031,7 @@ entries:
     version: 1.5.17
   - apiVersion: v2
     appVersion: 1.5.16
-    created: "2026-07-03T07:45:00.158667706Z"
+    created: "2026-07-03T21:39:38.090967083Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -3042,7 +3063,7 @@ entries:
     version: 1.5.16
   - apiVersion: v2
     appVersion: 1.5.15
-    created: "2026-07-03T07:45:00.149408653Z"
+    created: "2026-07-03T21:39:38.080892333Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -3074,7 +3095,7 @@ entries:
     version: 1.5.15
   - apiVersion: v2
     appVersion: 1.5.14
-    created: "2026-07-03T07:45:00.140180109Z"
+    created: "2026-07-03T21:39:38.070611856Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -3106,7 +3127,7 @@ entries:
     version: 1.5.14
   - apiVersion: v2
     appVersion: 1.5.13
-    created: "2026-07-03T07:45:00.130842612Z"
+    created: "2026-07-03T21:39:38.060626639Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -3138,7 +3159,7 @@ entries:
     version: 1.5.13
   - apiVersion: v2
     appVersion: 1.5.12
-    created: "2026-07-03T07:45:00.121145823Z"
+    created: "2026-07-03T21:39:38.050698266Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -3170,7 +3191,7 @@ entries:
     version: 1.5.12
   - apiVersion: v2
     appVersion: 1.5.11
-    created: "2026-07-03T07:45:00.11191977Z"
+    created: "2026-07-03T21:39:38.040895179Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -3202,7 +3223,7 @@ entries:
     version: 1.5.11
   - apiVersion: v2
     appVersion: 1.5.10
-    created: "2026-07-03T07:45:00.102398806Z"
+    created: "2026-07-03T21:39:38.03119831Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -3234,7 +3255,7 @@ entries:
     version: 1.5.10
   - apiVersion: v2
     appVersion: 1.5.9
-    created: "2026-07-03T07:45:00.434906107Z"
+    created: "2026-07-03T21:39:38.367232266Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -3266,7 +3287,7 @@ entries:
     version: 1.5.9
   - apiVersion: v2
     appVersion: 1.5.8
-    created: "2026-07-03T07:45:00.425475971Z"
+    created: "2026-07-03T21:39:38.357258666Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -3298,7 +3319,7 @@ entries:
     version: 1.5.8
   - apiVersion: v2
     appVersion: 1.5.7
-    created: "2026-07-03T07:45:00.41623923Z"
+    created: "2026-07-03T21:39:38.347581496Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -3330,7 +3351,7 @@ entries:
     version: 1.5.7
   - apiVersion: v2
     appVersion: 1.5.6
-    created: "2026-07-03T07:45:00.406925355Z"
+    created: "2026-07-03T21:39:38.337874011Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -3362,7 +3383,7 @@ entries:
     version: 1.5.6
   - apiVersion: v2
     appVersion: 1.5.5
-    created: "2026-07-03T07:45:00.397632771Z"
+    created: "2026-07-03T21:39:38.328186246Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -3394,7 +3415,7 @@ entries:
     version: 1.5.5
   - apiVersion: v2
     appVersion: 1.5.4
-    created: "2026-07-03T07:45:00.350708249Z"
+    created: "2026-07-03T21:39:38.279550217Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -3426,7 +3447,7 @@ entries:
     version: 1.5.4
   - apiVersion: v2
     appVersion: 1.5.0
-    created: "2026-07-03T07:45:00.091838254Z"
+    created: "2026-07-03T21:39:38.021450346Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -3458,7 +3479,7 @@ entries:
     version: 1.5.0
   - apiVersion: v2
     appVersion: 1.4.2
-    created: "2026-07-03T07:45:00.082527174Z"
+    created: "2026-07-03T21:39:38.011550004Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -3490,7 +3511,7 @@ entries:
     version: 1.4.2
   - apiVersion: v2
     appVersion: 1.4.1
-    created: "2026-07-03T07:45:00.073169672Z"
+    created: "2026-07-03T21:39:38.001438249Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -3522,7 +3543,7 @@ entries:
     version: 1.4.1
   - apiVersion: v2
     appVersion: 1.4.0
-    created: "2026-07-03T07:45:00.063827885Z"
+    created: "2026-07-03T21:39:37.991671536Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -3554,7 +3575,7 @@ entries:
     version: 1.4.0
   - apiVersion: v2
     appVersion: 1.3.9
-    created: "2026-07-03T07:45:00.054458191Z"
+    created: "2026-07-03T21:39:37.98181527Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -3586,7 +3607,7 @@ entries:
     version: 1.3.9
   - apiVersion: v2
     appVersion: 1.3.3
-    created: "2026-07-03T07:45:00.044309647Z"
+    created: "2026-07-03T21:39:37.971598839Z"
     dependencies:
     - condition: kafka.enabled
       name: strimzi-kafka-operator
@@ -3616,4 +3637,4 @@ entries:
     urls:
     - https://karimzakzouk.github.io/sentinel/sentinel-1.3.5.tgz
     version: 1.3.5
-generated: "2026-07-03T07:45:00.034414351Z"
+generated: "2026-07-03T21:39:37.96103447Z"
