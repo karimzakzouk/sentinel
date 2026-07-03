@@ -16,7 +16,16 @@ COPY web/package.json web/package-lock.json* ./
 #   npm install --frozen-lockfile 2>/dev/null || npm install
 # which silently fell back to `npm install` on lockfile drift, regenerating the
 # lockfile and hiding dependency mismatches. `npm ci` fails loudly on drift.
-RUN npm ci
+#
+# M43 — retry npm ci on transient network errors. The v5.9.2 release failed
+# on amd64 because npm ci hit ECONNRESET mid-fetch from the npm registry.
+# npm's built-in --fetch-retries handles timeouts but not always connection
+# resets; the outer shell loop catches the rest. 3 attempts with 10s backoff.
+RUN for i in 1 2 3; do \
+        npm ci --fetch-retries=5 --fetch-retry-mintimeout=20000 && break; \
+        echo "npm ci attempt $i failed, retrying in 10s..." >&2; \
+        sleep 10; \
+    done && test -d node_modules
 
 # Copy web source and build
 COPY web/ .
