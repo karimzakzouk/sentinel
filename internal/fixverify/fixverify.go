@@ -116,13 +116,3 @@ func (v *Verifier) RequeryAlert(ctx context.Context, promqlExpr string) Result {
                 MetricsChecked: []string{fmt.Sprintf("alert_requery=%d_series", len(promResp.Data.Result))},
         }
 }
-
-// scrapeKubelet queries the kubelet /metrics/cadvisor endpoint via the
-// K8s API proxy. Currently unused — VerifyCanaryMetrics uses the K8s API
-// directly (pods.Get) which is more reliable. Kept for future use when
-// we add CPU/memory metric checks.
-func (v *Verifier) scrapeKubelet(ctx context.Context, path string) (string, error) {
-        _ = ctx
-        _ = path
-        return "", nil
-}
