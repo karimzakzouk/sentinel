@@ -351,6 +351,16 @@ func main() {
 
         vectorStore := feedback.NewVectorStore(embedder)
 
+        // LLM semantic cache — enabled only when semantic embeddings are available
+        // + the operator explicitly opts in via SENTINEL_LLM_SEMANTIC_CACHE=true.
+        if cfg.LLMSemanticCacheEnabled && embedder.IsSemantic() {
+                cache := llm.NewSemanticCache(embedder, float32(cfg.LLMSemanticCacheThreshold), 24*time.Hour)
+                router.SetCache(cache)
+                logging.Info("LLM semantic cache enabled", "threshold", cfg.LLMSemanticCacheThreshold)
+        } else if cfg.LLMSemanticCacheEnabled && !embedder.IsSemantic() {
+                logging.Warn("LLM semantic cache requested but embeddings are non-semantic (TF-IDF) — cache disabled. Set SENTINEL_LLM_EMBEDDING_MODEL to enable.")
+        }
+
         // 4. Agent pipeline (with vector store for memory loop)
 
         pipeline := agents.NewPipeline(router, k8sClient, cfg.GitHubToken, store, &vectorStoreAdapter{vs: vectorStore})

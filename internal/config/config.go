@@ -49,6 +49,11 @@ type Config struct {
         EmbeddingAPIKey   string
         EmbeddingBaseURL  string
 
+        // LLM semantic cache (Phase 2). When enabled + semantic embeddings
+        // are configured, LLM responses are cached by prompt similarity.
+        LLMSemanticCacheEnabled  bool
+        LLMSemanticCacheThreshold float64 // default 0.97
+
         LLMEmbeddingDim int
 
         // Kubernetes
@@ -313,6 +318,9 @@ func Load() *Config {
                 EmbeddingProvider: getenv("SENTINEL_EMBEDDING_PROVIDER", ""),
                 EmbeddingAPIKey:   getenv("SENTINEL_EMBEDDING_API_KEY", ""),
                 EmbeddingBaseURL:  getenv("SENTINEL_EMBEDDING_BASE_URL", ""),
+
+                LLMSemanticCacheEnabled:   getenvBool("SENTINEL_LLM_SEMANTIC_CACHE", false),
+                LLMSemanticCacheThreshold: getenvFloat("SENTINEL_LLM_CACHE_THRESHOLD", 0.97),
 
                 LLMEmbeddingDim:           getenvInt("SENTINEL_LLM_EMBEDDING_DIM", 1536),
                 Namespace:                 getenv("SENTINEL_NAMESPACE", "sentinel"),
