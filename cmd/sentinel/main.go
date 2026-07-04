@@ -55,7 +55,7 @@ var broadcaster events.Broadcaster = events.Noop()
 // local scope.
 
 var chatopsStatusManager chatops.StatusCommentManager
-var pkgSafeActions *safeactions.Controller
+var pkgSafeActions *safeactions.Controller // used by investigation handler for L2 actions
 
 // the runtimecfg apply callback (registered BEFORE these clients exist) to
 // reconfigure them live when the GitHub App credentials change at runtime.
