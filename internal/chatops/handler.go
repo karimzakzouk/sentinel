@@ -26,7 +26,7 @@ import (
 type WebhookHandler struct {
         deps          *Deps
         webhookSecret string // optional HMAC-SHA256 secret for signature verification
-        // M9 fix: bounded semaphore to prevent unbounded goroutine growth.
+        //bounded semaphore to prevent unbounded goroutine growth.
         // Each /sentinel command spawns a goroutine that can live up to 30 min.
         // Without a cap, an attacker posting many /sentinel retest commands
         // could exhaust memory. The semaphore limits concurrent dispatches.
@@ -34,7 +34,7 @@ type WebhookHandler struct {
 }
 
 // NewWebhookHandler creates a WebhookHandler with the given deps + secret.
-// The semaphore size defaults to 8 concurrent dispatches (M9 fix).
+// The semaphore size defaults to 8 concurrent dispatches ().
 // deps is the dependency bag (must be fully wired before this is called).
 // webhookSecret is the GitHub webhook secret (empty = skip signature check).
 
@@ -164,8 +164,7 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
         // Dispatch in a goroutine so we return 200 immediately — GitHub times out
         // webhooks after 10s. Long-running commands (retry-sandbox takes minutes)
         // must run async.
-        //
-        // M9 fix: use a bounded semaphore to cap concurrent dispatches at 8.
+        //use a bounded semaphore to cap concurrent dispatches at 8.
         // If 8 are already running, the 9th waits for one to finish (up to 30s).
         // If it can't acquire within 30s, we return 503 so GitHub retries later.
 
@@ -209,5 +208,4 @@ func (h *WebhookHandler) verifySignature(body []byte, sig string) bool {
         return hmac.Equal(expected, actual)
 }
 
-// missing time import fix
 

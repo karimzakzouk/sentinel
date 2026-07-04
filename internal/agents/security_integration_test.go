@@ -1,5 +1,4 @@
 // Package agents — integration tests for the security scanner. v4.4.0.
-//
 // Tests the security scanner end-to-end with realistic fix proposals
 // that include both safe and dangerous patterns.
 package agents

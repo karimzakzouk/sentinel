@@ -1,5 +1,5 @@
 # =============================================================================
-# Sentinel v5.9.6 — Complete Values Reference
+# Sentinel v5.10.0 — Complete Values Reference
 # =============================================================================
 # This file documents EVERY configurable option in Sentinel.
 # Copy it, edit what you need, then install:
@@ -12,7 +12,7 @@
 image:
   registry: "docker.io/karimzakzouk"
   repository: "sentinel"
-  tag: "5.9.6"
+  tag: "5.10.0"
   pullPolicy: Always
 
 # ─── Sentinel Configuration ──────────────────────────────────────────────────

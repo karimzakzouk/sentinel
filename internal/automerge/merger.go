@@ -103,7 +103,7 @@ func (m *Merger) SetOnSkipped(fn func(repo string, prNumber int, reason string))
         m.onSkipped = fn
 }
 
-// prLock returns (or creates) a per-PR mutex. v4.2.5: prevents EvaluateNow
+// prLock returns (or creates) a per-PR mutex.prevents EvaluateNow
 // and the 30s poll from racing on the same PR (which caused duplicate merges
 // + duplicate comments).
 
@@ -370,5 +370,4 @@ func prKey(repo string, prNumber int) string {
         return fmt.Sprintf("%s#%d", repo, prNumber)
 }
 
-// strings import guard
 

@@ -5,7 +5,7 @@
 package feedback
 
 import (
-	"github.com/karimzakzouk/sentinel/internal/logging"
+        "github.com/karimzakzouk/sentinel/internal/logging"
         "database/sql"
         "fmt"
         "sync"
@@ -36,12 +36,11 @@ func New(path string) (*Store, error) {
                 return nil, fmt.Errorf("open sqlite: %w", err)
         }
 
-        // SQLite only allows one writer at a time. Limit connections to avoid
-        // "database is locked" errors under concurrent access.
-
-        db.SetMaxOpenConns(1)
-        db.SetMaxIdleConns(1)
-        db.SetConnMaxLifetime(0) // keep connections open forever
+        // WAL mode allows concurrent readers + 1 writer. 4 connections lets
+        // reads proceed in parallel while writes serialize naturally.
+        db.SetMaxOpenConns(4)
+        db.SetMaxIdleConns(4)
+        db.SetConnMaxLifetime(0)
 
         // Verify connection
 

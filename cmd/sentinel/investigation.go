@@ -513,7 +513,7 @@ func recordBetaOutcome(ctx context.Context, store *feedback.Store, incident sche
 }
 
 // extractPodLogsFromIncident pulls the pod logs from the incident's anomaly
-// explanations. v3.5.0: Used to extract the error fingerprint for the 24h
+// explanations.Used to extract the error fingerprint for the 24h
 // re-occurrence watcher.
 
 func extractPodLogsFromIncident(incident *schemas.Incident) string {
@@ -526,7 +526,7 @@ func extractPodLogsFromIncident(incident *schemas.Incident) string {
 
 // fetchCurrentBranchFiles fetches the current file content from the fix branch
 // (which has the previous fix applied) so the LLM generates search/replace blocks
-// against the CURRENT state, not the original code. v3.14.0: Fix C.
+// against the CURRENT state, not the original code.Fix C.
 // Without this, the retry loop fails because the LLM's search text references
 // the original code (e.g. "item = items[index]") which no longer exists — the
 // previous fix already replaced it with a bounds check.

@@ -314,7 +314,7 @@ func (s *SandboxRunner) runReproducer(ctx context.Context, sandboxNS string, inc
 }
 
 // fetchCanaryPodLogs retrieves the canary pod's logs for inclusion in
-// SandboxResult.PodLogs. v3.18.0: gives the LLM the actual error instead of
+// SandboxResult.PodLogs.gives the LLM the actual error instead of
 // a generic "canary_pods_not_ready" summary.
 
 func (s *SandboxRunner) fetchCanaryPodLogs(ctx context.Context, ns, service string) string {
@@ -368,7 +368,7 @@ func parsePathMethod(entry string) (method, path string) {
 }
 
 // verifyEndpointsWithPaths probes each path on the canary Service and requires
-// every probe to return 2xx/3xx. v3.18.0: extracted from verifyEndpoints so the
+// every probe to return 2xx/3xx.extracted from verifyEndpoints so the
 // caller passes a local slice (no shared state race).
 //   1. 4xx responses now FAIL (
 //   2. POST/DELETE/PATCH endpoints are now probed with the correct method (was:

@@ -145,7 +145,7 @@ func (g *GitHubClientImpl) RemoveReaction(ctx context.Context, repo string, comm
         }
         resp.Body.Close()
 
-        // M1 fix: find the BOT's reaction of this type, not just the first
+        //find the BOT's reaction of this type, not just the first
         // matching one. Previously we deleted the first reaction of this type,
         // which could be a user's reaction — silently stealing their emoji.
         // Now we fetch the bot's login via /user and match on it.
@@ -312,7 +312,7 @@ func (g *GitHubClientImpl) GetPermission(ctx context.Context, repo, username str
         return result.Permission, nil
 }
 
-// setHeaders adds the standard GitHub API headers. v4.0.0: uses authToken()
+// setHeaders adds the standard GitHub API headers.uses authToken()
 // which prefers the GitHub App installation token when configured.
 
 func (g *GitHubClientImpl) setHeaders(req *http.Request) {
@@ -474,7 +474,7 @@ func NewReactionsClient(gh GitHubClient) *ReactionsClientImpl {
 }
 
 // Ack reacts to the command comment with 👍 (immediate acknowledgment).
-// This is the #1 fix for Prow's #1 complaint (silence).
+// This is the #1 fix for(silence).
 
 func (r *ReactionsClientImpl) Ack(ctx context.Context, repo string, commentID int64) error {
         return r.gh.ReactComment(ctx, repo, commentID, "+1")

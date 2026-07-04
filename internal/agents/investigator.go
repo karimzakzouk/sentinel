@@ -111,7 +111,7 @@ func (a *Investigator) SetAllowedRepos(repos []string) {
         a.allowedRepos = repos
 }
 
-// SetDefaultBranch sets the default branch fallback. v3.11.0: Replaces the
+// SetDefaultBranch sets the default branch fallback.Replaces the
 // hardcoded "main" in branch_resolver.go. Per-repo
 // override via sentinel.io/branch annotation takes precedence.
 
@@ -121,7 +121,7 @@ func (a *Investigator) SetDefaultBranch(branch string) {
         }
 }
 
-// SetGitHost propagates the git host to the cloner. v3.11.0: Replaces the
+// SetGitHost propagates the git host to the cloner.Replaces the
 // hardcoded "github.com" in cloner.go.
 
 func (a *Investigator) SetGitHost(host string) {
@@ -470,7 +470,7 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
         state.Hypotheses = newHyps
         state.FetchedCode = fetched
         state.SourceFiles = keysOf(fetched)
-        // H2 fix: removed `state.Iterations++` here — the pipeline loop in
+        //removed `state.Iterations++` here — the pipeline loop in
         // pipeline.go:176 already increments state.Iterations on each pass.
         // Double-incrementing meant effective max iterations was
         // MaxIterations/2 (e.g. configured 5 → actual 2-3). The trace
@@ -610,7 +610,6 @@ func (a *Investigator) extractPodLogs(cluster schemas.AnomalyCluster) string {
 //   Function: get_config
 //   Error: AttributeError: 'NoneType' object has no attribute 'upper'
 //   Crash line: value = config.get(key).upper()
-//
 // This is placed at the TOP of the investigator prompt so the LLM focuses
 // on the ACTUAL crash, not on other similar-looking code in the file.
 func extractCrashLocation(podLogs string) string {
@@ -731,7 +730,7 @@ func (a *Investigator) buildRound2Message(state *schemas.AgentState, podLogs str
 }
 
 // detectLanguageHint parses the pod logs for the error type + language and
-// returns a human-readable language hint for the LLM prompt. v3.11.0:.
+// returns a human-readable language hint for the LLM prompt..
 // Returns "" if no language can be detected.
 
 func detectLanguageHint(podLogs string) string {

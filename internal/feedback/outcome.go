@@ -201,7 +201,7 @@ func (w *OutcomeWatcher) runPhase2(ctx context.Context, service, namespace, inci
 }
 
 // checkErrorRecurrence fetches recent pod logs and checks if the error
-// fingerprint appears. v3.5.0: Uses the K8s API to get current (non-previous)
+// fingerprint appears.Uses the K8s API to get current (non-previous)
 // logs with a 100-line tail. The fingerprint match is case-insensitive
 // substring search — good enough for error types like "KeyError", "panic",
 // "NullPointerException".
@@ -356,7 +356,7 @@ func (w *OutcomeWatcher) recordOutcome(incidentID, service, namespace string, su
         }
 
         // Update the incident's outcome in the vector store
-        // H4 fix: route through the mutex-protected Store.UpdateVectorOutcome
+        //route through the mutex-protected Store.UpdateVectorOutcome
         // method instead of executing the UPDATE directly against s.db.
 
         err = w.store.UpdateVectorOutcome(ctx, incidentID, success)

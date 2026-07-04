@@ -25,7 +25,7 @@ func TestLoadDefaults(t *testing.T) {
                 t.Errorf("ConfidenceAutonomous = %v, want 0.92", c.ConfidenceAutonomous)
         }
 
-        // to "" (audit #13). The previous default was OpenAI-specific but the
+        // to "" (). The previous default was OpenAI-specific but the
         // default provider is "zai", so every default install silently fell back
         // to hash embeddings. Empty default is honest about what's happening.
         if c.LLMEmbeddingModel != "" {
@@ -125,7 +125,7 @@ func TestSplitCSV(t *testing.T) {
         }
 }
 
-// "payments" (audit #5). The demo's "payments" namespace leaked into every
+// "payments" (). The demo's "payments" namespace leaked into every
 // install — operators with a namespace literally named "payments" got
 // stricter governance than intended.
 func TestDefaultProductionNamespacesExcludesPayments(t *testing.T) {

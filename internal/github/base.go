@@ -1,11 +1,9 @@
 // Package githubapp — shared base client for GitHub API operations.
-//
 // BaseClient provides the common auth + HTTP + retry logic used by all
 // GitHub clients in Sentinel:
 //   - internal/chatops/github.go (comments, reactions, labels)
 //   - internal/automerge/github.go (CI status, merge)
 //   - internal/executors/github.go (branch, file, PR)
-//
 // Each client embeds BaseClient and adds its domain-specific methods.
 package githubapp
 

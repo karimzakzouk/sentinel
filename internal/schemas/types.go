@@ -169,7 +169,7 @@ type RootCause struct {
 type FileChange struct {
         Path       string        `json:"path"`
         NewContent string        `json:"new_content,omitempty"` // legacy: full file replacement
-        Changes    []SearchReplace `json:"changes,omitempty"`    // v3.9.0: surgical edits
+        Changes    []SearchReplace `json:"changes,omitempty"`    //surgical edits
 }
 
 // SearchReplace is one surgical edit: find "search" in the file, replace
@@ -345,7 +345,7 @@ func NewIncident(cluster AnomalyCluster) Incident {
 
 // ─── Fix verification types ──────────────────────────────────────────────────
 // These were
-// (LEAK-1 from the architecture audit). Moved here so the executors package
+// (from the architecture audit). Moved here so the executors package
 // doesn't have to import agents — outer adapter was reaching into inner
 // reasoning layer. The agents package keeps thin wrappers for back-compat.
 // ParsedError is the structured form of a runtime error extracted from logs.

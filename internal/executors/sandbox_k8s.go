@@ -1,9 +1,3 @@
-// Package executors — K8s namespace backend for the sandbox.
-// Contains the K8s-specific implementation: namespace creation, NetworkPolicy,
-// canary Deployment deployment, cleanup, stale namespace reaping.
-// Future backends (gVisor, Firecracker, Docker-local) will live in sibling
-// files and implement the sandbox.Backend interface defined in
-// internal/sandbox/backend.go.
 package executors
 
 import (
@@ -249,7 +243,7 @@ func (s *SandboxRunner) getProbePaths() []string {
 }
 
 // waitForReadyWithLogs is like waitForReady but also captures canary pod logs
-// during the sustained window. v4.2.0: the captured logs are used by the
+// during the sustained window.the captured logs are used by the
 // Level 3 primary oracle (verifyErrorGoneFromLogs) to check if the original
 // error type still appears.
 // Returns (ready, canaryLogs). If ready is false, canaryLogs contains
@@ -399,7 +393,7 @@ func patchPodSpec(spec corev1.PodSpec, canaryImage string) corev1.PodSpec {
                 }
         }
 
-        // M4 fix: mount an emptyDir at /tmp so apps that write temp files
+        //mount an emptyDir at /tmp so apps that write temp files
         // (PID files, caches, sqlite WAL, /tmp uploads) work correctly under
         // ReadOnlyRootFilesystem. Without this, canary pods crash on startup
         // for any app that writes to /tmp — Level 1 fails, not because the

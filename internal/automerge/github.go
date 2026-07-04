@@ -335,7 +335,7 @@ func (g *GitHubClientImpl) RemoveLabel(ctx context.Context, repo string, prNumbe
 func (g *GitHubClientImpl) setHeaders(req *http.Request) {
         ctx := req.Context()
         req.Header.Set("Accept", "application/vnd.github+json")
-        req.Header.Set("Authorization", "Bearer "+g.AuthToken(ctx)) // v4.0.0: GitHub App token when configured
+        req.Header.Set("Authorization", "Bearer "+g.AuthToken(ctx)) //GitHub App token when configured
         req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
         req.Header.Set("Content-Type", "application/json")
 }

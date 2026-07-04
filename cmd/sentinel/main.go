@@ -71,8 +71,7 @@ var _ alertmanager.SignalHandler = (*alertmanagerAdapter)(nil)
 // crName="auto-detected"; manual API triggers pass "manual"; Slack triggers
 // pass "slack". None of these correspond to a real CR object, so patching
 // their status generates a 404 + spurious error log.
-//
-// H5 fix: callers should gate PatchCRStatus/PatchCRStatusFull calls on this
+//callers should gate PatchCRStatus/PatchCRStatusFull calls on this
 // helper to avoid the spurious error logs.
 
 func isRealCR(crName string) bool {

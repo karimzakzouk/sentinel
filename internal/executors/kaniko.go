@@ -67,7 +67,7 @@ func NewKaniko(clientset *kubernetes.Clientset, namespace string) *KanikoBuilder
 }
 
 // WithDockerHubUsername sets the Docker Hub username used for the Kaniko
-// layer cache repository. v3.3.1: This fixes a bug where the cache-repo was
+// layer cache repository.This fixes a bug where the cache-repo was
 // constructed as "docker.io/<secret-name>/sentinel-build-cache" (invalid path)
 // instead of "docker.io/<username>/sentinel-build-cache".
 
@@ -76,7 +76,7 @@ func (k *KanikoBuilder) WithDockerHubUsername(username string) *KanikoBuilder {
         return k
 }
 
-// WithRegistry sets the container registry Kaniko pushes to. v3.11.0:
+// WithRegistry sets the container registry Kaniko pushes to.
 // For ECR use "<account>.dkr.ecr.<region>.amazonaws.com",
 // for GCR use "gcr.io/<project>",
 // for ACR use "<name>.azurecr.io",
@@ -299,7 +299,7 @@ func (k *KanikoBuilder) createConfigMap(ctx context.Context, name string, files 
 }
 
 // kanikoInitImageDefault is the default image used for the clone-and-patch
-// init container. v3.11.0: Now overridable via WithInitImage() +
+// init container.Now overridable via WithInitImage() +
 // cfg.KanikoInitImage env var (was an unexported const).
 // Tag-pinned to alpine/git:2.43.0 (we avoid `:latest` so a malicious
 // upstream rebuild can't change behavior under us). For maximum supply-chain

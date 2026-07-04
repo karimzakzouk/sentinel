@@ -73,7 +73,7 @@ func AllCommands() []*CommandSpec {
 
 // Dispatch executes one or more parsed commands from a single comment.
 // For each command:
-//  1. ACK with 👍 reaction (Prow's #1 complaint was silence)
+//  1. ACK with 👍 reaction (was silence)
 //  2. Look up the command in the registry → 404 comment if unknown
 //  3. Check the author's permission on the repo
 //  4. If denied → post actionable error comment, log to audit, continue
@@ -100,7 +100,7 @@ func Dispatch(ctx context.Context, commands []*Command, deps *Deps) error {
 // dispatchOne executes a single command end-to-end.
 
 func dispatchOne(ctx context.Context, cmd *Command, deps *Deps) error {
-	// 1. Immediate ACK — 👍 reaction. Prow's #1 complaint was silence.
+	// 1. Immediate ACK — 👍 reaction.was silence.
 
 	if deps.Reactions != nil {
 		_ = deps.Reactions.Ack(ctx, cmd.PRRepo, cmd.CommentID)
@@ -135,7 +135,7 @@ func dispatchOne(ctx context.Context, cmd *Command, deps *Deps) error {
 	}
 
 	if !hasPermission(spec.Permission, perm) {
-		// Actionable denial — say *why* and *what to do*. (Prow's #4 complaint fixed.)
+		// Actionable denial — say *why* and *what to do*. (fixed.)
 
 		body := actionablePermissionError(cmd, spec, perm)
 		_ = deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber, body)
@@ -187,7 +187,7 @@ func hasPermission(required Permission, actual string) bool {
 }
 
 // actionablePermissionError builds a comment body that explains *why* the
-// user was denied and *what they can do about it*. Fixes Prow's #4 complaint
+// user was denied and *what they can do about it*. Fixes
 // (silent or confusing permission denials).
 
 func actionablePermissionError(cmd *Command, spec *CommandSpec, has string) string {
@@ -246,7 +246,7 @@ func auditLog(ctx context.Context, deps *Deps, cmd *Command, result, detail stri
 // their permission level). Prow shows all commands regardless of permission
 // — Sentinel only shows what the user can use, plus grayed-out 🔒 entries
 // for higher-tier commands they can't run (so they know what's possible).
-// This fixes Prow's #5 complaint (command discovery is poor).
+// This fixes(command discovery is poor).
 
 func RenderHelp(author string, userPermission string) string {
 	var sb strings.Builder

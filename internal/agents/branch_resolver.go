@@ -74,7 +74,7 @@ func discoverRepo(state *schemas.AgentState, gitHost string) string {
 }
 
 // normalizeRepo strips the configured git host prefix (https://<host>/ and
-// <host>/) and a trailing ".git". v3.11.0:com" —
+// <host>/) and a trailing ".git".com" —
 // a GitHub Enterprise repo string like "gh.mycorp.internal/acme/api" would
 // not be normalized, producing a malformed clone URL.
 

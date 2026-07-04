@@ -82,11 +82,11 @@ type Cooldown struct {
         mu              sync.Mutex
         until           time.Time
         reason          string
-        defaultDur      time.Duration // H1 fix: store the configured default duration
+        defaultDur      time.Duration //store the configured default duration
 }
 
 // NewCooldown creates a Cooldown with the given default pause duration.
-// H1 fix: previously the defaultDuration parameter was silently dropped
+//previously the defaultDuration parameter was silently dropped
 // and defaultDuration() hardcoded time.Hour, ignoring the operator-set
 // SENTINEL_AUTO_MERGE_COOLDOWN_MIN config. Now we store it on the struct.
 
@@ -156,7 +156,7 @@ func (c *Cooldown) Clear() {
 }
 
 // defaultDuration returns the configured default pause duration.
-// H1 fix: was hardcoded to time.Hour; now uses the value passed to NewCooldown.
+//was hardcoded to time.Hour; now uses the value passed to NewCooldown.
 
 func (c *Cooldown) defaultDuration() time.Duration {
         if c.defaultDur > 0 {

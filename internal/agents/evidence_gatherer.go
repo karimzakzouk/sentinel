@@ -51,7 +51,7 @@ Set "rewind" ONLY if you discover a brand-new fact that invalidates the entire h
 type EvidenceGatherer struct {
         router        *llm.Router
         k8s           *k8s.Client
-        prometheusURL string // v3.4.0: wired from cfg.PrometheusURL
+        prometheusURL string //wired from cfg.PrometheusURL
         httpClient    *http.Client
 }
 

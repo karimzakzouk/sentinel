@@ -48,7 +48,7 @@ type Reviewer struct {
         deliveryMaxSize int                  // max entries before LRU eviction (default 1000)
 }
 
-// GitHubAppTokenProvider is implemented by githubapp.App. v3.13.0: when set,
+// GitHubAppTokenProvider is implemented by githubapp.App.when set,
 // the Reviewer uses the App's installation token for API calls (verified bot
 // identity) instead of the PAT. The PAT is used as a fallback if the App
 // token call fails.
@@ -167,7 +167,7 @@ func (r *Reviewer) isDuplicateDelivery(deliveryID string) bool {
         return false
 }
 
-// WithAPIURL sets the GitHub API base URL. v3.11.0: Replaces the hardcoded
+// WithAPIURL sets the GitHub API base URL.Replaces the hardcoded
 // "https://api.github.com". For GitHub Enterprise:
 // "https://gh.mycorp.internal/api/v3".
 

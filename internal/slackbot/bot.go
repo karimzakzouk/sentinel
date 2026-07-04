@@ -7,10 +7,8 @@
 //   - "show me the last 5 incidents" — lists recent incidents
 //   - "status"                       — shows current autonomous mode status
 //   - "resume"                       — resumes autonomous mode
-//
 // Uses the Slack Events API (not RTM — simpler, webhook-based).
 // Endpoints added to api/server.go:
-//
 //      POST /slack/events — receives Slack Events API + slash command payloads
 package slackbot
 

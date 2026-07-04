@@ -271,7 +271,7 @@ func stripVersionSuffix(name string) string {
 }
 
 // FormatSharedLibFix returns a human-readable description of the shared lib
-// fix recommendation. v3.5.0: Used in the PR body when Sentinel opens a fix
+// fix recommendation.Used in the PR body when Sentinel opens a fix
 // in a shared library instead of the service.
 
 func FormatSharedLibFix(slf SharedLibFix) string {

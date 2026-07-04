@@ -7,12 +7,10 @@ import (
 
 // TestVectorStore_Search_RealScores verifies that v3.3.1 fix: VectorStore.Search
 // returns REAL cosine similarity scores (not fabricated ones).
-//
 // Before v3.3.1, the adapter in main.go fabricated scores as
 //   scores[0] = 0.9, scores[i] = 0.5 - 0.1*i
 // which made the investigator's memory loop fire applyKnownFix on every incident
 // after the first success, because the 0.85 threshold was always exceeded.
-//
 // This test verifies:
 //  1. Identical text → score very close to 1.0
 //  2. Completely unrelated text → score well below 0.85

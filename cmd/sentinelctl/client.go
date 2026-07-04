@@ -67,7 +67,7 @@ func (c *client) get(path string) ([]byte, error) {
 // postAuth sends a POST with an optional bearer token. authRequired=true
 // attaches the token (used for /admin/* and POST /settings); false sends
 // without (currently no POST endpoints are unauthenticated, but kept for
-// future use). v3.8.4: replaced the unused post() wrapper with this single
+// future use).replaced the unused post() wrapper with this single
 // method — golangci-lint flagged the unused post() function.
 
 func (c *client) postAuth(path string, payload any, authRequired bool) ([]byte, error) {

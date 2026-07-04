@@ -191,8 +191,7 @@ func boolToInt(b bool) int {
 // UpdateVectorOutcome marks an incident's vector entry as outcome-verified
 // with the given success flag. Called by OutcomeWatcher.recordOutcome after
 // the recovery check completes.
-//
-// H4 fix: previously recordOutcome executed this UPDATE directly against
+//previously recordOutcome executed this UPDATE directly against
 // s.db WITHOUT acquiring s.mu, breaking the Store's concurrency invariant
 // ("all DB access goes through the mutex"). With SetMaxOpenConns(1) the
 // actual race was serialized, but the invariant was broken. This method

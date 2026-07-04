@@ -10,7 +10,7 @@ import (
         "github.com/google/uuid"
 )
 
-// TestHandleSSEMaxSubscribers verifies the SSE subscriber cap. v3.13.0: audit #10.
+// TestHandleSSEMaxSubscribers verifies the SSE subscriber cap..
 // Opening more than maxSSESubscribers concurrent connections should return 503.
 func TestHandleSSEMaxSubscribers(t *testing.T) {
         s := New(":0", &noopStoreAdapter{}, func() map[string]any { return nil }, func(s, ns, r string) (string, error) { return "", nil }, func() bool { return true })
@@ -33,7 +33,7 @@ func TestHandleSSEMaxSubscribers(t *testing.T) {
         }
 }
 
-// TestReadBodyMaxBytes verifies the body size limit. v3.13.0: audit #3.
+// TestReadBodyMaxBytes verifies the body size limit..
 // Bodies larger than maxRequestBodyBytes should be truncated/rejected.
 func TestReadBodyMaxBytes(t *testing.T) {
         // Create a body larger than 1MB

@@ -7,7 +7,6 @@
 // (a map increment or a float64 add) so contention is negligible for a
 // single-pod system.
 // Metrics exported:
-//
 //	Counters (monotonically increasing):
 //	  sentinel_incidents_total{status="verified|failed|escalated"}
 //	  sentinel_investigations_started_total
@@ -21,9 +20,7 @@
 //	Gauges (point-in-time values):
 //	  sentinel_active_incidents
 //	  sentinel_llm_in_flight_calls
-//
 // Usage:
-//
 //	metrics.RecordInvestigationStart()
 //	defer metrics.RecordInvestigationComplete("verified", time.Since(start))
 package metrics

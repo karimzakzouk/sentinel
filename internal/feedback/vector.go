@@ -67,7 +67,7 @@ func NewVectorStore(baseURL, apiKey, model string) *VectorStore {
 }
 
 // NewVectorStoreWithDim creates a new vector store with a configurable
-// embedding dimension for the hash fallback. v3.11.0:.
+// embedding dimension for the hash fallback..
 // Pass dim=0 to keep the default (1536).
 
 func NewVectorStoreWithDim(baseURL, apiKey, model string, dim int) *VectorStore {

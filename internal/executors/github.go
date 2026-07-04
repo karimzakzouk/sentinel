@@ -58,7 +58,7 @@ func (e *GitHubExecutor) WithTokenProvider(tp TokenProvider) *GitHubExecutor {
 // configured, falls back to the PAT.
 
 
-// WithAPIURL sets the GitHub API base URL. v3.11.0: Replaces the hardcoded
+// WithAPIURL sets the GitHub API base URL.Replaces the hardcoded
 // "https://api.github.com" in 8 sites within this file.
 // For GitHub Enterprise: "https://gh.mycorp.internal/api/v3".
 // For GitLab (GitHub-compat API): "https://gitlab.com/api/v4".
@@ -70,7 +70,7 @@ func (e *GitHubExecutor) WithAPIURL(url string) *GitHubExecutor {
         return e
 }
 
-// WithGitHost sets the git host for clone URLs. v3.11.0: Replaces the
+// WithGitHost sets the git host for clone URLs.Replaces the
 // hardcoded "github.com". For GitHub Enterprise:
 // "gh.mycorp.internal". For GitLab: "gitlab.com".
 
@@ -81,7 +81,7 @@ func (e *GitHubExecutor) WithGitHost(host string) *GitHubExecutor {
         return e
 }
 
-// WithDefaultBranch sets the default branch fallback. v3.11.0: Replaces the
+// WithDefaultBranch sets the default branch fallback.Replaces the
 // hardcoded "main" in PrepareBranch. For repos whose
 // default branch is master/develop/trunk, set this accordingly. Per-repo
 // override via sentinel.io/branch annotation takes precedence.

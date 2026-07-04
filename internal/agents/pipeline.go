@@ -11,6 +11,7 @@ import (
         "encoding/json"
         "fmt"
         "log"
+        "sync"
         "time"
 
         "github.com/karimzakzouk/sentinel/internal/k8s"
@@ -112,7 +113,7 @@ func (p *Pipeline) SetGitHost(host string) {
 }
 
 // SetDefaultBranch propagates the default branch fallback to the
-// Investigator + FixProposer. v3.11.0: Replaces hardcoded "main" in
+// Investigator + FixProposer.Replaces hardcoded "main" in
 // cloner.go + branch_resolver.go + fix_proposer.go.
 
 func (p *Pipeline) SetDefaultBranch(branch string) {
@@ -128,7 +129,7 @@ func (p *Pipeline) SetLLMPriorWeight(w float64) {
         p.analyst.SetLLMPriorWeight(w)
 }
 
-// SetMaxIterations sets the max pipeline iterations. v3.11.0: Replaces
+// SetMaxIterations sets the max pipeline iterations.Replaces
 // the hardcoded 5 in schemas/types.go NewAgentState. The
 // pipeline's Run loop uses state.MaxIterations, so we set it on the state
 // before each Run via this setter (stored on the pipeline).
@@ -269,73 +270,89 @@ func (p *Pipeline) Run(ctx context.Context, state *schemas.AgentState) error {
                 // the LLM from gaming its own test.
                 // The test runs in the sandbox as Level 4 (test gate).
 
+                // Run test generation, reproducer generation, and security check
+                // in PARALLEL — they're independent LLM calls that all read
+                // state.FixProposal and produce independent artifacts.
+                var (
+                        testResult *schemas.GeneratedTest
+                        testErr    error
+                        reproResult *schemas.GeneratedReproducer
+                        reproErr   error
+                        secResult  *SecurityResult
+                )
+                var wg sync.WaitGroup
                 if p.generateTests && state.FixProposal != nil {
-                        testCtx, testCancel := context.WithTimeout(ctx, 60*time.Second)
-                        test, err := p.testGenerator.Generate(testCtx, state)
-                        testCancel()
-                        if err != nil {
-                                logging.Error("test generation failed (non-blocking)", "err", err)
-                        } else if test != nil {
-                                // Store the test in the agent state for the sandbox to run.
-                                // We store it as a special event so it persists + is visible in the trace.
-
-                                testJSON, _ := json.Marshal(test)
-                                state.AgentTrace = append(state.AgentTrace, map[string]any{
-                                        "agent":         "test_generator",
-                                        "action":        "test_generated",
-                                        "test_file":     test.TestFile,
-                                        "test_framework": test.TestFramework,
-                                        "test_language": test.TestLanguage,
-                                        "description":   test.Description,
-                                })
-                                // Store the test in a special state field for the sandbox.
-                                // We reuse the RetrievedIncidents field (it's a []map[string]any)
-                                // to avoid a schema change. The sandbox looks for a key "regression_test".
-
-                                if state.RetrievedIncidents == nil {
-                                        state.RetrievedIncidents = []map[string]any{}
-                                }
-                                state.RetrievedIncidents = append(state.RetrievedIncidents, map[string]any{
-                                        "regression_test": string(testJSON),
-                                })
-                                logging.Info("regression test generated", "value", test.TestFile, test.TestFramework, test.TestLanguage)
-                        }
+                        wg.Add(1)
+                        go func() {
+                                defer wg.Done()
+                                testCtx, testCancel := context.WithTimeout(ctx, 60*time.Second)
+                                defer testCancel()
+                                testResult, testErr = p.testGenerator.Generate(testCtx, state)
+                        }()
                 }
-
                 if p.generateReproducer && state.FixProposal != nil {
-                        reproCtx, reproCancel := context.WithTimeout(ctx, 60*time.Second)
-                        reproducer, err := p.reproducerGen.Generate(reproCtx, state)
-                        reproCancel()
-                        if err != nil {
-                                logging.Error("reproducer generation failed (non-blocking)", "err", err)
-                        } else if reproducer != nil {
-                                reproJSON, _ := json.Marshal(reproducer)
-                                state.AgentTrace = append(state.AgentTrace, map[string]any{
-                                        "agent":           "reproducer_generator",
-                                        "action":          "reproducer_generated",
-                                        "script_file":     reproducer.ScriptFile,
-                                        "script_language": reproducer.ScriptLanguage,
-                                        "description":     reproducer.Description,
-                                })
-                                if state.RetrievedIncidents == nil {
-                                        state.RetrievedIncidents = []map[string]any{}
-                                }
-                                state.RetrievedIncidents = append(state.RetrievedIncidents, map[string]any{
-                                        "reproducer": string(reproJSON),
-                                })
-                                logging.Info("reproducer script generated", "value", reproducer.ScriptFile, reproducer.ScriptLanguage)
+                        wg.Add(1)
+                        go func() {
+                                defer wg.Done()
+                                reproCtx, reproCancel := context.WithTimeout(ctx, 60*time.Second)
+                                defer reproCancel()
+                                reproResult, reproErr = p.reproducerGen.Generate(reproCtx, state)
+                        }()
+                }
+                if state.FixProposal != nil {
+                        wg.Add(1)
+                        go func() {
+                                defer wg.Done()
+                                secCtx, secCancel := context.WithTimeout(ctx, 30*time.Second)
+                                defer secCancel()
+                                secResult = RunSecurityCheck(secCtx, p.investigator.router, state)
+                        }()
+                }
+                wg.Wait()
+
+                // Merge results into state sequentially (no race).
+                if testResult != nil && testErr == nil {
+                        testJSON, _ := json.Marshal(testResult)
+                        state.AgentTrace = append(state.AgentTrace, map[string]any{
+                                "agent":         "test_generator",
+                                "action":        "test_generated",
+                                "test_file":     testResult.TestFile,
+                                "test_framework": testResult.TestFramework,
+                                "test_language": testResult.TestLanguage,
+                                "description":   testResult.Description,
+                        })
+                        if state.RetrievedIncidents == nil {
+                                state.RetrievedIncidents = []map[string]any{}
                         }
+                        state.RetrievedIncidents = append(state.RetrievedIncidents, map[string]any{
+                                "regression_test": string(testJSON),
+                        })
+                        logging.Info("regression test generated", "value", testResult.TestFile, testResult.TestFramework, testResult.TestLanguage)
+                } else if testErr != nil {
+                        logging.Error("test generation failed (non-blocking)", "err", testErr)
                 }
 
-                // Runs AFTER the fix is generated but BEFORE the pipeline returns.
-                // If the security check fails, the fix is marked as requiring human review
-                // (status = governance_review) and the security findings are stored.
+                if reproResult != nil && reproErr == nil {
+                        reproJSON, _ := json.Marshal(reproResult)
+                        state.AgentTrace = append(state.AgentTrace, map[string]any{
+                                "agent":           "reproducer_generator",
+                                "action":          "reproducer_generated",
+                                "script_file":     reproResult.ScriptFile,
+                                "script_language": reproResult.ScriptLanguage,
+                                "description":     reproResult.Description,
+                        })
+                        if state.RetrievedIncidents == nil {
+                                state.RetrievedIncidents = []map[string]any{}
+                        }
+                        state.RetrievedIncidents = append(state.RetrievedIncidents, map[string]any{
+                                "reproducer": string(reproJSON),
+                        })
+                        logging.Info("reproducer script generated", "value", reproResult.ScriptFile, reproResult.ScriptLanguage)
+                } else if reproErr != nil {
+                        logging.Error("reproducer generation failed (non-blocking)", "err", reproErr)
+                }
 
-                if state.FixProposal != nil {
-                        secCtx, secCancel := context.WithTimeout(ctx, 30*time.Second)
-                        secResult := RunSecurityCheck(secCtx, p.investigator.router, state)
-                        secCancel()
-
+                if secResult != nil {
                         state.AgentTrace = append(state.AgentTrace, map[string]any{
                                 "agent":       "security_scanner",
                                 "action":      "security_scan",
@@ -343,25 +360,15 @@ func (p *Pipeline) Run(ctx context.Context, state *schemas.AgentState) error {
                                 "findings":    len(secResult.Findings),
                                 "summary":     secResult.Summary,
                         })
-
                         if !secResult.Passed {
                                 logging.Error("SECURITY CHECK FAILED", "summary", secResult.Summary)
-                                // Store the security findings in the error field so the PR body
-                                // (if opened) shows them, and the safety policy can block auto-merge.
-
                                 secDetail := secResult.Summary
                                 for _, f := range secResult.Findings {
                                         secDetail += fmt.Sprintf("\n  - [%s] %s: %s (%s)", f.Severity, f.Rule, f.Message, f.File)
                                 }
-                                // Mark as governance review — the safety policy will block auto-merge
-
                                 state.Status = schemas.StatusGovernanceReview
                                 s := fmt.Sprintf("security_check_failed: %s", secDetail)
                                 state.Error = &s
-                                // Still return nil (not an error) — the pipeline completed, but the
-                                // fix needs human review. The handler in main.go will see the status
-                                // and skip auto-merge.
-
                                 return nil
                         }
                         logging.Info("security check PASSED", "summary", secResult.Summary)

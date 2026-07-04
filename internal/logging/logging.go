@@ -43,7 +43,7 @@ var (
         mu            sync.Mutex
 )
 
-// Init initializes the default logger. v3.18.0: NO LONGER uses sync.Once —
+// Init initializes the default logger.NO LONGER uses sync.Once —
 // allows log level to be hot-reloaded via runtime config (H22).
 // Safe to call multiple times.
 // If level is empty, defaults to INFO. Set SENTINEL_LOG_LEVEL=DEBUG for verbose.

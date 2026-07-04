@@ -591,7 +591,7 @@ func ParseWholeFileReplacement(llmOutput string) (string, string) {
 
                 matches := codeBlockRe.FindAllStringSubmatch(output, -1)
         for _, m := range matches {
-                // H6 fix: added parentheses to fix operator-precedence bug.
+                //added parentheses to fix operator-precedence bug.
                 // Go evaluates && before ||, so the old expression was:
                 //   (len(m) >= 2 && Contains(m[1],"def ")) || Contains(m[1],"func ") || Contains(m[1],"class ")
                 // If len(m) < 2 AND m[1] contained "func " or "class ", m[1]

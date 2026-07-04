@@ -2,8 +2,8 @@ apiVersion: v2
 name: sentinel
 description: Sentinel v5 — The Autonomous AI SRE. One binary, one pod, 43MB.
 type: application
-version: 5.9.6
-appVersion: "5.9.6"
+version: 5.10.0
+appVersion: "5.10.0"
 home: https://github.com/karimzakzouk/sentinel
 sources:
   - https://github.com/karimzakzouk/sentinel
