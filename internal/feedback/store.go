@@ -219,3 +219,24 @@ func (s *Store) migrateSchema() error {
 }
 
 // UpsertIncident stores or updates an incident.
+
+func nullableString(s *string) sql.NullString {
+        if s == nil {
+                return sql.NullString{}
+        }
+        return sql.NullString{String: *s, Valid: true}
+}
+
+func boolToInt(b bool) int {
+        if b {
+                return 1
+        }
+        return 0
+}
+
+func nullableStringPtr(s *string) sql.NullString {
+        if s == nil {
+                return sql.NullString{}
+        }
+        return sql.NullString{String: *s, Valid: true}
+}

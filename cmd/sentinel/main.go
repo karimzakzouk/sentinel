@@ -26,6 +26,7 @@ import (
         "github.com/karimzakzouk/sentinel/internal/config"
         "github.com/karimzakzouk/sentinel/internal/correlation"
         "github.com/karimzakzouk/sentinel/internal/detection"
+        "github.com/karimzakzouk/sentinel/internal/emb"
         "github.com/karimzakzouk/sentinel/internal/events"
         "github.com/karimzakzouk/sentinel/internal/executors"
         "github.com/karimzakzouk/sentinel/internal/feedback"
@@ -324,10 +325,31 @@ func main() {
         llm.SetInFlightHooks(metrics.LLMCallStart, metrics.LLMCallEnd)
 
         // 3.5 Vector store (HNSW + LLM embeddings) — created before pipeline for memory loop
-        // vector store uses permanent hash fallback. Also wire the
-        // configurable hash-fallback dim (cfg.LLMLLMEmbeddingDim, default 1536).
+        // Create embedding pipeline. Auto-detects: if an embedding API key is
+        // configured (dedicated or reused from LLM key), use remote embeddings.
+        // Otherwise fall back to TF-IDF (keyword overlap, non-semantic).
+        embAPIKey := cfg.EmbeddingAPIKey
+        if embAPIKey == "" && cfg.LLMEmbeddingModel != "" {
+                embAPIKey = cfg.LLMAPIKey // reuse LLM key for embeddings
+        }
+        embBaseURL := cfg.EmbeddingBaseURL
+        if embBaseURL == "" && cfg.LLMEmbeddingModel != "" {
+                embBaseURL = cfg.ResolvedBaseURL() // reuse LLM base URL
+        }
+        embedder, err := emb.New(emb.Config{
+                Provider:  cfg.EmbeddingProvider,
+                Model:     cfg.LLMEmbeddingModel,
+                APIKey:    embAPIKey,
+                BaseURL:   embBaseURL,
+                Dimension: cfg.LLMEmbeddingDim,
+        })
+        if err != nil {
+                logging.Error("failed to create embedder, using TF-IDF fallback", "err", err)
+                embedder, _ = emb.New(emb.Config{Provider: "tfidf", Dimension: cfg.LLMEmbeddingDim})
+        }
+        logging.Info("embedding pipeline configured", "provider", embedder.Name(), "semantic", embedder.IsSemantic())
 
-        vectorStore := feedback.NewVectorStoreWithDim(cfg.ResolvedBaseURL(), cfg.LLMAPIKey, cfg.LLMEmbeddingModel, cfg.LLMEmbeddingDim)
+        vectorStore := feedback.NewVectorStore(embedder)
 
         // 4. Agent pipeline (with vector store for memory loop)
 
@@ -665,23 +687,27 @@ func main() {
                 alpha, beta := recordBetaOutcome(ctx, store, incident, success)
                 incident.BetaAlpha = alpha
                 incident.BetaBeta = beta
-                if err := store.StoreIncidentVector(ctx, &incident, success); err != nil {
-                        logging.ErrorCtx(invCtx, "store incident vector failed", "error", err)
-                }
 
-                // Add to HNSW vector index for future RAG retrieval
-
+                // Compute embedding once, use for both SQLite persistence + HNSW index
                 if incident.State.RootCause != nil && incident.State.FixProposal != nil {
                         vectorText := incident.Cluster.Summary + " " + incident.State.RootCause.Statement + " " + incident.State.FixProposal.Description
-                        if err := vectorStore.Add(ctx, vectorText, &feedback.VectorMetadata{
-                                IncidentID: incident.IncidentID.String(),
-                                Service:    incident.Cluster.Service,
-                                RootCause:  incident.State.RootCause.Statement,
-                                FixType:    string(incident.State.FixProposal.FixType),
-                                FixPattern: incident.State.FixProposal.Description,
-                                Outcome:    map[bool]string{true: "success", false: "failure"}[success],
-                        }); err != nil {
-                                logging.ErrorCtx(invCtx, "vector store add failed", "error", err)
+                        embedding, embErr := vectorStore.GenerateEmbedding(ctx, vectorText)
+                        if embErr != nil {
+                                logging.ErrorCtx(invCtx, "embedding computation failed", "error", embErr)
+                        } else {
+                                if err := store.StoreIncidentVector(ctx, &incident, success, embedding); err != nil {
+                                        logging.ErrorCtx(invCtx, "store incident vector failed", "error", err)
+                                }
+                                if err := vectorStore.Add(ctx, vectorText, &feedback.VectorMetadata{
+                                        IncidentID: incident.IncidentID.String(),
+                                        Service:    incident.Cluster.Service,
+                                        RootCause:  incident.State.RootCause.Statement,
+                                        FixType:    string(incident.State.FixProposal.FixType),
+                                        FixPattern: incident.State.FixProposal.Description,
+                                        Outcome:    map[bool]string{true: "success", false: "failure"}[success],
+                                }); err != nil {
+                                        logging.ErrorCtx(invCtx, "vector store add failed", "error", err)
+                                }
                         }
                 }
 

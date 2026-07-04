@@ -3,6 +3,8 @@ package feedback
 import (
         "context"
         "testing"
+
+        "github.com/karimzakzouk/sentinel/internal/emb"
 )
 
 // TestVectorStore_Search_RealScores verifies that v3.3.1 fix: VectorStore.Search
@@ -18,7 +20,7 @@ import (
 //  4. The actual top score reflects real similarity, not a hardcoded 0.9
 func TestVectorStore_Search_RealScores(t *testing.T) {
         // No API key → falls back to hashEmbedding (deterministic, no network).
-        vs := NewVectorStore("", "", "test-model")
+        vs := NewVectorStore(emb.NewTfIDF(1536))
         ctx := context.Background()
 
         // Insert a known incident.
@@ -102,7 +104,7 @@ func TestVectorStore_Search_RealScores(t *testing.T) {
         })
 
         t.Run("no results when index empty", func(t *testing.T) {
-                empty := NewVectorStore("", "", "test-model")
+                empty := NewVectorStore(emb.NewTfIDF(1536))
                 metas, scores, err := empty.Search(ctx, "anything", 5)
                 if err != nil {
                         t.Fatalf("Search on empty index failed: %v", err)
@@ -118,7 +120,7 @@ func TestVectorStore_Search_RealScores(t *testing.T) {
 // We query with text that's similar (but not identical) to a stored incident —
 // the score should be neither 1.0 (exact match) nor the fabricated 0.9.
 func TestVectorStore_Search_ScoresAreNotFabricated(t *testing.T) {
-        vs := NewVectorStore("", "", "test-model")
+        vs := NewVectorStore(emb.NewTfIDF(1536))
         ctx := context.Background()
 
         _ = vs.Add(ctx, "KeyError DATABASE_URLL typo in app main py", &VectorMetadata{
