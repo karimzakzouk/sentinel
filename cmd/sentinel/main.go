@@ -181,6 +181,20 @@ func main() {
                 logging.Info("L2 safe-actions enabled", "namespaces", cfg.SafeActionsNamespaces, "max_per_hour", cfg.SafeActionsMaxPerHour)
         }
 
+        // 2.6. Fix verification (kubelet cAdvisor + optional Prometheus)
+        if cfg.FixVerifyEnabled {
+                logging.Info("fix verification enabled", "prometheus", cfg.PrometheusURL)
+        }
+
+        // 2.7. Argo Rollouts / Flagger CRD detection (optional, detect-only)
+        logging.Info("checking for Argo Rollouts / Flagger CRDs...")
+        if _, err := k8sClient.Clientset().Discovery().ServerResourcesForGroupVersion("argoproj.io/v1alpha1"); err == nil {
+                logging.Info("Argo Rollouts detected — canary verification can defer to Rollout CRDs")
+        }
+        if _, err := k8sClient.Clientset().Discovery().ServerResourcesForGroupVersion("flager.app/v1beta1"); err == nil {
+                logging.Info("Flagger detected — canary verification can defer to Canary CRD")
+        }
+
         // 3. LLM router
 
         router := llm.NewWithProvider(cfg.LLMProvider, cfg.ResolvedBaseURL(), cfg.LLMAPIKey, cfg.LLMFastModel, cfg.LLMFrontierModel)

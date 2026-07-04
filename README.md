@@ -11,7 +11,7 @@ Detect. Diagnose. Fix. Verify. — autonomously.
 [![Pods](https://img.shields.io/badge/pods-1-blue)]()
 [![Arch](https://img.shields.io/badge/arch-amd64%20%7C%20arm64-success)]()
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![Version](https://img.shields.io/badge/version-5.12.0-cyan)]()
+[![Version](https://img.shields.io/badge/version-5.13.0-cyan)]()
 
 [Install](#install) · [How It Works](#how-it-works) · [Configuration](#configuration) · [Architecture](#architecture) · [CLI](#cli) · [Web UI](#web-ui)
 
@@ -41,7 +41,7 @@ helm repo add sentinel https://karimzakzouk.github.io/sentinel/
 helm repo update
 
 <<<<<<< HEAD
-helm install sentinel sentinel/sentinel --version 5.12.0 \
+helm install sentinel sentinel/sentinel --version 5.13.0 \
 =======
 helm install sentinel sentinel/sentinel --version 5.11.1 \
 >>>>>>> ccf5bf3f5b2ebbe4b480d1a96497641dd28c47f5

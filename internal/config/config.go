@@ -62,6 +62,10 @@ type Config struct {
         SafeActionsMaxPerHour       int
         SafeActionsMaxScaleDeltaPct int
 
+        // Fix verification (Phase 2). Scrapes kubelet cAdvisor for canary
+        // pod metrics + optionally re-queries the original alert's PromQL.
+        FixVerifyEnabled    bool
+
         // Kubernetes
 
         Namespace   string // the namespace Sentinel runs in
@@ -334,6 +338,8 @@ func Load() *Config {
                 SafeActionsNamespaces:       getenvCsv("SENTINEL_SAFE_ACTIONS_NAMESPACES"),
                 SafeActionsMaxPerHour:       getenvInt("SENTINEL_SAFE_ACTIONS_MAX_PER_HOUR", 3),
                 SafeActionsMaxScaleDeltaPct: getenvInt("SENTINEL_SAFE_ACTIONS_MAX_SCALE_DELTA_PCT", 50),
+
+                FixVerifyEnabled: getenvBool("SENTINEL_FIX_VERIFY", true),
 
                 Namespace:                 getenv("SENTINEL_NAMESPACE", "sentinel"),
                 ReleaseName:               getenv("SENTINEL_RELEASE_NAME", "sentinel"),

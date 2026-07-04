@@ -4,14 +4,14 @@
 # no UI, no OPA sidecar. 43MB image, ~50MB RAM at idle.
 #
 # Install:
-#   helm install sentinel sentinel/sentinel --version 5.12.0 -n sentinel --create-namespace \
+#   helm install sentinel sentinel/sentinel --version 5.13.0 -n sentinel --create-namespace \
 #     --set sentinel.githubToken=YOUR_GITHUB_TOKEN \
 #     --set sentinel.llm.apiKey=YOUR_LLM_API_KEY
 
 image:
   registry: "docker.io/karimzakzouk"
   repository: "sentinel"
-  tag: "5.12.0"
+  tag: "5.13.0"
   pullPolicy: Always
 
 sentinel:
@@ -110,6 +110,12 @@ sentinel:
     namespaces: []
     maxPerHour: 3
     maxScaleDeltaPct: 50
+
+  # Fix verification — scrapes kubelet cAdvisor for canary metrics + optional
+  # Prometheus alert re-query. Enabled by default.
+  fixVerify:
+    enabled: true
+    prometheusUrl: ""    # set to enable alert re-query (e.g. http://prometheus:9090)
 
   # Docker Hub creds for Kaniko sandbox image builder
   dockerHubUsername: ""

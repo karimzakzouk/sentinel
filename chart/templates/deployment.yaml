@@ -107,6 +107,14 @@ spec:
             - name: SENTINEL_SAFE_ACTIONS_MAX_SCALE_DELTA_PCT
               value: {{ .Values.sentinel.safeActions.maxScaleDeltaPct | quote }}
             {{- end }}
+            {{- if .Values.sentinel.fixVerify.enabled }}
+            - name: SENTINEL_FIX_VERIFY
+              value: "true"
+            {{- end }}
+            {{- if .Values.sentinel.fixVerify.prometheusUrl }}
+            - name: SENTINEL_PROMETHEUS_URL
+              value: {{ .Values.sentinel.fixVerify.prometheusUrl | quote }}
+            {{- end }}
             - name: SENTINEL_GITHUB_TOKEN
               valueFrom:
                 secretKeyRef:
