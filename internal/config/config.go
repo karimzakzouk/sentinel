@@ -56,6 +56,12 @@ type Config struct {
 
         LLMEmbeddingDim int
 
+        // L2 safe-actions (restart, rollback, scale)
+        SafeActionsEnabled          bool
+        SafeActionsNamespaces       []string
+        SafeActionsMaxPerHour       int
+        SafeActionsMaxScaleDeltaPct int
+
         // Kubernetes
 
         Namespace   string // the namespace Sentinel runs in
@@ -323,6 +329,12 @@ func Load() *Config {
                 LLMSemanticCacheThreshold: getenvFloat("SENTINEL_LLM_CACHE_THRESHOLD", 0.97),
 
                 LLMEmbeddingDim:           getenvInt("SENTINEL_LLM_EMBEDDING_DIM", 1536),
+
+                SafeActionsEnabled:          getenvBool("SENTINEL_SAFE_ACTIONS_ENABLED", false),
+                SafeActionsNamespaces:       getenvCsv("SENTINEL_SAFE_ACTIONS_NAMESPACES"),
+                SafeActionsMaxPerHour:       getenvInt("SENTINEL_SAFE_ACTIONS_MAX_PER_HOUR", 3),
+                SafeActionsMaxScaleDeltaPct: getenvInt("SENTINEL_SAFE_ACTIONS_MAX_SCALE_DELTA_PCT", 50),
+
                 Namespace:                 getenv("SENTINEL_NAMESPACE", "sentinel"),
                 ReleaseName:               getenv("SENTINEL_RELEASE_NAME", "sentinel"),
                 GitHubToken:               getenv("SENTINEL_GITHUB_TOKEN", ""),

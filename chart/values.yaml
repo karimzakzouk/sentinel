@@ -104,6 +104,13 @@ sentinel:
     maxPerHour: 3            # rate limit — prevents cascade → many bad merges
     cooldownMin: 60          # pause auto-merge for 1h after any regression
 
+  # L2 safe-actions — immediate remediation (restart, rollback, scale)
+  safeActions:
+    enabled: false
+    namespaces: []
+    maxPerHour: 3
+    maxScaleDeltaPct: 50
+
   # Docker Hub creds for Kaniko sandbox image builder
   dockerHubUsername: ""
   dockerHubToken: ""
