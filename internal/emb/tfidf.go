@@ -1,3 +1,4 @@
+// TF-IDF embedding backend — pure Go, zero dependencies, keyword-overlap similarity.
 package emb
 
 import (

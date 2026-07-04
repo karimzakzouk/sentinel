@@ -1,3 +1,4 @@
+// Package emb provides pluggable text embeddings for incident memory + LLM semantic cache.
 package emb
 
 import (
