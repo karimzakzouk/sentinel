@@ -661,6 +661,10 @@ func getenvBool(key string, def bool) bool {
         return def
 }
 
+func getenvCsv(key string) []string {
+        return splitCSV(os.Getenv(key))
+}
+
 func splitCSV(s string) []string {
         if s == "" {
                 return nil
