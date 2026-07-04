@@ -8,7 +8,7 @@
 package chatops
 
 import (
-	"github.com/karimzakzouk/sentinel/internal/logging"
+        "github.com/karimzakzouk/sentinel/internal/logging"
         "context"
         "crypto/hmac"
         "crypto/sha256"
@@ -26,9 +26,15 @@ import (
 type WebhookHandler struct {
         deps          *Deps
         webhookSecret string // optional HMAC-SHA256 secret for signature verification
+        // M9 fix: bounded semaphore to prevent unbounded goroutine growth.
+        // Each /sentinel command spawns a goroutine that can live up to 30 min.
+        // Without a cap, an attacker posting many /sentinel retest commands
+        // could exhaust memory. The semaphore limits concurrent dispatches.
+        dispatchSem chan struct{}
 }
 
-// NewWebhookHandler creates a webhook handler.
+// NewWebhookHandler creates a WebhookHandler with the given deps + secret.
+// The semaphore size defaults to 8 concurrent dispatches (M9 fix).
 // deps is the dependency bag (must be fully wired before this is called).
 // webhookSecret is the GitHub webhook secret (empty = skip signature check).
 
@@ -36,6 +42,7 @@ func NewWebhookHandler(deps *Deps, webhookSecret string) *WebhookHandler {
         return &WebhookHandler{
                 deps:          deps,
                 webhookSecret: webhookSecret,
+                dispatchSem:   make(chan struct{}, 8),
         }
 }
 
@@ -157,9 +164,21 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
         // Dispatch in a goroutine so we return 200 immediately — GitHub times out
         // webhooks after 10s. Long-running commands (retry-sandbox takes minutes)
         // must run async.
+        //
+        // M9 fix: use a bounded semaphore to cap concurrent dispatches at 8.
+        // If 8 are already running, the 9th waits for one to finish (up to 30s).
+        // If it can't acquire within 30s, we return 503 so GitHub retries later.
 
         go func() {
                 defer func() { if r := recover(); r != nil { log.Printf("[chatops] dispatch panic recovered: %v", r) } }()
+                select {
+                case h.dispatchSem <- struct{}{}:
+                        defer func() { <-h.dispatchSem }()
+                case <-time.After(30 * time.Second):
+                        log.Printf("[chatops] dispatch queue full, dropping commands from @%s on %s#%d",
+                                event.Comment.User.Login, event.Repository.FullName, event.Issue.Number)
+                        return
+                }
                 ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
                 defer cancel()
                 if err := Dispatch(ctx, commands, h.deps); err != nil {

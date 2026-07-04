@@ -7,7 +7,7 @@
 package executors
 
 import (
-	"github.com/karimzakzouk/sentinel/internal/logging"
+        "github.com/karimzakzouk/sentinel/internal/logging"
         "context"
         "fmt"
         "log"
@@ -20,7 +20,7 @@ import (
         "k8s.io/apimachinery/pkg/util/intstr"
 
         "github.com/karimzakzouk/sentinel/internal/errs"
-	"github.com/karimzakzouk/sentinel/internal/schemas"
+        "github.com/karimzakzouk/sentinel/internal/schemas"
 )
 
 func (s *SandboxRunner) createNamespace(ctx context.Context, ns string) error {
@@ -396,6 +396,44 @@ func patchPodSpec(spec corev1.PodSpec, canaryImage string) corev1.PodSpec {
                                         EmptyDir: &corev1.EmptyDirVolumeSource{},
                                 },
                         }
+                }
+        }
+
+        // M4 fix: mount an emptyDir at /tmp so apps that write temp files
+        // (PID files, caches, sqlite WAL, /tmp uploads) work correctly under
+        // ReadOnlyRootFilesystem. Without this, canary pods crash on startup
+        // for any app that writes to /tmp — Level 1 fails, not because the
+        // fix is wrong but because the sandbox is too restrictive.
+        tmpVolumeName := "sentinel-tmp"
+        hasTmpVolume := false
+        for _, v := range spec.Volumes {
+                if v.Name == tmpVolumeName {
+                        hasTmpVolume = true
+                        break
+                }
+        }
+        if !hasTmpVolume {
+                spec.Volumes = append(spec.Volumes, corev1.Volume{
+                        Name: tmpVolumeName,
+                        VolumeSource: corev1.VolumeSource{
+                                EmptyDir: &corev1.EmptyDirVolumeSource{},
+                        },
+                })
+        }
+        for i := range spec.Containers {
+                hasTmpMount := false
+                for _, vm := range spec.Containers[i].VolumeMounts {
+                        if vm.MountPath == "/tmp" {
+                                hasTmpMount = true
+                                break
+                        }
+                }
+                if !hasTmpMount {
+                        spec.Containers[i].VolumeMounts = append(spec.Containers[i].VolumeMounts,
+                                corev1.VolumeMount{
+                                        Name:      tmpVolumeName,
+                                        MountPath: "/tmp",
+                                })
                 }
         }
 

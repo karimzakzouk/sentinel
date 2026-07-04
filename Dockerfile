@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-# Sentinel v3.12.0 Dockerfile — includes embedded web UI.
+# Sentinel v5.9.6 Dockerfile — includes embedded web UI.
 # Multi-stage: Node.js builds the dashboard → Go compiles with embedded assets.
 # Multi-arch: builds natively on amd64 + arm64 runners (no QEMU).
 # Build time: ~4 min cold, ~2 min cached.

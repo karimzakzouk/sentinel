@@ -53,9 +53,23 @@ async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
       ...(init?.headers || {}),
     },
   });
+  // 401 interceptor: if the token expired mid-session, clear it and reload
+  // to show the login gate. Without this, every fetch 401s silently and the
+  // user sees stale data with no indicator.
+  if (res.status === 401) {
+    clearToken();
+    if (typeof window !== "undefined") {
+      window.location.reload();
+    }
+    throw new Error("Session expired — redirecting to login");
+  }
   if (!res.ok) {
     const text = await res.text().catch(() => res.statusText);
     throw new Error(`${res.status} ${res.statusText}: ${text}`);
+  }
+  // 204 No Content — don't try to parse JSON (would throw "Unexpected end of JSON input")
+  if (res.status === 204) {
+    return undefined as T;
   }
   return res.json() as Promise<T>;
 }

@@ -330,6 +330,8 @@ type AutoMergeInput struct {
         SandboxVerified     bool
         PolicyVerdict       string
         AutoMergeAnnotation bool
+        SandboxOverride     bool
+        CIOverride          bool
 }
 
 // AutoMergeStatus is the public state of the auto-merge policy.
@@ -364,6 +366,7 @@ type RollbackExecutor interface {
 type Store interface {
         FindIncidentByPR(ctx context.Context, repo string, prNumber int) (*Incident, error)
         LogCommandEvent(ctx context.Context, ev *CommandEvent) error
+        UpdateOverrides(ctx context.Context, incidentID string, sandboxOverride, ciOverride bool) error
 }
 
 // Incident is a minimal incident view for command handlers.

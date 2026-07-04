@@ -242,6 +242,13 @@ type ExecutionResult struct {
         StartedAt        time.Time      `json:"started_at"`
         FinishedAt       *time.Time     `json:"finished_at,omitempty"`
         Error            *string        `json:"error,omitempty"`
+
+        // Admin overrides — set by /sentinel override sandbox|ci.
+        // When true, the auto-merge policy treats the corresponding gate
+        // as passed without actually running the check. Destructive —
+        // every use is audit-logged.
+        SandboxOverride bool `json:"sandbox_override,omitempty"`
+        CIOverride      bool `json:"ci_override,omitempty"`
 }
 
 // AgentState is the structured object passed between agents in the state machine.

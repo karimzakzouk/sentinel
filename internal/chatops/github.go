@@ -6,7 +6,7 @@
 package chatops
 
 import (
-	"strings"
+        "strings"
         "bytes"
         "context"
         "encoding/json"
@@ -14,13 +14,45 @@ import (
         "io"
         "net/http"
 
-	githubapp "github.com/karimzakzouk/sentinel/internal/github"
+        "github.com/karimzakzouk/sentinel/internal/logging"
+        githubapp "github.com/karimzakzouk/sentinel/internal/github"
 )
 
 // GitHubClientImpl is the default GitHubClient implementation.
 
 type GitHubClientImpl struct {
-	*githubapp.BaseClient
+        *githubapp.BaseClient
+        botLogin string // cached login from /user (for RemoveReaction)
+}
+
+// getBotLogin fetches the authenticated user's login (cached after first call).
+// Used by RemoveReaction to match the bot's own reaction rather than a random user's.
+
+func (g *GitHubClientImpl) getBotLogin(ctx context.Context) string {
+        if g.botLogin != "" {
+                return g.botLogin
+        }
+        req, err := http.NewRequestWithContext(ctx, "GET", g.APIURL+"/user", nil)
+        if err != nil {
+                return ""
+        }
+        g.setHeaders(req)
+        resp, err := g.HTTP.Do(req)
+        if err != nil {
+                return ""
+        }
+        defer resp.Body.Close()
+        if resp.StatusCode != http.StatusOK {
+                return ""
+        }
+        var user struct {
+                Login string `json:"login"`
+        }
+        if err := json.NewDecoder(resp.Body).Decode(&user); err != nil {
+                return ""
+        }
+        g.botLogin = user.Login
+        return g.botLogin
 }
 
 // TokenProvider returns a fresh GitHub API token. v4.0.0.
@@ -36,9 +68,9 @@ type TokenProvider interface {
 // Enterprise, set to "https://gh.mycorp.internal/api/v3".
 
 func NewGitHubClient(token, apiURL string) *GitHubClientImpl {
-	return &GitHubClientImpl{
-		BaseClient: githubapp.NewBaseClient(token, apiURL),
-	}
+        return &GitHubClientImpl{
+                BaseClient: githubapp.NewBaseClient(token, apiURL),
+        }
 }
 
 // WithTokenProvider wires a GitHub App token provider. v4.0.0.
@@ -46,8 +78,8 @@ func NewGitHubClient(token, apiURL string) *GitHubClientImpl {
 // merges) use the App's installation token, appearing as "Sentinel[bot]".
 
 func (g *GitHubClientImpl) WithTokenProvider(tp TokenProvider) *GitHubClientImpl {
-	g.BaseClient.WithTokenProvider(tp)
-	return g
+        g.BaseClient.WithTokenProvider(tp)
+        return g
 }
 
 // authToken returns the token to use for an API call. v4.0.0.
@@ -113,26 +145,38 @@ func (g *GitHubClientImpl) RemoveReaction(ctx context.Context, repo string, comm
         }
         resp.Body.Close()
 
-        // Find the bot's reaction of this type. The bot is the user whose token
-        // we're using — we don't know its login without a /user call. Instead,
-        // just delete the first reaction of this type (best-effort — if multiple
-        // users reacted +1, we might delete theirs, but that's a minor UX issue).
+        // M1 fix: find the BOT's reaction of this type, not just the first
+        // matching one. Previously we deleted the first reaction of this type,
+        // which could be a user's reaction — silently stealing their emoji.
+        // Now we fetch the bot's login via /user and match on it.
+        botLogin := g.getBotLogin(ctx)
+        if botLogin == "" {
+                // Couldn't determine bot login — fall back to first match
+                // (same as old behavior) with a warning log.
+                logging.Warn("could not determine bot login for reaction removal — may delete wrong user's reaction")
+        }
 
         for _, r := range reactions {
-                if r.Content == reaction {
-                        delReq, _ := http.NewRequestWithContext(ctx, "DELETE",
-                                fmt.Sprintf("%s/repos/%s/issues/comments/%d/reactions/%d", g.APIURL, repo, commentID, r.ID), nil)
-                        g.setHeaders(delReq)
-                        delResp, err := g.HTTP.Do(delReq)
-                        if err != nil {
-                                return err
-                        }
-                        delResp.Body.Close()
-                        if delResp.StatusCode != http.StatusNoContent && delResp.StatusCode != http.StatusOK {
-                                return fmt.Errorf("delete reaction %d: %d", r.ID, delResp.StatusCode)
-                        }
-                        return nil
+                if r.Content != reaction {
+                        continue
                 }
+                // If we know the bot login, only delete the bot's reaction.
+                // If we don't know it (getBotLogin failed), fall back to first match.
+                if botLogin != "" && r.User.Login != botLogin {
+                        continue
+                }
+                delReq, _ := http.NewRequestWithContext(ctx, "DELETE",
+                        fmt.Sprintf("%s/repos/%s/issues/comments/%d/reactions/%d", g.APIURL, repo, commentID, r.ID), nil)
+                g.setHeaders(delReq)
+                delResp, err := g.HTTP.Do(delReq)
+                if err != nil {
+                        return err
+                }
+                delResp.Body.Close()
+                if delResp.StatusCode != http.StatusNoContent && delResp.StatusCode != http.StatusOK {
+                        return fmt.Errorf("delete reaction %d: %d", r.ID, delResp.StatusCode)
+                }
+                return nil
         }
         return nil // not found — already gone
 }

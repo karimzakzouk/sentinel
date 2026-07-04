@@ -2,7 +2,7 @@
 package feedback
 
 import (
-	"github.com/karimzakzouk/sentinel/internal/logging"
+        "github.com/karimzakzouk/sentinel/internal/logging"
         "context"
         "database/sql"
         "encoding/json"
@@ -387,6 +387,47 @@ func (s *Store) UpdateAutoMergeStatus(ctx context.Context, incidentID uuid.UUID,
                 UPDATE incidents SET auto_merge_status = ?, updated_at = ?
                 WHERE incident_id = ?
         `, status, time.Now().UTC(), incidentID.String())
+        return err
+}
+
+// UpdateOverrides sets admin override flags on an incident's ExecutionResult.
+// Called by /sentinel override sandbox|ci. When true, the auto-merge policy
+// treats the corresponding gate as passed without actually running the check.
+// The overrides are stored inside state_json (ExecutionResult.SandboxOverride
+// / CIOverride), so we read-modify-write the state.
+func (s *Store) UpdateOverrides(ctx context.Context, incidentID uuid.UUID, sandboxOverride, ciOverride bool) error {
+        s.mu.Lock()
+        defer s.mu.Unlock()
+
+        // Read current state_json
+        var stateJSON string
+        err := s.db.QueryRowContext(ctx,
+                `SELECT state_json FROM incidents WHERE incident_id = ?`,
+                incidentID.String(),
+        ).Scan(&stateJSON)
+        if err != nil {
+                return fmt.Errorf("read state for override: %w", err)
+        }
+
+        // Unmarshal, set overrides, re-marshal
+        var state schemas.AgentState
+        if err := json.Unmarshal([]byte(stateJSON), &state); err != nil {
+                return fmt.Errorf("unmarshal state for override: %w", err)
+        }
+        if state.ExecutionResult == nil {
+                state.ExecutionResult = &schemas.ExecutionResult{}
+        }
+        state.ExecutionResult.SandboxOverride = sandboxOverride
+        state.ExecutionResult.CIOverride = ciOverride
+
+        newStateJSON, err := json.Marshal(state)
+        if err != nil {
+                return fmt.Errorf("marshal state for override: %w", err)
+        }
+
+        _, err = s.db.ExecContext(ctx,
+                `UPDATE incidents SET state_json = ?, updated_at = ? WHERE incident_id = ?`,
+                string(newStateJSON), time.Now().UTC(), incidentID.String())
         return err
 }
 

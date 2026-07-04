@@ -19,7 +19,7 @@
 - [ ] I have added tests that prove my fix is effective or my feature works
 - [ ] I have updated the README / docs if needed
 - [ ] My changes generate no new golangci-lint warnings
-- [ ] I have not added any new direct dependencies without discussion (we keep the dep diet tight — currently 7 direct deps)
+- [ ] I have not added any new direct dependencies without discussion (we keep the dep diet tight — currently 10 direct deps)
 
 ## Test plan
 

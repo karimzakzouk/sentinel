@@ -474,6 +474,8 @@ func executeCodeFix(
                                 SandboxVerified:     sandboxVerified,
                                 PolicyVerdict:       policyVerdict,
                                 AutoMergeAnnotation: autoMergeAnnotation,
+                                SandboxOverride:     incident.State.ExecutionResult != nil && incident.State.ExecutionResult.SandboxOverride,
+                                CIOverride:          incident.State.ExecutionResult != nil && incident.State.ExecutionResult.CIOverride,
                         },
                 })
                 logging.Info("PR tracked for auto-merge",

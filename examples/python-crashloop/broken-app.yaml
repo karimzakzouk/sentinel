@@ -4,7 +4,7 @@ metadata:
   name: payments-api
   namespace: sim
   annotations:
-    sentinel.io/repo: YOUR_GITHUB_USER/sentinel-demo-app
+    sentinel.io/repo: karimzakzouk/demo-app
     sentinel.io/branch: main
   labels:
     app: payments-api
