@@ -80,6 +80,16 @@ spec:
               value: {{ .Values.sentinel.autoMerge.maxPerHour | quote }}
             - name: SENTINEL_AUTO_MERGE_COOLDOWN_MIN
               value: {{ .Values.sentinel.autoMerge.cooldownMin | quote }}
+            {{- if .Values.sentinel.safeActions.enabled }}
+            - name: SENTINEL_SAFE_ACTIONS_ENABLED
+              value: "true"
+            - name: SENTINEL_SAFE_ACTIONS_NAMESPACES
+              value: {{ .Values.sentinel.safeActions.namespaces | join "," | quote }}
+            - name: SENTINEL_SAFE_ACTIONS_MAX_PER_HOUR
+              value: {{ .Values.sentinel.safeActions.maxPerHour | quote }}
+            - name: SENTINEL_SAFE_ACTIONS_MAX_SCALE_DELTA_PCT
+              value: {{ .Values.sentinel.safeActions.maxScaleDeltaPct | quote }}
+            {{- end }}
             - name: SENTINEL_GITHUB_TOKEN
               valueFrom:
                 secretKeyRef:

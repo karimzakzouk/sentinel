@@ -31,6 +31,7 @@ import (
         "github.com/karimzakzouk/sentinel/internal/feedback"
         "github.com/karimzakzouk/sentinel/internal/github" // package name: githubapp
         "github.com/karimzakzouk/sentinel/internal/k8s"
+        "github.com/karimzakzouk/sentinel/internal/safeactions"
         "github.com/karimzakzouk/sentinel/internal/llm"
         "github.com/karimzakzouk/sentinel/internal/logging"
         "github.com/karimzakzouk/sentinel/internal/metrics"
@@ -53,6 +54,7 @@ var broadcaster events.Broadcaster = events.Noop()
 // local scope.
 
 var chatopsStatusManager chatops.StatusCommentManager
+var pkgSafeActions *safeactions.Controller
 
 // the runtimecfg apply callback (registered BEFORE these clients exist) to
 // reconfigure them live when the GitHub App credentials change at runtime.
@@ -148,6 +150,18 @@ func main() {
         k8sClient, err := k8s.New()
         if err != nil {
                 log.Fatalf("k8s client: %v", err)
+        }
+
+        // 2.5. L2 safe-actions controller
+        safeActionsCtrl := safeactions.New(k8sClient.Clientset(), safeactions.Config{
+                Enabled:           cfg.SafeActionsEnabled,
+                AllowedNamespaces: cfg.SafeActionsNamespaces,
+                MaxActionsPerHour: cfg.SafeActionsMaxPerHour,
+                MaxScaleDeltaPct:  cfg.SafeActionsMaxScaleDeltaPct,
+        })
+        pkgSafeActions = safeActionsCtrl
+        if cfg.SafeActionsEnabled {
+                logging.Info("L2 safe-actions enabled", "namespaces", cfg.SafeActionsNamespaces, "max_per_hour", cfg.SafeActionsMaxPerHour)
         }
 
         // 3. LLM router
