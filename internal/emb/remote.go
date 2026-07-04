@@ -1,4 +1,4 @@
-// Remote embedding backend — calls OpenAI-compatible /embeddings API.
+// Package emb — remote embedding backend.
 package emb
 
 import (
