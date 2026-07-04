@@ -233,6 +233,4 @@ func detectLanguageFromState(state *schemas.AgentState) string {
         return parsed.Language
 }
 
-// (MarshalJSON removed — the struct's json: tags produce identical output.
 // The method was redundant and prevented moving the type to schemas.)
-

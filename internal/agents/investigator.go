@@ -220,7 +220,6 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
 
                         // High similarity + prior success → skip investigation, apply known fix
 
-
                         if scores[0] > ConfidenceHighMatch && similar[0].Outcome == "success" && !a.vectorStore.UsingHashFallback() {
                                 logging.Info("HIGH MATCH (score=%.3f) — applying known fix from incident", "value", scores[0], similar[0].IncidentID)
                                 return a.applyKnownFix(ctx, state, similar[0], podLogs)
@@ -601,7 +600,6 @@ func (a *Investigator) extractPodLogs(cluster schemas.AnomalyCluster) string {
         }
         return allText
 }
-
 
 // extractCrashLocation extracts the exact crash location from pod logs.
 // Returns a formatted string like:

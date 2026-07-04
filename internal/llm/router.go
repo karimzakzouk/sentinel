@@ -125,7 +125,6 @@ func (r *Router) SetRetryConfig(maxRetries int, baseDelay time.Duration) {
 // Update reconfigures the router (called when settings change at runtime).
 // using the read methods below see a consistent snapshot.
 
-
 func (r *Router) Update(baseURL, apiKey, fastModel, frontierModel string) {
         r.mu.Lock()
         defer r.mu.Unlock()
@@ -331,7 +330,6 @@ func (r *Router) completeSingle(ctx context.Context, model, system, user string,
 
 // recordLLMMetrics is set by main.go via SetMetricsRecorder. This avoids a
 // circular import (llm → metrics → ... → llm). If nil, metrics are skipped.
-
 
 var recordLLMMetrics func(model, status string, duration time.Duration, inputTokens, outputTokens int)
 

@@ -369,5 +369,3 @@ func containsLabel(labels []string, target string) bool {
 func prKey(repo string, prNumber int) string {
         return fmt.Sprintf("%s#%d", repo, prNumber)
 }
-
-

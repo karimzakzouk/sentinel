@@ -429,7 +429,6 @@ func cmdApply(ctx context.Context, cmd *Command, deps *Deps) error {
         // command posts the LLM-generated approach description so the developer
         // can implement it manually.
 
-
         body := fmt.Sprintf("## ⏳ Apply Approach %s\n\n"+
                 "Requested by @%s.\n\n"+
                 "Automatic approach application is not yet implemented. To use approach %s:\n\n"+
@@ -441,8 +440,6 @@ func cmdApply(ctx context.Context, cmd *Command, deps *Deps) error {
 
         return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber, body)
 }
-
-// unused import guards (kept for future expansion)
 
 var (
         _ = json.Marshal

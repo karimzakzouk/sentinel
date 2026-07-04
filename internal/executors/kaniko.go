@@ -92,7 +92,6 @@ func (k *KanikoBuilder) WithRegistry(registry string) *KanikoBuilder {
 
 // WithInitImage sets the Kaniko init container image (clone-and-patch).
 
-
 func (k *KanikoBuilder) WithInitImage(image string) *KanikoBuilder {
         if image != "" {
                 k.initImage = image
@@ -101,7 +100,6 @@ func (k *KanikoBuilder) WithInitImage(image string) *KanikoBuilder {
 }
 
 // WithExecutorImage sets the Kaniko executor image.
-
 
 func (k *KanikoBuilder) WithExecutorImage(image string) *KanikoBuilder {
         if image != "" {

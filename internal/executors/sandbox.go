@@ -95,7 +95,6 @@ func NewSandbox(clientset *kubernetes.Clientset, sandboxPrefix string, enableMir
 
 // WithProbePaths sets custom probe paths for Level 2 + 3 verification.
 
-
 func (s *SandboxRunner) WithProbePaths(paths []string) *SandboxRunner {
         if len(paths) > 0 {
                 s.probePaths = paths

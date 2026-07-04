@@ -2,7 +2,6 @@
 // v3: single binary, single client, no Python client-go shim.
 package k8s
 
-
 import (
 	"context"
 	"encoding/json"

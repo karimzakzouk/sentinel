@@ -26,6 +26,7 @@ import (
         "context"
         "log/slog"
         "os"
+        "strings"
         "sync"
 )
 
@@ -92,7 +93,7 @@ func redactSecrets(groups []string, a slog.Attr) slog.Attr {
         }
         keyLower := toLowerASCII(a.Key)
         for _, pat := range secretKeyPatterns {
-                if contains(keyLower, pat) {
+                if strings.Contains(keyLower, pat) {
                         if a.Value.Kind() == slog.KindString && a.Value.String() != "" {
                                 return slog.String(a.Key, "***REDACTED***")
                         }
@@ -111,21 +112,6 @@ func toLowerASCII(s string) string {
                 b[i] = c
         }
         return string(b)
-}
-
-func contains(s, sub string) bool {
-        if len(sub) == 0 {
-                return true
-        }
-        if len(s) < len(sub) {
-                return false
-        }
-        for i := 0; i <= len(s)-len(sub); i++ {
-                if s[i:i+len(sub)] == sub {
-                        return true
-                }
-        }
-        return false
 }
 
 // L returns the default logger. Initializes with INFO level if not yet initialized.
@@ -187,7 +173,6 @@ func argsFromCtx(ctx context.Context) []any {
 }
 
 // Convenience functions — these mirror slog's API but auto-attach context fields.
-
 
 func Debug(msg string, args ...any) { L().Debug(msg, args...) }
 func Info(msg string, args ...any)  { L().Info(msg, args...) }

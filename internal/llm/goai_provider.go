@@ -14,7 +14,6 @@ package llm
 // FastText, Update, Snapshot, SetRetryConfig) is preserved — the agent
 // pipeline doesn't change at all.
 
-
 import (
 	"strings"
 

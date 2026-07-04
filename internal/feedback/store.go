@@ -14,7 +14,6 @@ import (
 )
 
 // Store is the single storage layer for Sentinel v3.
-// Replaces: IncidentStore (Postgres), EventStore (Postgres), BetaStore (Postgres),
 // WeaviateStore (Weaviate vector DB).
 
 type Store struct {
@@ -220,4 +219,3 @@ func (s *Store) migrateSchema() error {
 }
 
 // UpsertIncident stores or updates an incident.
-

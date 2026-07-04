@@ -207,5 +207,3 @@ func (h *WebhookHandler) verifySignature(body []byte, sig string) bool {
         actual := mac.Sum(nil)
         return hmac.Equal(expected, actual)
 }
-
-

@@ -57,7 +57,6 @@ func (e *GitHubExecutor) WithTokenProvider(tp TokenProvider) *GitHubExecutor {
 // Prefers the GitHub App installation token (verified bot identity) when
 // configured, falls back to the PAT.
 
-
 // WithAPIURL sets the GitHub API base URL.Replaces the hardcoded
 // "https://api.github.com" in 8 sites within this file.
 // For GitHub Enterprise: "https://gh.mycorp.internal/api/v3".
@@ -249,7 +248,6 @@ func (e *GitHubExecutor) OpenPR(ctx context.Context, inc *schemas.Incident, bran
 
 // --- GitHub API helpers ---
 
-
 func (e *GitHubExecutor) getBranchSHA(ctx context.Context, repo, branch string) (string, error) {
         url := fmt.Sprintf("%s/repos/%s/branches/%s", e.APIURL, repo, branch)
         var resp struct {
@@ -344,7 +342,6 @@ func (e *GitHubExecutor) GetFileContent(ctx context.Context, repo, path, ref str
 // actual fix block didn't, don't ship a PR with just an unused import.
 // implementation, which silently returned nil in distroless (no binaries)
 // AND swallowed os.CreateTemp errors. See syntax_validate.go for details.
-
 
 func (e *GitHubExecutor) createPR(ctx context.Context, repo, title, body, head, base string) (int, string, error) {
         url := fmt.Sprintf("%s/repos/%s/pulls", e.APIURL, repo)

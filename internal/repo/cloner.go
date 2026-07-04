@@ -235,7 +235,6 @@ func (c *Cloner) Clone(ctx context.Context, repo, ref string) (string, error) {
 
 // gitAuth returns an HTTP basic-auth object for go-git, or nil if no token is set.
 
-
 func (c *Cloner) gitAuth() *githttpprovider.BasicAuth {
         if c.githubToken == "" {
                 return nil

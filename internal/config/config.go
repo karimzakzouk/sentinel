@@ -114,7 +114,6 @@ type Config struct {
 	DockerHubUsername string
 	DockerHubToken    string
 
-	//iogo:106,255,
 	// secrets.yaml:28, values.yaml:12), so ECR/GCR/ACR/Harbor/Quay users
 	// got an invalid destination image:
 	//   "docker.io/123456789.dkr.ecr.us-east-1.amazonaws.com/myapp:sentinel-..."

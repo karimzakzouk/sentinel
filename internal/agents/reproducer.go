@@ -169,6 +169,4 @@ func (g *ReproducerGenerator) buildUserMessage(state *schemas.AgentState) string
         return strings.Join(parts, "\n")
 }
 
-// (MarshalJSON removed — the struct's json: tags produce identical output.
 // The method was redundant and prevented moving the type to schemas.)
-

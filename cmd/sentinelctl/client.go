@@ -9,7 +9,6 @@ import (
 	"net/http"
 )
 
-
 type client struct {
         baseURL string
         token   string
@@ -80,4 +79,3 @@ func (c *client) postAuth(path string, payload any, authRequired bool) ([]byte, 
 }
 
 // --- Commands ---
-

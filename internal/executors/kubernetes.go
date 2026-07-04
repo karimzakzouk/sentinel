@@ -7,6 +7,7 @@ import (
         "fmt"
         "sort"
         "strconv"
+        "strings"
 
         appsv1 "k8s.io/api/apps/v1"
         corev1 "k8s.io/api/core/v1"
@@ -256,24 +257,8 @@ func isAlreadyExistsErr(err error) bool {
                 return false
         }
         msg := err.Error()
-        return contains(msg, "already exists")
+        return strings.Contains(msg, "already exists")
 }
-
-// contains is a tiny helper to avoid importing strings just for one call.
-
-func contains(s, sub string) bool {
-        if len(sub) == 0 {
-                return true
-        }
-        for i := 0; i+len(sub) <= len(s); i++ {
-                if s[i:i+len(sub)] == sub {
-                        return true
-                }
-        }
-        return false
-}
-
-// errAlreadyExists is a sentinel kept for future typed-error migration.
 
 var errAlreadyExists = errors.New("already exists")
 
@@ -288,10 +273,10 @@ func mustJSON(v any) string {
 // FixProposal so we don't have to refactor the existing method.
 
 func (e *K8sExecutor) RollbackByName(ctx context.Context, namespace, deploymentName string) error {
-	fp := &schemas.FixProposal{
-		FixType:         schemas.FixRollback,
-		TargetService:   deploymentName,
-		TargetNamespace: namespace,
-	}
-	return e.Rollback(ctx, fp)
+        fp := &schemas.FixProposal{
+                FixType:         schemas.FixRollback,
+                TargetService:   deploymentName,
+                TargetNamespace: namespace,
+        }
+        return e.Rollback(ctx, fp)
 }

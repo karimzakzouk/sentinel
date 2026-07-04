@@ -71,7 +71,6 @@ const (
         VerdictDeny                 GovernanceVerdict = "deny"
 )
 
-// ---------- Layer 1: Ingestion ----------
 // Signal is the canonical cleaned/normalized telemetry event.
 
 type Signal struct {
@@ -88,7 +87,6 @@ type Signal struct {
         SchemaVersion string          `json:"schema_version"`
 }
 
-// ---------- Layer 2: Detection ----------
 // Anomaly is a single anomalous observation flagged by a detector.
 
 type Anomaly struct {
@@ -118,7 +116,6 @@ type AnomalyCluster struct {
         Annotations map[string]string `json:"annotations"`
 }
 
-// ---------- Layer 3: Reasoning ----------
 // Hypothesis is one candidate root cause proposed by the Investigator.
 
 type Hypothesis struct {
@@ -212,7 +209,6 @@ type RewindEvent struct {
         Ts         time.Time      `json:"ts"`
 }
 
-// ---------- Layer 4: Safety / Governance ----------
 // GovernanceDecision is the verdict for a proposed fix.
 
 type GovernanceDecision struct {
@@ -226,7 +222,6 @@ type GovernanceDecision struct {
         DecidedAt                   time.Time         `json:"decided_at"`
 }
 
-// ---------- Layer 5: Execution ----------
 // ExecutionResult is the outcome of executing a FixProposal.
 
 type ExecutionResult struct {
@@ -280,7 +275,6 @@ type AgentState struct {
         SandboxFeedback    *string              `json:"sandbox_feedback,omitempty"`
 }
 
-// ---------- Layer 6: Feedback ----------
 // Incident is the end-to-end incident record. One Incident == one full Sentinel run.
 
 type Incident struct {

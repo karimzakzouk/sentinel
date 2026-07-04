@@ -464,7 +464,6 @@ type level3Result struct {
 // verifyErrorGoneFromLogs which is the primary oracle — scans canary
 // logs for the original error type instead of probing HTTP endpoints).
 
-
 // extractOriginalErrorType parses the incident's pod logs to find the original
 // error type (e.g. "KeyError", "TypeError", "panic", "ZeroDivisionError").
 // Used by Level 5 false-negative detection: if the reproducer failed but the

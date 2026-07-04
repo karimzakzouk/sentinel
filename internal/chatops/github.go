@@ -36,7 +36,7 @@ func (g *GitHubClientImpl) getBotLogin(ctx context.Context) string {
         if err != nil {
                 return ""
         }
-        g.setHeaders(req)
+        g.SetHeaders(req)
         resp, err := g.HTTP.Do(req)
         if err != nil {
                 return ""
@@ -84,7 +84,6 @@ func (g *GitHubClientImpl) WithTokenProvider(tp TokenProvider) *GitHubClientImpl
 
 // authToken returns the token to use for an API call. v4.0.0.
 
-
 // ReactComment adds an emoji reaction to a PR comment.
 // GitHub dedupes reactions from the same user — calling this twice with the
 // same reaction is a no-op (doesn't error).
@@ -97,7 +96,7 @@ func (g *GitHubClientImpl) ReactComment(ctx context.Context, repo string, commen
         if err != nil {
                 return err
         }
-        g.setHeaders(req)
+        g.SetHeaders(req)
         resp, err := g.HTTP.Do(req)
         if err != nil {
                 return err
@@ -123,7 +122,7 @@ func (g *GitHubClientImpl) RemoveReaction(ctx context.Context, repo string, comm
         if err != nil {
                 return err
         }
-        g.setHeaders(req)
+        g.SetHeaders(req)
         resp, err := g.HTTP.Do(req)
         if err != nil {
                 return err
@@ -167,7 +166,7 @@ func (g *GitHubClientImpl) RemoveReaction(ctx context.Context, repo string, comm
                 }
                 delReq, _ := http.NewRequestWithContext(ctx, "DELETE",
                         fmt.Sprintf("%s/repos/%s/issues/comments/%d/reactions/%d", g.APIURL, repo, commentID, r.ID), nil)
-                g.setHeaders(delReq)
+                g.SetHeaders(delReq)
                 delResp, err := g.HTTP.Do(delReq)
                 if err != nil {
                         return err
@@ -198,7 +197,7 @@ func (g *GitHubClientImpl) PostCommentWithID(ctx context.Context, repo string, p
         if err != nil {
                 return 0, err
         }
-        g.setHeaders(req)
+        g.SetHeaders(req)
         resp, err := g.HTTP.Do(req)
         if err != nil {
                 return 0, err
@@ -227,7 +226,7 @@ func (g *GitHubClientImpl) FindStatusComment(ctx context.Context, repo string, p
         if err != nil {
                 return 0, "", err
         }
-        g.setHeaders(req)
+        g.SetHeaders(req)
         resp, err := g.HTTP.Do(req)
         if err != nil {
                 return 0, "", err
@@ -264,7 +263,7 @@ func (g *GitHubClientImpl) UpdateComment(ctx context.Context, repo string, comme
         if err != nil {
                 return err
         }
-        g.setHeaders(req)
+        g.SetHeaders(req)
         resp, err := g.HTTP.Do(req)
         if err != nil {
                 return err
@@ -286,7 +285,7 @@ func (g *GitHubClientImpl) GetPermission(ctx context.Context, repo, username str
         if err != nil {
                 return "", err
         }
-        g.setHeaders(req)
+        g.SetHeaders(req)
         resp, err := g.HTTP.Do(req)
         if err != nil {
                 return "", err
@@ -315,118 +314,16 @@ func (g *GitHubClientImpl) GetPermission(ctx context.Context, repo, username str
 // setHeaders adds the standard GitHub API headers.uses authToken()
 // which prefers the GitHub App installation token when configured.
 
-func (g *GitHubClientImpl) setHeaders(req *http.Request) {
-        ctx := req.Context()
-        req.Header.Set("Accept", "application/vnd.github+json")
-        req.Header.Set("Authorization", "Bearer "+g.AuthToken(ctx))
-        req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-        req.Header.Set("Content-Type", "application/json")
-}
-
 // SetLabels adds labels to a PR (used by /sentinel approve, /sentinel hold).
 // v4.0.0.
 
-func (g *GitHubClientImpl) SetLabels(ctx context.Context, repo string, prNumber int, labels []string) error {
-        payload, _ := json.Marshal(map[string][]string{"labels": labels})
-        req, err := http.NewRequestWithContext(ctx, "POST",
-                fmt.Sprintf("%s/repos/%s/issues/%d/labels", g.APIURL, repo, prNumber),
-                bytes.NewReader(payload))
-        if err != nil {
-                return err
-        }
-        g.setHeaders(req)
-        resp, err := g.HTTP.Do(req)
-        if err != nil {
-                return err
-        }
-        defer resp.Body.Close()
-        if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-                body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-                return fmt.Errorf("set labels: %d %s", resp.StatusCode, string(body))
-        }
-        return nil
-}
-
 // RemoveLabel removes a label from a PR. v4.0.0.
 
-func (g *GitHubClientImpl) RemoveLabel(ctx context.Context, repo string, prNumber int, label string) error {
-        req, err := http.NewRequestWithContext(ctx, "DELETE",
-                fmt.Sprintf("%s/repos/%s/issues/%d/labels/%s", g.APIURL, repo, prNumber, label), nil)
-        if err != nil {
-                return err
-        }
-        g.setHeaders(req)
-        resp, err := g.HTTP.Do(req)
-        if err != nil {
-                return err
-        }
-        defer resp.Body.Close()
-        // 200 = removed, 404 = label wasn't there (treat as success)
-
-        if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNotFound {
-                body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-                return fmt.Errorf("remove label: %d %s", resp.StatusCode, string(body))
-        }
-        return nil
-}
-
 // GetLabels returns the labels on a PR. v4.0.0.
-
-func (g *GitHubClientImpl) GetLabels(ctx context.Context, repo string, prNumber int) ([]string, error) {
-        req, err := http.NewRequestWithContext(ctx, "GET",
-                fmt.Sprintf("%s/repos/%s/issues/%d/labels?per_page=100", g.APIURL, repo, prNumber), nil)
-        if err != nil {
-                return nil, err
-        }
-        g.setHeaders(req)
-        resp, err := g.HTTP.Do(req)
-        if err != nil {
-                return nil, err
-        }
-        defer resp.Body.Close()
-        if resp.StatusCode != http.StatusOK {
-                return nil, fmt.Errorf("get labels: %d", resp.StatusCode)
-        }
-        var labels []struct {
-                Name string `json:"name"`
-        }
-        if err := json.NewDecoder(resp.Body).Decode(&labels); err != nil {
-                return nil, err
-        }
-        out := make([]string, 0, len(labels))
-        for _, l := range labels {
-                out = append(out, l.Name)
-        }
-        return out, nil
-}
 
 // Merge merges a PR via the GitHub API. v4.0.0.
 // Used by /sentinel merge (manual merge through Sentinel so the outcome
 // watcher attaches). The auto-merger uses its own GitHub client.
-
-func (g *GitHubClientImpl) Merge(ctx context.Context, repo string, prNumber int, commitMessage string) error {
-        body, _ := json.Marshal(map[string]string{
-                "commit_message": commitMessage,
-                "merge_method":   "squash",
-        })
-        req, err := http.NewRequestWithContext(ctx, "PUT",
-                fmt.Sprintf("%s/repos/%s/pulls/%d/merge", g.APIURL, repo, prNumber),
-                bytes.NewReader(body))
-        if err != nil {
-                return err
-        }
-        g.setHeaders(req)
-        resp, err := g.HTTP.Do(req)
-        if err != nil {
-                return err
-        }
-        defer resp.Body.Close()
-        if resp.StatusCode != http.StatusOK {
-                respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-                return fmt.Errorf("merge: %d %s", resp.StatusCode, string(respBody))
-        }
-        return nil
-}
 
 // FindCommentByMarker returns the body of the first PR comment containing
 // the given marker string. v4.0.0. Used by /sentinel apply to find the
@@ -438,7 +335,7 @@ func (g *GitHubClientImpl) FindCommentByMarker(ctx context.Context, repo string,
         if err != nil {
                 return "", err
         }
-        g.setHeaders(req)
+        g.SetHeaders(req)
         resp, err := g.HTTP.Do(req)
         if err != nil {
                 return "", err

@@ -1,6 +1,5 @@
 package feedback
 
-
 import (
         "github.com/karimzakzouk/sentinel/internal/logging"
         "bytes"
@@ -34,7 +33,6 @@ var fingerprintCache = sync.Map{}
 // the Beta prior was never corrected. The system "learned" from sandbox
 // results, not real outcomes.
 
-
 type OutcomeWatcher struct {
         clientset *kubernetes.Clientset
         store     *Store
@@ -65,7 +63,6 @@ func NewOutcomeWatcher(clientset *kubernetes.Clientset, store *Store) *OutcomeWa
 
 // SetDurations configures both Phase 1 and Phase 2 durations.
 
-
 func (w *OutcomeWatcher) SetDurations(shortWatch, shortInterval, longWatch, longInterval time.Duration) {
         if shortWatch > 0 {
                 w.shortWatchDuration = shortWatch
@@ -82,7 +79,6 @@ func (w *OutcomeWatcher) SetDurations(shortWatch, shortInterval, longWatch, long
 }
 
 // Watch monitors the service for 10 minutes after a fix (Phase 1 only).
-
 
 func (w *OutcomeWatcher) Watch(ctx context.Context, service, namespace, incidentID string, prOpened bool) {
         w.WatchWithFixType(ctx, service, namespace, incidentID, prOpened, "code_fix")

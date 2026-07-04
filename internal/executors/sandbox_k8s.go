@@ -43,7 +43,6 @@ func (s *SandboxRunner) createNamespace(ctx context.Context, ns string) error {
         // pods, secrets, roles, and rolebindings. This was the previous approach
         // but it failed because the SA couldn't create Roles in the sandbox NS.
 
-
         return nil
 }
 
@@ -249,7 +248,6 @@ func (s *SandboxRunner) getProbePaths() []string {
 // Returns (ready, canaryLogs). If ready is false, canaryLogs contains
 // whatever was captured before the timeout (useful for the failure summary).
 
-
 func (s *SandboxRunner) cleanup(ctx context.Context, ns string) {
 
         // is cancelled (e.g. investigation timeout).
@@ -439,6 +437,5 @@ func patchPodSpec(spec corev1.PodSpec, canaryImage string) corev1.PodSpec {
 func boolPtr(b bool) *bool { return &b }
 
 // int64Ptr returns a pointer to i. Helper for *int64 fields in corev1.
-
 
 func int32Ptr(i int32) *int32 { return &i }

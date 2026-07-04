@@ -330,9 +330,6 @@ func hashEmbedding(text string, dim int) []float32 {
         return vec
 }
 
-// simpleHash32 is defined in store.go (shared between both files)
-
-
 func splitWords(s string) []string {
         var words []string
         current := ""

@@ -231,8 +231,6 @@ func (d *Detector) watchPodsInNamespace(ctx context.Context, namespace string) {
                 return
         }
 
-        // (Claude's review noted the goto was unusual and would confuse contributors.)
-
 watchLoop:
         for {
                 select {

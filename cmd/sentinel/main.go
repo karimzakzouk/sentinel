@@ -168,7 +168,6 @@ func main() {
 
         // 3. LLM router
 
-
         router := llm.NewWithProvider(cfg.LLMProvider, cfg.ResolvedBaseURL(), cfg.LLMAPIKey, cfg.LLMFastModel, cfg.LLMFrontierModel)
         router.SetRetryConfig(cfg.LLMMaxRetries, time.Duration(cfg.LLMRetryBaseDelayMs)*time.Millisecond)
         if cfg.LLMProvider == "bedrock" {
@@ -244,7 +243,6 @@ func main() {
                         "fast_model", fastModel, "frontier_model", frontierModel,
                         "api_key_set", apiKey != "", "base_url_changed", baseURL != "")
 
-                
                 LockCfgWrite()
                 if rc.SandboxEnabled != nil {
                         cfg.SandboxEnabled = *rc.SandboxEnabled
@@ -355,7 +353,6 @@ func main() {
         pipeline.SetGitHost(cfg.GitHost)
         pipeline.SetDefaultBranch(cfg.DefaultBranch)
 
-        
         pipeline.SetLLMPriorWeight(cfg.LLMPriorWeight)
         pipeline.SetMaxIterations(cfg.MaxPipelineIterations)
 
@@ -424,8 +421,6 @@ func main() {
                         logging.Error("vector store load failed", "error", err)
                 }
         }()
-
-        
 
         maxConcurrent := cfg.MaxConcurrentInvestigations
         if maxConcurrent <= 0 {
@@ -498,7 +493,6 @@ func main() {
                         "timestamp": time.Now().UTC().Format(time.RFC3339),
                 })
 
-                
                 invCtx := logging.WithIncidentID(ctx, incident.IncidentID.String())
 
                 _ = store.AppendEvent(ctx, incident.IncidentID, "reasoning", "investigation_started", nil,
@@ -916,7 +910,6 @@ func main() {
 
                 // Send to clusterer — it will group + dedup + emit one trigger
 
-
                 clusterer.Send(ctx, detection.Signal{
                         Type:      detection.SignalLogError,
                         Service:   service,
@@ -1016,7 +1009,6 @@ func main() {
 
         // verified bot identity + auto-webhook registration.
 
-
         prReviewer := prreview.New(cfg.GitHubToken, cfg.GitHubWebhookSecret, &prReviewVectorAdapter{vs: vectorStore}).
                 WithAPIURL(cfg.GitHubAPIURL)
         withPkgWriteLock(func() { pkgPrReviewer = prReviewer })
@@ -1052,7 +1044,6 @@ func main() {
         autoMergeMerger := automerge.NewMerger(autoMergePolicy, autoMergeGH, &autoMergeStoreAdapter{store: store}, &autoMergeOutcomeAdapter{watcher: outcomeWatcher, policy: autoMergePolicy})
         withPkgWriteLock(func() { pkgAutoMergeMerger = autoMergeMerger })
 
-        
         autoMergeMerger.SetOnMerged(func(repo string, prNumber int) {
                 if csm := getChatopsStatusManager(); csm != nil {
                         inc := &chatops.Incident{
@@ -1096,7 +1087,6 @@ func main() {
         chatopsHandler := chatops.NewWebhookHandler(chatopsDeps, cfg.GitHubWebhookSecret)
         apiServer.SetChatopsHandler(chatopsHandler)
 
-        
         apiServer.SetProvidersStatusGetter(&providersStatusAdapter{router: router})
         apiServer.SetAutoMergeStatusGetter(&autoMergeStatusAdapter{policy: autoMergePolicy, merger: autoMergeMerger})
 
@@ -1127,7 +1117,6 @@ func main() {
         // appear as the verified "Sentinel" bot instead of the PAT user.
         // reactions), and autoMergeGH (merge API). When configured, ALL GitHub
         // operations appear as "Sentinel[bot]" instead of the PAT owner.
-
 
         var ghApp *githubapp.App
         rtConfig := rtCfg.Get()
@@ -1207,7 +1196,6 @@ func main() {
                 slackBot.SetBotToken(cfg.SlackBotToken)
         }
 
-        
         chatopsDeps.PauseController = slackBot
 
         // When autonomous mode is paused via Slack, the clusterer skips emitting

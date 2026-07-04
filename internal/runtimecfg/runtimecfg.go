@@ -337,4 +337,3 @@ func (m *Manager) RemoveGitHubApp() error {
 // schemas.GitHubAppStatus from GetGitHubAppStatus() so the types match exactly.
 // (No type alias needed — runtimecfg imports api transitively via the
 // GitHubAppManager interface in main.go.)
-

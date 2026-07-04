@@ -150,4 +150,3 @@ func TestDefaultProductionNamespacesExcludesPayments(t *testing.T) {
                 t.Errorf("default ProductionNamespaces should include prod+production, got %v", c.ProductionNamespaces)
         }
 }
-

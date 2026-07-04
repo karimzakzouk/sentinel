@@ -297,7 +297,6 @@ func (s *Store) ListRecentIncidents(ctx context.Context, limit int) ([]*schemas.
 
 // AppendEvent appends an audit event to the event log.
 
-
 func (s *Store) FindIncidentByPR(ctx context.Context, repo string, prNumber int) (*schemas.Incident, error) {
         s.mu.RLock()
         defer s.mu.RUnlock()
@@ -432,4 +431,3 @@ func (s *Store) UpdateOverrides(ctx context.Context, incidentID uuid.UUID, sandb
 }
 
 // LogCommandEvent writes a chatops command invocation to the audit log.
-

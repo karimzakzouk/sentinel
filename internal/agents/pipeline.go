@@ -67,7 +67,6 @@ func NewPipeline(router *llm.Router, k8sClient *k8s.Client, gitHubToken string, 
 
 // SetConfig sets configurable pipeline parameters.
 
-
 func (p *Pipeline) SetConfig(invTimeout, evTimeout, anTimeout, fpTimeout int, confLoopBack float64) {
         if invTimeout > 0 {
                 p.investigatorTimeoutSec = invTimeout
@@ -120,7 +119,6 @@ func (p *Pipeline) SetDefaultBranch(branch string) {
 }
 
 // SetLLMPriorWeight propagates the LLM prior weight to the Analyst.
-
 
 func (p *Pipeline) SetLLMPriorWeight(w float64) {
         p.analyst.SetLLMPriorWeight(w)
