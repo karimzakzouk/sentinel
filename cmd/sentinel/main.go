@@ -26,6 +26,7 @@ import (
         "github.com/karimzakzouk/sentinel/internal/config"
         "github.com/karimzakzouk/sentinel/internal/correlation"
         "github.com/karimzakzouk/sentinel/internal/detection"
+        "github.com/karimzakzouk/sentinel/internal/emb"
         "github.com/karimzakzouk/sentinel/internal/events"
         "github.com/karimzakzouk/sentinel/internal/executors"
         "github.com/karimzakzouk/sentinel/internal/feedback"
@@ -67,6 +68,22 @@ var pkgSafeActions *safeactions.Controller
 // Compile-time assertion: alertmanagerAdapter satisfies alertmanager.SignalHandler.
 
 var _ alertmanager.SignalHandler = (*alertmanagerAdapter)(nil)
+
+// isRealCR returns true if crName refers to an actual SentinelIncident CR
+// (created via kubectl apply or the watcher). Auto-detected incidents pass
+// crName="auto-detected"; manual API triggers pass "manual"; Slack triggers
+// pass "slack". None of these correspond to a real CR object, so patching
+// their status generates a 404 + spurious error log.
+//callers should gate PatchCRStatus/PatchCRStatusFull calls on this
+// helper to avoid the spurious error logs.
+
+func isRealCR(crName string) bool {
+        switch crName {
+        case "", "auto-detected", "manual", "slack", "alertmanager":
+                return false
+        }
+        return true
+}
 
 func main() {
         addr := flag.String("addr", "", "HTTP listen address (overrides env)")
@@ -166,7 +183,6 @@ func main() {
 
         // 3. LLM router
 
-
         router := llm.NewWithProvider(cfg.LLMProvider, cfg.ResolvedBaseURL(), cfg.LLMAPIKey, cfg.LLMFastModel, cfg.LLMFrontierModel)
         router.SetRetryConfig(cfg.LLMMaxRetries, time.Duration(cfg.LLMRetryBaseDelayMs)*time.Millisecond)
         if cfg.LLMProvider == "bedrock" {
@@ -242,7 +258,6 @@ func main() {
                         "fast_model", fastModel, "frontier_model", frontierModel,
                         "api_key_set", apiKey != "", "base_url_changed", baseURL != "")
 
-                
                 LockCfgWrite()
                 if rc.SandboxEnabled != nil {
                         cfg.SandboxEnabled = *rc.SandboxEnabled
@@ -324,10 +339,41 @@ func main() {
         llm.SetInFlightHooks(metrics.LLMCallStart, metrics.LLMCallEnd)
 
         // 3.5 Vector store (HNSW + LLM embeddings) — created before pipeline for memory loop
-        // vector store uses permanent hash fallback. Also wire the
-        // configurable hash-fallback dim (cfg.LLMLLMEmbeddingDim, default 1536).
+        // Create embedding pipeline. Auto-detects: if an embedding API key is
+        // configured (dedicated or reused from LLM key), use remote embeddings.
+        // Otherwise fall back to TF-IDF (keyword overlap, non-semantic).
+        embAPIKey := cfg.EmbeddingAPIKey
+        if embAPIKey == "" && cfg.LLMEmbeddingModel != "" {
+                embAPIKey = cfg.LLMAPIKey // reuse LLM key for embeddings
+        }
+        embBaseURL := cfg.EmbeddingBaseURL
+        if embBaseURL == "" && cfg.LLMEmbeddingModel != "" {
+                embBaseURL = cfg.ResolvedBaseURL() // reuse LLM base URL
+        }
+        embedder, err := emb.New(emb.Config{
+                Provider:  cfg.EmbeddingProvider,
+                Model:     cfg.LLMEmbeddingModel,
+                APIKey:    embAPIKey,
+                BaseURL:   embBaseURL,
+                Dimension: cfg.LLMEmbeddingDim,
+        })
+        if err != nil {
+                logging.Error("failed to create embedder, using TF-IDF fallback", "err", err)
+                embedder, _ = emb.New(emb.Config{Provider: "tfidf", Dimension: cfg.LLMEmbeddingDim})
+        }
+        logging.Info("embedding pipeline configured", "provider", embedder.Name(), "semantic", embedder.IsSemantic())
 
-        vectorStore := feedback.NewVectorStoreWithDim(cfg.ResolvedBaseURL(), cfg.LLMAPIKey, cfg.LLMEmbeddingModel, cfg.LLMEmbeddingDim)
+        vectorStore := feedback.NewVectorStore(embedder)
+
+        // LLM semantic cache — enabled only when semantic embeddings are available
+        // + the operator explicitly opts in via SENTINEL_LLM_SEMANTIC_CACHE=true.
+        if cfg.LLMSemanticCacheEnabled && embedder.IsSemantic() {
+                cache := llm.NewSemanticCache(embedder, float32(cfg.LLMSemanticCacheThreshold), 24*time.Hour)
+                router.SetCache(cache)
+                logging.Info("LLM semantic cache enabled", "threshold", cfg.LLMSemanticCacheThreshold)
+        } else if cfg.LLMSemanticCacheEnabled && !embedder.IsSemantic() {
+                logging.Warn("LLM semantic cache requested but embeddings are non-semantic (TF-IDF) — cache disabled. Set SENTINEL_LLM_EMBEDDING_MODEL to enable.")
+        }
 
         // 4. Agent pipeline (with vector store for memory loop)
 
@@ -353,7 +399,6 @@ func main() {
         pipeline.SetGitHost(cfg.GitHost)
         pipeline.SetDefaultBranch(cfg.DefaultBranch)
 
-        
         pipeline.SetLLMPriorWeight(cfg.LLMPriorWeight)
         pipeline.SetMaxIterations(cfg.MaxPipelineIterations)
 
@@ -422,8 +467,6 @@ func main() {
                         logging.Error("vector store load failed", "error", err)
                 }
         }()
-
-        
 
         maxConcurrent := cfg.MaxConcurrentInvestigations
         if maxConcurrent <= 0 {
@@ -496,7 +539,6 @@ func main() {
                         "timestamp": time.Now().UTC().Format(time.RFC3339),
                 })
 
-                
                 invCtx := logging.WithIncidentID(ctx, incident.IncidentID.String())
 
                 _ = store.AppendEvent(ctx, incident.IncidentID, "reasoning", "investigation_started", nil,
@@ -517,6 +559,9 @@ func main() {
                         investigationCtx, cancel := context.WithTimeout(ctx, time.Duration(invTimeout)*time.Second)
                 defer cancel()
 
+                // Run the pipeline WITHOUT post-fix artifacts — those run in parallel
+                // with the Kaniko build in executeCodeFix for a 30-90s speedup.
+                pipeline.SetSkipPostFix(true)
                 if err := pipeline.Run(investigationCtx, &incident.State); err != nil {
                         logging.ErrorCtx(invCtx, "pipeline error", "error", err)
                         incident.Status = schemas.StatusFailed
@@ -525,8 +570,10 @@ func main() {
                         if err := store.UpsertIncident(ctx, &incident); err != nil {
                                 logging.ErrorCtx(invCtx, "save incident (pipeline-error) failed", "error", err)
                         }
-                        if err := k8sClient.PatchCRStatus(ctx, crName, crNamespace, "failed"); err != nil {
-                                logging.ErrorCtx(invCtx, "patch CR status (failed) failed", "error", err)
+                        if isRealCR(crName) {
+                                if err := k8sClient.PatchCRStatus(ctx, crName, crNamespace, "failed"); err != nil {
+                                        logging.ErrorCtx(invCtx, "patch CR status (failed) failed", "error", err)
+                                }
                         }
                         return
                 }
@@ -556,9 +603,11 @@ func main() {
                         if incident.State.RootCause != nil {
                                 rootCause = incident.State.RootCause.Statement
                         }
-                        if err := k8sClient.PatchCRStatusFull(ctx, crName, crNamespace, string(incident.Status),
-                                incident.IncidentID.String(), rootCause, 0, ""); err != nil {
-                                logging.ErrorCtx(invCtx, "patch CR status (no-fix) failed", "error", err)
+                        if isRealCR(crName) {
+                                if err := k8sClient.PatchCRStatusFull(ctx, crName, crNamespace, string(incident.Status),
+                                        incident.IncidentID.String(), rootCause, 0, ""); err != nil {
+                                        logging.ErrorCtx(invCtx, "patch CR status (no-fix) failed", "error", err)
+                                }
                         }
                         return
                 }
@@ -606,8 +655,10 @@ func main() {
                         } else {
                                 logging.WarnCtx(invCtx, "denied by safety", "verdict", decision.Verdict)
                         }
-                        if err := k8sClient.PatchCRStatus(ctx, crName, crNamespace, string(incident.Status)); err != nil {
-                                logging.ErrorCtx(invCtx, "patch CR status (denied) failed", "error", err)
+                        if isRealCR(crName) {
+                                if err := k8sClient.PatchCRStatus(ctx, crName, crNamespace, string(incident.Status)); err != nil {
+                                        logging.ErrorCtx(invCtx, "patch CR status (denied) failed", "error", err)
+                                }
                         }
                         return
                 }
@@ -631,8 +682,10 @@ func main() {
                         if err := store.UpsertIncident(ctx, &incident); err != nil {
                                 logging.ErrorCtx(invCtx, "save incident (rbac-deny) failed", "error", err)
                         }
-                        if err := k8sClient.PatchCRStatus(ctx, crName, crNamespace, "escalated"); err != nil {
-                                logging.ErrorCtx(invCtx, "patch CR status (escalated) failed", "error", err)
+                        if isRealCR(crName) {
+                                if err := k8sClient.PatchCRStatus(ctx, crName, crNamespace, "escalated"); err != nil {
+                                        logging.ErrorCtx(invCtx, "patch CR status (escalated) failed", "error", err)
+                                }
                         }
                         return
                 }
@@ -658,23 +711,27 @@ func main() {
                 alpha, beta := recordBetaOutcome(ctx, store, incident, success)
                 incident.BetaAlpha = alpha
                 incident.BetaBeta = beta
-                if err := store.StoreIncidentVector(ctx, &incident, success); err != nil {
-                        logging.ErrorCtx(invCtx, "store incident vector failed", "error", err)
-                }
 
-                // Add to HNSW vector index for future RAG retrieval
-
+                // Compute embedding once, use for both SQLite persistence + HNSW index
                 if incident.State.RootCause != nil && incident.State.FixProposal != nil {
                         vectorText := incident.Cluster.Summary + " " + incident.State.RootCause.Statement + " " + incident.State.FixProposal.Description
-                        if err := vectorStore.Add(ctx, vectorText, &feedback.VectorMetadata{
-                                IncidentID: incident.IncidentID.String(),
-                                Service:    incident.Cluster.Service,
-                                RootCause:  incident.State.RootCause.Statement,
-                                FixType:    string(incident.State.FixProposal.FixType),
-                                FixPattern: incident.State.FixProposal.Description,
-                                Outcome:    map[bool]string{true: "success", false: "failure"}[success],
-                        }); err != nil {
-                                logging.ErrorCtx(invCtx, "vector store add failed", "error", err)
+                        embedding, embErr := vectorStore.GenerateEmbedding(ctx, vectorText)
+                        if embErr != nil {
+                                logging.ErrorCtx(invCtx, "embedding computation failed", "error", embErr)
+                        } else {
+                                if err := store.StoreIncidentVector(ctx, &incident, success, embedding); err != nil {
+                                        logging.ErrorCtx(invCtx, "store incident vector failed", "error", err)
+                                }
+                                if err := vectorStore.Add(ctx, vectorText, &feedback.VectorMetadata{
+                                        IncidentID: incident.IncidentID.String(),
+                                        Service:    incident.Cluster.Service,
+                                        RootCause:  incident.State.RootCause.Statement,
+                                        FixType:    string(incident.State.FixProposal.FixType),
+                                        FixPattern: incident.State.FixProposal.Description,
+                                        Outcome:    map[bool]string{true: "success", false: "failure"}[success],
+                                }); err != nil {
+                                        logging.ErrorCtx(invCtx, "vector store add failed", "error", err)
+                                }
                         }
                 }
 
@@ -747,9 +804,11 @@ func main() {
                 }
                 // prURL is already in scope (declared above in the resolved path).
 
-                if err := k8sClient.PatchCRStatusFull(ctx, crName, crNamespace, string(incident.Status),
-                        incident.IncidentID.String(), rootCause, confidence, prURL); err != nil {
-                        logging.ErrorCtx(invCtx, "patch CR status (resolved) failed", "error", err)
+                if isRealCR(crName) {
+                        if err := k8sClient.PatchCRStatusFull(ctx, crName, crNamespace, string(incident.Status),
+                                incident.IncidentID.String(), rootCause, confidence, prURL); err != nil {
+                                logging.ErrorCtx(invCtx, "patch CR status (resolved) failed", "error", err)
+                        }
                 }
         }
 
@@ -901,7 +960,6 @@ func main() {
 
                 // Send to clusterer — it will group + dedup + emit one trigger
 
-
                 clusterer.Send(ctx, detection.Signal{
                         Type:      detection.SignalLogError,
                         Service:   service,
@@ -1001,7 +1059,6 @@ func main() {
 
         // verified bot identity + auto-webhook registration.
 
-
         prReviewer := prreview.New(cfg.GitHubToken, cfg.GitHubWebhookSecret, &prReviewVectorAdapter{vs: vectorStore}).
                 WithAPIURL(cfg.GitHubAPIURL)
         withPkgWriteLock(func() { pkgPrReviewer = prReviewer })
@@ -1037,7 +1094,6 @@ func main() {
         autoMergeMerger := automerge.NewMerger(autoMergePolicy, autoMergeGH, &autoMergeStoreAdapter{store: store}, &autoMergeOutcomeAdapter{watcher: outcomeWatcher, policy: autoMergePolicy})
         withPkgWriteLock(func() { pkgAutoMergeMerger = autoMergeMerger })
 
-        
         autoMergeMerger.SetOnMerged(func(repo string, prNumber int) {
                 if csm := getChatopsStatusManager(); csm != nil {
                         inc := &chatops.Incident{
@@ -1081,7 +1137,6 @@ func main() {
         chatopsHandler := chatops.NewWebhookHandler(chatopsDeps, cfg.GitHubWebhookSecret)
         apiServer.SetChatopsHandler(chatopsHandler)
 
-        
         apiServer.SetProvidersStatusGetter(&providersStatusAdapter{router: router})
         apiServer.SetAutoMergeStatusGetter(&autoMergeStatusAdapter{policy: autoMergePolicy, merger: autoMergeMerger})
 
@@ -1112,7 +1167,6 @@ func main() {
         // appear as the verified "Sentinel" bot instead of the PAT user.
         // reactions), and autoMergeGH (merge API). When configured, ALL GitHub
         // operations appear as "Sentinel[bot]" instead of the PAT owner.
-
 
         var ghApp *githubapp.App
         rtConfig := rtCfg.Get()
@@ -1192,7 +1246,6 @@ func main() {
                 slackBot.SetBotToken(cfg.SlackBotToken)
         }
 
-        
         chatopsDeps.PauseController = slackBot
 
         // When autonomous mode is paused via Slack, the clusterer skips emitting

@@ -91,7 +91,7 @@ func (s *Store) RecordBetaOutcome(ctx context.Context, service, fixType string, 
 // In v3 we use a simple bag-of-words embedding (no external model required).
 // This is replaced by a real embedding model in v3.1 if needed.
 
-func (s *Store) StoreIncidentVector(ctx context.Context, inc *schemas.Incident, outcomeSuccess bool) error {
+func (s *Store) StoreIncidentVector(ctx context.Context, inc *schemas.Incident, outcomeSuccess bool, embedding []float32) error {
         s.mu.Lock()
         defer s.mu.Unlock()
 
@@ -99,12 +99,12 @@ func (s *Store) StoreIncidentVector(ctx context.Context, inc *schemas.Incident, 
                 return nil
         }
 
-        // Build the text signature for embedding
-
         summary := inc.Cluster.Summary
         rootCause := inc.State.RootCause.Statement
         fixPattern := inc.State.FixProposal.Description
-        embedding := computeEmbedding(summary + " " + rootCause + " " + fixPattern)
+        _ = summary
+        _ = rootCause
+        _ = fixPattern
 
         embeddingJSON, err := json.Marshal(embedding)
         if err != nil {
@@ -143,49 +143,22 @@ func (s *Store) StoreIncidentVector(ctx context.Context, inc *schemas.Incident, 
         return err
 }
 
-// computeEmbedding produces a bag-of-words vector from text.
-// by the runtime VectorStore) instead of strings.Fields().
-// computeEmbedding used strings.Fields+ToLower (which keeps punctuation in
-// words: "KeyError:" → "keyerror:") while hashEmbedding used splitWords
-// (which strips punctuation: "KeyError:" → "KeyError", no lowercasing).
-// Same text produced DIFFERENT vectors. After pod restart, LoadFromDB
-// loaded the computeEmbedding vectors into HNSW, but runtime queries used
-// hashEmbedding — cosine similarity was near-zero for all stored incidents.
-// The entire memory loop (applyKnownFix, similar-incident retrieval) was
-// silently broken across restarts. Now both use the same tokenizer.
+// UpdateVectorOutcome marks an incident's vector entry as outcome-verified
+// with the given success flag. Called by OutcomeWatcher.recordOutcome after
+// the recovery check completes.
+//previously recordOutcome executed this UPDATE directly against
+// s.db WITHOUT acquiring s.mu, breaking the Store's concurrency invariant
+// ("all DB access goes through the mutex"). With SetMaxOpenConns(1) the
+// actual race was serialized, but the invariant was broken. This method
+// restores the invariant by acquiring the lock.
 
-func computeEmbedding(text string) []float32 {
-        return hashEmbedding(text, 1536)
-}
-
-func simpleHash32(s string) uint32 {
-        h := uint32(2166136261)
-        for _, c := range s {
-                h ^= uint32(c)
-                h *= 16777619
-        }
-        return h
-}
-
-func nullableString(s *string) interface{} {
-        if s == nil || *s == "" {
-                return nil
-        }
-        return *s
-}
-
-func nullableStringPtr(s *string) interface{} {
-        if s == nil {
-                return nil
-        }
-        return *s
-}
-
-func boolToInt(b bool) int {
-        if b {
-                return 1
-        }
-        return 0
+func (s *Store) UpdateVectorOutcome(ctx context.Context, incidentID string, success bool) error {
+        s.mu.Lock()
+        defer s.mu.Unlock()
+        _, err := s.db.ExecContext(ctx,
+                `UPDATE incident_vectors SET outcome_verified = 1, outcome_success = ? WHERE incident_id = ?`,
+                boolToInt(success), incidentID)
+        return err
 }
 
 // FindIncidentByPR looks up an incident by its associated PR number + repo.

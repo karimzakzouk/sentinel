@@ -134,7 +134,7 @@ func New(clientset *kubernetes.Clientset, handler IncidentHandler, alertURL stri
 }
 
 // NewWithConfig creates a Detector with configurable cooldown, tail lines,
-// and namespace skip list. v3.11.0: Replaces the hardcoded values in
+// and namespace skip list.Replaces the hardcoded values in
 // shouldTrigger + streamPodLogs + watchPodsInNamespace ( + #11).
 // Pass cooldown=0 / tailLines=0 to keep defaults (5min / 100).
 // Pass nil skipNamespaces to keep the default skip list.
@@ -230,8 +230,6 @@ func (d *Detector) watchPodsInNamespace(ctx context.Context, namespace string) {
         if d.skipNamespaces[namespace] {
                 return
         }
-
-        // (Claude's review noted the goto was unusual and would confuse contributors.)
 
 watchLoop:
         for {
@@ -333,7 +331,7 @@ func (d *Detector) handlePod(ctx context.Context, pod *corev1.Pod) {
 }
 
 // lookupRepoFromOwner checks the pod's owner (Deployment/StatefulSet/ReplicaSet)
-// for the sentinel.io/repo annotation. v3.5.2: This handles the common case
+// for the sentinel.io/repo annotation.This handles the common case
 // where users annotate the Deployment instead of the pod template.
 // K8s ownership chain: Deployment → ReplicaSet → Pod
 // So we need to handle ReplicaSet by walking up to the Deployment.

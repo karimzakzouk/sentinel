@@ -1,7 +1,7 @@
 package executors
 
 import (
-	"github.com/karimzakzouk/sentinel/internal/logging"
+        "github.com/karimzakzouk/sentinel/internal/logging"
         "bytes"
         "context"
         "errors"
@@ -15,7 +15,7 @@ import (
         "k8s.io/client-go/kubernetes"
 
         "github.com/karimzakzouk/sentinel/internal/errs"
-	"github.com/karimzakzouk/sentinel/internal/schemas"
+        "github.com/karimzakzouk/sentinel/internal/schemas"
 )
 
 // KanikoBuilder builds Docker images inside Kubernetes without a daemon.
@@ -67,7 +67,7 @@ func NewKaniko(clientset *kubernetes.Clientset, namespace string) *KanikoBuilder
 }
 
 // WithDockerHubUsername sets the Docker Hub username used for the Kaniko
-// layer cache repository. v3.3.1: This fixes a bug where the cache-repo was
+// layer cache repository.This fixes a bug where the cache-repo was
 // constructed as "docker.io/<secret-name>/sentinel-build-cache" (invalid path)
 // instead of "docker.io/<username>/sentinel-build-cache".
 
@@ -76,7 +76,7 @@ func (k *KanikoBuilder) WithDockerHubUsername(username string) *KanikoBuilder {
         return k
 }
 
-// WithRegistry sets the container registry Kaniko pushes to. v3.11.0:
+// WithRegistry sets the container registry Kaniko pushes to.
 // For ECR use "<account>.dkr.ecr.<region>.amazonaws.com",
 // for GCR use "gcr.io/<project>",
 // for ACR use "<name>.azurecr.io",
@@ -92,7 +92,6 @@ func (k *KanikoBuilder) WithRegistry(registry string) *KanikoBuilder {
 
 // WithInitImage sets the Kaniko init container image (clone-and-patch).
 
-
 func (k *KanikoBuilder) WithInitImage(image string) *KanikoBuilder {
         if image != "" {
                 k.initImage = image
@@ -101,7 +100,6 @@ func (k *KanikoBuilder) WithInitImage(image string) *KanikoBuilder {
 }
 
 // WithExecutorImage sets the Kaniko executor image.
-
 
 func (k *KanikoBuilder) WithExecutorImage(image string) *KanikoBuilder {
         if image != "" {
@@ -299,7 +297,7 @@ func (k *KanikoBuilder) createConfigMap(ctx context.Context, name string, files 
 }
 
 // kanikoInitImageDefault is the default image used for the clone-and-patch
-// init container. v3.11.0: Now overridable via WithInitImage() +
+// init container.Now overridable via WithInitImage() +
 // cfg.KanikoInitImage env var (was an unexported const).
 // Tag-pinned to alpine/git:2.43.0 (we avoid `:latest` so a malicious
 // upstream rebuild can't change behavior under us). For maximum supply-chain
@@ -330,7 +328,14 @@ func (k *KanikoBuilder) buildPodSpec(podName, repo, branch, configmapName, fullI
         // cfg.GitHost, which is set by the operator at deploy time — NOT from
         // pod annotations (which would be an injection vector).
 
-        initScript := `set -ex
+        // SECURITY (C1 fix): Use `set -e` WITHOUT `-x`. The previous `set -ex`
+        // caused the GitHub PAT to be leaked to pod logs — bash prints every
+        // command with variables expanded before executing it, so the
+        // `echo "https://x-access-token:${SENTINEL_GITHUB_TOKEN}@..."` line
+        // appeared in `kubectl logs` output with the token fully expanded.
+        // Anyone with kubectl logs access in the Sentinel namespace could
+        // read the PAT.
+        initScript := `set -e
 
 # Repo and branch arrive as env vars — they cannot inject shell
 # metacharacters even if a malicious value slipped past validation.
@@ -343,7 +348,8 @@ func (k *KanikoBuilder) buildPodSpec(podName, repo, branch, configmapName, fullI
 # leak via pod logs). Empty token = anonymous clone (public repos only).
 if [ -n "$SENTINEL_GITHUB_TOKEN" ]; then
   git config --global credential.helper store
-  echo "https://x-access-token:${SENTINEL_GITHUB_TOKEN}@` + k.gitHost + `" > ~/.git-credentials
+  printf '%s\n' "https://x-access-token:${SENTINEL_GITHUB_TOKEN}@` + k.gitHost + `" > ~/.git-credentials
+  chmod 600 ~/.git-credentials
 fi
 git clone --depth 1 --branch "$SENTINEL_BRANCH" "https://` + k.gitHost + `/$SENTINEL_REPO.git" /workspace/repo
 cd /workspace/repo

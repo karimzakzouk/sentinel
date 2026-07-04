@@ -24,7 +24,7 @@ func (m *mockVectorStore) Search(ctx context.Context, text string, k int) ([]*Ve
 func (m *mockVectorStore) UsingHashFallback() bool { return false }
 
 // TestChunkDiff verifies that a unified diff is correctly split into
-// per-file chunks. v3.5.0: Each chunk starts with "diff --git".
+// per-file chunks.Each chunk starts with "diff --git".
 func TestChunkDiff(t *testing.T) {
         diff := `diff --git a/main.py b/main.py
 index 1234567..abcdefg 100644
@@ -96,7 +96,7 @@ func TestVerifySignature_Invalid(t *testing.T) {
 }
 
 // TestVerifySignature_NoSecret verifies that with no secret configured,
-// verification is refused (v3.8.4: was previously accepted for dev mode,
+// verification is refused (was previously accepted for dev mode,
 // but that allowed forged webhooks to drive Sentinel into fetching
 // arbitrary diff_url values with the GitHub PAT attached).
 func TestVerifySignature_NoSecret(t *testing.T) {

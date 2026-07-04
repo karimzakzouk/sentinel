@@ -140,7 +140,7 @@ make check-version
 
 - Go idiomatic. No interfaces until you need them.
 - `log/slog` for structured logging (JSON to stdout).
-- No external dependencies unless absolutely necessary (currently 6 direct deps).
+- No external dependencies unless absolutely necessary (currently 10 direct deps).
 - Error handling: log + continue for non-critical, return for critical.
 - Every goroutine has panic recovery.
 

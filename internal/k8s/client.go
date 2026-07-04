@@ -2,7 +2,6 @@
 // v3: single binary, single client, no Python client-go shim.
 package k8s
 
-
 import (
 	"context"
 	"encoding/json"
@@ -35,9 +34,9 @@ var sentinelAnnotationKeys = map[string]bool{
 	"sentinel.io/ignore":         true,
 	"sentinel.io/owner":          true,
 	"sentinel.io/criticality":    true,
-	"sentinel.io/auto-merge":     true, // v4.2.4: was missing — auto-merge never worked
-	"sentinel.io/admin-team":     true, // v4.1.0: for chatops admin override
-	"sentinel.io/sandbox-strict": true, // v4.0.0: for sandbox strict mode
+	"sentinel.io/auto-merge":     true, //was missing — auto-merge never worked
+	"sentinel.io/admin-team":     true, //for chatops admin override
+	"sentinel.io/sandbox-strict": true, //for sandbox strict mode
 }
 
 // Client wraps the K8s clientset with the helpers Sentinel needs.

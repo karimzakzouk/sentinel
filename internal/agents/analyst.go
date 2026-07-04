@@ -51,12 +51,12 @@ type Analyst struct {
 func NewAnalyst(router *llm.Router) *Analyst {
         return &Analyst{
                 router:         router,
-                llmPriorWeight: 0.4, // v3.11.0: default; override via SetLLMPriorWeight
+                llmPriorWeight: 0.4, //default; override via SetLLMPriorWeight
         }
 }
 
 // SetLLMPriorWeight sets the weight given to the LLM's confidence vs the
-// Bayesian posterior. v3.11.0: Replaces the hardcoded 0.4.
+// Bayesian posterior.Replaces the hardcoded 0.4.
 // Range [0, 1]: 0 = pure Bayesian (ignore LLM), 1 = pure LLM (ignore Bayes).
 // Default 0.4 (slight Bayesian lean — Bayes is more robust with few samples).
 

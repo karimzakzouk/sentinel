@@ -5,7 +5,7 @@
 package feedback
 
 import (
-	"github.com/karimzakzouk/sentinel/internal/logging"
+        "github.com/karimzakzouk/sentinel/internal/logging"
         "database/sql"
         "fmt"
         "sync"
@@ -14,7 +14,6 @@ import (
 )
 
 // Store is the single storage layer for Sentinel v3.
-// Replaces: IncidentStore (Postgres), EventStore (Postgres), BetaStore (Postgres),
 // WeaviateStore (Weaviate vector DB).
 
 type Store struct {
@@ -36,12 +35,11 @@ func New(path string) (*Store, error) {
                 return nil, fmt.Errorf("open sqlite: %w", err)
         }
 
-        // SQLite only allows one writer at a time. Limit connections to avoid
-        // "database is locked" errors under concurrent access.
-
-        db.SetMaxOpenConns(1)
-        db.SetMaxIdleConns(1)
-        db.SetConnMaxLifetime(0) // keep connections open forever
+        // WAL mode allows concurrent readers + 1 writer. 4 connections lets
+        // reads proceed in parallel while writes serialize naturally.
+        db.SetMaxOpenConns(4)
+        db.SetMaxIdleConns(4)
+        db.SetConnMaxLifetime(0)
 
         // Verify connection
 
@@ -222,3 +220,23 @@ func (s *Store) migrateSchema() error {
 
 // UpsertIncident stores or updates an incident.
 
+func nullableString(s *string) sql.NullString {
+        if s == nil {
+                return sql.NullString{}
+        }
+        return sql.NullString{String: *s, Valid: true}
+}
+
+func boolToInt(b bool) int {
+        if b {
+                return 1
+        }
+        return 0
+}
+
+func nullableStringPtr(s *string) sql.NullString {
+        if s == nil {
+                return sql.NullString{}
+        }
+        return sql.NullString{String: *s, Valid: true}
+}

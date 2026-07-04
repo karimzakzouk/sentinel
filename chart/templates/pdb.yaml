@@ -1,7 +1,10 @@
 {{/* v3.18.0: M38 — PodDisruptionBudget.
    For single-replica deployments this is harmless (minAvailable: 0 lets
    voluntary disruptions through). For multi-replica scale-up it prevents
-   all replicas from being evicted simultaneously. */}}
+   all replicas from being evicted simultaneously.
+   H7 fix: selector now matches the pod template's actual labels (literal
+   "sentinel" for app.kubernetes.io/name) instead of {{ .Release.Name }},
+   which only worked if the release was named exactly "sentinel". */}}
 {{- if .Values.podDisruptionBudget.enabled }}
 apiVersion: policy/v1
 kind: PodDisruptionBudget
@@ -18,5 +21,6 @@ spec:
   {{- end }}
   selector:
     matchLabels:
-      app.kubernetes.io/name: {{ .Release.Name }}
+      app.kubernetes.io/name: sentinel
+      app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}

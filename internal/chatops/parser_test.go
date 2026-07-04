@@ -50,7 +50,7 @@ func TestParseCommand_CancelNegation(t *testing.T) {
 }
 
 func TestParseCommand_TrailingPunctuation(t *testing.T) {
-	// Prow's #8 complaint — trailing punctuation broke parsing.
+	//— trailing punctuation broke parsing.
 	// Sentinel strips it.
 	cmds := ParseCommand("/sentinel help.", "alice", 42, "org/repo", 100)
 	if len(cmds) != 1 {

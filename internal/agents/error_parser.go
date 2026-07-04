@@ -20,7 +20,7 @@ import (
 // ParsedError is an alias for schemas.ParsedError. Kept for backwards
 // compatibility — new code should use schemas.ParsedError directly.
 // The canonical type lives in internal/schemas so the executors package
-// doesn't have to import agents (fixes LEAK-1 from the architecture audit).
+// doesn't have to import agents (fixesfrom the architecture audit).
 
 type ParsedError = schemas.ParsedError
 
@@ -597,10 +597,8 @@ func extractMethod(logLine string) string {
 // extractFunction extracts the function/method name from a stack trace
 // frame line. Works universally across all languages by finding the
 // identifier that appears near the file:line reference.
-//
 // How it works — every stack trace frame in every language has a function
 // name positioned predictably relative to the file:line:
-//
 //	Python:  File "app.py", line 70, in get_config        → after "in "
 //	Go:      main.get_config(main.go:70)                   → before "("
 //	Java:    at com.acme.Foo.get_config(Foo.java:70)      → before "("
@@ -608,7 +606,6 @@ func extractMethod(logLine string) string {
 //	Rust:    at get_config::handler (src/main.rs:70:5)     → before "("
 //	Ruby:    /app/app.rb:70:in `get_config'               → after "in `"
 //	C#:      at get_config() in /app/Program.cs:line 70    → before "()"
-//
 // Universal strategy:
 //  1. Try "in <name>" pattern (Python, Ruby, C#)
 //  2. Try "<name>(" pattern before the file:line (Go, Java, JS, Rust)

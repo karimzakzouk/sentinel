@@ -1,5 +1,5 @@
 // Package chatops — MVP command implementations.
-// 6 commands ship in v4.0.0:
+// 6 commands ship in
 //   /sentinel help          — auto-generated command list (filtered by user's perm)
 //   /sentinel status        — re-render the in-place [SENTINELSTATUS] comment
 //   /sentinel explain       — re-explain the root cause in plain English via LLM
@@ -90,7 +90,7 @@ func init() {
 }
 
 // cmdHelp posts the auto-generated help text, filtered by the user's permission.
-// Fixes Prow's #5 complaint (command discovery is poor) — users see exactly
+// Fixes(command discovery is poor) — users see exactly
 // what they can run, plus 🔒 markers for higher-tier commands they can't.
 
 func cmdHelp(ctx context.Context, cmd *Command, deps *Deps) error {
@@ -429,7 +429,6 @@ func cmdApply(ctx context.Context, cmd *Command, deps *Deps) error {
         // command posts the LLM-generated approach description so the developer
         // can implement it manually.
 
-
         body := fmt.Sprintf("## ⏳ Apply Approach %s\n\n"+
                 "Requested by @%s.\n\n"+
                 "Automatic approach application is not yet implemented. To use approach %s:\n\n"+
@@ -441,8 +440,6 @@ func cmdApply(ctx context.Context, cmd *Command, deps *Deps) error {
 
         return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber, body)
 }
-
-// unused import guards (kept for future expansion)
 
 var (
         _ = json.Marshal

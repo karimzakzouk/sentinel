@@ -26,6 +26,7 @@ import (
         "context"
         "log/slog"
         "os"
+        "strings"
         "sync"
 )
 
@@ -43,7 +44,7 @@ var (
         mu            sync.Mutex
 )
 
-// Init initializes the default logger. v3.18.0: NO LONGER uses sync.Once —
+// Init initializes the default logger.NO LONGER uses sync.Once —
 // allows log level to be hot-reloaded via runtime config (H22).
 // Safe to call multiple times.
 // If level is empty, defaults to INFO. Set SENTINEL_LOG_LEVEL=DEBUG for verbose.
@@ -92,7 +93,7 @@ func redactSecrets(groups []string, a slog.Attr) slog.Attr {
         }
         keyLower := toLowerASCII(a.Key)
         for _, pat := range secretKeyPatterns {
-                if contains(keyLower, pat) {
+                if strings.Contains(keyLower, pat) {
                         if a.Value.Kind() == slog.KindString && a.Value.String() != "" {
                                 return slog.String(a.Key, "***REDACTED***")
                         }
@@ -111,21 +112,6 @@ func toLowerASCII(s string) string {
                 b[i] = c
         }
         return string(b)
-}
-
-func contains(s, sub string) bool {
-        if len(sub) == 0 {
-                return true
-        }
-        if len(s) < len(sub) {
-                return false
-        }
-        for i := 0; i <= len(s)-len(sub); i++ {
-                if s[i:i+len(sub)] == sub {
-                        return true
-                }
-        }
-        return false
 }
 
 // L returns the default logger. Initializes with INFO level if not yet initialized.
@@ -187,7 +173,6 @@ func argsFromCtx(ctx context.Context) []any {
 }
 
 // Convenience functions — these mirror slog's API but auto-attach context fields.
-
 
 func Debug(msg string, args ...any) { L().Debug(msg, args...) }
 func Info(msg string, args ...any)  { L().Info(msg, args...) }

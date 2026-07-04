@@ -124,8 +124,27 @@ export function DashboardSection() {
     [providers],
   );
 
-  const successRate = 0;
-  const queueDepth = 0;
+  // Derive auto-merge KPIs from incidents (was hardcoded to 0).
+  const incidentsWithPR = useMemo(
+    () => incidents.filter((i) => i.pr_number && i.pr_url),
+    [incidents],
+  );
+  const mergedCount = useMemo(
+    () => incidentsWithPR.filter((i) => i.status === "resolved" || i.status === "verified").length,
+    [incidentsWithPR],
+  );
+  const revertedCount = useMemo(
+    () => incidentsWithPR.filter((i) => i.status === "rejected" || i.status === "failed").length,
+    [incidentsWithPR],
+  );
+  const totalDecided = mergedCount + revertedCount;
+  const successRate = totalDecided > 0 ? (mergedCount / totalDecided) * 100 : 0;
+  const queueDepth = useMemo(
+    () => incidentsWithPR.filter((i) =>
+      ["investigating", "executing", "fix_proposed", "approved", "root_caused"].includes(i.status),
+    ).length,
+    [incidentsWithPR],
+  );
 
   // Cost sum across models (when metrics has cost data)
   const totalCost = useMemo(() => {
@@ -275,7 +294,7 @@ export function DashboardSection() {
                       {successRate.toFixed(1)}%
                     </span>
                     <span className="mt-0.5 text-[11px] text-zinc-500">
-                      {0} merged · {0} reverted
+                      {mergedCount} merged · {revertedCount} reverted
                     </span>
                   </div>
                 </div>

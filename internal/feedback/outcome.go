@@ -1,6 +1,5 @@
 package feedback
 
-
 import (
         "github.com/karimzakzouk/sentinel/internal/logging"
         "bytes"
@@ -34,7 +33,6 @@ var fingerprintCache = sync.Map{}
 // the Beta prior was never corrected. The system "learned" from sandbox
 // results, not real outcomes.
 
-
 type OutcomeWatcher struct {
         clientset *kubernetes.Clientset
         store     *Store
@@ -65,7 +63,6 @@ func NewOutcomeWatcher(clientset *kubernetes.Clientset, store *Store) *OutcomeWa
 
 // SetDurations configures both Phase 1 and Phase 2 durations.
 
-
 func (w *OutcomeWatcher) SetDurations(shortWatch, shortInterval, longWatch, longInterval time.Duration) {
         if shortWatch > 0 {
                 w.shortWatchDuration = shortWatch
@@ -82,7 +79,6 @@ func (w *OutcomeWatcher) SetDurations(shortWatch, shortInterval, longWatch, long
 }
 
 // Watch monitors the service for 10 minutes after a fix (Phase 1 only).
-
 
 func (w *OutcomeWatcher) Watch(ctx context.Context, service, namespace, incidentID string, prOpened bool) {
         w.WatchWithFixType(ctx, service, namespace, incidentID, prOpened, "code_fix")
@@ -201,7 +197,7 @@ func (w *OutcomeWatcher) runPhase2(ctx context.Context, service, namespace, inci
 }
 
 // checkErrorRecurrence fetches recent pod logs and checks if the error
-// fingerprint appears. v3.5.0: Uses the K8s API to get current (non-previous)
+// fingerprint appears.Uses the K8s API to get current (non-previous)
 // logs with a 100-line tail. The fingerprint match is case-insensitive
 // substring search — good enough for error types like "KeyError", "panic",
 // "NullPointerException".
@@ -356,10 +352,10 @@ func (w *OutcomeWatcher) recordOutcome(incidentID, service, namespace string, su
         }
 
         // Update the incident's outcome in the vector store
+        //route through the mutex-protected Store.UpdateVectorOutcome
+        // method instead of executing the UPDATE directly against s.db.
 
-        _, err = w.store.db.ExecContext(ctx,
-                `UPDATE incident_vectors SET outcome_verified = 1, outcome_success = ? WHERE incident_id = ?`,
-                boolToInt(success), incidentID)
+        err = w.store.UpdateVectorOutcome(ctx, incidentID, success)
         if err != nil {
                 logging.Error("failed to update vector outcome", "err", err)
         }

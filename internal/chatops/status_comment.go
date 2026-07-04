@@ -108,7 +108,7 @@ func (s *StatusCommentManagerImpl) Render(incident *Incident, extra string) stri
 
         sb.WriteString(fmt.Sprintf("| Overall | %s | `%s` |\n", emojiForStatus(incident.Status), incident.Status))
 
-        // Auto-merge status — v4.2.5:
+        // Auto-merge status —
 
         autoMergeStatus := "—"
         autoMergeDetail := "(not configured)"

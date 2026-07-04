@@ -8,7 +8,6 @@ import (
 	"github.com/karimzakzouk/sentinel/internal/version"
 )
 
-
 func str(m map[string]any, key string) string {
         if m == nil {
                 return ""

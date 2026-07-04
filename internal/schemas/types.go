@@ -71,7 +71,6 @@ const (
         VerdictDeny                 GovernanceVerdict = "deny"
 )
 
-// ---------- Layer 1: Ingestion ----------
 // Signal is the canonical cleaned/normalized telemetry event.
 
 type Signal struct {
@@ -88,7 +87,6 @@ type Signal struct {
         SchemaVersion string          `json:"schema_version"`
 }
 
-// ---------- Layer 2: Detection ----------
 // Anomaly is a single anomalous observation flagged by a detector.
 
 type Anomaly struct {
@@ -118,7 +116,6 @@ type AnomalyCluster struct {
         Annotations map[string]string `json:"annotations"`
 }
 
-// ---------- Layer 3: Reasoning ----------
 // Hypothesis is one candidate root cause proposed by the Investigator.
 
 type Hypothesis struct {
@@ -169,7 +166,7 @@ type RootCause struct {
 type FileChange struct {
         Path       string        `json:"path"`
         NewContent string        `json:"new_content,omitempty"` // legacy: full file replacement
-        Changes    []SearchReplace `json:"changes,omitempty"`    // v3.9.0: surgical edits
+        Changes    []SearchReplace `json:"changes,omitempty"`    //surgical edits
 }
 
 // SearchReplace is one surgical edit: find "search" in the file, replace
@@ -212,7 +209,6 @@ type RewindEvent struct {
         Ts         time.Time      `json:"ts"`
 }
 
-// ---------- Layer 4: Safety / Governance ----------
 // GovernanceDecision is the verdict for a proposed fix.
 
 type GovernanceDecision struct {
@@ -226,7 +222,6 @@ type GovernanceDecision struct {
         DecidedAt                   time.Time         `json:"decided_at"`
 }
 
-// ---------- Layer 5: Execution ----------
 // ExecutionResult is the outcome of executing a FixProposal.
 
 type ExecutionResult struct {
@@ -242,6 +237,13 @@ type ExecutionResult struct {
         StartedAt        time.Time      `json:"started_at"`
         FinishedAt       *time.Time     `json:"finished_at,omitempty"`
         Error            *string        `json:"error,omitempty"`
+
+        // Admin overrides — set by /sentinel override sandbox|ci.
+        // When true, the auto-merge policy treats the corresponding gate
+        // as passed without actually running the check. Destructive —
+        // every use is audit-logged.
+        SandboxOverride bool `json:"sandbox_override,omitempty"`
+        CIOverride      bool `json:"ci_override,omitempty"`
 }
 
 // AgentState is the structured object passed between agents in the state machine.
@@ -273,7 +275,6 @@ type AgentState struct {
         SandboxFeedback    *string              `json:"sandbox_feedback,omitempty"`
 }
 
-// ---------- Layer 6: Feedback ----------
 // Incident is the end-to-end incident record. One Incident == one full Sentinel run.
 
 type Incident struct {
@@ -338,7 +339,7 @@ func NewIncident(cluster AnomalyCluster) Incident {
 
 // ─── Fix verification types ──────────────────────────────────────────────────
 // These were
-// (LEAK-1 from the architecture audit). Moved here so the executors package
+// (from the architecture audit). Moved here so the executors package
 // doesn't have to import agents — outer adapter was reaching into inner
 // reasoning layer. The agents package keeps thin wrappers for back-compat.
 // ParsedError is the structured form of a runtime error extracted from logs.

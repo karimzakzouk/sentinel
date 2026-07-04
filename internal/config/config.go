@@ -43,21 +43,18 @@ type Config struct {
 
         LLMEmbeddingModel string
 
-        //.go hashEmbedding().
-        // If an operator configures a real embedding model with a different dim
-        // (e.g. 1024 for bge-large, 3072 for text-embedding-3-large), the hash
-        // fallback's 1536-dim vectors were incompatible with real embeddings
-        // stored Now the dim
-        // is configurable and defaults to 1536 (backwards-compatible with
-        // existing indexes built with the previous hash fallback).
+        // Embedding pipeline config. Auto-detects: if EmbeddingAPIKey is set,
+        // uses remote API; else falls back to TF-IDF.
+        EmbeddingProvider string
+        EmbeddingAPIKey   string
+        EmbeddingBaseURL  string
+
+        // LLM semantic cache (Phase 2). When enabled + semantic embeddings
+        // are configured, LLM responses are cached by prompt similarity.
+        LLMSemanticCacheEnabled  bool
+        LLMSemanticCacheThreshold float64 // default 0.97
 
         LLMEmbeddingDim int
-
-        // L2 safe-actions (restart, rollback, scale)
-        SafeActionsEnabled          bool
-        SafeActionsNamespaces       []string
-        SafeActionsMaxPerHour       int
-        SafeActionsMaxScaleDeltaPct int
 
         // Kubernetes
 
@@ -120,7 +117,6 @@ type Config struct {
         DockerHubUsername string
         DockerHubToken    string
 
-        //iogo:106,255,
         // secrets.yaml:28, values.yaml:12), so ECR/GCR/ACR/Harbor/Quay users
         // got an invalid destination image:
         //   "docker.io/123456789.dkr.ecr.us-east-1.amazonaws.com/myapp:sentinel-..."
@@ -319,15 +315,14 @@ func Load() *Config {
 
                 LLMEmbeddingModel: getenv("SENTINEL_LLM_EMBEDDING_MODEL", ""),
 
-                // preserves backwards compat with existing indexes.
+                EmbeddingProvider: getenv("SENTINEL_EMBEDDING_PROVIDER", ""),
+                EmbeddingAPIKey:   getenv("SENTINEL_EMBEDDING_API_KEY", ""),
+                EmbeddingBaseURL:  getenv("SENTINEL_EMBEDDING_BASE_URL", ""),
+
+                LLMSemanticCacheEnabled:   getenvBool("SENTINEL_LLM_SEMANTIC_CACHE", false),
+                LLMSemanticCacheThreshold: getenvFloat("SENTINEL_LLM_CACHE_THRESHOLD", 0.97),
 
                 LLMEmbeddingDim:           getenvInt("SENTINEL_LLM_EMBEDDING_DIM", 1536),
-
-                SafeActionsEnabled:          getenvBool("SENTINEL_SAFE_ACTIONS_ENABLED", false),
-                SafeActionsNamespaces:       getenvCsv("SENTINEL_SAFE_ACTIONS_NAMESPACES"),
-                SafeActionsMaxPerHour:       getenvInt("SENTINEL_SAFE_ACTIONS_MAX_PER_HOUR", 3),
-                SafeActionsMaxScaleDeltaPct: getenvInt("SENTINEL_SAFE_ACTIONS_MAX_SCALE_DELTA_PCT", 50),
-
                 Namespace:                 getenv("SENTINEL_NAMESPACE", "sentinel"),
                 ReleaseName:               getenv("SENTINEL_RELEASE_NAME", "sentinel"),
                 GitHubToken:               getenv("SENTINEL_GITHUB_TOKEN", ""),
@@ -652,10 +647,6 @@ func getenvBool(key string, def bool) bool {
                 }
         }
         return def
-}
-
-func getenvCsv(key string) []string {
-        return splitCSV(os.Getenv(key))
 }
 
 func splitCSV(s string) []string {

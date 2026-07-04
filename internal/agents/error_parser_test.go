@@ -9,7 +9,6 @@ import (
 // extracts error type, file, line, and detected language from real-world stack
 // traces across all 8 supported languages: Python, Go, Java, JavaScript/Node,
 // Rust, Ruby, C, and unknown.
-//
 // This is the test coverage the codebase was missing — error_parser.go had
 // zero tests despite being a flagship feature ("universal error parser").
 // Each subtest uses a real traceback sampled from production logs of the

@@ -54,7 +54,7 @@ No prose before or after the JSON.`
 // backwards compatibility — new code should use schemas.GeneratedReproducer
 // directly.
 // The canonical type lives in internal/schemas so the executors package
-// doesn't have to import agents (fixes LEAK-1 from the architecture audit).
+// doesn't have to import agents (fixesfrom the architecture audit).
 
 type GeneratedReproducer = schemas.GeneratedReproducer
 
@@ -169,6 +169,4 @@ func (g *ReproducerGenerator) buildUserMessage(state *schemas.AgentState) string
         return strings.Join(parts, "\n")
 }
 
-// (MarshalJSON removed — the struct's json: tags produce identical output.
 // The method was redundant and prevented moving the type to schemas.)
-

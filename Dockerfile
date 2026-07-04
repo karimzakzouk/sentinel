@@ -1,71 +1,42 @@
 # syntax=docker/dockerfile:1.7
-# Sentinel v3.12.0 Dockerfile — includes embedded web UI.
-# Multi-stage: Node.js builds the dashboard → Go compiles with embedded assets.
-# Multi-arch: builds natively on amd64 + arm64 runners (no QEMU).
-# Build time: ~4 min cold, ~2 min cached.
+# Sentinel — multi-stage build: Node.js web UI → Go binary → distroless runtime.
 
-# ── Stage 1: Build the web UI (Next.js static export) ──────────────────────
+# ── Stage 1: Build the web UI ──────────────────────────────────────────────
 FROM node:26-alpine AS web-builder
 
 WORKDIR /web
-
-# Copy package files first (cacheable)
 COPY web/package.json web/package-lock.json* ./
 
-# M41 — use `npm ci` (strict lockfile mode). Was:
-#   npm install --frozen-lockfile 2>/dev/null || npm install
-# which silently fell back to `npm install` on lockfile drift, regenerating the
-# lockfile and hiding dependency mismatches. `npm ci` fails loudly on drift.
-#
-# M43 — retry npm ci on transient network errors. The v5.9.2 release failed
-# on amd64 because npm ci hit ECONNRESET mid-fetch from the npm registry.
-# npm's built-in --fetch-retries handles timeouts but not always connection
-# resets; the outer shell loop catches the rest. 3 attempts with 10s backoff.
 RUN for i in 1 2 3; do \
         npm ci --fetch-retries=5 --fetch-retry-mintimeout=20000 && break; \
         echo "npm ci attempt $i failed, retrying in 10s..." >&2; \
         sleep 10; \
     done && test -d node_modules
 
-# Copy web source and build
 COPY web/ .
-
-# H23 + M42 — let the build fail loudly. Was: piped through `|| true`
-# + a placeholder HTML fallback that masked real CI failures (broken JS bundle
-# produced a green build with no dashboard). Now if `next build` fails OR
-# produces no out/index.html, the Docker build fails.
 RUN npx next build
-
-# M42 — fail loudly if the build didn't produce output.
 RUN test -f out/index.html || (echo "ERROR: next build did not produce out/index.html" && exit 1)
 
-# Copy built files to output directory
+# Pre-gzip static assets for smaller embed + faster serving
+RUN find out -type f \( -name '*.js' -o -name '*.css' -o -name '*.html' -o -name '*.txt' -o -name '*.svg' -o -name '*.woff2' \) -exec gzip -9 -k {} \;
+
 RUN mkdir -p /out && cp -r out/* /out/
 
-# ── Stage 2: Compile the Go binary with embedded web UI ────────────────────
+# ── Stage 2: Compile the Go binary ─────────────────────────────────────────
 FROM golang:1.26.4-alpine AS builder
 
 RUN apk add --no-cache git ca-certificates
 
 WORKDIR /app
 
-# Copy go.mod + go.sum first (cacheable layer)
 COPY go.mod go.sum ./
-
-# Download deps with BuildKit cache mount
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     go mod download
 
-# Copy source
 COPY . .
-
-# Copy the built web UI into the embed directory (overwrites placeholder)
 COPY --from=web-builder /out/ internal/web/out/
 
-# VERSION comes from the VERSION file (single source of truth).
-# The build arg still exists for backward compatibility with CI that
-# passes --build-arg VERSION=X.Y.Z, but defaults to reading VERSION.
 ARG VERSION=dev
 ARG TARGETOS=linux
 ARG TARGETARCH=amd64
@@ -76,27 +47,12 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     -trimpath \
     -o /sentinel ./cmd/sentinel
 
-# Also build the CLI
-RUN --mount=type=cache,target=/go/pkg/mod \
-    --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
-    -ldflags="-s -w -X github.com/karimzakzouk/sentinel/internal/version.Version=${VERSION}" \
-    -trimpath \
-    -o /sentinelctl ./cmd/sentinelctl
-
-# ── Stage 3: Runtime (distroless, 43MB) ──────────────────────────────────
+# ── Stage 3: Runtime ──────────────────────────────────────────────────────
 FROM gcr.io/distroless/static-debian12:nonroot
 
-# CA certs for HTTPS calls to GitHub / LLM / Docker Hub
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
-
-# The binary (includes embedded web UI)
 COPY --from=builder /sentinel /sentinel
 
-# The CLI binary
-COPY --from=builder /sentinelctl /sentinelctl
-
-# Storage volume for SQLite
 VOLUME ["/data"]
 
 USER nonroot:nonroot

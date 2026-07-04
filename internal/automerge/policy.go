@@ -19,7 +19,7 @@
 package automerge
 
 import (
-	"github.com/karimzakzouk/sentinel/internal/logging"
+        "github.com/karimzakzouk/sentinel/internal/logging"
         "fmt"
         "strings"
         "sync"
@@ -109,6 +109,11 @@ type Input struct {
         NoMergeLabel       bool  // sentinel/no-merge label set?
         ApprovedLabel      bool  // sentinel/approved label set?
         PolicyVerdict      string // safety.Policy.Evaluate verdict: "allow"|"require_human_approval"|"deny"
+
+        // Admin overrides — set by /sentinel override sandbox|ci.
+        // When true, the corresponding gate is treated as passed.
+        SandboxOverride bool
+        CIOverride      bool
 }
 
 // CIStatus is the state of CI checks on the PR.
@@ -163,14 +168,18 @@ func (p *Policy) Evaluate(in Input) *Decision {
         }
         d.GatesPassed = append(d.GatesPassed, "annotation")
 
-        // Gate 3: sandbox verified (hard)
+        // Gate 3: sandbox verified (hard) — unless admin override is set
 
-        if !in.SandboxVerified {
+        if !in.SandboxVerified && !in.SandboxOverride {
                 d.GatesFailed = append(d.GatesFailed, "sandbox")
                 d.Reason = "sandbox not verified — auto-merge requires sandbox verification"
                 return d
         }
-        d.GatesPassed = append(d.GatesPassed, "sandbox")
+        if in.SandboxOverride && !in.SandboxVerified {
+                d.GatesPassed = append(d.GatesPassed, "sandbox (OVERRIDE)")
+        } else {
+                d.GatesPassed = append(d.GatesPassed, "sandbox")
+        }
 
         // Gate 4: confidence threshold (hard)
 
@@ -219,22 +228,25 @@ func (p *Policy) Evaluate(in Input) *Decision {
                 return d
         }
 
-        // Gate 9: CI green
+        // Gate 9: CI green — unless admin override is set
 
         if p.cfg.RequireCIGreen {
-                switch in.CIStatus.State {
-                case "failure":
-                        d.GatesFailed = append(d.GatesFailed, "ci")
-                        d.Reason = fmt.Sprintf("CI failing (%d/%d checks failing)", in.CIStatus.Failing, in.CIStatus.Checks)
-                        return d
-                case "pending":
-                        // Don't fail — the merger will wait for CI to complete.
-
-                        d.GatesPassed = append(d.GatesPassed, "ci_pending")
-                case "success":
-                        d.GatesPassed = append(d.GatesPassed, "ci")
-                default:
-                        d.GatesPassed = append(d.GatesPassed, "ci_unknown")
+                if in.CIOverride {
+                        d.GatesPassed = append(d.GatesPassed, "ci (OVERRIDE)")
+                } else {
+                        switch in.CIStatus.State {
+                        case "failure":
+                                d.GatesFailed = append(d.GatesFailed, "ci")
+                                d.Reason = fmt.Sprintf("CI failing (%d/%d checks failing)", in.CIStatus.Failing, in.CIStatus.Checks)
+                                return d
+                        case "pending":
+                                // Don't fail — the merger will wait for CI to complete.
+                                d.GatesPassed = append(d.GatesPassed, "ci_pending")
+                        case "success":
+                                d.GatesPassed = append(d.GatesPassed, "ci")
+                        default:
+                                d.GatesPassed = append(d.GatesPassed, "ci_unknown")
+                        }
                 }
         }
 

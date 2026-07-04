@@ -54,9 +54,26 @@ spec:
             # Default is now "" (empty) — hash fallback by default (audit #13)
             - name: SENTINEL_LLM_EMBEDDING_MODEL
               value: {{ .Values.sentinel.llm.embeddingModel | quote }}
-            # Embedding dim for hash fallback (audit #13)
             - name: SENTINEL_LLM_EMBEDDING_DIM
               value: {{ .Values.sentinel.llm.embeddingDim | default 1536 | quote }}
+            {{- if .Values.sentinel.llm.embeddingProvider }}
+            - name: SENTINEL_EMBEDDING_PROVIDER
+              value: {{ .Values.sentinel.llm.embeddingProvider | quote }}
+            {{- end }}
+            {{- if .Values.sentinel.llm.embeddingApiKey }}
+            - name: SENTINEL_EMBEDDING_API_KEY
+              value: {{ .Values.sentinel.llm.embeddingApiKey | quote }}
+            {{- end }}
+            {{- if .Values.sentinel.llm.embeddingBaseUrl }}
+            - name: SENTINEL_EMBEDDING_BASE_URL
+              value: {{ .Values.sentinel.llm.embeddingBaseUrl | quote }}
+            {{- end }}
+            {{- if .Values.sentinel.llm.semanticCache }}
+            - name: SENTINEL_LLM_SEMANTIC_CACHE
+              value: "true"
+            - name: SENTINEL_LLM_CACHE_THRESHOLD
+              value: {{ .Values.sentinel.llm.semanticCacheThreshold | default 0.97 | quote }}
+            {{- end }}
             # Multi-provider failover pool (JSON array of ProviderConfig).
             # Empty = single-provider mode (uses SENTINEL_LLM_PROVIDER + SENTINEL_LLM_API_KEY).
             {{- if .Values.sentinel.llm.providers }}

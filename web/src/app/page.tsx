@@ -1,24 +1,31 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import dynamic from "next/dynamic";
 import { Sidebar } from "@/components/sentinel/sidebar";
 import { CommandPalette } from "@/components/sentinel/command-palette";
-import { DashboardSection } from "@/components/sections/dashboard";
-import { IncidentsSection } from "@/components/sections/incidents";
-import { LiveInvestigationSection } from "@/components/sections/live-investigation";
-import { SandboxSection } from "@/components/sections/sandbox";
-import { PullRequestsSection } from "@/components/sections/pull-requests";
-import { ProvidersSection } from "@/components/sections/providers";
-import { AutoMergeSection } from "@/components/sections/auto-merge";
-import { DetectionSection } from "@/components/sections/detection";
-import { ChatopsSection } from "@/components/sections/chatops";
-import { MetricsSection } from "@/components/sections/metrics";
-import { SettingsSection } from "@/components/sections/settings";
-import { ApiExplorerSection } from "@/components/sections/api-explorer";
+import { ErrorBoundary } from "@/components/sentinel/error-boundary";
 import { useSentinelStore, useSSE, useAutoRefresh, type SectionId } from "@/lib/store";
 import { LoginGate } from "@/components/sentinel/login-gate";
 import { Clock, Search, Wifi, WifiOff, Activity, LogOut } from "lucide-react";
 import { clearToken } from "@/lib/api";
+
+// Code splitting: lazy-load each section so the initial bundle is smaller.
+// Recharts (200KB) only loads when Metrics/Providers is visited.
+// react-syntax-highlighter (200KB) only loads when API Explorer is visited.
+// framer-motion (50KB) only loads when Live Investigation / Sandbox / PRs is visited.
+const DashboardSection = dynamic(() => import("@/components/sections/dashboard").then(m => ({ default: m.DashboardSection })), { ssr: false });
+const IncidentsSection = dynamic(() => import("@/components/sections/incidents").then(m => ({ default: m.IncidentsSection })), { ssr: false });
+const LiveInvestigationSection = dynamic(() => import("@/components/sections/live-investigation").then(m => ({ default: m.LiveInvestigationSection })), { ssr: false });
+const SandboxSection = dynamic(() => import("@/components/sections/sandbox").then(m => ({ default: m.SandboxSection })), { ssr: false });
+const PullRequestsSection = dynamic(() => import("@/components/sections/pull-requests").then(m => ({ default: m.PullRequestsSection })), { ssr: false });
+const ProvidersSection = dynamic(() => import("@/components/sections/providers").then(m => ({ default: m.ProvidersSection })), { ssr: false });
+const AutoMergeSection = dynamic(() => import("@/components/sections/auto-merge").then(m => ({ default: m.AutoMergeSection })), { ssr: false });
+const DetectionSection = dynamic(() => import("@/components/sections/detection").then(m => ({ default: m.DetectionSection })), { ssr: false });
+const ChatopsSection = dynamic(() => import("@/components/sections/chatops").then(m => ({ default: m.ChatopsSection })), { ssr: false });
+const MetricsSection = dynamic(() => import("@/components/sections/metrics").then(m => ({ default: m.MetricsSection })), { ssr: false });
+const SettingsSection = dynamic(() => import("@/components/sections/settings").then(m => ({ default: m.SettingsSection })), { ssr: false });
+const ApiExplorerSection = dynamic(() => import("@/components/sections/api-explorer").then(m => ({ default: m.ApiExplorerSection })), { ssr: false });
 
 const titles: Record<SectionId, { title: string; sub: string }> = {
   dashboard: { title: "Dashboard", sub: "Operational overview — last 7 days" },
@@ -52,16 +59,40 @@ function ClockBadge() {
 }
 
 export default function Home() {
+  // LoginGate wraps the entire app. SSE + auto-refresh only start AFTER
+  // auth succeeds (inside AuthenticatedApp). Previously they fired before
+  // LoginGate validated, causing 6 unauthorized 401s on every fresh visit.
+  return (
+    <LoginGate>
+      <AuthenticatedApp />
+    </LoginGate>
+  );
+}
+
+function AuthenticatedApp() {
   const active = useSentinelStore((s) => s.activeSection);
   const setCommandOpen = useSentinelStore((s) => s.setCommandOpen);
   const version = useSentinelStore((s) => s.version);
   const sseConnected = useSentinelStore((s) => s.sseConnected);
   const healthy = useSentinelStore((s) => s.healthy);
 
-  // Boot SSE + auto-refresh on mount — these are the only data sources for the
-  // whole dashboard. The hooks are idempotent (subscribe, fetch, reconnect).
+  // Boot SSE + auto-refresh — only after auth succeeds (FE auth race fix).
+  // These hooks are idempotent (subscribe, fetch, reconnect).
   useSSE();
   useAutoRefresh(30_000);
+
+  // Track which sections have been visited. A section mounts on first visit
+  // and stays mounted (hidden via CSS) on subsequent visits — this preserves
+  // scroll position, filters, and form drafts when switching tabs.
+  const [visitedSections, setVisitedSections] = useState<Set<SectionId>>(new Set(["dashboard"]));
+  useEffect(() => {
+    setVisitedSections((prev) => {
+      if (prev.has(active)) return prev;
+      const next = new Set(prev);
+      next.add(active);
+      return next;
+    });
+  }, [active]);
 
   // Cmd+K shortcut
   useEffect(() => {
@@ -78,7 +109,6 @@ export default function Home() {
   const meta = titles[active] ?? titles.dashboard;
 
   return (
-    <LoginGate>
     <div className="flex h-screen overflow-hidden bg-background">
       <Sidebar />
 
@@ -143,25 +173,99 @@ export default function Home() {
           </div>
         </header>
 
-        {/* Main content */}
+        {/* Main content — sections mount on first visit and stay mounted (hidden
+            via CSS) so switching tabs preserves scroll position, filters, and
+            form drafts. Each section is wrapped in an ErrorBoundary so a render
+            crash in one section doesn't white-screen the entire dashboard. */}
         <main className="flex-1 overflow-y-auto scrollbar-thin">
-          {active === "dashboard" && <DashboardSection />}
-          {active === "incidents" && <IncidentsSection />}
-          {active === "live" && <LiveInvestigationSection />}
-          {active === "sandbox" && <SandboxSection />}
-          {active === "prs" && <PullRequestsSection />}
-          {active === "providers" && <ProvidersSection />}
-          {active === "automerge" && <AutoMergeSection />}
-          {active === "detection" && <DetectionSection />}
-          {active === "chatops" && <ChatopsSection />}
-          {active === "metrics" && <MetricsSection />}
-          {active === "settings" && <SettingsSection />}
-          {active === "api" && <ApiExplorerSection />}
+          {visitedSections.has("dashboard") && (
+            <div style={{ display: active === "dashboard" ? "block" : "none" }}>
+              <ErrorBoundary sectionName="Dashboard">
+                <DashboardSection />
+              </ErrorBoundary>
+            </div>
+          )}
+          {visitedSections.has("incidents") && (
+            <div style={{ display: active === "incidents" ? "block" : "none" }}>
+              <ErrorBoundary sectionName="Incidents">
+                <IncidentsSection />
+              </ErrorBoundary>
+            </div>
+          )}
+          {visitedSections.has("live") && (
+            <div style={{ display: active === "live" ? "block" : "none" }}>
+              <ErrorBoundary sectionName="Live Investigation">
+                <LiveInvestigationSection />
+              </ErrorBoundary>
+            </div>
+          )}
+          {visitedSections.has("sandbox") && (
+            <div style={{ display: active === "sandbox" ? "block" : "none" }}>
+              <ErrorBoundary sectionName="Sandbox">
+                <SandboxSection />
+              </ErrorBoundary>
+            </div>
+          )}
+          {visitedSections.has("prs") && (
+            <div style={{ display: active === "prs" ? "block" : "none" }}>
+              <ErrorBoundary sectionName="Pull Requests">
+                <PullRequestsSection />
+              </ErrorBoundary>
+            </div>
+          )}
+          {visitedSections.has("providers") && (
+            <div style={{ display: active === "providers" ? "block" : "none" }}>
+              <ErrorBoundary sectionName="Providers">
+                <ProvidersSection />
+              </ErrorBoundary>
+            </div>
+          )}
+          {visitedSections.has("automerge") && (
+            <div style={{ display: active === "automerge" ? "block" : "none" }}>
+              <ErrorBoundary sectionName="Auto-Merge">
+                <AutoMergeSection />
+              </ErrorBoundary>
+            </div>
+          )}
+          {visitedSections.has("detection") && (
+            <div style={{ display: active === "detection" ? "block" : "none" }}>
+              <ErrorBoundary sectionName="Detection">
+                <DetectionSection />
+              </ErrorBoundary>
+            </div>
+          )}
+          {visitedSections.has("chatops") && (
+            <div style={{ display: active === "chatops" ? "block" : "none" }}>
+              <ErrorBoundary sectionName="Chatops">
+                <ChatopsSection />
+              </ErrorBoundary>
+            </div>
+          )}
+          {visitedSections.has("metrics") && (
+            <div style={{ display: active === "metrics" ? "block" : "none" }}>
+              <ErrorBoundary sectionName="Metrics">
+                <MetricsSection />
+              </ErrorBoundary>
+            </div>
+          )}
+          {visitedSections.has("settings") && (
+            <div style={{ display: active === "settings" ? "block" : "none" }}>
+              <ErrorBoundary sectionName="Settings">
+                <SettingsSection />
+              </ErrorBoundary>
+            </div>
+          )}
+          {visitedSections.has("api") && (
+            <div style={{ display: active === "api" ? "block" : "none" }}>
+              <ErrorBoundary sectionName="API Explorer">
+                <ApiExplorerSection />
+              </ErrorBoundary>
+            </div>
+          )}
         </main>
       </div>
 
       <CommandPalette />
     </div>
-    </LoginGate>
   );
 }

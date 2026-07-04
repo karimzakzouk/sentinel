@@ -4,6 +4,7 @@ import (
         "context"
         "fmt"
         "strings"
+        "sync"
         "time"
 
         "github.com/karimzakzouk/sentinel/internal/agents"
@@ -226,8 +227,7 @@ func executeCodeFix(
                                 }
                         }
 
-                        // Phase 2: Build canary image
-
+                        // Phase 2: Build canary image (+ post-fix artifacts in parallel on first attempt)
                         logging.Info("execution Phase 2: building canary image with Kaniko",
                                 "fix_id", fp.FixID, "attempt", sandboxAttempt+1, "max", maxRetries+1)
                         prodImage, err := k8sClient.GetProdImage(ctx, fp.TargetService, fp.TargetNamespace)
@@ -236,16 +236,33 @@ func executeCodeFix(
                                 break
                         }
 
-                        canaryImage, err := kaniko.BuildForIncident(ctx, incident, branchInfo, prodImage)
-                        if err != nil {
-// Kaniko build failure = infrastructure error, NOT a code issue.
-                                // The LLM cannot fix "chown /etc/gshadow: operation not permitted".
-                                // Break immediately — don't retry. Open the PR with needs-review
-                                // (the code fix might still be correct, we just couldn't verify it).
+                        // On the first attempt, run the Kaniko build and the post-fix
+                        // LLM artifacts (test/reproducer/security) in parallel — saves
+                        // 30-90s by overlapping the build with the LLM calls.
+                        var kanikoErr error
+                        var canaryImage string
+                        if sandboxAttempt == 0 {
+                                var wg sync.WaitGroup
+                                wg.Add(2)
+                                go func() {
+                                        defer wg.Done()
+                                        canaryImage, kanikoErr = kaniko.BuildForIncident(ctx, incident, branchInfo, prodImage)
+                                }()
+                                go func() {
+                                        defer wg.Done()
+                                        if err := pipeline.RunPostFixArtifacts(ctx, &incident.State); err != nil {
+                                                logging.Error("post-fix artifacts failed (non-blocking)", "err", err)
+                                        }
+                                }()
+                                wg.Wait()
+                        } else {
+                                canaryImage, kanikoErr = kaniko.BuildForIncident(ctx, incident, branchInfo, prodImage)
+                        }
 
-                                sandboxSummary = fmt.Sprintf("kaniko_error: %v", err)
-                                logging.Error("kaniko build failed — not retrying (infrastructure error, not a code issue)",
-                                        "fix_id", fp.FixID, "error", err, "attempt", sandboxAttempt+1)
+                        if kanikoErr != nil {
+                                sandboxSummary = fmt.Sprintf("kaniko_error: %v", kanikoErr)
+                                logging.Error("kaniko build failed — not retrying (infrastructure error)",
+                                        "fix_id", fp.FixID, "error", kanikoErr, "attempt", sandboxAttempt+1)
                                 break
                         }
 
@@ -474,6 +491,8 @@ func executeCodeFix(
                                 SandboxVerified:     sandboxVerified,
                                 PolicyVerdict:       policyVerdict,
                                 AutoMergeAnnotation: autoMergeAnnotation,
+                                SandboxOverride:     incident.State.ExecutionResult != nil && incident.State.ExecutionResult.SandboxOverride,
+                                CIOverride:          incident.State.ExecutionResult != nil && incident.State.ExecutionResult.CIOverride,
                         },
                 })
                 logging.Info("PR tracked for auto-merge",
@@ -511,7 +530,7 @@ func recordBetaOutcome(ctx context.Context, store *feedback.Store, incident sche
 }
 
 // extractPodLogsFromIncident pulls the pod logs from the incident's anomaly
-// explanations. v3.5.0: Used to extract the error fingerprint for the 24h
+// explanations.Used to extract the error fingerprint for the 24h
 // re-occurrence watcher.
 
 func extractPodLogsFromIncident(incident *schemas.Incident) string {
@@ -524,7 +543,7 @@ func extractPodLogsFromIncident(incident *schemas.Incident) string {
 
 // fetchCurrentBranchFiles fetches the current file content from the fix branch
 // (which has the previous fix applied) so the LLM generates search/replace blocks
-// against the CURRENT state, not the original code. v3.14.0: Fix C.
+// against the CURRENT state, not the original code.Fix C.
 // Without this, the retry loop fails because the LLM's search text references
 // the original code (e.g. "item = items[index]") which no longer exists — the
 // previous fix already replaced it with a bounds check.

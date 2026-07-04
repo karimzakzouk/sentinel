@@ -230,7 +230,7 @@ func (c *Correlator) cleanupDeployments(now time.Time) {
 }
 
 // ActiveIncidentCount returns the number of distinct services with active
-// incidents in the current window. v3.5.0: Used for metrics/debugging.
+// incidents in the current window.Used for metrics/debugging.
 
 func (c *Correlator) ActiveIncidentCount() int {
         c.mu.Lock()

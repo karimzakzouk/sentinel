@@ -34,7 +34,6 @@ import (
 	"github.com/karimzakzouk/sentinel/internal/version"
 )
 
-
 func main() {
         if len(os.Args) < 2 {
                 printHelp()
@@ -242,4 +241,3 @@ func extractGlobalFlags(args []string, server, token string, jsonOut bool, timeo
 }
 
 // client wraps the HTTP calls to Sentinel's API.
-

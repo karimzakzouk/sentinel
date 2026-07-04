@@ -1,12 +1,10 @@
 // Package errorparse provides shared error-detection patterns used by both
 // the detection layer (fast log scanning) and the agents layer (rich parsing).
-//
 // Two consumers:
 //   - internal/detection: uses IsErrorLine() for fast "does this look like
 //     an error?" checks on every log line
 //   - internal/agents: uses ParseError() for structured extraction
 //     (error type, file, line, language) from stack traces
-//
 // The regexes here are the common set. Each consumer may have additional
 // patterns specific to its use case.
 package errorparse

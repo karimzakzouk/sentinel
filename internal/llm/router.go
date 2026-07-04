@@ -5,7 +5,7 @@
 package llm
 
 import (
-	"github.com/karimzakzouk/sentinel/internal/logging"
+        "github.com/karimzakzouk/sentinel/internal/logging"
         "context"
         "encoding/json"
         "fmt"
@@ -40,14 +40,10 @@ type Router struct {
         maxRetries     int
         retryBaseDelay time.Duration
 
-        // maxRetries / retryBaseDelay. These fields can be mutated at runtime
-        // via Update (called from the runtimecfg apply callback when the user
-        // changes LLM settings in the web UI). Without this lock, an in-flight
-        // request could see a torn string pointer during an Update.
-
         mu sync.RWMutex
 
-        pool *Pool
+        pool  *Pool
+        cache *SemanticCache
 }
 
 // New creates a Router with default retry settings (3 retries, 500ms base delay).
@@ -104,6 +100,12 @@ func (r *Router) SetPool(pool *Pool) {
         }
 }
 
+func (r *Router) SetCache(cache *SemanticCache) {
+        r.mu.Lock()
+        defer r.mu.Unlock()
+        r.cache = cache
+}
+
 // Pool returns the router's failover pool (nil if not configured).
 
 func (r *Router) Pool() *Pool {
@@ -124,7 +126,6 @@ func (r *Router) SetRetryConfig(maxRetries int, baseDelay time.Duration) {
 
 // Update reconfigures the router (called when settings change at runtime).
 // using the read methods below see a consistent snapshot.
-
 
 func (r *Router) Update(baseURL, apiKey, fastModel, frontierModel string) {
         r.mu.Lock()
@@ -220,6 +221,17 @@ func (r *Router) FrontierText(ctx context.Context, system, user string, maxToken
 func (r *Router) complete(ctx context.Context, model, system, user string, maxTokens int) (string, error) {
         _, _, _, _, maxRetries, _ := r.snapshot()
 
+        // Semantic cache: check before calling the LLM
+        r.mu.RLock()
+        cache := r.cache
+        r.mu.RUnlock()
+        if cache != nil && cache.Enabled() {
+                promptKey := system + "\n" + user + "\n" + model
+                if resp, ok := cache.Get(ctx, promptKey); ok {
+                        return resp, nil
+                }
+        }
+
         if recordLLMMetrics != nil {
                 LLMCallStart()
                 defer LLMCallEnd()
@@ -230,12 +242,20 @@ func (r *Router) complete(ctx context.Context, model, system, user string, maxTo
         pool := r.pool
         r.mu.RUnlock()
         if pool != nil && pool.HasProviders() {
-                return r.completeWithPool(ctx, pool, model, system, user, maxTokens, maxRetries, callStart)
+                result, err := r.completeWithPool(ctx, pool, model, system, user, maxTokens, maxRetries, callStart)
+                if err == nil && cache != nil && cache.Enabled() {
+                        promptKey := system + "\n" + user + "\n" + model
+                        cache.Put(ctx, promptKey, result)
+                }
+                return result, err
         }
 
-        // Legacy single-provider path.
-
-        return r.completeSingle(ctx, model, system, user, maxTokens, maxRetries, callStart, "")
+        result, err := r.completeSingle(ctx, model, system, user, maxTokens, maxRetries, callStart, "")
+        if err == nil && cache != nil && cache.Enabled() {
+                promptKey := system + "\n" + user + "\n" + model
+                cache.Put(ctx, promptKey, result)
+        }
+        return result, err
 }
 
 // completeWithPool tries each provider in the pool in priority order.
@@ -332,7 +352,6 @@ func (r *Router) completeSingle(ctx context.Context, model, system, user string,
 // recordLLMMetrics is set by main.go via SetMetricsRecorder. This avoids a
 // circular import (llm → metrics → ... → llm). If nil, metrics are skipped.
 
-
 var recordLLMMetrics func(model, status string, duration time.Duration, inputTokens, outputTokens int)
 
 // SetMetricsRecorder wires in the metrics recorder. Called from main.go.
@@ -351,8 +370,8 @@ var (
 )
 
 var (
-	jsonBlockRePre = regexp.MustCompile("(?s)" + "```(?:[a-zA-Z]+)?\\s*(\\{.*?\\}|\\[.*?\\])```")
-	bareJSONRePre  = regexp.MustCompile(`(?s)(\{.*\}|\[.*\])`)
+        jsonBlockRePre = regexp.MustCompile("(?s)" + "```(?:[a-zA-Z]+)?\\s*(\\{.*?\\}|\\[.*?\\])```")
+        bareJSONRePre  = regexp.MustCompile(`(?s)(\{.*\}|\[.*\])`)
 )
 
 // LLMCallStart increments the in-flight gauge (if wired).

@@ -7,20 +7,18 @@
 package automerge
 
 import (
-        "bytes"
         "context"
         "encoding/json"
         "fmt"
-        "io"
         "net/http"
 
-	githubapp "github.com/karimzakzouk/sentinel/internal/github"
+        githubapp "github.com/karimzakzouk/sentinel/internal/github"
 )
 
 // GitHubClientImpl is the default GitHubClient implementation.
 
 type GitHubClientImpl struct {
-	*githubapp.BaseClient
+        *githubapp.BaseClient
 }
 
 // TokenProvider returns a fresh GitHub API token. v4.0.0.
@@ -30,20 +28,19 @@ type TokenProvider = githubapp.TokenProvider
 // NewGitHubClient creates a GitHubClientImpl.
 
 func NewGitHubClient(token, apiURL string) *GitHubClientImpl {
-	return &GitHubClientImpl{
-		BaseClient: githubapp.NewBaseClient(token, apiURL),
-	}
+        return &GitHubClientImpl{
+                BaseClient: githubapp.NewBaseClient(token, apiURL),
+        }
 }
 
 // WithTokenProvider wires a GitHub App token provider. v4.0.0.
 
 func (g *GitHubClientImpl) WithTokenProvider(tp TokenProvider) *GitHubClientImpl {
-	g.BaseClient.WithTokenProvider(tp)
-	return g
+        g.BaseClient.WithTokenProvider(tp)
+        return g
 }
 
 // authToken returns the token to use for an API call. v4.0.0.
-
 
 // GetCIStatus aggregates the CI check state for a PR. Combines:
 //   - check_runs (GitHub Actions, CI systems that use Checks API)
@@ -130,7 +127,7 @@ func (g *GitHubClientImpl) getPRHeadSHA(ctx context.Context, repo string, prNumb
         if err != nil {
                 return "", err
         }
-        g.setHeaders(req)
+        g.SetHeaders(req)
         resp, err := g.HTTP.Do(req)
         if err != nil {
                 return "", err
@@ -162,7 +159,7 @@ func (g *GitHubClientImpl) getCheckRuns(ctx context.Context, repo, sha string) (
         if err != nil {
                 return nil, err
         }
-        g.setHeaders(req)
+        g.SetHeaders(req)
         resp, err := g.HTTP.Do(req)
         if err != nil {
                 return nil, err
@@ -191,7 +188,7 @@ func (g *GitHubClientImpl) getStatuses(ctx context.Context, repo, sha string) ([
         if err != nil {
                 return nil, err
         }
-        g.setHeaders(req)
+        g.SetHeaders(req)
         resp, err := g.HTTP.Do(req)
         if err != nil {
                 return nil, err
@@ -209,133 +206,10 @@ func (g *GitHubClientImpl) getStatuses(ctx context.Context, repo, sha string) ([
 
 // GetLabels returns the labels on a PR.
 
-func (g *GitHubClientImpl) GetLabels(ctx context.Context, repo string, prNumber int) ([]string, error) {
-        req, err := http.NewRequestWithContext(ctx, "GET",
-                fmt.Sprintf("%s/repos/%s/issues/%d/labels?per_page=100", g.APIURL, repo, prNumber), nil)
-        if err != nil {
-                return nil, err
-        }
-        g.setHeaders(req)
-        resp, err := g.HTTP.Do(req)
-        if err != nil {
-                return nil, err
-        }
-        defer resp.Body.Close()
-        if resp.StatusCode != http.StatusOK {
-                return nil, fmt.Errorf("get labels: %d", resp.StatusCode)
-        }
-        var labels []struct {
-                Name string `json:"name"`
-        }
-        if err := json.NewDecoder(resp.Body).Decode(&labels); err != nil {
-                return nil, err
-        }
-        out := make([]string, 0, len(labels))
-        for _, l := range labels {
-                out = append(out, l.Name)
-        }
-        return out, nil
-}
-
 // Merge merges a PR via the GitHub API.
-
-func (g *GitHubClientImpl) Merge(ctx context.Context, repo string, prNumber int, commitMessage string) error {
-        body, _ := json.Marshal(map[string]string{
-                "commit_message": commitMessage,
-                "merge_method":   "squash", // squash is the safest default — single commit on main
-        })
-        req, err := http.NewRequestWithContext(ctx, "PUT",
-                fmt.Sprintf("%s/repos/%s/pulls/%d/merge", g.APIURL, repo, prNumber),
-                bytes.NewReader(body))
-        if err != nil {
-                return err
-        }
-        g.setHeaders(req)
-        resp, err := g.HTTP.Do(req)
-        if err != nil {
-                return err
-        }
-        defer resp.Body.Close()
-        if resp.StatusCode != http.StatusOK {
-                respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-                return fmt.Errorf("merge: %d %s", resp.StatusCode, string(respBody))
-        }
-        return nil
-}
 
 // PostComment posts a comment on a PR.
 
-func (g *GitHubClientImpl) PostComment(ctx context.Context, repo string, prNumber int, body string) error {
-        payload, _ := json.Marshal(map[string]string{"body": body})
-        req, err := http.NewRequestWithContext(ctx, "POST",
-                fmt.Sprintf("%s/repos/%s/issues/%d/comments", g.APIURL, repo, prNumber),
-                bytes.NewReader(payload))
-        if err != nil {
-                return err
-        }
-        g.setHeaders(req)
-        resp, err := g.HTTP.Do(req)
-        if err != nil {
-                return err
-        }
-        defer resp.Body.Close()
-        if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
-                respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-                return fmt.Errorf("post comment: %d %s", resp.StatusCode, string(respBody))
-        }
-        return nil
-}
-
 // SetLabels adds labels to a PR (used by /sentinel approve, /sentinel hold).
 
-func (g *GitHubClientImpl) SetLabels(ctx context.Context, repo string, prNumber int, labels []string) error {
-        payload, _ := json.Marshal(map[string][]string{"labels": labels})
-        req, err := http.NewRequestWithContext(ctx, "POST",
-                fmt.Sprintf("%s/repos/%s/issues/%d/labels", g.APIURL, repo, prNumber),
-                bytes.NewReader(payload))
-        if err != nil {
-                return err
-        }
-        g.setHeaders(req)
-        resp, err := g.HTTP.Do(req)
-        if err != nil {
-                return err
-        }
-        defer resp.Body.Close()
-        if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-                respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-                return fmt.Errorf("set labels: %d %s", resp.StatusCode, string(respBody))
-        }
-        return nil
-}
-
 // RemoveLabel removes a label from a PR.
-
-func (g *GitHubClientImpl) RemoveLabel(ctx context.Context, repo string, prNumber int, label string) error {
-        req, err := http.NewRequestWithContext(ctx, "DELETE",
-                fmt.Sprintf("%s/repos/%s/issues/%d/labels/%s", g.APIURL, repo, prNumber, label), nil)
-        if err != nil {
-                return err
-        }
-        g.setHeaders(req)
-        resp, err := g.HTTP.Do(req)
-        if err != nil {
-                return err
-        }
-        defer resp.Body.Close()
-        // 200 = removed, 404 = label wasn't there (treat as success)
-
-        if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNotFound {
-                respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-                return fmt.Errorf("remove label: %d %s", resp.StatusCode, string(respBody))
-        }
-        return nil
-}
-
-func (g *GitHubClientImpl) setHeaders(req *http.Request) {
-        ctx := req.Context()
-        req.Header.Set("Accept", "application/vnd.github+json")
-        req.Header.Set("Authorization", "Bearer "+g.AuthToken(ctx)) // v4.0.0: GitHub App token when configured
-        req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-        req.Header.Set("Content-Type", "application/json")
-}

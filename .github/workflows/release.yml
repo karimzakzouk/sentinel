@@ -261,8 +261,8 @@ jobs:
 
       - name: Publish to GitHub Pages (Helm repo)
         run: |
-          git config user.email "actions@github.com"
-          git config user.name "GitHub Actions"
+          git config user.email "karimzakzouk69@gmail.com"
+          git config user.name "karimzakzouk"
 
           rm -rf /tmp/gh-pages
           git clone --branch gh-pages --depth 1 \
@@ -270,8 +270,8 @@ jobs:
             /tmp/gh-pages 2>/dev/null || mkdir -p /tmp/gh-pages
 
           cd /tmp/gh-pages
-          git config user.email "actions@github.com"
-          git config user.name "GitHub Actions"
+          git config user.email "karimzakzouk69@gmail.com"
+          git config user.name "karimzakzouk"
           cp /tmp/sentinel-${{ steps.version.outputs.version }}.tgz .
           helm repo index . --url https://karimzakzouk.github.io/sentinel/
           touch .nojekyll

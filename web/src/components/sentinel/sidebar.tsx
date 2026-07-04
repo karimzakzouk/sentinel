@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import {
   LayoutDashboard,
   AlertTriangle,
@@ -15,6 +16,8 @@ import {
   Terminal,
   Shield,
   Command,
+  Menu,
+  X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useSentinelStore, type SectionId } from "@/lib/store";
@@ -49,14 +52,15 @@ export function Sidebar() {
   const healthy = useSentinelStore((s) => s.healthy);
   const sseConnected = useSentinelStore((s) => s.sseConnected);
   const incidents = useSentinelStore((s) => s.incidents);
+  const [mobileOpen, setMobileOpen] = useState(false);
 
   // Real "live" badge — only pulse when there's an active investigation.
   const activeIncidents = incidents.filter((i) =>
     ["investigating", "executing", "fix_proposed", "approved", "root_caused"].includes(i.status),
   ).length;
 
-  return (
-    <aside className="flex h-screen w-60 flex-col border-r border-zinc-800 bg-zinc-950">
+  const sidebarContent = (
+    <>
       {/* Brand */}
       <div className="flex h-14 items-center gap-2.5 border-b border-zinc-800 px-4">
         <div className="flex h-7 w-7 items-center justify-center rounded-md bg-cyan-500/10 ring-1 ring-cyan-500/30">
@@ -68,6 +72,14 @@ export function Sidebar() {
             {version ? `v${version}` : "connecting…"}
           </span>
         </div>
+        {/* Mobile close button */}
+        <button
+          onClick={() => setMobileOpen(false)}
+          className="ml-auto rounded-md p-1.5 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300 lg:hidden"
+          aria-label="Close menu"
+        >
+          <X className="h-4 w-4" />
+        </button>
       </div>
 
       {/* Search trigger */}
@@ -95,7 +107,7 @@ export function Sidebar() {
             return (
               <li key={item.id}>
                 <button
-                  onClick={() => setActiveSection(item.id)}
+                  onClick={() => { setActiveSection(item.id); setMobileOpen(false); }}
                   className={cn(
                     "group flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-sm transition-colors",
                     active
@@ -170,6 +182,42 @@ export function Sidebar() {
           </div>
         </div>
       </div>
-    </aside>
+    </>
+  );
+
+  return (
+    <>
+      {/* Mobile hamburger button — visible on mobile only */}
+      <button
+        onClick={() => setMobileOpen(true)}
+        className="fixed left-4 top-3 z-50 rounded-md border border-zinc-800 bg-zinc-900 p-2 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 lg:hidden"
+        aria-label="Open menu"
+      >
+        <Menu className="h-5 w-5" />
+      </button>
+
+      {/* Mobile overlay backdrop */}
+      {mobileOpen && (
+        <div
+          onClick={() => setMobileOpen(false)}
+          className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm lg:hidden"
+        />
+      )}
+
+      {/* Desktop sidebar — always visible on lg+ */}
+      <aside className="hidden h-screen w-60 flex-col border-r border-zinc-800 bg-zinc-950 lg:flex">
+        {sidebarContent}
+      </aside>
+
+      {/* Mobile sidebar — slides in when mobileOpen */}
+      <aside
+        className={cn(
+          "fixed left-0 top-0 z-50 h-screen w-72 flex-col border-r border-zinc-800 bg-zinc-950 transition-transform duration-200 lg:hidden",
+          mobileOpen ? "flex translate-x-0" : "hidden -translate-x-full",
+        )}
+      >
+        {sidebarContent}
+      </aside>
+    </>
   );
 }

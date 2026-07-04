@@ -69,7 +69,7 @@ No prose before or after the JSON. Start with { and end with }.`
 // GeneratedTest is an alias for schemas.GeneratedTest. Kept for backwards
 // compatibility — new code should use schemas.GeneratedTest directly.
 // The canonical type lives in internal/schemas so the executors package
-// doesn't have to import agents (fixes LEAK-1 from the architecture audit).
+// doesn't have to import agents (fixesfrom the architecture audit).
 
 type GeneratedTest = schemas.GeneratedTest
 
@@ -233,6 +233,4 @@ func detectLanguageFromState(state *schemas.AgentState) string {
         return parsed.Language
 }
 
-// (MarshalJSON removed — the struct's json: tags produce identical output.
 // The method was redundant and prevented moving the type to schemas.)
-

@@ -39,12 +39,20 @@ REPO = Path(__file__).resolve().parent.parent
 SYNC_TARGETS = [
     ("VERSION",                       "raw",        None),
     ("chart/Chart.yaml",              "chart_yaml", None),
+    ("chart/Chart.yaml",              "chart_desc", None),
     ("chart/values.yaml",             "values_tag", None),
     ("chart/values.yaml",             "comment_ver", None),
     ("my-values.yaml",                "values_tag", None),
+    ("my-values.yaml",                "my_values_header", None),
     ("web/package.json",              "pkg_json",   None),
     ("README.md",                     "readme_install", None),
+    ("README.md",                     "readme_badge", None),
+    ("README.md",                     "readme_image_size", None),
     ("internal/version/version.go",   "go_const",   None),
+    ("SECURITY.md",                   "security_versions", None),
+    ("Dockerfile",                    "dockerfile_header", None),
+    (".github/ISSUE_TEMPLATE/bug_report.yml", "bug_report_version", None),
+    ("examples/python-crashloop/README.md",   "example_readme", None),
 ]
 
 
@@ -124,6 +132,64 @@ def sync_one(file_rel: str, kind: str, version: str, *, check: bool) -> tuple[bo
         # We don't actually set the version in source — ldflags injects it at build time.
         # The source file always says "dev". So this file never drifts.
         return False, f"  OK   {file_rel} (ldflags-injected at build time)"
+
+    if kind == "chart_desc":
+        # Sync "Sentinel v3" → "Sentinel v5" in the description (just major version)
+        major = version.split(".")[0]
+        changed = patch(p, r'(description:\s*Sentinel v)\d+', rf'\g<1>{major}', check=check)
+        if changed:
+            return True, f"  {'DRIFT' if check else 'OK  '} {file_rel}: description → v{major}"
+        return False, f"  OK   {file_rel} (description already v{major})"
+
+    if kind == "my_values_header":
+        # Sync "Sentinel v4.4.0 — Complete Values Reference" header
+        changed = patch(p, r'(Sentinel v)[\d.]+', rf'\g<1>{version}', check=check)
+        if changed:
+            return True, f"  {'DRIFT' if check else 'OK  '} {file_rel}: header → v{version}"
+        return False, f"  OK   {file_rel} (header already v{version})"
+
+    if kind == "readme_badge":
+        # Sync shields.io badge: version-X.X.X-cyan
+        changed = patch(p, r'(badge/version-)[\d.]+(-cyan)', rf'\g<1>{version}\g<2>', check=check)
+        if changed:
+            return True, f"  {'DRIFT' if check else 'OK  '} {file_rel}: badge → {version}"
+        return False, f"  OK   {file_rel} (badge already {version})"
+
+    if kind == "readme_image_size":
+        # Normalize image size to 43MB across all references (was 36MB in README)
+        changed = patch(p, r'\b36MB\b', '43MB', check=check)
+        if changed:
+            return True, f"  {'DRIFT' if check else 'OK  '} {file_rel}: image size 36MB → 43MB"
+        return False, f"  OK   {file_rel} (image size already 43MB)"
+
+    if kind == "security_versions":
+        # Sync SECURITY.md supported-versions table: "| 4.5.x | ✅ |" → "| 5.x.x | ✅ |"
+        major = version.split(".")[0]
+        changed = patch(p, r'(\|\s*)[\d]+\.[\dx]+(\s*\|\s*✅)', rf'\g<1>{major}.x\g<2>', check=check)
+        if changed:
+            return True, f"  {'DRIFT' if check else 'OK  '} {file_rel}: supported → {major}.x"
+        return False, f"  OK   {file_rel} (supported already {major}.x)"
+
+    if kind == "dockerfile_header":
+        # Sync Dockerfile header comment: "Sentinel v3.12.0 Dockerfile"
+        changed = patch(p, r'(Sentinel v)[\d.]+( Dockerfile)', rf'\g<1>{version}\g<2>', check=check)
+        if changed:
+            return True, f"  {'DRIFT' if check else 'OK  '} {file_rel}: header → v{version}"
+        return False, f"  OK   {file_rel} (header already v{version})"
+
+    if kind == "bug_report_version":
+        # Sync bug_report.yml placeholder: "4.5.0" → current version
+        changed = patch(p, r'(placeholder:\s*")\d+\.\d+\.\d+(")', rf'\g<1>{version}\g<2>', check=check)
+        if changed:
+            return True, f"  {'DRIFT' if check else 'OK  '} {file_rel}: placeholder → {version}"
+        return False, f"  OK   {file_rel} (placeholder already {version})"
+
+    if kind == "example_readme":
+        # Sync examples/python-crashloop/README.md helm install --version
+        changed = patch(p, r'(helm install sentinel sentinel/sentinel --version )[\d.]+', rf'\g<1>{version}', check=check)
+        if changed:
+            return True, f"  {'DRIFT' if check else 'OK  '} {file_rel}: install --version → {version}"
+        return False, f"  OK   {file_rel} (install cmd already {version})"
 
     return False, f"  SKIP {file_rel} (unknown kind {kind})"
 

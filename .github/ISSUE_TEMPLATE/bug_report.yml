@@ -33,7 +33,7 @@ body:
     attributes:
       label: Sentinel version
       description: Run `sentinelctl version` or check the pod image tag
-      placeholder: "4.5.0"
+      placeholder: "5.11.1"
     validations:
       required: true
   - type: input

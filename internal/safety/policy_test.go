@@ -48,7 +48,6 @@ func TestDefaultPolicyDenyProdLowConfidence(t *testing.T) {
 // The new verdict matrix sends high-risk services to RequireHumanApproval
 // instead — that's more useful (a human can approve a high-confidence fix
 // to a payment service rather than having to do it manually from scratch).
-//
 
 // default HighRiskServices is now empty — demo values no longer leak into
 // every install. Tests must explicitly set up high-risk services.

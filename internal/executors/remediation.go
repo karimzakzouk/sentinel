@@ -246,4 +246,3 @@ func (r *RemediationController) Status() RemediationStatus {
 }
 
 // Guard against unused import warning if strings is not used elsewhere.
-

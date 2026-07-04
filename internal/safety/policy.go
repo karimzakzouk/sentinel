@@ -31,7 +31,7 @@ type Policy struct {
 }
 
 // DefaultPolicy returns the default policy.
-// Removed demo-specific values ( + obs-1).
+// Removed demo-specific values ( +).
 //   - ProductionNamespaces: was {prod, production, payments}. The demo's
 //     "payments" namespace leaked into every install. Now {prod, production}.
 //     NewPolicy() overrides this from cfg.ProductionNamespaces anyway.
@@ -58,7 +58,7 @@ func DefaultPolicy() *Policy {
 // (payment-api/billing-api/auth-service). The default HighRiskServices is
 // now empty — operators must explicitly set their own via WithHighRiskServices
 // or NewPolicyWithHighRisk. The previous behavior (NewPolicy could not
-// override HighRiskServices) leaked demo values into every install (obs-1).
+// override HighRiskServices) leaked demo values into every install ().
 
 func NewPolicy(productionNamespaces []string, confidenceAutonomous, confidenceHumanReview float64) *Policy {
         p := DefaultPolicy()
@@ -81,7 +81,7 @@ func NewPolicy(productionNamespaces []string, confidenceAutonomous, confidenceHu
 }
 
 // NewPolicyWithHighRisk creates a policy with custom namespaces, thresholds,
-// AND high-risk services. v3.11.0: This is the constructor operators should
+// AND high-risk services.This is the constructor operators should
 // use when they want to enforce human review on specific services. The
 // highRiskServices parameter is a list of service names (e.g.
 // ["payment-api", "billing-api"]) that always require human approval in prod.
@@ -94,7 +94,7 @@ func NewPolicyWithHighRisk(productionNamespaces []string, confidenceAutonomous, 
         return p
 }
 
-// WithHighRiskServices sets the high-risk services list. v3.11.0: Replaces
+// WithHighRiskServices sets the high-risk services list.Replaces
 // the permanent demo defaults. Pass your own services, e.g.
 // ["payment-api", "billing-api", "auth-service"]. Pass nil/empty to clear
 // all high-risk services (every service can be auto-fixed if confidence

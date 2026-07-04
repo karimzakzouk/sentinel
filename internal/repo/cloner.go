@@ -46,7 +46,7 @@ func NewCloner(githubToken string) *Cloner {
         }
 }
 
-// WithGitHost sets the git host for clone URLs. v3.11.0: Replaces the
+// WithGitHost sets the git host for clone URLs.Replaces the
 // hardcoded "github.com".
 
 func (c *Cloner) WithGitHost(host string) *Cloner {
@@ -56,7 +56,7 @@ func (c *Cloner) WithGitHost(host string) *Cloner {
         return c
 }
 
-// WithDefaultBranch sets the default branch fallback. v3.11.0: Replaces the
+// WithDefaultBranch sets the default branch fallback.Replaces the
 // hardcoded "main".
 
 func (c *Cloner) WithDefaultBranch(branch string) *Cloner {
@@ -235,7 +235,6 @@ func (c *Cloner) Clone(ctx context.Context, repo, ref string) (string, error) {
 
 // gitAuth returns an HTTP basic-auth object for go-git, or nil if no token is set.
 
-
 func (c *Cloner) gitAuth() *githttpprovider.BasicAuth {
         if c.githubToken == "" {
                 return nil
@@ -247,7 +246,7 @@ func (c *Cloner) gitAuth() *githttpprovider.BasicAuth {
 }
 
 // sanitizeErr strips any embedded token from an error message before it is
-// logged or returned. v3.18.0: defense-in-depth — even though we no longer
+// logged or returned.defense-in-depth — even though we no longer
 // embed the token in URLs, go-git might still leak it via other paths.
 
 func (c *Cloner) sanitizeErr(err error) error {

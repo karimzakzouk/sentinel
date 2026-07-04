@@ -39,7 +39,7 @@ type App struct {
         privateKey    *rsa.PrivateKey
         installID     string
         httpClient    *http.Client
-        apiURL        string // v3.11.0: base API URL (default "https://api.github.com")
+        apiURL        string //base API URL (default "https://api.github.com")
 
         // Cached installation token
 
@@ -57,7 +57,7 @@ func New(appID, privateKeyPEM, installID string) (*App, error) {
         return NewWithAPIURL(appID, privateKeyPEM, installID, "https://api.github.com")
 }
 
-// NewWithAPIURL creates a GitHub App with a custom API base URL. v3.11.0:
+// NewWithAPIURL creates a GitHub App with a custom API base URL.
 // For GitHub Enterprise / GitLab (GitHub-compat API) support.
 
 func NewWithAPIURL(appID, privateKeyPEM, installID, apiURL string) (*App, error) {

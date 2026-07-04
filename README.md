@@ -7,11 +7,11 @@
 Detect. Diagnose. Fix. Verify. — autonomously.
 
 [![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go)](https://go.dev)
-[![Image Size](https://img.shields.io/badge/image-36MB-success)](https://hub.docker.com/r/karimzakzouk/sentinel)
+[![Image Size](https://img.shields.io/badge/image-43MB-success)](https://hub.docker.com/r/karimzakzouk/sentinel)
 [![Pods](https://img.shields.io/badge/pods-1-blue)]()
 [![Arch](https://img.shields.io/badge/arch-amd64%20%7C%20arm64-success)]()
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![Version](https://img.shields.io/badge/version-4.6.0-cyan)]()
+[![Version](https://img.shields.io/badge/version-5.11.1-cyan)]()
 
 [Install](#install) · [How It Works](#how-it-works) · [Configuration](#configuration) · [Architecture](#architecture) · [CLI](#cli) · [Web UI](#web-ui)
 
@@ -21,7 +21,7 @@ Detect. Diagnose. Fix. Verify. — autonomously.
 
 Sentinel is an autonomous AI SRE that watches your Kubernetes cluster for production crashes, diagnoses the root cause with an LLM, writes the fix, verifies it in a sandbox, and opens a Pull Request — all on its own.
 
-**One binary. One pod. 36MB image. ~50MB RAM. Zero external dependencies.**
+**One binary. One pod. 43MB image. ~50MB RAM. Zero external dependencies.**
 
 ## Why Sentinel
 
@@ -40,7 +40,11 @@ Every SRE tool on the market either alerts you (PagerDuty, Datadog) or recommend
 helm repo add sentinel https://karimzakzouk.github.io/sentinel/
 helm repo update
 
+<<<<<<< HEAD
 helm install sentinel sentinel/sentinel --version 5.12.0 \
+=======
+helm install sentinel sentinel/sentinel --version 5.11.1 \
+>>>>>>> ccf5bf3f5b2ebbe4b480d1a96497641dd28c47f5
   --namespace sentinel --create-namespace \
   --set sentinel.githubToken=YOUR_GITHUB_TOKEN \
   --set sentinel.llm.apiKey=YOUR_LLM_API_KEY \
@@ -48,7 +52,7 @@ helm install sentinel sentinel/sentinel --version 5.12.0 \
   --set 'sentinel.rbac.writeNamespaces={sim}'
 ```
 
-That's it. One pod. 36MB image. ~50MB RAM. Ready in <1 second.
+That's it. One pod. 43MB image. ~50MB RAM. Ready in <1 second.
 
 ```bash
 kubectl -n sentinel get pods
@@ -270,7 +274,7 @@ sentinel/
 │   ├── schemas/               # All shared types
 │   ├── slackbot/              # Interactive Slack bot
 │   └── watcher/               # CRD watcher
-├── web/                       # Next.js frontend (8 sections)
+├── web/                       # Next.js frontend (12 sections)
 ├── chart/                     # Helm chart
 ├── examples/                  # 60-second kind walkthrough
 └── scripts/                   # sync-version.py
@@ -280,7 +284,7 @@ sentinel/
 
 | Metric | Sentinel | Typical AIOps tool |
 |---|---|---|
-| Image size | **36MB** | 1–5GB |
+| Image size | **43MB** | 1–5GB |
 | Pods | **1** | 5–20 |
 | RAM at idle | **~50MB** | 2–8GB |
 | Disk | **~5GB** | 50–200GB |
@@ -324,7 +328,7 @@ Sentinel ships with a built-in dark-themed dashboard at `http://sentinel.sentine
 - **Settings** — 11 cards covering every configurable knob (LLM, timeouts, confidence, sandbox, auto-merge, K8s, observability, GitHub App, Slack, Kaniko)
 
 ```bash
-kubectl -n sentinel port-forward svc/sentinel 8000:80
+kubectl -n sentinel port-forward svc/sentinel 8000:8000
 # Open http://localhost:8000
 ```
 
@@ -382,7 +386,7 @@ make bump-version VERSION=4.7.0  # Sync files only (no commit)
 make check-version               # CI mode: fail if drift detected
 ```
 
-CI runs `make check-version` on every PR. See [Versioning & Releases](#) in the docs for the full flow.
+CI runs `make check-version` on every PR. See [Versioning & Releases](#versioning--releases) above for the full flow.
 
 ## Community
 

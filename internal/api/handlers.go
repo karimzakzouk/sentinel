@@ -115,7 +115,7 @@ func (s *Server) handleIncident(w http.ResponseWriter, r *http.Request) {
                 return
         }
 
-        // Not a full UUID — try prefix matching. v3.8.4: This makes
+        // Not a full UUID — try prefix matching.This makes
         // `sentinelctl incidents get 91cce5a5` work, which is what users
         // naturally type after seeing the 8-char truncated ID in
         // `incidents list` output. FindIncidentByPrefix is now part of the
@@ -275,7 +275,7 @@ func (s *Server) handleResume(w http.ResponseWriter, r *http.Request) {
 }
 
 // maxSSESubscribers caps the number of concurrent SSE connections to prevent
-// memory exhaustion DoS. v3.13.0: audit finding #10 — SSE is unauthenticated
+// memory exhaustion DoS.— SSE is unauthenticated
 // and had no cap. Each subscriber pins a goroutine + 16-entry buffered channel
 // + map entry (~10KB). 10K connections = ~100MB = OOM on the 256Mi pod.
 // 100 subscribers is generous for a single-pod dashboard (one operator = 1-3
@@ -541,7 +541,26 @@ func (s *Server) handleWebUI(w http.ResponseWriter, r *http.Request) {
 // handlePprof delegates to net/http/pprof for production profiling.
 // Protected by the apiToken auth middleware (same as /admin/* endpoints).
 // Usage: `go tool pprof http://sentinel.sentinel.svc:8000/debug/pprof/heap`
+//previously all pprof routes dispatched to pprof.Index, which only
+// renders the HTML index page. So `go tool pprof .../debug/pprof/heap`
+// returned HTML instead of a heap profile. Now we dispatch based on the
+// URL path to the correct pprof function.
 
 func (s *Server) handlePprof(w http.ResponseWriter, r *http.Request) {
-        pprof.Index(w, r)
+        switch r.URL.Path {
+        case "/debug/pprof/cmdline":
+                pprof.Cmdline(w, r)
+        case "/debug/pprof/profile":
+                pprof.Profile(w, r)
+        case "/debug/pprof/symbol":
+                pprof.Symbol(w, r)
+        case "/debug/pprof/trace":
+                pprof.Trace(w, r)
+        default:
+                // /debug/pprof/ (index) + /debug/pprof/heap + /debug/pprof/goroutine
+                // + /debug/pprof/threadcreate + /debug/pprof/block + /debug/pprof/mutex
+                // — all of these are handled by pprof.Index, which dispatches
+                // internally based on the path.
+                pprof.Index(w, r)
+        }
 }

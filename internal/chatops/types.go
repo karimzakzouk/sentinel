@@ -3,7 +3,7 @@
 // is fed back via emoji reactions + status comments.
 // Design principles (informed by Prow + Mergify research):
 //   - Always ACK with a 👍 reaction immediately when a command is received
-//     (Prow's #1 complaint was silence).
+//     (was silence).
 //   - One negation convention: every state-changing command takes a `cancel`
 //     argument. No /un-, no /remove-.
 //   - Labels as the gate, a separate merger as the actor. Commands never
@@ -76,7 +76,7 @@ type Command struct {
 
 // ParseCommand extracts a /sentinel command from a comment body.
 // Returns nil if the comment doesn't contain a parseable command.
-// Rules (fixes Prow's #8 complaint — fragile line-anchored regex):
+// Rules (fixes— fragile line-anchored regex):
 //   - The command must be on its own line (or be the entire comment).
 //   - A command mid-sentence ("see /sentinel explain for details") is
 //     recognized but NOT executed — only suggested.
@@ -330,6 +330,8 @@ type AutoMergeInput struct {
         SandboxVerified     bool
         PolicyVerdict       string
         AutoMergeAnnotation bool
+        SandboxOverride     bool
+        CIOverride          bool
 }
 
 // AutoMergeStatus is the public state of the auto-merge policy.
@@ -364,6 +366,7 @@ type RollbackExecutor interface {
 type Store interface {
         FindIncidentByPR(ctx context.Context, repo string, prNumber int) (*Incident, error)
         LogCommandEvent(ctx context.Context, ev *CommandEvent) error
+        UpdateOverrides(ctx context.Context, incidentID string, sandboxOverride, ciOverride bool) error
 }
 
 // Incident is a minimal incident view for command handlers.

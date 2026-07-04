@@ -29,7 +29,6 @@ package executors
 // it runs in a real toolchain. These pure-Go validators are a pre-flight
 // to catch obviously-broken LLM output before we open a PR.
 
-
 import (
 	"encoding/json"
 	"fmt"

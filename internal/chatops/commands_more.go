@@ -515,16 +515,34 @@ func cmdOverride(ctx context.Context, cmd *Command, deps *Deps) error {
                 return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
                         fmt.Sprintf("⚠️ Cooldown cleared by @%s. Auto-merge is active again. **Audit logged.**", cmd.Author))
         case "sandbox":
-                // Sandbox override is destructive — bypasses the 5-level verification.
-                // Persisting this in the incident record requires a store.UpdateSandboxOverride
-                // method (not yet implemented). The override is logged but not enforced
-                // until that lands; the auto-merger will still check sandbox_verified.
-
+                // Look up the incident for this PR, then persist the override.
+                inc, err := deps.Store.FindIncidentByPR(ctx, cmd.PRRepo, cmd.PRNumber)
+                if err != nil {
+                        return fmt.Errorf("find incident for override: %w", err)
+                }
+                if inc == nil {
+                        return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
+                                "❌ This PR isn't tracked by Sentinel. Cannot override.")
+                }
+                if err := deps.Store.UpdateOverrides(ctx, inc.ID, true, false); err != nil {
+                        return fmt.Errorf("persist sandbox override: %w", err)
+                }
                 return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
-                        fmt.Sprintf("⚠️ Sandbox override requested by @%s. **Audit logged.**\n\nThis PR will be treated as sandbox-verified for auto-merge purposes. Use with extreme caution — the fix was NOT actually verified by the 5-level sandbox suite.", cmd.Author))
+                        fmt.Sprintf("⚠️ Sandbox override applied by @%s. **Audit logged.**\n\nThis PR's sandbox gate is now bypassed for auto-merge. The fix was NOT actually verified by the 5-level sandbox suite — use with extreme caution.", cmd.Author))
         case "ci":
+                inc, err := deps.Store.FindIncidentByPR(ctx, cmd.PRRepo, cmd.PRNumber)
+                if err != nil {
+                        return fmt.Errorf("find incident for override: %w", err)
+                }
+                if inc == nil {
+                        return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
+                                "❌ This PR isn't tracked by Sentinel. Cannot override.")
+                }
+                if err := deps.Store.UpdateOverrides(ctx, inc.ID, false, true); err != nil {
+                        return fmt.Errorf("persist ci override: %w", err)
+                }
                 return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
-                        fmt.Sprintf("⚠️ CI override requested by @%s. **Audit logged.**\n\nThis PR will be treated as CI-green for auto-merge purposes.", cmd.Author))
+                        fmt.Sprintf("⚠️ CI override applied by @%s. **Audit logged.**\n\nThis PR's CI gate is now bypassed for auto-merge.", cmd.Author))
         default:
                 return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
                         fmt.Sprintf("❌ Unknown override target: `%s`. Valid: sandbox, ci, cooldown.", check))

@@ -4,14 +4,14 @@
 # no UI, no OPA sidecar. 43MB image, ~50MB RAM at idle.
 #
 # Install:
-#   helm install sentinel sentinel/sentinel --version 5.12.0 -n sentinel --create-namespace \
+#   helm install sentinel sentinel/sentinel --version 5.11.1 -n sentinel --create-namespace \
 #     --set sentinel.githubToken=YOUR_GITHUB_TOKEN \
 #     --set sentinel.llm.apiKey=YOUR_LLM_API_KEY
 
 image:
   registry: "docker.io/karimzakzouk"
   repository: "sentinel"
-  tag: "5.12.0"
+  tag: "5.11.1"
   pullPolicy: Always
 
 sentinel:
@@ -45,27 +45,23 @@ sentinel:
 
   # LLM settings — any OpenAI-compatible endpoint
   llm:
-    provider: "zai"           # openai, zai, gemini, ollama, vllm, litellm, custom
-    baseUrl: ""               # if empty, derived from provider
+    provider: "zai"
+    baseUrl: ""
     apiKey: ""
     fastModel: "glm-4-flash"
     frontierModel: "glm-4.5"
-    # Configurable embedding model.
-    # Default changed from "text-embedding-3-small" to "" (audit #13).
-    # The previous default was OpenAI-specific but the default provider is "zai",
-    # so every default install silently fell back to hash embeddings. Empty
-    # default is honest — the vector store uses hash fallback explicitly.
-    # Set to a real model name only if your provider supports /embeddings:
-    #   OpenAI: "text-embedding-3-small" (dim 1536) or "text-embedding-3-large" (dim 3072)
-    #   z.ai:   "embedding-3" (dim 2048)
-    #   BGE:    "bge-large-en" (dim 1024)
     embeddingModel: ""
-    # Embedding dimension for the hash fallback (audit #13).
-    # Must match the real model's dim if you set embeddingModel above,
-    # otherwise hash-fallback vectors will be incompatible with real
-    # embeddings stored previously (silently corrupting the HNSW index).
-    # Default 1536 (matches text-embedding-3-small for backwards compat).
     embeddingDim: 1536
+    # Embedding pipeline (Phase 2). Auto-detects: if embeddingModel + apiKey
+    # are set, uses remote API. Otherwise falls back to TF-IDF (keyword overlap).
+    embeddingProvider: ""    # "remote" or "tfidf" (auto-detect if empty)
+    embeddingApiKey: ""      # reuse llm.apiKey if empty
+    embeddingBaseUrl: ""     # reuse llm.baseUrl if empty
+    # LLM semantic cache — caches LLM responses by prompt similarity.
+    # Requires semantic embeddings (embeddingModel must be set).
+    # Saves 40-85% LLM cost on repeat/similar incidents.
+    semanticCache: false
+    semanticCacheThreshold: 0.97
 
     # Multi-provider failover pool. Stack multiple API keys (e.g. 3
     # OpenRouter + 2 Groq + 1 Gemini) and Sentinel will try them in priority
@@ -107,15 +103,6 @@ sentinel:
     ciTimeoutSec: 900        # 15 min — if CI doesn't pass, skip auto-merge
     maxPerHour: 3            # rate limit — prevents cascade → many bad merges
     cooldownMin: 60          # pause auto-merge for 1h after any regression
-
-  # L2 safe-actions — immediate remediation (restart, rollback, scale)
-  # Runs before the code-fix pipeline for fast relief on common incidents.
-  # Disabled by default. Enable per-namespace for safety.
-  safeActions:
-    enabled: false
-    namespaces: []           # e.g. ["sim", "staging"] — must be explicit
-    maxPerHour: 3
-    maxScaleDeltaPct: 50     # max % replica change for auto-scale
 
   # Docker Hub creds for Kaniko sandbox image builder
   dockerHubUsername: ""

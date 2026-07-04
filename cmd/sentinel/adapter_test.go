@@ -16,7 +16,6 @@ import (
 // (the bridge between feedback.Store and api.Store) actually has the
 // FindIncidentByPrefix method and that it works. This is the exact code
 // path that handleIncident uses.
-//
 // Written after discovering that a type-assertion approach in
 // handleIncident silently failed because s.store is a *storeAdapter,
 // not a *feedback.Store — the assertion always returned ok=false.
@@ -90,7 +89,6 @@ func TestStoreAdapterFindIncidentByPrefix(t *testing.T) {
 // any) when the incident doesn't exist. Without this, handleIncident's
 // `if incident == nil` check fails and the server returns 200 with body
 // "null" instead of 404.
-//
 // This is a pre-existing bug from v3.3.1 that was never caught
 // because mock servers always return real incidents.
 func TestStoreAdapterGetIncidentNilInterface(t *testing.T) {

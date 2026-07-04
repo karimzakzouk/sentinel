@@ -161,10 +161,9 @@ export function ProvidersSection() {
                 <TableHead className="h-8 px-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Provider</TableHead>
                 <TableHead className="h-8 px-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Priority</TableHead>
                 <TableHead className="h-8 px-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Status</TableHead>
-                <TableHead className="h-8 px-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Model</TableHead>
-                <TableHead className="h-8 px-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Fast Model</TableHead>
-                <TableHead className="h-8 px-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Frontier Model</TableHead>
-                <TableHead className="h-8 px-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Trips</TableHead>
+                <TableHead className="h-8 px-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Calls</TableHead>
+                <TableHead className="h-8 px-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Success Rate</TableHead>
+                <TableHead className="h-8 px-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Failures</TableHead>
                 <TableHead className="h-8 px-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Last Trip</TableHead>
                 <TableHead className="h-8 px-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Trip Reason</TableHead>
               </TableRow>
@@ -192,18 +191,15 @@ export function ProvidersSection() {
                     </div>
                   </TableCell>
                   <TableCell className="px-3 py-2">
-                    <Mono className="text-[11px] text-zinc-300">{p.provider || "—"}</Mono>
+                    <Mono className="text-[11px] text-zinc-300">{p.totalCalls}</Mono>
                   </TableCell>
                   <TableCell className="px-3 py-2">
-                    <Mono className="text-[11px] text-zinc-400">{p.provider || "—"}</Mono>
-                  </TableCell>
-                  <TableCell className="px-3 py-2">
-                    <Mono className="text-[11px] text-zinc-400">{p.provider || "—"}</Mono>
-                  </TableCell>
-                  <TableCell className="px-3 py-2">
-                    <Mono className={cn("text-[11px]", p.totalFailures > 0 ? "text-rose-400" : "text-zinc-400")}>
-                      {p.totalFailures}
+                    <Mono className={cn("text-[11px]", p.totalCalls > 0 && p.totalFailures / p.totalCalls < 0.1 ? "text-emerald-400" : p.totalCalls > 0 && p.totalFailures / p.totalCalls > 0.3 ? "text-rose-400" : "text-zinc-400")}>
+                      {p.totalCalls > 0 ? `${(((p.totalCalls - p.totalFailures) / p.totalCalls) * 100).toFixed(1)}%` : "—"}
                     </Mono>
+                  </TableCell>
+                  <TableCell className="px-3 py-2">
+                    <Mono className="text-[11px] text-zinc-400">{p.totalFailures}</Mono>
                   </TableCell>
                   <TableCell className="px-3 py-2">
                     {p.lastFailure ? (
@@ -324,8 +320,10 @@ export function ProvidersSection() {
               {[
                 { label: "Priority", value: `P${p.priority}`, icon: Zap },
                 { label: "Trips total", value: String(p.totalFailures), icon: AlertTriangle },
-                { label: "Fast model", value: p.provider || "—", icon: Activity },
-                { label: "Frontier model", value: p.provider || "—", icon: Activity },
+                { label: "Total calls", value: String(p.totalCalls), icon: Activity },
+                { label: "Successes", value: String(p.totalSuccesses), icon: Activity },
+                { label: "Failures", value: String(p.totalFailures), icon: Activity },
+                { label: "Consecutive failures", value: String(p.consecutiveFailures), icon: Activity },
                 { label: "Last trip", value: p.lastFailure ? new Date(p.lastFailure).toLocaleDateString() : "—", icon: Clock },
                 { label: "CB until", value: p.trippedUntil ? new Date(p.trippedUntil).toLocaleString("en-US", { hour12: false }) : "—", icon: Clock },
               ].map((s) => {

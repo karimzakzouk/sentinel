@@ -11,6 +11,7 @@ import (
         "encoding/json"
         "fmt"
         "log"
+        "sync"
         "time"
 
         "github.com/karimzakzouk/sentinel/internal/k8s"
@@ -38,12 +39,9 @@ type Pipeline struct {
         confidenceLoopBackThreshold  float64
 
         generateTests bool
-
-        // Used as a fallback when the test generator fails or the repo has no test framework.
-
         generateReproducer bool
-
         maxIterations int
+        skipPostFix bool // when true, Run() skips test/reproducer/security — caller runs RunPostFixArtifacts separately
 }
 
 // NewPipeline creates a Pipeline with optional vector store for memory loop.
@@ -68,7 +66,6 @@ func NewPipeline(router *llm.Router, k8sClient *k8s.Client, gitHubToken string, 
 }
 
 // SetConfig sets configurable pipeline parameters.
-
 
 func (p *Pipeline) SetConfig(invTimeout, evTimeout, anTimeout, fpTimeout int, confLoopBack float64) {
         if invTimeout > 0 {
@@ -112,7 +109,7 @@ func (p *Pipeline) SetGitHost(host string) {
 }
 
 // SetDefaultBranch propagates the default branch fallback to the
-// Investigator + FixProposer. v3.11.0: Replaces hardcoded "main" in
+// Investigator + FixProposer.Replaces hardcoded "main" in
 // cloner.go + branch_resolver.go + fix_proposer.go.
 
 func (p *Pipeline) SetDefaultBranch(branch string) {
@@ -123,12 +120,11 @@ func (p *Pipeline) SetDefaultBranch(branch string) {
 
 // SetLLMPriorWeight propagates the LLM prior weight to the Analyst.
 
-
 func (p *Pipeline) SetLLMPriorWeight(w float64) {
         p.analyst.SetLLMPriorWeight(w)
 }
 
-// SetMaxIterations sets the max pipeline iterations. v3.11.0: Replaces
+// SetMaxIterations sets the max pipeline iterations.Replaces
 // the hardcoded 5 in schemas/types.go NewAgentState. The
 // pipeline's Run loop uses state.MaxIterations, so we set it on the state
 // before each Run via this setter (stored on the pipeline).
@@ -141,6 +137,10 @@ func (p *Pipeline) SetMaxIterations(n int) {
         if n > 0 {
                 p.maxIterations = n
         }
+}
+
+func (p *Pipeline) SetSkipPostFix(skip bool) {
+        p.skipPostFix = skip
 }
 
 // RetryFixProposal re-runs ONLY the fix proposer with the current state.
@@ -158,15 +158,8 @@ func (p *Pipeline) RetryFixProposal(ctx context.Context, state *schemas.AgentSta
         return nil
 }
 
-// Run executes the full pipeline on the given state. Handles rewinds.
-// already has high confidence (>= 0.7). Evidence gathering adds ~90s of LLM +
-// K8s API latency; for obvious errors like KeyError with the key name in the
-// traceback, it's unnecessary.
-
 func (p *Pipeline) Run(ctx context.Context, state *schemas.AgentState) error {
         defer recoverPanic("pipeline")
-
-        // value.NewAgentState.
 
         if p.maxIterations > 0 {
                 state.MaxIterations = p.maxIterations
@@ -175,7 +168,6 @@ func (p *Pipeline) Run(ctx context.Context, state *schemas.AgentState) error {
         for state.Iterations < state.MaxIterations {
                 state.Iterations++
 
-                // 1. Investigator
                 invCtx, invSpan := tracing.Start(ctx, "investigator.run")
                 invCtx, invCancel := context.WithTimeout(invCtx, time.Duration(p.investigatorTimeoutSec)*time.Second)
                 if err := p.investigator.Run(invCtx, state); err != nil {
@@ -190,10 +182,6 @@ func (p *Pipeline) Run(ctx context.Context, state *schemas.AgentState) error {
                         return nil
                 }
 
-                // high-confidence. This saves ~90s (LLM + K8s API calls) for obvious
-                // errors like KeyError: 'DATABASE_URLL' where the traceback has all
-                // the info we need.
-
                 topConfidence := float64(0)
                 for _, h := range state.Hypotheses {
                         if h.Confidence > topConfidence {
@@ -203,7 +191,6 @@ func (p *Pipeline) Run(ctx context.Context, state *schemas.AgentState) error {
                 if topConfidence >= ConfidenceFastPath {
                         logging.Info("top hypothesis confidence %.2f >= ConfidenceFastPath — skipping evidence gathering (fast path)", "topconfidence", topConfidence)
                 } else {
-                        // 2. Evidence Gatherer
                         evCtx, evSpan := tracing.Start(ctx, "evidence_gatherer.run")
                         evCtx, evCancel := context.WithTimeout(evCtx, time.Duration(p.evidenceGathererTimeoutSec)*time.Second)
                         if err := p.evidenceGatherer.Run(evCtx, state); err != nil {
@@ -221,8 +208,6 @@ func (p *Pipeline) Run(ctx context.Context, state *schemas.AgentState) error {
                         }
                 }
 
-                // 3. Analyst (pure math — fast)
-
                 anCtx, anCancel := context.WithTimeout(ctx, time.Duration(p.analystTimeoutSec)*time.Second)
                 if err := p.analyst.Run(anCtx, state, p.betaStore); err != nil {
                         anCancel()
@@ -239,13 +224,6 @@ func (p *Pipeline) Run(ctx context.Context, state *schemas.AgentState) error {
                         return nil
                 }
 
-                // Confidence routing
-                if state.RootCause == nil {
-                        log.Printf("[pipeline] root cause is nil after analyst — looping back to investigator")
-                        state.Hypotheses = nil
-                        state.Evidence = nil
-                        continue
-                }
                 if state.RootCause.Confidence < p.confidenceLoopBackThreshold && state.Iterations < 3 {
                         log.Printf("[pipeline] confidence %.2f < %.2f — looping back to investigator (iteration %d)",
                                 state.RootCause.Confidence, p.confidenceLoopBackThreshold, state.Iterations)
@@ -255,8 +233,6 @@ func (p *Pipeline) Run(ctx context.Context, state *schemas.AgentState) error {
                         continue
                 }
 
-                // 4. Fix Proposer
-
                 fpCtx, fpCancel := context.WithTimeout(ctx, time.Duration(p.fixProposerTimeoutSec)*time.Second)
                 if err := p.fixProposer.Run(fpCtx, state); err != nil {
                         fpCancel()
@@ -264,112 +240,122 @@ func (p *Pipeline) Run(ctx context.Context, state *schemas.AgentState) error {
                 }
                 fpCancel()
 
-                // The test is generated by a SEPARATE LLM call from the fix proposer —
-                // the LLM that wrote the fix does NOT write the test. This prevents
-                // the LLM from gaming its own test.
-                // The test runs in the sandbox as Level 4 (test gate).
-
-                if p.generateTests && state.FixProposal != nil {
-                        testCtx, testCancel := context.WithTimeout(ctx, 60*time.Second)
-                        test, err := p.testGenerator.Generate(testCtx, state)
-                        testCancel()
-                        if err != nil {
-                                logging.Error("test generation failed (non-blocking)", "err", err)
-                        } else if test != nil {
-                                // Store the test in the agent state for the sandbox to run.
-                                // We store it as a special event so it persists + is visible in the trace.
-
-                                testJSON, _ := json.Marshal(test)
-                                state.AgentTrace = append(state.AgentTrace, map[string]any{
-                                        "agent":         "test_generator",
-                                        "action":        "test_generated",
-                                        "test_file":     test.TestFile,
-                                        "test_framework": test.TestFramework,
-                                        "test_language": test.TestLanguage,
-                                        "description":   test.Description,
-                                })
-                                // Store the test in a special state field for the sandbox.
-                                // We reuse the RetrievedIncidents field (it's a []map[string]any)
-                                // to avoid a schema change. The sandbox looks for a key "regression_test".
-
-                                if state.RetrievedIncidents == nil {
-                                        state.RetrievedIncidents = []map[string]any{}
-                                }
-                                state.RetrievedIncidents = append(state.RetrievedIncidents, map[string]any{
-                                        "regression_test": string(testJSON),
-                                })
-                                logging.Info("regression test generated", "value", test.TestFile, test.TestFramework, test.TestLanguage)
-                        }
+                if p.skipPostFix {
+                        return nil
                 }
-
-                if p.generateReproducer && state.FixProposal != nil {
-                        reproCtx, reproCancel := context.WithTimeout(ctx, 60*time.Second)
-                        reproducer, err := p.reproducerGen.Generate(reproCtx, state)
-                        reproCancel()
-                        if err != nil {
-                                logging.Error("reproducer generation failed (non-blocking)", "err", err)
-                        } else if reproducer != nil {
-                                reproJSON, _ := json.Marshal(reproducer)
-                                state.AgentTrace = append(state.AgentTrace, map[string]any{
-                                        "agent":           "reproducer_generator",
-                                        "action":          "reproducer_generated",
-                                        "script_file":     reproducer.ScriptFile,
-                                        "script_language": reproducer.ScriptLanguage,
-                                        "description":     reproducer.Description,
-                                })
-                                if state.RetrievedIncidents == nil {
-                                        state.RetrievedIncidents = []map[string]any{}
-                                }
-                                state.RetrievedIncidents = append(state.RetrievedIncidents, map[string]any{
-                                        "reproducer": string(reproJSON),
-                                })
-                                logging.Info("reproducer script generated", "value", reproducer.ScriptFile, reproducer.ScriptLanguage)
-                        }
-                }
-
-                // Runs AFTER the fix is generated but BEFORE the pipeline returns.
-                // If the security check fails, the fix is marked as requiring human review
-                // (status = governance_review) and the security findings are stored.
-
-                if state.FixProposal != nil {
-                        secCtx, secCancel := context.WithTimeout(ctx, 30*time.Second)
-                        secResult := RunSecurityCheck(secCtx, p.investigator.router, state)
-                        secCancel()
-
-                        state.AgentTrace = append(state.AgentTrace, map[string]any{
-                                "agent":       "security_scanner",
-                                "action":      "security_scan",
-                                "passed":      secResult.Passed,
-                                "findings":    len(secResult.Findings),
-                                "summary":     secResult.Summary,
-                        })
-
-                        if !secResult.Passed {
-                                logging.Error("SECURITY CHECK FAILED", "summary", secResult.Summary)
-                                // Store the security findings in the error field so the PR body
-                                // (if opened) shows them, and the safety policy can block auto-merge.
-
-                                secDetail := secResult.Summary
-                                for _, f := range secResult.Findings {
-                                        secDetail += fmt.Sprintf("\n  - [%s] %s: %s (%s)", f.Severity, f.Rule, f.Message, f.File)
-                                }
-                                // Mark as governance review — the safety policy will block auto-merge
-
-                                state.Status = schemas.StatusGovernanceReview
-                                s := fmt.Sprintf("security_check_failed: %s", secDetail)
-                                state.Error = &s
-                                // Still return nil (not an error) — the pipeline completed, but the
-                                // fix needs human review. The handler in main.go will see the status
-                                // and skip auto-merge.
-
-                                return nil
-                        }
-                        logging.Info("security check PASSED", "summary", secResult.Summary)
+                if err := p.RunPostFixArtifacts(ctx, state); err != nil {
+                        return err
                 }
 
                 return nil
         }
         return fmt.Errorf("max iterations (%d) reached", state.MaxIterations)
+}
+
+func (p *Pipeline) RunPostFixArtifacts(ctx context.Context, state *schemas.AgentState) error {
+        if state.FixProposal == nil {
+                return nil
+        }
+
+        var (
+                testResult  *schemas.GeneratedTest
+                testErr     error
+                reproResult *schemas.GeneratedReproducer
+                reproErr    error
+                secResult   *SecurityResult
+        )
+        var wg sync.WaitGroup
+        if p.generateTests {
+                wg.Add(1)
+                go func() {
+                        defer wg.Done()
+                        testCtx, testCancel := context.WithTimeout(ctx, 60*time.Second)
+                        defer testCancel()
+                        testResult, testErr = p.testGenerator.Generate(testCtx, state)
+                }()
+        }
+        if p.generateReproducer {
+                wg.Add(1)
+                go func() {
+                        defer wg.Done()
+                        reproCtx, reproCancel := context.WithTimeout(ctx, 60*time.Second)
+                        defer reproCancel()
+                        reproResult, reproErr = p.reproducerGen.Generate(reproCtx, state)
+                }()
+        }
+        wg.Add(1)
+        go func() {
+                defer wg.Done()
+                secCtx, secCancel := context.WithTimeout(ctx, 30*time.Second)
+                defer secCancel()
+                secResult = RunSecurityCheck(secCtx, p.investigator.router, state)
+        }()
+        wg.Wait()
+
+        if testResult != nil && testErr == nil {
+                testJSON, _ := json.Marshal(testResult)
+                state.AgentTrace = append(state.AgentTrace, map[string]any{
+                        "agent":          "test_generator",
+                        "action":         "test_generated",
+                        "test_file":      testResult.TestFile,
+                        "test_framework": testResult.TestFramework,
+                        "test_language":  testResult.TestLanguage,
+                        "description":    testResult.Description,
+                })
+                if state.RetrievedIncidents == nil {
+                        state.RetrievedIncidents = []map[string]any{}
+                }
+                state.RetrievedIncidents = append(state.RetrievedIncidents, map[string]any{
+                        "regression_test": string(testJSON),
+                })
+                logging.Info("regression test generated", "value", testResult.TestFile, testResult.TestFramework, testResult.TestLanguage)
+        } else if testErr != nil {
+                logging.Error("test generation failed (non-blocking)", "err", testErr)
+        }
+
+        if reproResult != nil && reproErr == nil {
+                reproJSON, _ := json.Marshal(reproResult)
+                state.AgentTrace = append(state.AgentTrace, map[string]any{
+                        "agent":           "reproducer_generator",
+                        "action":          "reproducer_generated",
+                        "script_file":     reproResult.ScriptFile,
+                        "script_language": reproResult.ScriptLanguage,
+                        "description":     reproResult.Description,
+                })
+                if state.RetrievedIncidents == nil {
+                        state.RetrievedIncidents = []map[string]any{}
+                }
+                state.RetrievedIncidents = append(state.RetrievedIncidents, map[string]any{
+                        "reproducer": string(reproJSON),
+                })
+                logging.Info("reproducer script generated", "value", reproResult.ScriptFile, reproResult.ScriptLanguage)
+        } else if reproErr != nil {
+                logging.Error("reproducer generation failed (non-blocking)", "err", reproErr)
+        }
+
+        if secResult != nil {
+                state.AgentTrace = append(state.AgentTrace, map[string]any{
+                        "agent":    "security_scanner",
+                        "action":   "security_scan",
+                        "passed":   secResult.Passed,
+                        "findings": len(secResult.Findings),
+                        "summary":  secResult.Summary,
+                })
+                if !secResult.Passed {
+                        logging.Error("SECURITY CHECK FAILED", "summary", secResult.Summary)
+                        secDetail := secResult.Summary
+                        for _, f := range secResult.Findings {
+                                secDetail += fmt.Sprintf("\n  - [%s] %s: %s (%s)", f.Severity, f.Rule, f.Message, f.File)
+                        }
+                        state.Status = schemas.StatusGovernanceReview
+                        s := fmt.Sprintf("security_check_failed: %s", secDetail)
+                        state.Error = &s
+                        return nil
+                }
+                logging.Info("security check PASSED", "summary", secResult.Summary)
+        }
+
+        return nil
 }
 
 func isRewindBy(state *schemas.AgentState, agent string) bool {

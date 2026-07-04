@@ -8,12 +8,10 @@ import (
 //   1. distroless has no python3/gofmt/node binaries
 //   2. readOnlyRootFilesystem:true makes /tmp unwritable
 //   3. The old validators swallowed os.CreateTemp failures with `return nil`
-//
 // The pure-Go validators must:
 //   - Actually detect broken syntax (not silently return nil)
 //   - Not depend on os.CreateTemp or external binaries
 //   - Run in-process (no exec.Command)
-//
 // Regression test for the audit's CRITICAL #1 + #10.
 func TestSyntaxValidators_NoSilentPass(t *testing.T) {
 	tests := []struct {

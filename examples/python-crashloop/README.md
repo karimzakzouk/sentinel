@@ -17,7 +17,7 @@ This example shows Sentinel detecting a real production crash (TypeError in a Py
 helm repo add sentinel https://karimzakzouk.github.io/sentinel/
 helm repo update
 
-helm install sentinel sentinel/sentinel --version 4.5.0 \
+helm install sentinel sentinel/sentinel --version 5.11.1 \
   --namespace sentinel --create-namespace \
   --set sentinel.githubToken=YOUR_GITHUB_TOKEN \
   --set sentinel.llm.apiKey=YOUR_LLM_API_KEY \
@@ -53,7 +53,7 @@ Annotate the Deployment so Sentinel knows where to find the source code:
 
 ```bash
 kubectl -n sim annotate deployment payments-api \
-  sentinel.io/repo=YOUR_GITHUB_USER/sentinel-demo-app \
+  sentinel.io/repo=karimzakzouk/demo-app \
   sentinel.io/branch=main
 ```
 
@@ -61,7 +61,7 @@ kubectl -n sim annotate deployment payments-api \
 
 ```bash
 # Watch the incident appear in Sentinel's API
-kubectl -n sentinel port-forward svc/sentinel 8000:80 &
+kubectl -n sentinel port-forward svc/sentinel 8000:8000 &
 
 # Open http://localhost:8000 — you'll see:
 #   1. Incident appears (TypeError detected)

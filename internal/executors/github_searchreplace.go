@@ -183,7 +183,6 @@ func tryExactMatch(content, search, replace string) (bool, string) {
 // line of both the search text and the file content, then tries to match.
 // This handles the #1 LLM error: getting indentation wrong.
 
-
 func tryWhitespaceInsensitiveMatch(content, search, replace string) (bool, string) {
         // Normalize: strip leading/trailing whitespace from each line
 
@@ -495,4 +494,3 @@ func validateSyntax(path, content string) error {
 
 // validateSyntax, validatePython, validateGo, validateJS, validateJSON,
 // validateYAML are implemented in syntax_validate.go (pure-Go, no exec).
-
