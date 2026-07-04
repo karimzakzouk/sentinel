@@ -177,7 +177,7 @@ func main() {
                 MaxScaleDeltaPct:  cfg.SafeActionsMaxScaleDeltaPct,
         })
         pkgSafeActions = safeActionsCtrl
-        if cfg.SafeActionsEnabled {
+        if pkgSafeActions != nil && cfg.SafeActionsEnabled {
                 logging.Info("L2 safe-actions enabled", "namespaces", cfg.SafeActionsNamespaces, "max_per_hour", cfg.SafeActionsMaxPerHour)
         }
 
