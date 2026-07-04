@@ -519,6 +519,9 @@ func main() {
                         investigationCtx, cancel := context.WithTimeout(ctx, time.Duration(invTimeout)*time.Second)
                 defer cancel()
 
+                // Run the pipeline WITHOUT post-fix artifacts — those run in parallel
+                // with the Kaniko build in executeCodeFix for a 30-90s speedup.
+                pipeline.SetSkipPostFix(true)
                 if err := pipeline.Run(investigationCtx, &incident.State); err != nil {
                         logging.ErrorCtx(invCtx, "pipeline error", "error", err)
                         incident.Status = schemas.StatusFailed
