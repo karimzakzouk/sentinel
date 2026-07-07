@@ -270,3 +270,100 @@ func (b *BaseClient) Merge(ctx context.Context, repo string, prNumber int, commi
         }
         return nil
 }
+
+// RevertMergeCommit creates a revert PR for the given merge commit SHA.
+// It uses the GitHub "create a pull request" API after creating a revert
+// branch via the refs API. The revert branch is named
+// "sentinel/revert/<short-sha>".
+//
+// Flow:
+//   1. GET /repos/{repo}/git/commits/{sha}  — verify the commit exists + get tree
+//   2. POST /repos/{repo}/git/refs          — create branch "sentinel/revert/<short-sha>" pointing at the commit's parent
+//   3. POST /repos/{repo}/pulls             — open a PR from the revert branch to baseBranch
+//
+// Note: this creates a branch pointing at the PARENT of the merge commit,
+// effectively reverting the merge. For squash merges the parent is the
+// previous main HEAD. For merge commits the parent[0] is the previous main.
+//
+// The actual revert diff is produced by the PR diff — operators review it
+// before merging, exactly like a manual revert.
+func (b *BaseClient) RevertMergeCommit(ctx context.Context, repo, mergeCommitSHA, baseBranch, reason string) (int, error) {
+        shortSHA := mergeCommitSHA
+        if len(shortSHA) > 8 {
+                shortSHA = shortSHA[:8]
+        }
+        branchName := fmt.Sprintf("sentinel/revert/%s", shortSHA)
+
+        // 1. Get the commit to find its parent.
+        var commit struct {
+                SHA     string   `json:"sha"`
+                Parents []struct {
+                        SHA string `json:"sha"`
+                } `json:"parents"`
+        }
+        if err := b.Do(ctx, "GET",
+                fmt.Sprintf("%s/repos/%s/git/commits/%s", b.APIURL, repo, mergeCommitSHA), nil, &commit); err != nil {
+                return 0, fmt.Errorf("get commit: %w", err)
+        }
+        if len(commit.Parents) == 0 {
+                return 0, fmt.Errorf("commit %s has no parent — cannot revert (is this the initial commit?)", mergeCommitSHA)
+        }
+        parentSHA := commit.Parents[0].SHA
+
+        // 2. Create a branch at the parent.
+        refPayload, _ := json.Marshal(map[string]string{
+                "ref": fmt.Sprintf("refs/heads/%s", branchName),
+                "sha": parentSHA,
+        })
+        req, err := http.NewRequestWithContext(ctx, "POST",
+                fmt.Sprintf("%s/repos/%s/git/refs", b.APIURL, repo),
+                bytes.NewReader(refPayload))
+        if err != nil {
+                return 0, err
+        }
+        b.SetHeaders(req)
+        resp, err := b.HTTP.Do(req)
+        if err != nil {
+                return 0, err
+        }
+        // 422 = branch already exists (idempotent — fine for retries).
+        if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusUnprocessableEntity {
+                body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+                resp.Body.Close()
+                return 0, fmt.Errorf("create revert branch: %d %s", resp.StatusCode, string(body))
+        }
+        resp.Body.Close()
+
+        // 3. Open a PR from the revert branch to baseBranch.
+        prBody := fmt.Sprintf("Sentinel auto-revert of merge commit %s.\n\n**Reason:** %s\n\nThis PR was opened automatically by Sentinel's post-merge regression watcher. Do not re-merge until the root cause is identified.",
+                mergeCommitSHA, reason)
+        prPayload, _ := json.Marshal(map[string]string{
+                "title": fmt.Sprintf("revert: %s (Sentinel auto-revert)", shortSHA),
+                "body":  prBody,
+                "head":  branchName,
+                "base":  baseBranch,
+        })
+        req, err = http.NewRequestWithContext(ctx, "POST",
+                fmt.Sprintf("%s/repos/%s/pulls", b.APIURL, repo),
+                bytes.NewReader(prPayload))
+        if err != nil {
+                return 0, err
+        }
+        b.SetHeaders(req)
+        resp, err = b.HTTP.Do(req)
+        if err != nil {
+                return 0, err
+        }
+        defer resp.Body.Close()
+        if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+                body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+                return 0, fmt.Errorf("create revert PR: %d %s", resp.StatusCode, string(body))
+        }
+        var pr struct {
+                Number int `json:"number"`
+        }
+        if err := json.NewDecoder(resp.Body).Decode(&pr); err != nil {
+                return 0, fmt.Errorf("decode PR response: %w", err)
+        }
+        return pr.Number, nil
+}

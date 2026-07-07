@@ -265,6 +265,51 @@ spec:
                   key: githubWebhookSecret
                   optional: true
             {{- end }}
+            # ─── Tier 1/2 features (v5.14.0+) ──────────────────────────────
+            {{- if .Values.sentinel.observability.tempoUrl }}
+            - name: SENTINEL_TEMPO_URL
+              value: {{ .Values.sentinel.observability.tempoUrl | quote }}
+            {{- end }}
+            {{- if .Values.sentinel.tier12.attest.enabled }}
+            - name: SENTINEL_ATTEST_ENABLED
+              value: "true"
+            - name: SENTINEL_ATTEST_LOG_DIR
+              value: {{ .Values.sentinel.tier12.attest.logDir | quote }}
+            {{- end }}
+            {{- if .Values.sentinel.tier12.postMergeWatch.enabled }}
+            - name: SENTINEL_POSTMERGE_WATCH_ENABLED
+              value: "true"
+            {{- end }}
+            {{- if .Values.sentinel.tier12.sloWatch.enabled }}
+            - name: SENTINEL_SLO_WATCH_ENABLED
+              value: "true"
+            {{- end }}
+            {{- if .Values.sentinel.tier12.causalRCA.enabled }}
+            - name: SENTINEL_CAUSAL_RCA_ENABLED
+              value: "true"
+            {{- end }}
+            {{- if .Values.sentinel.tier12.admissionWebhook.enabled }}
+            - name: SENTINEL_ADMISSION_WEBHOOK_ENABLED
+              value: "true"
+            - name: SENTINEL_ADMISSION_WEBHOOK_ADDR
+              value: {{ .Values.sentinel.tier12.admissionWebhook.addr | quote }}
+            - name: SENTINEL_ADMISSION_WEBHOOK_CERT_DIR
+              value: {{ .Values.sentinel.tier12.admissionWebhook.certDir | quote }}
+            {{- end }}
+            {{- if .Values.sentinel.tier12.llmCostRouter.enabled }}
+            - name: SENTINEL_LLMCOST_ROUTER_ENABLED
+              value: "true"
+            {{- end }}
+            {{- if .Values.sentinel.tier12.chaos.enabled }}
+            - name: SENTINEL_CHAOS_ENABLED
+              value: "true"
+            - name: SENTINEL_CHAOS_INTERVAL_MIN
+              value: {{ .Values.sentinel.tier12.chaos.intervalMin | quote }}
+            {{- if .Values.sentinel.tier12.chaos.namespaces }}
+            - name: SENTINEL_CHAOS_NAMESPACES
+              value: {{ join "," .Values.sentinel.tier12.chaos.namespaces | quote }}
+            {{- end }}
+            {{- end }}
           ports:
             - containerPort: 8000
               name: http

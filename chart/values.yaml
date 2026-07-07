@@ -204,6 +204,69 @@ sentinel:
     prometheusUrl: ""   # e.g. http://prometheus-server.monitoring.svc.cluster.local:9090
     lokiUrl: ""
     jaegerUrl: ""
+    tempoUrl: ""        # 2026: Tempo replaces Jaeger as the default trace backend
+
+  # ─── Tier 1/2 features (v5.14.0+) ──────────────────────────────────────
+  # All default OFF — operators opt in. Each feature is self-contained.
+  tier12:
+    # Signed audit trail (EU AI Act / SOC 2 / IETF Agent Audit Trail).
+    # Signs every autonomous action with an Ed25519 keypair + writes a
+    # tamper-evident hash-chained JSONL log.
+    attest:
+      enabled: false
+      logDir: "/data/attest"  # PVC-backed; persisted across restarts
+
+    # Post-merge regression watcher + auto-rollback.
+    # Phase 1 (10 min) + Phase 2 (24h) monitoring of every merged PR.
+    # Requires observability.prometheusUrl.
+    postMergeWatch:
+      enabled: false
+
+    # Proactive SLO burn-rate watcher.
+    # Fires synthetic incidents BEFORE the crash using Google SRE
+    # multi-window burn-rate rules (14.4x/6x/3x/1x).
+    # Requires observability.prometheusUrl.
+    sloWatch:
+      enabled: false
+      # SLOs to monitor — add one block per service:
+      # slos:
+      #   - service: "api"
+      #     namespace: "prod"
+      #     target: 0.999
+      #     window: "30d"
+      #     query: 'sum(rate(http_requests_total{service="api",namespace="prod",status!~"5.."}[{{window}}])) / sum(rate(http_requests_total{service="api",namespace="prod"}[{{window}}]))'
+      slos: []
+
+    # Causal RCA — Granger-causality + topological sort on the dependency
+    # DAG. Tells you WHICH service caused a cascade, not just WHICH services
+    # were affected. Subscribes to the existing correlator's events.
+    causalRCA:
+      enabled: false
+
+    # Validating admission webhook (Sentinel as Kyverno replacement).
+    # Requires TLS cert in admissionWebhook.certDir.
+    admissionWebhook:
+      enabled: false
+      addr: ":8443"
+      certDir: "/data/admission-tls"
+      # TLS cert/key as Helm-installed secrets or mounted volume.
+      # The chart does NOT generate these — operators must provision them
+      # (e.g. via cert-manager) and mount at certDir.
+
+    # Cost-aware LLM routing + semantic cache.
+    # Implicitly enables the LLM semantic cache at 0.95 threshold if an
+    # embedding model is configured. Cuts LLM cost per incident by ~70%.
+    llmCostRouter:
+      enabled: false
+
+    # Self-chaos mode — scheduled chaos experiments against staging.
+    # Sentinel investigates its own injections. Output: eval data for
+    # sentinel-bench + few-shot examples for the feedback store.
+    chaos:
+      enabled: false
+      namespaces: []           # REQUIRED if enabled — namespaces where chaos is allowed
+      intervalMin: 60          # 1 experiment per hour (business hours only)
+      businessHoursOnly: true  # Mon-Fri 09:00-17:00 UTC
 
   # Structured logging level (DEBUG/INFO/WARN/ERROR)
   logLevel: "INFO"

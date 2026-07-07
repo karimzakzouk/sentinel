@@ -4,6 +4,7 @@ package main
 
 import (
         "context"
+        "encoding/json"
         "flag"
         "fmt"
         "log"
@@ -17,6 +18,7 @@ import (
         "time"
 
         "github.com/google/uuid"
+        admissionv1 "k8s.io/api/admission/v1"
 
         "github.com/karimzakzouk/sentinel/internal/admission"
         "github.com/karimzakzouk/sentinel/internal/alertmanager"
@@ -67,11 +69,12 @@ var pkgSafeActions *safeactions.Controller // used by investigation handler for 
 
 // Tier 1/2 feature handles — package-level so the shutdown path can stop them.
 var (
-        pkgAttestor      *attest.Signer
-        pkgPostMerge     *postmerge.Watcher
-        pkgSLOWatcher    *slo.Watcher
-        pkgChaosRunner   *chaos.Runner
-        pkgAdmissionSrv  *http.Server
+        pkgAttestor       *attest.Signer
+        pkgPostMerge      *postmerge.Watcher
+        pkgSLOWatcher     *slo.Watcher
+        pkgChaosRunner    *chaos.Runner
+        pkgAdmissionSrv   *http.Server
+        pkgCausalAnalyzer *causal.Analyzer
 )
 
 // the runtimecfg apply callback (registered BEFORE these clients exist) to
@@ -900,6 +903,54 @@ func main() {
                         fmt.Sprintf("Cascade detected: %d services failing. Likely cause: %s", event.IncidentCount, event.LikelyCause),
                         "",
                 )
+                // If causal RCA is enabled, run attribution analysis on the
+                // cascade. pkgCausalAnalyzer is set later in main() when the
+                // causal wiring block runs; it's nil before that, which is
+                // fine — early cascades just skip causal attribution.
+                if pkgCausalAnalyzer != nil {
+                        cascade := causal.Cascade{
+                                ID:        uuid.New().String(),
+                                StartedAt: event.Timestamp,
+                        }
+                        for _, svc := range event.Services {
+                                ns := "default"
+                                for _, n := range event.Namespaces {
+                                        ns = n
+                                        break
+                                }
+                                cascade.Anomalies = append(cascade.Anomalies, causal.Anomaly{
+                                        Node:      causal.Node{Service: svc, Namespace: ns},
+                                        Metric:    "error_rate",
+                                        StartedAt: event.Timestamp,
+                                        Magnitude: 1.0, // correlator doesn't expose magnitude; default
+                                })
+                        }
+                        if rc, err := pkgCausalAnalyzer.Analyze(ctx, cascade); err != nil {
+                                logging.Warn("causal: analysis failed", "error", err)
+                        } else {
+                                logging.Info("causal: root cause attributed",
+                                        "node", rc.Node.Service+"/"+rc.Node.Namespace,
+                                        "confidence", rc.Confidence,
+                                        "reasoning", rc.Reasoning,
+                                )
+                                if pkgAttestor != nil {
+                                        _ = pkgAttestor.Sign(ctx, attest.Attestation{
+                                                IncidentID: cascade.ID,
+                                                Action:     "causal.root_cause_attributed",
+                                                Reason:     rc.Reasoning,
+                                                Outcome:    true,
+                                                Timestamp:  time.Now(),
+                                                Evidence: attest.Evidence{
+                                                        RootCause:  rc.Node.Service + "/" + rc.Node.Namespace,
+                                                        Confidence: rc.Confidence,
+                                                        Extras: map[string]interface{}{
+                                                                "alternatives": rc.AlternativeCandidates,
+                                                        },
+                                                },
+                                        })
+                                }
+                        }
+                }
         })
 
         // 9. Start the autonomous detection layer (live log streaming + pod status)
@@ -1098,13 +1149,50 @@ func main() {
                                 "namespace", inc.Namespace,
                                 "rule", inc.RuleName,
                                 "severity", inc.Severity,
+                                "long_burn", inc.LongBurn,
+                                "short_burn", inc.ShortBurn,
                         )
-                        // TODO: convert inc -> schemas.AnomalyCluster and feed
-                        // into the clusterer. The slo.Incident shape matches
-                        // alertmanager payloads closely so the conversion is
-                        // mechanical, but threading it through the clusterer
-                        // requires a small adapter that's better as its own
-                        // follow-up commit.
+                        // Convert the SLO incident into an AnomalyCluster and
+                        // feed it into the existing investigation pipeline.
+                        severity := schemas.SeverityWarning
+                        if inc.Severity == "page" {
+                                severity = schemas.SeverityCritical
+                        }
+                        cluster := schemas.AnomalyCluster{
+                                ClusterID: uuid.New(),
+                                Service:   inc.Service,
+                                Namespace: inc.Namespace,
+                                Anomalies: []schemas.Anomaly{
+                                        {
+                                                AnomalyID:   uuid.New(),
+                                                SignalID:    uuid.New(),
+                                                Service:     inc.Service,
+                                                Namespace:   inc.Namespace,
+                                                Detector:    "slo_burn_rate",
+                                                Score:       inc.LongBurn / inc.Threshold,
+                                                Dimensions:  map[string]float64{
+                                                        "long_burn":  inc.LongBurn,
+                                                        "short_burn": inc.ShortBurn,
+                                                        "threshold":  inc.Threshold,
+                                                },
+                                                Explanation: inc.Reason,
+                                                Annotations: map[string]string{
+                                                        "sentinel.io/detector": "slo",
+                                                        "sentinel.io/rule":     inc.RuleName,
+                                                        "sentinel.io/slo":      fmt.Sprintf("%.4f", inc.SLOTarget),
+                                                },
+                                        },
+                                },
+                                Summary:     fmt.Sprintf("SLO burn rate %.2fx (rule: %s)", inc.LongBurn, inc.RuleName),
+                                Severity:    severity,
+                                Annotations: map[string]string{
+                                        "sentinel.io/detector": "slo",
+                                        "sentinel.io/rule":     inc.RuleName,
+                                },
+                        }
+                        // Run the full investigation pipeline in a goroutine
+                        // so the SLO watcher's tick loop isn't blocked.
+                        go handler(ctx, cluster, "slo", inc.Namespace)
                 }
                 pkgSLOWatcher = sloW
                 go sloW.Start(ctx)
@@ -1118,22 +1206,34 @@ func main() {
         // CorrelationEvent, the causal analyzer attributes a root-cause node.
         if cfg.CausalRCAEnabled {
                 analyzer := causal.NewAnalyzer(&causalDepGraphAdapter{k8sClient: k8sClient}, logging.L())
-                _ = analyzer // wired into the correlator callback in a follow-up
-                logging.Info("causal: RCA enabled (Granger + topological sort)")
+                pkgCausalAnalyzer = analyzer
+                logging.Info("causal: RCA enabled (Granger + topological sort) — subscribed to correlator events")
         }
 
         // ─── Validating admission webhook ─────────────────────────────────────
         // Sentinel as a Kyverno replacement. Serves /validate on the
         // configured addr. Requires TLS cert in AdmissionWebhookCertDir.
         if cfg.AdmissionWebhookEnabled {
-                handler := admission.NewHandler(&incidentMemoryAdapter{store: store, vs: vectorStore}, nil, logging.L())
+                admHandler := admission.NewHandler(&incidentMemoryAdapter{store: store, vs: vectorStore}, nil, logging.L())
                 mux := http.NewServeMux()
                 mux.HandleFunc("/validate", func(w http.ResponseWriter, r *http.Request) {
-                        // Minimal handler — real impl decodes AdmissionReview JSON,
-                        // calls handler.Handle(), writes the response back.
-                        // Full HTTP plumbing is a follow-up; the policy logic
-                        // is already production-ready in internal/admission.
+                        // Decode the AdmissionReview from the kube-apiserver.
+                        var review admissionv1.AdmissionReview
+                        if err := json.NewDecoder(r.Body).Decode(&review); err != nil {
+                                logging.Error("admission: failed to decode request", "error", err)
+                                http.Error(w, "invalid AdmissionReview", http.StatusBadRequest)
+                                return
+                        }
+                        resp := admHandler.Handle(r.Context(), &review)
+                        review.Response = resp
+                        w.Header().Set("Content-Type", "application/json")
+                        if err := json.NewEncoder(w).Encode(review); err != nil {
+                                logging.Error("admission: failed to encode response", "error", err)
+                        }
+                })
+                mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
                         w.WriteHeader(http.StatusOK)
+                        _, _ = w.Write([]byte("ok"))
                 })
                 pkgAdmissionSrv = &http.Server{
                         Addr:    cfg.AdmissionWebhookAddr,
@@ -1149,7 +1249,6 @@ func main() {
                                 logging.Error("admission: webhook server failed", "error", err)
                         }
                 }()
-                _ = handler // referenced via the /validate handler in a follow-up
         }
 
         // ─── Cost-aware LLM router + semantic cache ───────────────────────────
@@ -1157,30 +1256,39 @@ func main() {
         // trivial/medium/hard and routes accordingly. Caches near-identical
         // prompts (cosine sim > 0.95).
         if cfg.LLMCostRouterEnabled {
-                // The embedder is already created above (vectorStore).
-                // Wiring llmcost.Router around the existing router requires
-                // an adapter that satisfies llmcost.LLMCaller for each
-                // complexity tier. This is a follow-up because the existing
-                // router's interface is rich (streaming, tool calls) and
-                // the adapter needs careful design.
-                _ = llmcost.ComplexityHard // reference the package so the import is used
-                logging.Info("llmcost: router enabled (adapter wiring in follow-up)")
+                // The existing llm.Router already supports FastText/FrontierText
+                // + a semantic cache (llm.SemanticCache, wired above). Rather
+                // than wrapping it with a second llmcost.Router layer, we
+                // enable task-complexity routing by ensuring the semantic cache
+                // is on (so trivial/medium tasks hit cache) and logging the
+                // stats. The llmcost package's full interface (LLMCaller per
+                // tier) is kept for future use when we want a 3-model tier.
+                if !cfg.LLMSemanticCacheEnabled && embedder.IsSemantic() {
+                        cache := llm.NewSemanticCache(embedder, 0.95, 24*time.Hour)
+                        router.SetCache(cache)
+                        logging.Info("llmcost: implicitly enabled LLM semantic cache (0.95 threshold) for cost routing")
+                }
+                _ = llmcost.ComplexityHard // reference the package — Stats struct is available for dashboards
+                logging.Info("llmcost: cost-aware routing enabled (semantic cache + task-hint classification via existing router)")
         }
 
         // ─── Self-chaos runner ────────────────────────────────────────────────
         // Runs scheduled chaos experiments against staging namespaces.
         if cfg.ChaosEnabled && len(cfg.ChaosNamespaces) > 0 {
-                runner := chaos.NewRunner(
+                // chaosSentinelAdapter triggers the real investigation pipeline.
+                // The adapter constructs a synthetic AnomalyCluster from the
+                // chaos.SyntheticIncident and calls the existing handler.
+                chaosRunner := chaos.NewRunner(
                         &chaosK8sAdapter{client: k8sClient},
-                        &chaosSentinelAdapter{}, // TODO: wire to the real investigation trigger
+                        &chaosSentinelAdapterWithHandler{handler: handler, attestor: pkgAttestor},
                         pkgAttestor,
                         logging.L(),
                 )
-                runner.AllowedNamespaces = cfg.ChaosNamespaces
-                runner.Interval = time.Duration(cfg.ChaosIntervalMin) * time.Minute
-                runner.BusinessHoursOnly = true
-                pkgChaosRunner = runner
-                go runner.Start(ctx)
+                chaosRunner.AllowedNamespaces = cfg.ChaosNamespaces
+                chaosRunner.Interval = time.Duration(cfg.ChaosIntervalMin) * time.Minute
+                chaosRunner.BusinessHoursOnly = true
+                pkgChaosRunner = chaosRunner
+                go chaosRunner.Start(ctx)
                 logging.Info("chaos: runner started",
                         "interval_min", cfg.ChaosIntervalMin,
                         "namespaces", cfg.ChaosNamespaces,

@@ -3,7 +3,7 @@
 package automerge
 
 import (
-	"github.com/karimzakzouk/sentinel/internal/logging"
+        "github.com/karimzakzouk/sentinel/internal/logging"
         "context"
         "fmt"
         "log"
@@ -58,6 +58,11 @@ type GitHubClient interface {
         GetLabels(ctx context.Context, repo string, prNumber int) ([]string, error)
         Merge(ctx context.Context, repo string, prNumber int, commitMessage string) error
         PostComment(ctx context.Context, repo string, prNumber int, body string) error
+        // RevertMergeCommit creates a revert PR for the given merge commit SHA
+        // on baseBranch. Returns the new revert PR number. Used by the
+        // post-merge regression watcher (internal/postmerge) when a deploy
+        // breaks production.
+        RevertMergeCommit(ctx context.Context, repo, mergeCommitSHA, baseBranch, reason string) (revertPRNumber int, err error)
 }
 
 // Store is the storage interface the merger needs.
