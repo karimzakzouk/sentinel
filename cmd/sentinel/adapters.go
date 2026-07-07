@@ -15,7 +15,6 @@ import (
         githubapp "github.com/karimzakzouk/sentinel/internal/github"
         "github.com/karimzakzouk/sentinel/internal/k8s"
         "github.com/karimzakzouk/sentinel/internal/llm"
-        "github.com/karimzakzouk/sentinel/internal/logging"
         "github.com/karimzakzouk/sentinel/internal/prreview"
 )
 
@@ -191,12 +190,6 @@ func (a *chatopsStoreAdapter) UpdateOverrides(ctx context.Context, incidentID st
         }
         return a.store.UpdateOverrides(ctx, id, sandboxOverride, ciOverride)
 }
-
-type slogAdapter struct{}
-
-func (s *slogAdapter) Info(msg string, args ...any)  { logging.Info(msg, args...) }
-func (s *slogAdapter) Warn(msg string, args ...any)  { logging.Warn(msg, args...) }
-func (s *slogAdapter) Error(msg string, args ...any) { logging.Error(msg, args...) }
 
 type autoMergeStoreAdapter struct {
         store *feedback.Store
