@@ -143,17 +143,6 @@ func (a *chaosK8sAdapter) RestartDeployment(ctx context.Context, namespace, name
         return err
 }
 
-// chaosSentinelAdapter bridges chaos.SentinelRunner to Sentinel's pipeline.
-// Kept as a stub for backward compat — chaosSentinelAdapterWithHandler is
-// the real implementation.
-type chaosSentinelAdapter struct{}
-
-func (a *chaosSentinelAdapter) RunInvestigation(ctx context.Context, incident chaos.SyntheticIncident, timeout time.Duration) (chaos.Outcome, error) {
-        return chaos.Outcome{
-                Notes: "sentinel investigation pipeline not yet wired — auto-restoring",
-        }, nil
-}
-
 // investigationHandlerType is the signature of the main investigation handler.
 type investigationHandlerType func(ctx context.Context, cluster schemas.AnomalyCluster, crName, crNamespace string)
 
