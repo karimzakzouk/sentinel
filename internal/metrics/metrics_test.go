@@ -73,7 +73,6 @@ func TestMetrics_Handler(t *testing.T) {
 // TestMetrics_InvestigationGauge verifies that active_incidents returns to 0
 // after all investigations complete.
 func TestMetrics_InvestigationGauge(t *testing.T) {
-        // Note: these add to the global state, so we can't easily test the absolute
         // value — but we can verify the delta is correct.
         RecordInvestigationStart()
         RecordInvestigationStart()

@@ -46,7 +46,6 @@ export interface ActivityEvent {
   icon: string;
 }
 
-
 interface SentinelState {
   // Navigation
   activeSection: SectionId;

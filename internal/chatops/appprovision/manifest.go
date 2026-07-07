@@ -5,7 +5,6 @@
 // Sentinel exchanges the code for the App's PEM + ID + webhook secret, and
 // stores everything in runtime config. No manual App creation, no PEM file
 // management, no permission dropdowns.
-// Fixed manifest not pre-filling the GitHub form. The issue was:
 //   - hook_attributes.url was empty when no --webhook-url was passed
 //   - GitHub silently rejects manifests with empty hook_attributes.url
 //   - content_type was missing (GitHub defaults to "form", we need "json")

@@ -222,8 +222,6 @@ func tryWhitespaceInsensitiveMatch(content, search, replace string) (bool, strin
                         // Found the match at startLine. Replace those lines with the
                         // replacement text, preserving the original indentation of the
                         // first line.
-                        // IN ADDITION to the replacement's own indent, producing 4+8=12 spaces.
-
                         originalIndent := getIndent(contentLines[startLine])
                         replaceLines := strings.Split(replace, "\n")
                         for k := range replaceLines {
@@ -316,7 +314,6 @@ func tryFuzzyMatch(content, search, replace string) (bool, string) {
         logging.Info("fuzzy match: %.1f%% similarity at line", "value", bestScore*100, bestStart+1)
 
         // Replace the matched lines with the replacement text.
-        // IN ADDITION to the replacement's own indent, producing 4+8=12 spaces
         // and breaking Python block structure (IndentationError).
         // Fix: strip the replacement's leading indent, then prepend originalIndent ONCE.
 

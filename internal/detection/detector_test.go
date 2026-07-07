@@ -19,7 +19,6 @@ func TestShouldTriggerCooldown(t *testing.T) {
         }
 
         // Second trigger immediately should be blocked by cooldown
-        // Note: shouldTrigger mutates recentSeen, so we need to use the same fingerprint
         if d.shouldTrigger("sim", "api", "KeyError") {
                 t.Error("second trigger within cooldown should be blocked")
         }

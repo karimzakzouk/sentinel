@@ -15,7 +15,6 @@ import (
 // Merger is the auto-merge orchestrator. It maintains a list of tracked PRs
 // (PRs that Sentinel opened + are pending auto-merge), polls their CI status,
 // and merges them when all gates pass.
-// Design (informed by Prow's Tide):
 //   - Commands (/sentinel approve, /sentinel no-merge) mutate labels.
 //   - The merger watches labels + gates + CI status.
 //   - The merger is the ONLY thing that actually merges.

@@ -512,7 +512,6 @@ func interpretTestOutput(output, framework string) bool {
         return true
 }
 
-// ─── SECURITY (C2 fix): validate LLM-generated file paths + commands ────────
 // The LLM generates test file paths, test commands, reproducer script paths,
 // and reproducer run commands. These are interpolated into shell commands
 // via fmt.Sprintf, which means a prompt-injected LLM (influenced by

@@ -1178,7 +1178,6 @@ func main() {
                 logging.Info("auto-remediation controller started", "poll_interval", "5m")
         }
 
-        // appear as the verified "Sentinel" bot instead of the PAT user.
         // reactions), and autoMergeGH (merge API). When configured, ALL GitHub
         // operations appear as "Sentinel[bot]" instead of the PAT owner.
 

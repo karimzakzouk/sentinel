@@ -337,7 +337,6 @@ func NewIncident(cluster AnomalyCluster) Incident {
         }
 }
 
-// ─── Fix verification types ──────────────────────────────────────────────────
 // These were
 // (from the architecture audit). Moved here so the executors package
 // doesn't have to import agents — outer adapter was reaching into inner

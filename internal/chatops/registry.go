@@ -1,7 +1,6 @@
 // Package chatops — command registry + dispatcher.
 // Every /sentinel command self-registers via RegisterCommand. The registry
 // is the single source of truth for:
-//   - /sentinel help output (auto-generated, never out of sync — Prow pattern)
 //   - Permission checks (each command declares its required tier)
 //   - Dispatch (name → handler routing)
 // To add a new command:
@@ -243,7 +242,6 @@ func auditLog(ctx context.Context, deps *Deps, cmd *Command, result, detail stri
 
 // RenderHelp generates the markdown body for /sentinel help.
 // Filters commands by what the requesting user can actually run (based on
-// their permission level). Prow shows all commands regardless of permission
 // — Sentinel only shows what the user can use, plus grayed-out 🔒 entries
 // for higher-tier commands they can't run (so they know what's possible).
 // This fixes(command discovery is poor).

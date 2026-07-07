@@ -214,7 +214,6 @@ func (r *RemediationController) checkPendingPods(ctx context.Context) {
                         log.Printf("[remediation] pod %s/%s pending for %v — reason: %s",
                                 pod.Namespace, pod.Name, pendingDuration.Round(time.Minute), schedulingReason)
 
-                        // If it's a resource issue, we could auto-scale (future feature)
                         // For now, just log + alert
 
                 }

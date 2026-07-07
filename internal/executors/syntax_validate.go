@@ -147,7 +147,6 @@ func validateBraceBalance(content string, pairs []rune) error {
 				// just let the loop continue; the next two '"' will be
 				// consumed by the inTripleDouble branch because the flag
 				// is now false but the chars are still '"'. To avoid
-				// mis-parsing, we use a small hack: skip ahead by
 				// overwriting them in our local view. Since strings are
 				// immutable, we instead just accept that the next two
 				// iterations will see '"' and treat them as starting a

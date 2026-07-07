@@ -1,6 +1,5 @@
 // Package chatops — in-place editable [SENTINELSTATUS] comment manager.
 // Every Sentinel-tracked PR gets ONE status comment that's edited in place
-// as state changes (Prow's [APPROVALNOTIFIER] pattern). New comments are
 // only posted for *events* (sandbox re-run, regression detected), not state
 // changes — this prevents comment spam on busy PRs.
 // The comment body starts with an HTML comment marker so we can find it

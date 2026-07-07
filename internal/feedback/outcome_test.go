@@ -92,7 +92,6 @@ all systems nominal`,
 func TestOutcomeWatcher_SetDurations(t *testing.T) {
         w := NewOutcomeWatcher(nil, nil)
 
-        // Verify defaults
         if w.shortWatchDuration != 10*60_000_000_000 { // 10 min in ns
                 t.Errorf("default shortWatchDuration = %v, want 10m", w.shortWatchDuration)
         }

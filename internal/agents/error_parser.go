@@ -61,11 +61,7 @@ var (
 
         //   "at Foo (/path/file.js:line:col)"  — with function name
         //   "at /path/file.js:line:col"         — without function name (user code)
-        // The function name part is optional to handle bare-path frames.
-
         nodeFileRe = regexp.MustCompile(`at\s+(?:[\w.<>\s]+\s*\()?\s*([^\s)]+\.js):(\d+)`)
-
-        // matching IP:port pairs (e.g. "127.0.0.1:5432") and other noise.
 
         codeExtRe = regexp.MustCompile(`\.(py|go|js|ts|tsx|jsx|java|rs|rb|c|cpp|cc|h|hpp|kt|swift|php|scala|cs)$`)
         genericFileRe   = regexp.MustCompile(`(?:at\s+)?\(?(?:[\w./-]+/)?([\w-]+\.\w+):(\d+)`)

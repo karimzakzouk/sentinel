@@ -518,4 +518,3 @@ func openBrowser(url string) {
         }
 }
 
-// version import guard

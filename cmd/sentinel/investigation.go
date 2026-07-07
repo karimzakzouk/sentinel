@@ -192,7 +192,6 @@ func executeCodeFix(
                                 incident.State.SandboxFeedback = &feedback
 
                                 // CRITICAL: Fetch the CURRENT file content from the branch (which has
-                                // the previous fix applied) BEFORE calling RetryFixProposal. The fix
                                 // proposer needs the current branch state so it generates SEARCH/REPLACE
                                 // blocks that match the current file content — not the original file
                                 // content. Without this, the SEARCH blocks won't match when

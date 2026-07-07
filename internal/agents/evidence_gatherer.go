@@ -68,8 +68,6 @@ func NewEvidenceGatherer(router *llm.Router, k8sClient *k8s.Client) *EvidenceGat
 // SetPrometheusURL configures the Prometheus backend for evidence queries.
 // When set, evidence queries of type "prometheus" are executed against
 // this URL. When empty, prometheus queries return an "not configured" error
-// (same behavior as v3.3.x).
-
 func (a *EvidenceGatherer) SetPrometheusURL(url string) {
         a.prometheusURL = url
 }

@@ -422,10 +422,8 @@ func cmdApply(ctx context.Context, cmd *Command, deps *Deps) error {
                         fmt.Sprintf("❌ Invalid choice `%s`. Must be A, B, or C. Run `/sentinel alternatives` to see options.", cmd.ArgList[0]))
         }
 
-        // NOTE: Full /sentinel apply implementation requires extending FixProposer
         // to accept an "approach hint" parameter, re-running it with the chosen
         // approach, pushing new commits via the GitHub executor, and re-triggering
-        // sandbox verification. Tracked as a future enhancement. For now, the
         // command posts the LLM-generated approach description so the developer
         // can implement it manually.
 

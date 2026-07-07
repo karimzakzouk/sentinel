@@ -146,8 +146,6 @@ func init() {
 }
 
 // cmdHold adds the sentinel/hold label, blocking auto-merge but keeping approval.
-// Prow's `hold` semantics — doesn't withdraw approval.
-
 func cmdHold(ctx context.Context, cmd *Command, deps *Deps) error {
         if cmd.Cancel {
                 if err := deps.GitHub.RemoveLabel(ctx, cmd.PRRepo, cmd.PRNumber, "sentinel/hold"); err != nil {

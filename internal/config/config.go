@@ -349,8 +349,6 @@ func Load() *Config {
                 AllowedGitHubRepos:        splitCSV(getenv("SENTINEL_ALLOWED_GITHUB_REPOS", "")),
                 APIToken:                  getenv("SENTINEL_API_TOKEN", ""),
 
-                // appear as the "Sentinel" bot instead of the PAT owner).
-
                 GitHubAppID:         getenv("SENTINEL_GITHUB_APP_ID", ""),
                 GitHubAppPrivateKey: getenv("SENTINEL_GITHUB_APP_PRIVATE_KEY", ""),
                 GitHubAppInstallID:  getenv("SENTINEL_GITHUB_APP_INSTALL_ID", ""),

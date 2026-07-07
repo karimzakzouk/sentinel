@@ -1,7 +1,6 @@
 // Package chatops implements GitHub-PR-comment-driven command execution.
 // Every command is parsed, permission-checked, executed, and the result
 // is fed back via emoji reactions + status comments.
-// Design principles (informed by Prow + Mergify research):
 //   - Always ACK with a 👍 reaction immediately when a command is received
 //     (was silence).
 //   - One negation convention: every state-changing command takes a `cancel`
@@ -11,7 +10,6 @@
 //   - Auto-generated command registry. /sentinel help is generated from
 //     code, never out of sync.
 //   - In-place editable [SENTINELSTATUS] comment for multi-step workflows
-//     (Prow's [APPROVALNOTIFIER] pattern).
 //   - Permission errors must be actionable — say *why* and *what to do*.
 //   - No fun commands. Sentinel is a prod tool.
 package chatops
@@ -525,7 +523,6 @@ type ReactionsClient interface {
 }
 
 // StatusCommentManager owns the in-place editable [SENTINELSTATUS] comment
-// on each tracked PR. Prow's [APPROVALNOTIFIER] pattern — one comment per PR
 // that's edited in place as state changes, instead of posting new comments.
 
 type StatusCommentManager interface {

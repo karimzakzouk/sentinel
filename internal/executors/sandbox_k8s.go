@@ -54,7 +54,6 @@ func (s *SandboxRunner) createNamespace(ctx context.Context, ns string) error {
 // home to attacker C2 over HTTPS. The default-deny egress below blocks all
 // outbound traffic. Ingress is also denied except from the Sentinel
 // namespace (so probes can still reach the canary).
-// Note: this is best-effort. On clusters without a CNI that supports
 // NetworkPolicy (e.g. some k3s setups), this is a no-op. Operators should
 // ensure their CNI supports NetworkPolicy before relying on this.
 

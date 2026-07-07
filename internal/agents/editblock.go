@@ -549,7 +549,6 @@ func min3(a, b, c int) int {
 //   app/main.py
 //   ```python
 //   import os
-//   ...full file content...
 //   ```
 // Returns (filePath, content) or ("", "") if no whole-file replacement found.
 

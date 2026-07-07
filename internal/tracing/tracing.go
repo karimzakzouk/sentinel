@@ -4,7 +4,6 @@
 // that logs span start/end/duration via slog. Spans are correlated by
 // incident_id (set via context) and can be exported to any structured log
 // sink (Datadog, Loki, Splunk).
-// Future: if/when OTel is needed, wrap these spans with otel-go's StartSpan.
 // The API is deliberately similar (ctx, name, attributes) to make migration
 // a one-line change per call site.
 package tracing

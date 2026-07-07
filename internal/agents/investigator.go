@@ -261,7 +261,6 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
                 return a.runWithoutRepo(ctx, state, podLogs)
         }
 
-        // node_modules/, site-packages/). If so, redirect the investigation to
         // the library's repo instead of the service's repo.
 
         parsedError := ParseError(podLogs)

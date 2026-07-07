@@ -14,7 +14,6 @@
 //   - Rate limit: max 3 auto-merges per hour (prevents cascade → many bad merges)
 //   - Cooldown: 1 hour pause after any regression detected
 //   - Escape hatch: /sentinel no-merge (chatops)
-// Design informed by Prow+Tide: commands mutate labels, the merger watches
 // labels + gates and is the only thing that actually merges.
 package automerge
 

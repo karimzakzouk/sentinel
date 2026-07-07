@@ -86,8 +86,6 @@ func (p *Pipeline) SetConfig(invTimeout, evTimeout, anTimeout, fpTimeout int, co
 }
 
 // SetPrometheusURL wires the Prometheus backend into the evidence gatherer.
-// a real Prometheus instance. No-op if URL is empty (backward compatible).
-
 func (p *Pipeline) SetPrometheusURL(url string) {
         p.evidenceGatherer.SetPrometheusURL(url)
 }
@@ -128,7 +126,6 @@ func (p *Pipeline) SetLLMPriorWeight(w float64) {
 // the hardcoded 5 in schemas/types.go NewAgentState. The
 // pipeline's Run loop uses state.MaxIterations, so we set it on the state
 // before each Run via this setter (stored on the pipeline).
-// NOTE: This is a soft setter — the state's MaxIterations is set in
 // schemas.NewAgentState. To override, call SetMaxIterations BEFORE the
 // pipeline runs and the pipeline will rewrite state.MaxIterations at
 // the start of Run.
