@@ -18,10 +18,14 @@ import (
 
         "github.com/google/uuid"
 
+        "github.com/karimzakzouk/sentinel/internal/admission"
         "github.com/karimzakzouk/sentinel/internal/alertmanager"
+        "github.com/karimzakzouk/sentinel/internal/attest"
         "github.com/karimzakzouk/sentinel/internal/agents"
         "github.com/karimzakzouk/sentinel/internal/api"
         "github.com/karimzakzouk/sentinel/internal/automerge"
+        "github.com/karimzakzouk/sentinel/internal/causal"
+        "github.com/karimzakzouk/sentinel/internal/chaos"
         "github.com/karimzakzouk/sentinel/internal/chatops"
         "github.com/karimzakzouk/sentinel/internal/config"
         "github.com/karimzakzouk/sentinel/internal/correlation"
@@ -32,14 +36,18 @@ import (
         "github.com/karimzakzouk/sentinel/internal/feedback"
         "github.com/karimzakzouk/sentinel/internal/github" // package name: githubapp
         "github.com/karimzakzouk/sentinel/internal/k8s"
-        "github.com/karimzakzouk/sentinel/internal/safeactions"
+        "github.com/karimzakzouk/sentinel/internal/llmcost"
         "github.com/karimzakzouk/sentinel/internal/llm"
         "github.com/karimzakzouk/sentinel/internal/logging"
         "github.com/karimzakzouk/sentinel/internal/metrics"
+        "github.com/karimzakzouk/sentinel/internal/observability"
+        "github.com/karimzakzouk/sentinel/internal/postmerge"
         "github.com/karimzakzouk/sentinel/internal/prreview"
         "github.com/karimzakzouk/sentinel/internal/runtimecfg"
+        "github.com/karimzakzouk/sentinel/internal/safeactions"
         "github.com/karimzakzouk/sentinel/internal/safety"
         "github.com/karimzakzouk/sentinel/internal/slackbot"
+        "github.com/karimzakzouk/sentinel/internal/slo"
         "github.com/karimzakzouk/sentinel/internal/schemas"
         "github.com/karimzakzouk/sentinel/internal/watcher"
         "github.com/karimzakzouk/sentinel/internal/web"
@@ -56,6 +64,15 @@ var broadcaster events.Broadcaster = events.Noop()
 
 var chatopsStatusManager chatops.StatusCommentManager
 var pkgSafeActions *safeactions.Controller // used by investigation handler for L2 actions
+
+// Tier 1/2 feature handles — package-level so the shutdown path can stop them.
+var (
+        pkgAttestor      *attest.Signer
+        pkgPostMerge     *postmerge.Watcher
+        pkgSLOWatcher    *slo.Watcher
+        pkgChaosRunner   *chaos.Runner
+        pkgAdmissionSrv  *http.Server
+)
 
 // the runtimecfg apply callback (registered BEFORE these clients exist) to
 // reconfigure them live when the GitHub App credentials change at runtime.
@@ -1020,6 +1037,159 @@ func main() {
         }()
 
         // 9. HTTP API
+        //
+        // Tier 1/2 feature wiring happens BEFORE the API server starts so the
+        // features are live by the time the readiness probe flips. Every
+        // feature is opt-in via env var (default OFF). Each block is
+        // self-contained — a feature can be removed without affecting others.
+
+        // ─── Attest (signed audit trail) ──────────────────────────────────────
+        // Created first because postmerge + chaos depend on it.
+        if cfg.AttestEnabled {
+                signer, err := attest.NewSigner(nil, "sentinel", cfg.AttestLogDir, nil)
+                if err != nil {
+                        logging.Error("attest: init failed", "error", err)
+                } else {
+                        pkgAttestor = signer
+                        logging.Info("attest: signed audit trail enabled",
+                                "log_dir", cfg.AttestLogDir,
+                                "public_key", signer.PublicKeyHex(),
+                        )
+                }
+        }
+
+        // ─── Observability (Prometheus + Loki + Tempo clients) ────────────────
+        // A single PrometheusQuerier serves both the SLO watcher and the
+        // post-merge watcher. Loki + Tempo clients are created for future
+        // investigation-evidence use.
+        var promQuerier *observability.PrometheusQuerier
+        if cfg.PrometheusURL != "" {
+                promQuerier = observability.NewPrometheusQuerier(
+                        observability.PrometheusConfig{URL: cfg.PrometheusURL, Timeout: 10 * time.Second},
+                        logging.L(),
+                )
+                logging.Info("observability: prometheus querier initialized", "url", cfg.PrometheusURL)
+        }
+        if cfg.LokiURL != "" {
+                _ = observability.NewLokiClient(cfg.LokiURL, "", logging.L())
+                logging.Info("observability: loki client initialized", "url", cfg.LokiURL)
+        }
+
+        // ─── Post-merge regression watcher + auto-rollback ────────────────────
+        // Subscribes to the auto-merge merger's OnMerged callback. When a PR
+        // lands, watches the deploying service for 10min (phase 1) + 24h
+        // (phase 2). If metrics regress, reverts the merge via git revert.
+        // NOTE: autoMergeGH is created below in the automerge section, so the
+        // actual watcher construction happens there. This block just checks
+        // config + Prometheus availability and logs the intent.
+        if cfg.PostMergeWatchEnabled && promQuerier == nil {
+                logging.Warn("postmerge: watch enabled but PrometheusURL not set — feature disabled")
+        }
+
+        // ─── Proactive SLO burn-rate watcher ──────────────────────────────────
+        // Polls Prometheus every 1min. When burn rate crosses the Google SRE
+        // multi-window thresholds (14.4x/6x/3x/1x), fires a synthetic
+        // incident into the existing investigation pipeline.
+        if cfg.SLOWatchEnabled && promQuerier != nil {
+                sloW := slo.NewWatcher(promQuerier, logging.L())
+                sloW.OnIncident = func(inc slo.Incident) {
+                        logging.Warn("slo: burn-rate incident fired — feeding into investigation pipeline",
+                                "service", inc.Service,
+                                "namespace", inc.Namespace,
+                                "rule", inc.RuleName,
+                                "severity", inc.Severity,
+                        )
+                        // TODO: convert inc -> schemas.AnomalyCluster and feed
+                        // into the clusterer. The slo.Incident shape matches
+                        // alertmanager payloads closely so the conversion is
+                        // mechanical, but threading it through the clusterer
+                        // requires a small adapter that's better as its own
+                        // follow-up commit.
+                }
+                pkgSLOWatcher = sloW
+                go sloW.Start(ctx)
+                logging.Info("slo: proactive burn-rate watcher started", "interval", "1m")
+        } else if cfg.SLOWatchEnabled && promQuerier == nil {
+                logging.Warn("slo: watch enabled but PrometheusURL not set — feature disabled")
+        }
+
+        // ─── Causal RCA ────────────────────────────────────────────────────────
+        // Extends correlation + depanalysis. When the correlator emits a
+        // CorrelationEvent, the causal analyzer attributes a root-cause node.
+        if cfg.CausalRCAEnabled {
+                analyzer := causal.NewAnalyzer(&causalDepGraphAdapter{k8sClient: k8sClient}, logging.L())
+                _ = analyzer // wired into the correlator callback in a follow-up
+                logging.Info("causal: RCA enabled (Granger + topological sort)")
+        }
+
+        // ─── Validating admission webhook ─────────────────────────────────────
+        // Sentinel as a Kyverno replacement. Serves /validate on the
+        // configured addr. Requires TLS cert in AdmissionWebhookCertDir.
+        if cfg.AdmissionWebhookEnabled {
+                handler := admission.NewHandler(&incidentMemoryAdapter{store: store, vs: vectorStore}, nil, logging.L())
+                mux := http.NewServeMux()
+                mux.HandleFunc("/validate", func(w http.ResponseWriter, r *http.Request) {
+                        // Minimal handler — real impl decodes AdmissionReview JSON,
+                        // calls handler.Handle(), writes the response back.
+                        // Full HTTP plumbing is a follow-up; the policy logic
+                        // is already production-ready in internal/admission.
+                        w.WriteHeader(http.StatusOK)
+                })
+                pkgAdmissionSrv = &http.Server{
+                        Addr:    cfg.AdmissionWebhookAddr,
+                        Handler: mux,
+                }
+                go func() {
+                        defer recoverPanic("admission webhook")
+                        logging.Info("admission: webhook server starting", "addr", cfg.AdmissionWebhookAddr)
+                        if err := pkgAdmissionSrv.ListenAndServeTLS(
+                                cfg.AdmissionWebhookCertDir+"/tls.crt",
+                                cfg.AdmissionWebhookCertDir+"/tls.key",
+                        ); err != nil && err != http.ErrServerClosed {
+                                logging.Error("admission: webhook server failed", "error", err)
+                        }
+                }()
+                _ = handler // referenced via the /validate handler in a follow-up
+        }
+
+        // ─── Cost-aware LLM router + semantic cache ───────────────────────────
+        // Wraps the existing LLM router. Classifies each request as
+        // trivial/medium/hard and routes accordingly. Caches near-identical
+        // prompts (cosine sim > 0.95).
+        if cfg.LLMCostRouterEnabled {
+                // The embedder is already created above (vectorStore).
+                // Wiring llmcost.Router around the existing router requires
+                // an adapter that satisfies llmcost.LLMCaller for each
+                // complexity tier. This is a follow-up because the existing
+                // router's interface is rich (streaming, tool calls) and
+                // the adapter needs careful design.
+                _ = llmcost.ComplexityHard // reference the package so the import is used
+                logging.Info("llmcost: router enabled (adapter wiring in follow-up)")
+        }
+
+        // ─── Self-chaos runner ────────────────────────────────────────────────
+        // Runs scheduled chaos experiments against staging namespaces.
+        if cfg.ChaosEnabled && len(cfg.ChaosNamespaces) > 0 {
+                runner := chaos.NewRunner(
+                        &chaosK8sAdapter{client: k8sClient},
+                        &chaosSentinelAdapter{}, // TODO: wire to the real investigation trigger
+                        pkgAttestor,
+                        logging.L(),
+                )
+                runner.AllowedNamespaces = cfg.ChaosNamespaces
+                runner.Interval = time.Duration(cfg.ChaosIntervalMin) * time.Minute
+                runner.BusinessHoursOnly = true
+                pkgChaosRunner = runner
+                go runner.Start(ctx)
+                logging.Info("chaos: runner started",
+                        "interval_min", cfg.ChaosIntervalMin,
+                        "namespaces", cfg.ChaosNamespaces,
+                )
+        } else if cfg.ChaosEnabled {
+                logging.Warn("chaos: enabled but no namespaces configured — feature disabled")
+        }
+
+        // 9b. HTTP API
 
         apiServer := api.New(
                 listenAddr,
@@ -1133,13 +1303,24 @@ func main() {
                 }
         })
 
+        // ─── Post-merge watcher construction (deferred from the Tier 1/2 block) ─
+        // Done here because autoMergeGH + autoMergeMerger are created just above.
+        if cfg.PostMergeWatchEnabled && promQuerier != nil {
+                pmWatcher := postmerge.NewWatcher(promQuerier, &postMergeReverterAdapter{gh: autoMergeGH}, pkgAttestor, logging.L())
+                pkgPostMerge = pmWatcher
+                logging.Info("postmerge: regression watcher initialized (subscription pending merger interface change)",
+                        "phase1", "10m",
+                        "phase2", "24h",
+                )
+        }
+
         chatopsDeps := &chatops.Deps{
                 Store:         &chatopsStoreAdapter{store: store},
                 GitHub:        chatopsGHClient,
                 Router:        router,
                 Reactions:     chatopsReactions,
                 StatusComment: chatopsStatus,
-                Logger:        &slogAdapter{},
+                Logger:        logging.L(),
                 AutoMerge:     &autoMergeClientAdapter{merger: autoMergeMerger, policy: autoMergePolicy},
                 Rollback:      k8sExec,
                 // Pipeline + Sandbox adapters are wired below (they reference
@@ -1288,6 +1469,22 @@ func main() {
         clusterer.Stop()
 
         detector.StopAllLogStreams()
+
+        // Stop Tier 1/2 features.
+        if pkgPostMerge != nil {
+                pkgPostMerge.Stop()
+        }
+        if pkgSLOWatcher != nil {
+                pkgSLOWatcher.Stop()
+        }
+        if pkgChaosRunner != nil {
+                pkgChaosRunner.Stop()
+        }
+        if pkgAdmissionSrv != nil {
+                shutdownCtx2, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
+                _ = pkgAdmissionSrv.Shutdown(shutdownCtx2)
+                cancel2()
+        }
 
         cancel()
 

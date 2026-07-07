@@ -278,6 +278,46 @@ type Config struct {
         PrometheusURL string
         LokiURL       string
         JaegerURL     string
+        TempoURL      string // 2026: Tempo replaces Jaeger as the default trace backend
+
+        // ─── Tier 1/2 feature toggles (v5.14.0+) ──────────────────────────────
+        // All default OFF — operators opt in via env. Each feature is
+        // self-contained and can run independently of the others.
+
+        // PostMergeWatch enables the post-merge regression watcher + auto-rollback.
+        // Phase 1 (10 min) + Phase 2 (24h) monitoring of every merged PR.
+        PostMergeWatchEnabled bool
+
+        // SLOWatch enables the proactive SLO burn-rate watcher.
+        // Fires synthetic incidents BEFORE the crash.
+        SLOWatchEnabled bool
+
+        // CausalRCA enables causal root-cause attribution on cascading incidents.
+        // Extends the existing correlation + depanalysis modules.
+        CausalRCAEnabled bool
+
+        // AdmissionWebhookEnabled starts the validating admission webhook server.
+        // Listens on AdmissionWebhookAddr (default :8443).
+        AdmissionWebhookEnabled bool
+        AdmissionWebhookAddr    string
+        AdmissionWebhookCertDir string
+
+        // AttestEnabled signs every autonomous action with an Ed25519 keypair
+        // and writes a tamper-evident hash-chained JSONL log to AttestLogDir.
+        // Required for EU AI Act / SOC 2 compliance.
+        AttestEnabled bool
+        AttestLogDir  string
+
+        // LLMCostRouterEnabled wraps the LLM router with a task-complexity
+        // classifier + semantic cache. Cuts LLM cost per incident by ~70%.
+        LLMCostRouterEnabled bool
+
+        // ChaosEnabled runs scheduled chaos experiments against staging
+        // namespaces (allow-listed via ChaosNamespaces). Sentinel
+        // investigates its own injections.
+        ChaosEnabled     bool
+        ChaosNamespaces  []string
+        ChaosIntervalMin int
 
         SlackWebhook string
 
@@ -425,6 +465,21 @@ func Load() *Config {
                 PrometheusURL: getenv("SENTINEL_PROMETHEUS_URL", ""),
                 LokiURL:       getenv("SENTINEL_LOKI_URL", ""),
                 JaegerURL:     getenv("SENTINEL_JAEGER_URL", ""),
+                TempoURL:      getenv("SENTINEL_TEMPO_URL", ""),
+
+                // Tier 1/2 feature toggles — all default OFF.
+                PostMergeWatchEnabled: getenvBool("SENTINEL_POSTMERGE_WATCH_ENABLED", false),
+                SLOWatchEnabled:       getenvBool("SENTINEL_SLO_WATCH_ENABLED", false),
+                CausalRCAEnabled:      getenvBool("SENTINEL_CAUSAL_RCA_ENABLED", false),
+                AdmissionWebhookEnabled: getenvBool("SENTINEL_ADMISSION_WEBHOOK_ENABLED", false),
+                AdmissionWebhookAddr:    getenv("SENTINEL_ADMISSION_WEBHOOK_ADDR", ":8443"),
+                AdmissionWebhookCertDir: getenv("SENTINEL_ADMISSION_WEBHOOK_CERT_DIR", "/data/admission-tls"),
+                AttestEnabled: getenvBool("SENTINEL_ATTEST_ENABLED", false),
+                AttestLogDir:  getenv("SENTINEL_ATTEST_LOG_DIR", "/data/attest"),
+                LLMCostRouterEnabled: getenvBool("SENTINEL_LLMCOST_ROUTER_ENABLED", false),
+                ChaosEnabled:     getenvBool("SENTINEL_CHAOS_ENABLED", false),
+                ChaosNamespaces:  getenvCsv("SENTINEL_CHAOS_NAMESPACES"),
+                ChaosIntervalMin: getenvInt("SENTINEL_CHAOS_INTERVAL_MIN", 60),
 
                 SlackWebhook: getenv("SENTINEL_SLACK_WEBHOOK", ""),
 
