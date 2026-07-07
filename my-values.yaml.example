@@ -1,4 +1,9 @@
 # =============================================================================
+# TEMPLATE FILE — copy to my-values.yaml (which is .gitignored) and edit.
+# Do NOT commit a real my-values.yaml with secrets in it.
+# =============================================================================
+
+# =============================================================================
 # Sentinel v5.13.0 — Complete Values Reference
 # =============================================================================
 # This file documents EVERY configurable option in Sentinel.

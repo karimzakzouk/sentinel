@@ -1,0 +1,22 @@
+version: 1
+# MANIFEST — pins every scenario's ID, slug, tags, and ground-truth hash.
+# The runner refuses to execute scenarios not listed here.
+#
+# When adding a scenario:
+#   1. mkdir scenarios/Sxxx-<slug>
+#   2. Fill in scenario.yaml + cluster/ + repo/ + ground-truth.diff + evidence.md
+#   3. Compute sha256 of ground-truth.diff
+#   4. Add an entry below
+#   5. Run: go run ./runner validate
+
+scenarios:
+  - id: S001
+    slug: crashloop-image-typo
+    category: crashloop
+    severity: sev2
+    difficulty: trivial
+    origin: synthetic
+    ground_truth_sha256: pending
+    time_budget: 15m
+    token_budget: 200000
+    cost_budget_usd: 2.00

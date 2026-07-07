@@ -47,3 +47,6 @@ Thumbs.db
 # Build artifacts (never commit binaries)
 /sentinel
 /sentinelctl
+
+# Local helm values — never commit (may contain real tokens)
+my-values.yaml
