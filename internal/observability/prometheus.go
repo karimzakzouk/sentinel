@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/karimzakzouk/sentinel/internal/logging"
+	"github.com/karimzakzouk/sentinel/internal/postmerge"
+	"github.com/karimzakzouk/sentinel/internal/slo"
 )
 
 // PrometheusConfig is the connection config for a Prometheus instance.
@@ -21,10 +23,10 @@ type PrometheusConfig struct {
 	Timeout time.Duration // defaults to 10s if zero.
 }
 
-// PrometheusQuerier implements MetricsQuerier and MetricsSource by querying
-// Prometheus via its HTTP API. The same instance serves both SLO burn-rate
-// queries (used by the SLO detector) and per-service health snapshots
-// (used by the post-merge regression watcher).
+// PrometheusQuerier implements slo.MetricsQuerier and postmerge.MetricsSource
+// by querying Prometheus via its HTTP API. The same instance serves both SLO
+// burn-rate queries (used by the SLO watcher) and per-service health
+// snapshots (used by the post-merge regression watcher).
 type PrometheusQuerier struct {
 	cfg    PrometheusConfig
 	client *http.Client
@@ -44,10 +46,10 @@ func NewPrometheusQuerier(cfg PrometheusConfig) *PrometheusQuerier {
 	}
 }
 
-// QueryBurnRate implements MetricsQuerier. It runs the SLO's Query twice —
-// once with the long window, once with the short window — and converts the
+// QueryBurnRate implements slo.MetricsQuerier. It runs the SLO's Query twice
+// — once with the long window, once with the short window — and converts the
 // success ratios to burn-rate multipliers.
-func (q *PrometheusQuerier) QueryBurnRate(ctx context.Context, s SLO, longWindow, shortWindow time.Duration) (long, short float64, err error) {
+func (q *PrometheusQuerier) QueryBurnRate(ctx context.Context, s slo.SLO, longWindow, shortWindow time.Duration) (long, short float64, err error) {
 	longSuccess, err := q.querySuccessRatio(ctx, s, longWindow)
 	if err != nil {
 		return 0, 0, fmt.Errorf("prom long query: %w", err)
@@ -61,13 +63,13 @@ func (q *PrometheusQuerier) QueryBurnRate(ctx context.Context, s SLO, longWindow
 	return long, short, nil
 }
 
-// Snapshot implements MetricsSource. It runs five PromQL queries
+// Snapshot implements postmerge.MetricsSource. It runs five PromQL queries
 // (error rate, p99 latency, restart count, CPU %, memory %) plus an SLO
-// burn-rate query, and assembles a MetricSnapshot. Missing values are
-// left zero — the caller can distinguish "no data" from "healthy" by the
-// associated Timestamp.
-func (q *PrometheusQuerier) Snapshot(ctx context.Context, service, namespace string) (*MetricSnapshot, error) {
-	snap := &MetricSnapshot{Timestamp: time.Now()}
+// burn-rate query, and assembles a postmerge.MetricSnapshot. Missing values
+// are left zero — the caller can distinguish "no data" from "healthy" by
+// the associated Timestamp.
+func (q *PrometheusQuerier) Snapshot(ctx context.Context, service, namespace string) (*postmerge.MetricSnapshot, error) {
+	snap := &postmerge.MetricSnapshot{Timestamp: time.Now()}
 
 	errRate, err := q.scalar(ctx, fmt.Sprintf(
 		`sum(rate(http_requests_total{service="%s",namespace="%s",status=~"5.."}[5m])) / sum(rate(http_requests_total{service="%s",namespace="%s"}[5m]))`,
@@ -109,7 +111,7 @@ func (q *PrometheusQuerier) Snapshot(ctx context.Context, service, namespace str
 		snap.MemoryPercent = mem
 	}
 
-	success, err := q.querySuccessRatio(ctx, SLO{
+	success, err := q.querySuccessRatio(ctx, slo.SLO{
 		Service:   service,
 		Namespace: namespace,
 		Target:    0.999,
@@ -124,7 +126,7 @@ func (q *PrometheusQuerier) Snapshot(ctx context.Context, service, namespace str
 
 // querySuccessRatio substitutes {{window}}, {{service}}, {{namespace}} into
 // the SLO query and runs it as an instant query.
-func (q *PrometheusQuerier) querySuccessRatio(ctx context.Context, s SLO, window time.Duration) (float64, error) {
+func (q *PrometheusQuerier) querySuccessRatio(ctx context.Context, s slo.SLO, window time.Duration) (float64, error) {
 	query := strings.ReplaceAll(s.Query, "{{window}}", fmt.Sprintf("%ds", int(window.Seconds())))
 	query = strings.ReplaceAll(query, "{{service}}", s.Service)
 	query = strings.ReplaceAll(query, "{{namespace}}", s.Namespace)
@@ -325,7 +327,7 @@ func (t *TempoClient) RecentSlowTraces(ctx context.Context, service string, look
 	return out, nil
 }
 
-// Compile-time checks that PrometheusQuerier satisfies the local
-// MetricsQuerier and MetricsSource interfaces.
-var _ MetricsQuerier = (*PrometheusQuerier)(nil)
-var _ MetricsSource = (*PrometheusQuerier)(nil)
+// Compile-time checks that PrometheusQuerier satisfies the slo.MetricsQuerier
+// and postmerge.MetricsSource interfaces owned by the consumer packages.
+var _ slo.MetricsQuerier = (*PrometheusQuerier)(nil)
+var _ postmerge.MetricsSource = (*PrometheusQuerier)(nil)
