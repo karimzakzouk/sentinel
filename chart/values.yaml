@@ -1,0 +1,259 @@
+# Sentinel — Helm Chart Values
+#
+# Sentinel is a single Go binary in a single pod. 43MB image, ~50MB RAM at idle.
+#
+# Install:
+#   helm install sentinel sentinel/sentinel --version 1.0.0 -n sentinel --create-namespace \
+#     --set sentinel.githubToken=YOUR_GITHUB_TOKEN \
+#     --set sentinel.llm.apiKey=YOUR_LLM_API_KEY
+
+image:
+  registry: "docker.io/karimzakzouk"
+  repository: "sentinel"
+  tag: "1.0.0"
+  pullPolicy: Always
+
+sentinel:
+  # GitHub token — REQUIRED for code_fix / roll_forward (opens PRs)
+  githubToken: ""
+
+  # Admin API bearer token. Required for sentinelctl admin commands
+  # (trigger, pause, resume, config set). Empty = admin API unauthenticated
+  # (NOT recommended — the server logs a warning at startup).
+  apiToken: ""
+
+  # GitHub App credentials. When all three are set, all GitHub operations
+  # (PRs, comments, reactions, labels, merges) appear as "Sentinel[bot]"
+  # instead of the PAT owner's personal account.
+  githubAppId: ""
+  githubAppPrivateKey: ""   # full PEM contents, including BEGIN/END lines
+  githubAppInstallId: ""    # numeric, from the install URL
+
+  # GitHub repo allowlist (CSV of owner/name). When set, Sentinel only
+  # clones repos in this list. Empty = allow all (NOT recommended).
+  allowedGithubRepos: ""
+
+  # LLM settings
+  llm:
+    provider: "zai"
+    baseUrl: ""
+    apiKey: ""
+    fastModel: "glm-4-flash"
+    frontierModel: "glm-4.5"
+    embeddingModel: ""
+    embeddingDim: 1536
+    # Auto-detects: if embeddingModel + apiKey are set, uses remote API.
+    # Otherwise falls back to TF-IDF (keyword overlap).
+    embeddingProvider: ""
+    embeddingApiKey: ""
+    embeddingBaseUrl: ""
+    # Semantic cache — caches LLM responses by prompt similarity.
+    # Requires semantic embeddings (embeddingModel must be set).
+    semanticCache: false
+    semanticCacheThreshold: 0.97
+    # Multi-provider failover pool. Stack multiple API keys with priority-
+    # ordered failover + circuit breaker. Empty = single-provider mode.
+    providers: []
+
+  # Auto-merge — all three opt-in layers must be true:
+  #   1. autoMerge.enabled (global)
+  #   2. namespace in autoMerge.namespaces
+  #   3. service has sentinel.io/auto-merge: "true" annotation
+  autoMerge:
+    enabled: false
+    namespaces: []
+    minConfidence: 0.85
+    requireCI: true
+    ciTimeoutSec: 900
+    maxPerHour: 3
+    cooldownMin: 60
+
+  # L2 safe-actions — immediate remediation (restart, rollback, scale)
+  safeActions:
+    enabled: false
+    namespaces: []
+    maxPerHour: 3
+    maxScaleDeltaPct: 50
+
+  # Fix verification — scrapes kubelet cAdvisor for canary metrics.
+  fixVerify:
+    enabled: true
+    prometheusUrl: ""
+
+  # Docker Hub creds for Kaniko sandbox image builder
+  dockerHubUsername: ""
+  dockerHubToken: ""
+
+  # Registry for Kaniko canary image pushes. Default: docker.io.
+  # Set to your private registry for ECR/GCR/ACR/Harbor/Quay.
+  kanikoRegistry: "docker.io"
+
+  # GitHub Enterprise / GitLab support
+  gitHost: "github.com"
+  githubApiUrl: "https://api.github.com"
+
+  # Default branch fallback (per-repo override via sentinel.io/branch annotation)
+  defaultBranch: "main"
+
+  # High-risk services (stricter governance). Empty = none.
+  highRiskServices: ""
+
+  # Namespace skip list (system namespaces Sentinel won't watch)
+  skipNamespaces: "kube-system,kube-public,kube-node-lease,calico-system,calico-apiserver,cert-manager,ingress-nginx,monitoring,prometheus,grafana,loki,metallb-system,longhorn-system,cattle-system,fleet-system,gatekeeper-system,external-secrets,vault,argo-events,argo-rollouts,tekton-pipelines,istio-system,knative-serving,kubernetes-dashboard"
+
+  # Kaniko images (tag-pinned)
+  kanikoInitImage: "alpine/git:2.43.0"
+  kanikoExecutorImage: "gcr.io/kaniko-project/executor:v1.24.0"
+
+  # Max concurrent investigations
+  maxConcurrentInvestigations: 3
+
+  # RBAC
+  rbac:
+    writeNamespaces: []
+    # Opt-in secrets read. When true, grants the Sentinel ServiceAccount
+    # get/list/watch on Secrets cluster-wide. Required for the sandbox
+    # runner to copy prod secrets into the sandbox namespace. Default false.
+    readSecrets: false
+
+  # Namespaces treated as production (stricter governance)
+  productionNamespaces: "prod,production"
+
+  # Confidence thresholds
+  confidenceThresholdAutonomous: 0.92
+  confidenceThresholdHumanReview: 0.70
+
+  # Panic-button thresholds
+  panicCpuThresholdPct: 95.0
+  panicConnectionsThreshold: 9000
+
+  # Observability backends (for Evidence Gatherer)
+  observability:
+    prometheusUrl: ""
+    lokiUrl: ""
+    jaegerUrl: ""
+    tempoUrl: ""
+
+  # Tier 1 features (close the autonomous loop)
+  tier1:
+    # Post-merge regression watcher + auto-rollback.
+    # Requires observability.prometheusUrl.
+    postMergeWatch:
+      enabled: false
+
+    # Proactive SLO burn-rate watcher.
+    # Requires observability.prometheusUrl.
+    sloWatch:
+      enabled: false
+      slos: []
+
+    # Causal RCA — Granger-causality on the dependency DAG.
+    causalRCA:
+      enabled: false
+
+    # Validating admission webhook (Sentinel as Kyverno replacement).
+    admissionWebhook:
+      enabled: false
+      addr: ":8443"
+      certDir: "/data/admission-tls"
+
+  # Tier 2 features (the brain)
+  tier2:
+    # Signed audit trail (EU AI Act / SOC 2).
+    attest:
+      enabled: false
+      logDir: "/data/attest"
+
+    # Cost-aware LLM routing + semantic cache.
+    llmCostRouter:
+      enabled: false
+
+    # Self-chaos mode — scheduled experiments against staging.
+    chaos:
+      enabled: false
+      namespaces: []
+      intervalMin: 60
+
+  # Logging level (DEBUG/INFO/WARN/ERROR)
+  logLevel: "INFO"
+
+  # LLM retry config
+  llmRetry:
+    maxRetries: 3
+    baseDelayMs: 500
+
+  # Sandbox probe paths
+  sandboxProbePaths: "/,/healthz,/readyz"
+
+  # Sandbox configuration
+  sandbox:
+    enabled: true
+    required: false
+    maxRetries: 2
+
+  # Slack webhook (optional)
+  slackWebhook: ""
+
+  # Interactive Slack bot
+  slackBot:
+    signingSecret: ""
+    botUserID: ""
+    botToken: ""
+
+  # Predictive PR review (GitHub webhook)
+  githubWebhookSecret: ""
+
+# Resource limits
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+# Storage for SQLite (incident store + vector memory)
+storage:
+  size: 5Gi
+
+# Service account
+serviceAccount:
+  create: true
+  name: ""
+
+rbac:
+  create: true
+
+# NetworkPolicy — deny by default, allow only needed egress.
+# Disabled by default (CNI quirks in dev clusters). Enable in production.
+networkPolicy:
+  enabled: false
+
+# Ingress (optional)
+ingress:
+  enabled: false
+  className: nginx
+  annotations: {}
+  hosts:
+    - host: sentinel.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# Metrics
+metrics:
+  serviceMonitor:
+    enabled: false
+    interval: "30s"
+    scrapeTimeout: "10s"
+    labels: {}
+
+# PodDisruptionBudget
+podDisruptionBudget:
+  enabled: false
+  maxUnavailable: 1

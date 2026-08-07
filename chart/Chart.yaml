@@ -1,0 +1,17 @@
+apiVersion: v2
+name: sentinel
+description: Sentinel — The Autonomous AI SRE. One binary, one pod, 43MB.
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+home: https://github.com/karimzakzouk/sentinel
+sources:
+  - https://github.com/karimzakzouk/sentinel
+maintainers:
+  - name: Karim Zakzouk
+keywords:
+  - sre
+  - ai
+  - automation
+  - kubernetes
+  - self-healing

@@ -1,0 +1,160 @@
+{{/* RBAC: ServiceAccount + ClusterRole (read) + per-namespace Role (write). */}}
+{{/*
+Least-privilege design:
+  - ClusterRole (read-only): pods, pods/log, services, configmaps, events,
+    namespaces, nodes, deployments, statefulsets, daemonsets, replicasets,
+    sentinelincidents. NO secrets by default.
+  - Secrets read is opt-in via sentinel.rbac.readSecrets (default false).
+    The sandbox runner needs to read prod secrets to copy them into the
+    sandbox namespace — operators who want this must explicitly enable it.
+  - Per-namespace Role + RoleBinding for each namespace in
+    sentinel.rbac.writeNamespaces: create/update/patch/delete on
+    deployments, statefulsets, pods, configmaps, services.
+  - Namespace creation is cluster-wide (sandbox namespaces are dynamic).
+    Gated behind sandbox.enabled — disable the sandbox to remove this.
+*/}}
+{{- if .Values.serviceAccount.create }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.serviceAccount.name | default .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    sentinel.io/managed: "true"
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "services", "configmaps", "events", "namespaces", "nodes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
+    verbs: ["get", "list", "watch"]
+  {{- if .Values.sentinel.sandbox.enabled }}
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets"]
+    verbs: ["create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods", "services", "configmaps"]
+    verbs: ["create", "update", "patch", "delete"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["roles", "rolebindings"]
+    verbs: ["create", "update", "patch", "delete", "get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["create", "delete"]
+  {{- end }}
+  {{- if .Values.sentinel.rbac.readSecrets }}
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  - apiGroups: ["sentinel.io"]
+    resources: ["sentinelincidents"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["sentinel.io"]
+    resources: ["sentinelincidents/status"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: ["networking.istio.io"]
+    resources: ["virtualservices"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    sentinel.io/managed: "true"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ .Release.Name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.serviceAccount.name | default .Release.Name }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
+
+{{- if .Values.rbac.create }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Release.Name }}-kaniko
+  namespace: {{ .Release.Namespace }}
+  labels:
+    sentinel.io/managed: "true"
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps", "pods", "pods/log", "services", "secrets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Release.Name }}-kaniko
+  namespace: {{ .Release.Namespace }}
+  labels:
+    sentinel.io/managed: "true"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ .Release.Name }}-kaniko
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.serviceAccount.name | default .Release.Name }}
+    namespace: {{ .Release.Namespace }}
+
+{{- range $ns := .Values.sentinel.rbac.writeNamespaces }}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ $ns }}
+  labels:
+    sentinel.io/managed: "true"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $.Release.Name }}-write
+  namespace: {{ $ns }}
+  labels:
+    sentinel.io/managed: "true"
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods", "configmaps", "services"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["sentinel.io"]
+    resources: ["sentinelincidents"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["sentinel.io"]
+    resources: ["sentinelincidents/status"]
+    verbs: ["get", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $.Release.Name }}-write
+  namespace: {{ $ns }}
+  labels:
+    sentinel.io/managed: "true"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $.Release.Name }}-write
+subjects:
+  - kind: ServiceAccount
+    name: {{ $.Values.serviceAccount.name | default $.Release.Name }}
+    namespace: {{ $.Release.Namespace }}
+{{- end }}
+{{- end }}
