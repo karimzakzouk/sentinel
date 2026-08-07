@@ -1,0 +1,52 @@
+id: S001
+slug: crashloop-image-typo
+title: "Deployment CrashLoopBackOff due to image tag typo"
+category: crashloop
+severity: sev2
+difficulty: trivial
+origin: synthetic
+
+time_budget: 15m
+token_budget: 200000
+cost_budget_usd: 2.00
+
+setup:
+  cluster:
+    kind_version: v0.24.0
+    kubernetes_version: v1.30.0
+    nodes: 3
+  apply:
+    - cluster/deployment.yaml
+    - cluster/service.yaml
+  source_repo: "https://github.com/sentinel-bench/sample-python-app"
+  source_ref: "main"
+  source_path: "deployment/k8s.yaml"
+
+trigger:
+  type: alertmanager
+  alert:
+    alertname: KubePodCrashLooping
+    namespace: prod
+    pod: sample-app-xxxxx-yyyyy
+    container: app
+    restarts: 7
+    labels:
+      severity: critical
+      service: sample-app
+    annotations:
+      summary: "Pod sample-app in prod is crash-looping"
+      description: "Pod sample-app-xxxxx-yyyyy in namespace prod has restarted 7 times in the last 5 minutes."
+
+assertions:
+  - type: pr_opened
+    weight: 0.25
+  - type: pr_ci_green
+    weight: 0.25
+  - type: diff_similarity
+    threshold: 0.80
+    weight: 0.25
+  - type: sentinel_automerge_approved
+    weight: 0.25
+
+ground_truth: ground-truth.diff
+evidence: evidence.md

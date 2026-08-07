@@ -1,0 +1,63 @@
+id: S002
+slug: python-keyerror-env-var
+title: "Flask app crashes with KeyError on misspelled DATABASE_URL env var"
+category: crashloop
+severity: sev2
+difficulty: moderate
+origin: synthetic
+
+time_budget: 15m
+token_budget: 200000
+cost_budget_usd: 2.00
+
+setup:
+  cluster:
+    kind_version: v0.24.0
+    kubernetes_version: v1.30.0
+    nodes: 3
+  apply:
+    - cluster/deployment.yaml
+    - cluster/service.yaml
+  source_repo: "https://github.com/sentinel-bench/sample-python-app"
+  source_ref: "main"
+  source_path: "deployment/k8s.yaml"
+
+trigger:
+  type: alertmanager
+  alert:
+    alertname: KubePodCrashLooping
+    namespace: prod
+    pod: payments-api-xxxxx-yyyyy
+    container: app
+    restarts: 9
+    labels:
+      severity: critical
+      service: payments-api
+    annotations:
+      summary: "Pod payments-api in prod is crash-looping"
+      description: "Pod payments-api-xxxxx-yyyyy in namespace prod has restarted 9 times in the last 5 minutes. Container logs show a Python KeyError traceback."
+
+# Sample log line the investigator will see when it polls the cluster:
+#   Traceback (most recent call last):
+#     File "/app/app.py", line 12, in <module>
+#       db_url = os.environ['DATABASE_URL']
+#                ~~~~~~~~~~^^^^^^^^^^^^^^^
+#   KeyError: 'DATABASE_URL'
+#
+# The env var is actually set in the Deployment manifest, but it's misspelled
+# `DATABASE_URLL` (double-L). The Flask app reads `os.environ['DATABASE_URL']`
+# (single-L) and crashes on import.
+
+assertions:
+  - type: pr_opened
+    weight: 0.25
+  - type: pr_ci_green
+    weight: 0.25
+  - type: diff_similarity
+    threshold: 0.80
+    weight: 0.25
+  - type: sentinel_automerge_approved
+    weight: 0.25
+
+ground_truth: ground-truth.diff
+evidence: evidence.md

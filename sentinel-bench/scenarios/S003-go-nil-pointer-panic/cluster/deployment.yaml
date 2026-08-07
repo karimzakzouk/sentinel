@@ -1,0 +1,47 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: prod
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: inventory-api
+  namespace: prod
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: inventory-api
+  template:
+    metadata:
+      labels:
+        app: inventory-api
+    spec:
+      containers:
+        # BUG: ships with a ConfigMap that omits the `server:` section, but
+        # main.go reads `cfg.Server.Port` without checking `cfg.Server ==
+        # nil`. The service panics on startup with `nil pointer
+        # dereference` and the pod enters CrashLoopBackOff within ~5s.
+        - name: app
+          image: ghcr.io/sentinel-bench/inventory-api:v1.2.0
+          ports:
+            - containerPort: 8080
+          env:
+            - name: CONFIG_PATH
+              value: /etc/inventory/config.yaml
+          volumeMounts:
+            - name: config
+              mountPath: /etc/inventory
+              readOnly: true
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+      volumes:
+        - name: config
+          configMap:
+            name: inventory-api-config

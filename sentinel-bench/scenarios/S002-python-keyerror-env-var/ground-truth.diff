@@ -1,0 +1,12 @@
+--- a/deployment/k8s.yaml
++++ b/deployment/k8s.yaml
+@@ -22,7 +22,7 @@ spec:
+        - name: app
+          image: ghcr.io/sentinel-bench/payments-api:v1.4.2
+          ports:
+            - containerPort: 8080
+          env:
+-           - name: DATABASE_URLL
++           - name: DATABASE_URL
+              value: "postgres://payments:****@db.prod.svc.cluster.local:5432/payments"
+            - name: FLASK_ENV

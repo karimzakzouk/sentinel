@@ -1,0 +1,13 @@
+--- a/main.go
++++ b/main.go
+@@ -42,6 +42,10 @@ func main() {
+ 	}
+
+ 	cfg := loadConfig(configPath)
++	if cfg.Server == nil {
++		log.Fatalf("config: server section is required in %s", configPath)
++	}
++
+ 	port := cfg.Server.Port
+ 	srv := http.Server{
+ 		Addr:    fmt.Sprintf(":%d", port),
