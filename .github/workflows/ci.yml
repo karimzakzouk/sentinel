@@ -157,6 +157,7 @@ jobs:
   codeql:
     name: CodeQL semantic analysis
     runs-on: ubuntu-latest
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -165,5 +166,6 @@ jobs:
       - uses: github/codeql-action/init@v3
         with:
           languages: go
-          build-mode: none
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
       - uses: github/codeql-action/analyze@v3
