@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/karimzakzouk/sentinel/internal/chatops"
 	"github.com/karimzakzouk/sentinel/internal/logging"
 	"github.com/karimzakzouk/sentinel/internal/metrics"
 	"github.com/karimzakzouk/sentinel/internal/schemas"
@@ -517,28 +518,56 @@ func (s *Server) handleAutoMerge(w http.ResponseWriter, r *http.Request) {
 // so the frontend doesn't have to hardcode them. This avoids the v5 bug
 // where the frontend drifted from the backend command registry.
 func (s *Server) handleAPIMeta(w http.ResponseWriter, r *http.Request) {
+	// chatopsCommands is the serialized form of chatops.AllCommands(). Built
+	// once per request from the live registry — never hardcoded.
+	type chatopsCommandMeta struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		Usage       string `json:"usage"`
+		Example     string `json:"example"`
+		Permission  string `json:"permission"`
+		Tier        string `json:"tier"`
+		Cancelable  bool   `json:"cancelable"`
+	}
+	commands := make([]chatopsCommandMeta, 0, len(chatops.AllCommands()))
+	for _, c := range chatops.AllCommands() {
+		commands = append(commands, chatopsCommandMeta{
+			Name:        c.Name,
+			Description: c.Description,
+			Usage:       c.Usage,
+			Example:     c.Example,
+			Permission:  c.Permission.String(),
+			Tier:        c.Tier,
+			Cancelable:  c.Cancelable,
+		})
+	}
 	writeJSON(w, 200, map[string]any{
-		"version": version.Version,
-		"endpoints": []string{
-			"/healthz",
-			"/readyz",
-			"/incidents",
-			"/incidents/{id}",
-			"/admin/investigate",
-			"/admin/pause",
-			"/admin/resume",
-			"/settings",
-			"/settings/github-app",
-			"/settings/github-app-install",
-			"/providers",
-			"/automerge",
-			"/metrics",
-			"/metrics-summary",
-			"/events",
-			"/api/meta",
-		},
+		"version":       version.Version,
+		"endpoints":     apiMetaEndpoints,
+		"commands":      commands,
 		"auth_required": s.apiToken != "",
 	})
+}
+
+// apiMetaEndpoints is the static list of routes the API exposes. Kept as a
+// package-level var so it isn't reallocated on every /api/meta call.
+var apiMetaEndpoints = []string{
+	"/healthz",
+	"/readyz",
+	"/incidents",
+	"/incidents/{id}",
+	"/admin/investigate",
+	"/admin/pause",
+	"/admin/resume",
+	"/settings",
+	"/settings/github-app",
+	"/settings/github-app-install",
+	"/providers",
+	"/automerge",
+	"/metrics",
+	"/metrics-summary",
+	"/events",
+	"/api/meta",
 }
 
 // handleWebUI serves the embedded Next.js dashboard. Falls back to a small

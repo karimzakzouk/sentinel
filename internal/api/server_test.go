@@ -431,7 +431,9 @@ func TestServer_IncidentsList(t *testing.T) {
 	}
 }
 
-// TestServer_APIMeta verifies /api/meta returns the endpoint list.
+// TestServer_APIMeta verifies /api/meta returns the endpoint list and the
+// chatops command list (so the frontend can render the chatops section
+// without hardcoding commands).
 func TestServer_APIMeta(t *testing.T) {
 	s := newTestServer()
 	req := httptest.NewRequest("GET", "/api/meta", nil)
@@ -458,6 +460,32 @@ func TestServer_APIMeta(t *testing.T) {
 	}
 	if !found {
 		t.Error("/api/meta not in endpoints list")
+	}
+	// The chatops command list must be present and non-empty — the registry
+	// is populated at init() time from internal/chatops/commands*.go.
+	commands, _ := resp["commands"].([]any)
+	if len(commands) == 0 {
+		t.Fatal("expected non-empty commands list — chatops registry not loaded")
+	}
+	// Every entry must have a name + tier + permission (the fields the
+	// frontend renders). Don't assert the exact count — that would couple
+	// the test to the chatops command count, which drifts as commands are
+	// added.
+	for _, raw := range commands {
+		c, ok := raw.(map[string]any)
+		if !ok {
+			t.Errorf("command entry is not an object: %T", raw)
+			continue
+		}
+		if c["name"] == "" || c["name"] == nil {
+			t.Error("command entry missing name")
+		}
+		if c["tier"] == "" || c["tier"] == nil {
+			t.Error("command entry missing tier")
+		}
+		if c["permission"] == "" || c["permission"] == nil {
+			t.Error("command entry missing permission")
+		}
 	}
 }
 
