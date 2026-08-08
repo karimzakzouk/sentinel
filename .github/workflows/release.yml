@@ -167,7 +167,7 @@ jobs:
           docker manifest push ${{ env.GHCR_REGISTRY }}/${{ env.GHCR_OWNER }}/sentinel:latest
 
       - name: Install cosign
-        uses: sigstore/cosign-installer@v3.7.0
+        uses: sigstore/cosign-installer@v4.1.2
       - name: Sign images (keyless via OIDC)
         run: |
           VERSION=${{ steps.version.outputs.version }}
