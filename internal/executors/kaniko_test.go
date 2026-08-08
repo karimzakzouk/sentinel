@@ -27,8 +27,8 @@ func TestBuildIDFromTag(t *testing.T) {
 			if len(got) != 8 {
 				t.Errorf("buildIDFromTag(%q) = %q (len %d), want len 8", c.tag, got, len(got))
 			}
-			if !strings.HasPrefix(got, strings.TrimPrefix(c.want, " ")) && c.want != "build000" {
-				// loose check: the prefix matches when not the special "" case
+			if c.want != "build000" && !strings.HasPrefix(got, strings.TrimPrefix(c.want, " ")) {
+				t.Errorf("buildIDFromTag(%q) = %q, want prefix %q", c.tag, got, strings.TrimPrefix(c.want, " "))
 			}
 			if c.tag == "" && got != "build000" {
 				t.Errorf("buildIDFromTag(\"\") = %q, want build000", got)

@@ -1,13 +1,16 @@
 package k8s
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 // TestPatchCRStatusSkipFakeNames verifies that PatchCRStatus silently
 // returns nil for fake CR names from auto/manual/slack triggers.
 func TestPatchCRStatusSkipFakeNames(t *testing.T) {
 	client := &Client{}
 	for _, name := range []string{"", "auto-detected", "manual", "slack"} {
-		if err := client.PatchCRStatus(nil, name, "default", "resolved"); err != nil {
+		if err := client.PatchCRStatus(context.TODO(), name, "default", "resolved"); err != nil {
 			t.Errorf("PatchCRStatus(%q) = %v, want nil", name, err)
 		}
 	}

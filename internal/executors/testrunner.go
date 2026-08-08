@@ -319,10 +319,7 @@ func (r *TestRunner) RunReproducer(ctx context.Context, canaryImage, sandboxNS s
 
 	// The reproducer exits 0 on success, 1 on crash. Check pod phase first.
 	pod, _ := r.clientset.CoreV1().Pods(sandboxNS).Get(ctx, reproPodName, metav1.GetOptions{})
-	passed := false
-	if pod != nil && pod.Status.Phase == corev1.PodSucceeded {
-		passed = true
-	}
+	passed := pod != nil && pod.Status.Phase == corev1.PodSucceeded
 
 	lowerOutput := strings.ToLower(podOutput)
 	if strings.Contains(lowerOutput, "traceback") || strings.Contains(lowerOutput, "panic:") ||

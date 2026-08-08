@@ -530,21 +530,21 @@ func extractCrashLocation(podLogs string) string {
 
 	var sb strings.Builder
 	sb.WriteString("## CRASH LOCATION (from traceback — THIS is the bug, not other code in the file)\n")
-	sb.WriteString(fmt.Sprintf("- Error type: %s\n", parsed.ErrorType))
+	fmt.Fprintf(&sb, "- Error type: %s\n", parsed.ErrorType)
 	if parsed.ErrorDetail != "" {
-		sb.WriteString(fmt.Sprintf("- Error detail: %s\n", parsed.ErrorDetail))
+		fmt.Fprintf(&sb, "- Error detail: %s\n", parsed.ErrorDetail)
 	}
 	if parsed.SourceFile != "" {
-		sb.WriteString(fmt.Sprintf("- Source file: %s\n", parsed.SourceFile))
+		fmt.Fprintf(&sb, "- Source file: %s\n", parsed.SourceFile)
 	}
 	if parsed.SourceLine != "" {
-		sb.WriteString(fmt.Sprintf("- Source line: %s\n", parsed.SourceLine))
+		fmt.Fprintf(&sb, "- Source line: %s\n", parsed.SourceLine)
 	}
 	if parsed.RawLine != "" {
-		sb.WriteString(fmt.Sprintf("- Crash line: %s\n", parsed.RawLine))
+		fmt.Fprintf(&sb, "- Crash line: %s\n", parsed.RawLine)
 	}
 	if parsed.Function != "" {
-		sb.WriteString(fmt.Sprintf("- Function: %s\n", parsed.Function))
+		fmt.Fprintf(&sb, "- Function: %s\n", parsed.Function)
 	}
 
 	sb.WriteString("\nIMPORTANT: The crash is in the function/file/line above. Do NOT form hypotheses about OTHER functions in the same file — they may have similar bugs but are NOT the crash you need to fix.\n")

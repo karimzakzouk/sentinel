@@ -57,8 +57,8 @@ func TestWithIncidentIDAndComponent(t *testing.T) {
 }
 
 func TestNilContext(t *testing.T) {
-	if got := withCtx(nil, nil); got != nil {
-		t.Errorf("nil ctx should produce no args, got %v", got)
+	if got := withCtx(context.TODO(), nil); got != nil {
+		t.Errorf("empty ctx should produce no args, got %v", got)
 	}
 }
 

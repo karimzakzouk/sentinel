@@ -196,9 +196,10 @@ func (a *EvidenceGatherer) runSingleQuery(ctx context.Context, idx int, q map[st
 		Query:  string(queryJSON),
 		TS:     time.Now().UTC(),
 	}
-	if supportsOrContradicts == "supports" {
+	switch supportsOrContradicts {
+	case "supports":
 		ev.SupportsHypothesisID = &hypID
-	} else if supportsOrContradicts == "contradicts" {
+	case "contradicts":
 		ev.ContradictsHypothesisID = &hypID
 	}
 

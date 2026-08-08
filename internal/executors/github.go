@@ -35,7 +35,7 @@ func NewGitHub(token string) *GitHubExecutor {
 // API calls use the App's installation token, making PRs + comments appear
 // as the "Sentinel" bot identity.
 func (e *GitHubExecutor) WithTokenProvider(tp TokenProvider) *GitHubExecutor {
-	e.BaseClient.WithTokenProvider(tp)
+	e.WithTokenProvider(tp)
 	return e
 }
 
@@ -205,7 +205,7 @@ func (e *GitHubExecutor) getBranchSHA(ctx context.Context, repo, branch string) 
 			SHA string `json:"sha"`
 		} `json:"commit"`
 	}
-	if err := e.BaseClient.Do(ctx, "GET", url, nil, &resp); err != nil {
+	if err := e.Do(ctx, "GET", url, nil, &resp); err != nil {
 		return "", fmt.Errorf("get branch %s/%s: %w", repo, branch, err)
 	}
 	return resp.Commit.SHA, nil
@@ -218,7 +218,7 @@ func (e *GitHubExecutor) createBranch(ctx context.Context, repo, branch, sha str
 		"ref": fmt.Sprintf("refs/heads/%s", branch),
 		"sha": sha,
 	}
-	return e.BaseClient.Do(ctx, "POST", url, body, nil)
+	return e.Do(ctx, "POST", url, body, nil)
 }
 
 // upsertFile creates or updates a file on branch via the Contents API.
@@ -234,7 +234,7 @@ func (e *GitHubExecutor) upsertFile(ctx context.Context, repo, branch, path, con
 	if existingSHA != "" {
 		body["sha"] = existingSHA
 	}
-	return e.BaseClient.Do(ctx, "PUT", url, body, nil)
+	return e.Do(ctx, "PUT", url, body, nil)
 }
 
 // getFileSHA fetches the SHA of a file (required for update). Returns an
@@ -245,7 +245,7 @@ func (e *GitHubExecutor) getFileSHA(ctx context.Context, repo, path, ref string)
 		SHA  string `json:"sha"`
 		Type string `json:"type"`
 	}
-	if err := e.BaseClient.Do(ctx, "GET", url, nil, &resp); err != nil {
+	if err := e.Do(ctx, "GET", url, nil, &resp); err != nil {
 		return "", err
 	}
 	if resp.Type == "dir" {
@@ -262,7 +262,7 @@ func (e *GitHubExecutor) GetFileContent(ctx context.Context, repo, path, ref str
 		Encoding string `json:"encoding"`
 		Type     string `json:"type"`
 	}
-	if err := e.BaseClient.Do(ctx, "GET", url, nil, &resp); err != nil {
+	if err := e.Do(ctx, "GET", url, nil, &resp); err != nil {
 		return "", err
 	}
 	if resp.Type == "dir" {
@@ -291,7 +291,7 @@ func (e *GitHubExecutor) createPR(ctx context.Context, repo, title, body, head, 
 		Number  int    `json:"number"`
 		HTMLURL string `json:"html_url"`
 	}
-	if err := e.BaseClient.Do(ctx, "POST", url, body_, &resp); err != nil {
+	if err := e.Do(ctx, "POST", url, body_, &resp); err != nil {
 		return 0, "", err
 	}
 	return resp.Number, resp.HTMLURL, nil
@@ -301,7 +301,7 @@ func (e *GitHubExecutor) createPR(ctx context.Context, repo, title, body, head, 
 func (e *GitHubExecutor) addLabels(ctx context.Context, repo string, prNumber int, labels []string) error {
 	url := fmt.Sprintf("%s/repos/%s/issues/%d/labels", e.APIURL, repo, prNumber)
 	body := map[string]any{"labels": labels}
-	return e.BaseClient.Do(ctx, "POST", url, body, nil)
+	return e.Do(ctx, "POST", url, body, nil)
 }
 
 // base64Decode decodes a base64-encoded string returned by the GitHub

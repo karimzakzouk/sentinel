@@ -54,11 +54,14 @@ func New(appID, privateKeyPEM, installID string) (*App, error) {
 // Enterprise, pass "https://gh.mycorp.internal/api/v3". A trailing slash
 // is trimmed.
 func NewWithAPIURL(appID, privateKeyPEM, installID, apiURL string) (*App, error) {
-	if _, err := pem.Decode([]byte(privateKeyPEM)); err == nil {
-		// fall through; jwt.ParseRSAPrivateKeyFromPEM also accepts PEM.
-	} else if privateKeyPEM != "" {
-		// pem.Decode returns nil + nothing on failure; rely on jwt parser
-		// to give the actual error.
+	// Validate the PEM block up front. pem.Decode returns nil + the rest of
+	// the input on failure; we surface that as a parse error to give the
+	// caller an early, actionable message instead of relying on the JWT
+	// parser's less obvious failure.
+	if privateKeyPEM != "" {
+		if _, rest := pem.Decode([]byte(privateKeyPEM)); len(rest) == len(privateKeyPEM) {
+			return nil, fmt.Errorf("parse RSA private key: not a valid PEM block")
+		}
 	}
 
 	key, err := jwt.ParseRSAPrivateKeyFromPEM([]byte(privateKeyPEM))

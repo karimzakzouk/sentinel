@@ -225,7 +225,7 @@ func (s *SandboxRunner) ReapStaleSandboxNamespaces(ctx context.Context, maxAge t
 	cutoff := time.Now().Add(-maxAge)
 	for i := range list.Items {
 		ns := &list.Items[i]
-		if ns.CreationTimestamp.Time.After(cutoff) {
+		if ns.CreationTimestamp.After(cutoff) {
 			continue
 		}
 		if err := s.clientset.CoreV1().Namespaces().Delete(ctx, ns.Name, metav1.DeleteOptions{}); err != nil {
@@ -235,7 +235,7 @@ func (s *SandboxRunner) ReapStaleSandboxNamespaces(ctx context.Context, maxAge t
 		}
 		logging.Info("reaper: deleted stale sandbox namespace",
 			"namespace", ns.Name,
-			"created", ns.CreationTimestamp.Time.Format(time.RFC3339),
+			"created", ns.CreationTimestamp.Format(time.RFC3339),
 			"age", time.Since(ns.CreationTimestamp.Time).Round(time.Second))
 		reaped++
 	}
