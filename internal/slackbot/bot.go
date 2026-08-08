@@ -411,12 +411,14 @@ func (b *Bot) handleList(text, userName string) string {
 		return "No incidents found."
 	}
 	var b2 strings.Builder
-	b2.WriteString(fmt.Sprintf("*Last %d incidents:*\n", len(incidents)))
+	fmt.Fprintf(&b2, "*Last %d incidents:*\n", len(incidents))
+
 	for _, inc := range incidents {
 		id, _ := inc["incident_id"].(string)
 		service, _ := inc["service"].(string)
 		status, _ := inc["status"].(string)
-		b2.WriteString(fmt.Sprintf("• `%s` — %s (%s)\n", id, service, status))
+		fmt.Fprintf(&b2, "• `%s` — %s (%s)\n", id, service, status)
+
 	}
 	return b2.String()
 }

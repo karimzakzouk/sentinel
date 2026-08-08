@@ -43,20 +43,21 @@ func (s *StatusCommentManagerImpl) Render(incident *Incident, extra string) stri
 
 	// Hidden marker — used to find the comment via list-comments API.
 	// incident_id makes it easy to cross-reference with the DB.
-	sb.WriteString(fmt.Sprintf("<!-- [SENTINELSTATUS] incident_id=%s pr_number=%d -->\n\n",
-		incident.ID, incident.PRNumber))
+	fmt.Fprintf(&sb, "<!-- [SENTINELSTATUS] incident_id=%s pr_number=%d -->\n\n",
+		incident.ID, incident.PRNumber)
 
 	sb.WriteString("## 🤖 Sentinel Status\n\n")
 
 	sb.WriteString("| Phase | Status | Detail |\n")
 	sb.WriteString("|-------|--------|--------|\n")
 
-	sb.WriteString(fmt.Sprintf("| Detection | ✅ | Service: `%s` (namespace: `%s`) |\n",
-		incident.Service, incident.Namespace))
+	fmt.Fprintf(&sb, "| Detection | ✅ | Service: `%s` (namespace: `%s`) |\n",
+		incident.Service, incident.Namespace)
 
 	if incident.RootCause != "" {
-		sb.WriteString(fmt.Sprintf("| Root cause | ✅ | %s (confidence: %.0f%%) |\n",
-			truncate(incident.RootCause, 80), incident.Confidence*100))
+		fmt.Fprintf(&sb, "| Root cause | ✅ | %s (confidence: %.0f%%) |\n",
+			truncate(incident.RootCause, 80), incident.Confidence*100)
+
 	} else {
 		sb.WriteString("| Root cause | ⏳ | Investigating... |\n")
 	}
@@ -73,12 +74,13 @@ func (s *StatusCommentManagerImpl) Render(incident *Incident, extra string) stri
 	}
 
 	if incident.PRURL != "" {
-		sb.WriteString(fmt.Sprintf("| PR | ✅ | [%s#%d](%s) |\n", incident.PRRepo, incident.PRNumber, incident.PRURL))
+		fmt.Fprintf(&sb, "| PR | ✅ | [%s#%d](%s) |\n", incident.PRRepo, incident.PRNumber, incident.PRURL)
+
 	} else {
 		sb.WriteString("| PR | ⏳ | Opening... |\n")
 	}
 
-	sb.WriteString(fmt.Sprintf("| Overall | %s | `%s` |\n", emojiForStatus(incident.Status), incident.Status))
+	fmt.Fprintf(&sb, "| Overall | %s | `%s` |\n", emojiForStatus(incident.Status), incident.Status)
 
 	autoMergeStatus := "—"
 	autoMergeDetail := "(not configured)"
@@ -95,10 +97,10 @@ func (s *StatusCommentManagerImpl) Render(incident *Incident, extra string) stri
 			autoMergeDetail = "Queued (evaluating gates)"
 		}
 	}
-	sb.WriteString(fmt.Sprintf("| Auto-merge | %s | %s |\n", autoMergeStatus, autoMergeDetail))
+	fmt.Fprintf(&sb, "| Auto-merge | %s | %s |\n", autoMergeStatus, autoMergeDetail)
 
 	sb.WriteString("\n")
-	sb.WriteString(fmt.Sprintf("_Last updated: %s_\n\n", time.Now().UTC().Format("2006-01-02 15:04:05 UTC")))
+	fmt.Fprintf(&sb, "_Last updated: %s_\n\n", time.Now().UTC().Format("2006-01-02 15:04:05 UTC"))
 
 	sb.WriteString("Commands: `/sentinel help` for available commands.\n")
 

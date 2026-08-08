@@ -168,16 +168,19 @@ func hasPermission(required Permission, actual string) bool {
 // user was denied and *what they can do about it*.
 func actionablePermissionError(cmd *Command, spec *CommandSpec, has string) string {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("❌ @%s doesn't have the required permission to run `/sentinel %s`.\n\n", cmd.Author, cmd.Name))
-	sb.WriteString(fmt.Sprintf("**Required:** %s access to `%s`\n", spec.Permission, cmd.PRRepo))
-	sb.WriteString(fmt.Sprintf("**Your access:** %s\n\n", has))
+	fmt.Fprintf(&sb, "❌ @%s doesn't have the required permission to run `/sentinel %s`.\n\n", cmd.Author, cmd.Name)
+
+	fmt.Fprintf(&sb, "**Required:** %s access to `%s`\n", spec.Permission, cmd.PRRepo)
+
+	fmt.Fprintf(&sb, "**Your access:** %s\n\n", has)
 
 	switch spec.Permission {
 	case PermWrite:
 		sb.WriteString("To run this command, you need:\n")
 		sb.WriteString("- **Write access** to this repo, OR\n")
 		sb.WriteString("- Be a member of the team configured in the `sentinel.io/admin-team` annotation on the service's Deployment\n\n")
-		sb.WriteString(fmt.Sprintf("Request access: https://github.com/%s/settings/access\n", cmd.PRRepo))
+		fmt.Fprintf(&sb, "Request access: https://github.com/%s/settings/access\n", cmd.PRRepo)
+
 		sb.WriteString("Or ask a collaborator to run this command for you.\n")
 	case PermAdmin:
 		sb.WriteString("To run this destructive command, you need:\n")
@@ -219,7 +222,7 @@ func auditLog(ctx context.Context, deps *Deps, cmd *Command, result, detail stri
 // can't run are shown with a 🔒 marker so the user knows they exist.
 func RenderHelp(author string, userPermission string) string {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("## Available commands for @%s on this PR\n\n", author))
+	fmt.Fprintf(&sb, "## Available commands for @%s on this PR\n\n", author)
 
 	groups := []struct {
 		tier  string
@@ -236,13 +239,15 @@ func RenderHelp(author string, userPermission string) string {
 		if len(commands) == 0 {
 			continue
 		}
-		sb.WriteString(fmt.Sprintf("### %s\n\n%s\n\n", g.title, g.desc))
+		fmt.Fprintf(&sb, "### %s\n\n%s\n\n", g.title, g.desc)
+
 		for _, c := range commands {
 			locked := ""
 			if !hasPermission(c.Permission, userPermission) {
 				locked = "🔒 "
 			}
-			sb.WriteString(fmt.Sprintf("%s`%s` — %s\n", locked, c.Usage, c.Description))
+			fmt.Fprintf(&sb, "%s`%s` — %s\n", locked, c.Usage, c.Description)
+
 		}
 		sb.WriteString("\n")
 	}
