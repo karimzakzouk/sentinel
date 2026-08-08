@@ -3,7 +3,7 @@
 # Final image: 43MB, nonroot, read-only rootfs, no shell.
 
 # ── Stage 1: Build the web UI ──────────────────────────────────────────────
-FROM node:22-alpine AS web-builder
+FROM node:25-alpine AS web-builder
 
 WORKDIR /web
 COPY web/package.json web/package-lock.json* ./
