@@ -16,6 +16,12 @@ import (
 	"github.com/karimzakzouk/sentinel/internal/slo"
 )
 
+// promQLEscape escapes a label value for safe interpolation into PromQL.
+// Prevents injection via attacker-controllable pod annotations.
+func promQLEscape(s string) string {
+	return strings.ReplaceAll(s, `"`, `\"`)
+}
+
 // PrometheusConfig is the connection config for a Prometheus instance.
 type PrometheusConfig struct {
 	URL     string        // e.g. "http://prometheus.monitoring:9090".
@@ -70,10 +76,12 @@ func (q *PrometheusQuerier) QueryBurnRate(ctx context.Context, s slo.SLO, longWi
 // the associated Timestamp.
 func (q *PrometheusQuerier) Snapshot(ctx context.Context, service, namespace string) (*postmerge.MetricSnapshot, error) {
 	snap := &postmerge.MetricSnapshot{Timestamp: time.Now()}
+	s := promQLEscape(service)
+	ns := promQLEscape(namespace)
 
 	errRate, err := q.scalar(ctx, fmt.Sprintf(
 		`sum(rate(http_requests_total{service="%s",namespace="%s",status=~"5.."}[5m])) / sum(rate(http_requests_total{service="%s",namespace="%s"}[5m]))`,
-		service, namespace, service, namespace,
+		s, ns, s, ns,
 	))
 	if err == nil {
 		snap.ErrorRate = errRate
@@ -81,7 +89,7 @@ func (q *PrometheusQuerier) Snapshot(ctx context.Context, service, namespace str
 
 	p99, err := q.scalar(ctx, fmt.Sprintf(
 		`histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{service="%s",namespace="%s"}[5m])) by (le))`,
-		service, namespace,
+		s, ns,
 	))
 	if err == nil {
 		snap.P99LatencyMs = p99 * 1000
@@ -89,7 +97,7 @@ func (q *PrometheusQuerier) Snapshot(ctx context.Context, service, namespace str
 
 	restarts, err := q.scalar(ctx, fmt.Sprintf(
 		`sum(increase(kube_pod_container_status_restarts_total{namespace="%s",container="%s"}[5m]))`,
-		namespace, service,
+		ns, s,
 	))
 	if err == nil {
 		snap.RestartCount = int64(restarts)
@@ -97,7 +105,7 @@ func (q *PrometheusQuerier) Snapshot(ctx context.Context, service, namespace str
 
 	cpu, err := q.scalar(ctx, fmt.Sprintf(
 		`sum(rate(container_cpu_usage_seconds_total{namespace="%s",pod=~"%s-.*"}[5m])) / sum(kube_pod_container_resource_limits{namespace="%s",pod=~"%s-.*",resource="cpu"}) * 100`,
-		namespace, service, namespace, service,
+		ns, s, ns, s,
 	))
 	if err == nil {
 		snap.CPUPercent = cpu
@@ -105,7 +113,7 @@ func (q *PrometheusQuerier) Snapshot(ctx context.Context, service, namespace str
 
 	mem, err := q.scalar(ctx, fmt.Sprintf(
 		`sum(container_memory_working_set_bytes{namespace="%s",pod=~"%s-.*"}) / sum(kube_pod_container_resource_limits{namespace="%s",pod=~"%s-.*",resource="memory"}) * 100`,
-		namespace, service, namespace, service,
+		ns, s, ns, s,
 	))
 	if err == nil {
 		snap.MemoryPercent = mem

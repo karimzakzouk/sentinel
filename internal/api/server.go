@@ -222,6 +222,7 @@ func New(addr string, store Store, settings SettingsGetter, investigate Investig
 	mux.HandleFunc("/settings/github-app", s.handleGitHubApp)
 	mux.HandleFunc("/settings/github-app-install", s.handleGitHubAppInstall)
 	mux.HandleFunc("/admin/investigate", s.handleInvestigate)
+	mux.HandleFunc("/admin/whoami", s.handleWhoami)
 	mux.HandleFunc("/admin/pause", s.handlePause)
 	mux.HandleFunc("/admin/resume", s.handleResume)
 	mux.HandleFunc("/events", s.handleSSE)
@@ -292,6 +293,10 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		}
 
 		if s.apiToken == "" {
+			if strings.HasPrefix(r.URL.Path, "/debug/pprof") {
+				writeJSON(w, 403, map[string]string{"error": "pprof requires SENTINEL_API_TOKEN to be set"})
+				return
+			}
 			next.ServeHTTP(w, r)
 			return
 		}

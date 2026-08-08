@@ -267,12 +267,9 @@ func (b *BaseClient) Merge(ctx context.Context, repo string, prNumber int, commi
 	return nil
 }
 
-// RevertMergeCommit opens a revert PR for mergeCommitSHA. The revert branch
-// ("sentinel/revert/<short-sha>") is created pointing at the parent of the
-// merge commit, and a PR is opened from it to baseBranch.
-//
-// Returns the PR number. The actual revert diff is produced by the PR diff
-// and reviewed by operators before merging, exactly like a manual revert.
+// RevertMergeCommit opens a revert PR for mergeCommitSHA. It creates a new
+// commit on a revert branch that has the current HEAD as parent but the merge
+// commit's parent tree — effectively undoing only the merge commit's changes.
 func (b *BaseClient) RevertMergeCommit(ctx context.Context, repo, mergeCommitSHA, baseBranch, reason string) (int, error) {
 	shortSHA := mergeCommitSHA
 	if len(shortSHA) > 8 {
@@ -281,23 +278,54 @@ func (b *BaseClient) RevertMergeCommit(ctx context.Context, repo, mergeCommitSHA
 	branchName := fmt.Sprintf("sentinel/revert/%s", shortSHA)
 
 	var commit struct {
-		SHA     string `json:"sha"`
-		Parents []struct {
+		SHA  string `json:"sha"`
+		Tree struct {
 			SHA string `json:"sha"`
+		} `json:"tree"`
+		Parents []struct {
+			SHA  string `json:"sha"`
+			Tree struct {
+				SHA string `json:"sha"`
+			} `json:"tree"`
 		} `json:"parents"`
 	}
 	if err := b.Do(ctx, "GET",
-		fmt.Sprintf("%s/repos/%s/git/commits/%s", b.APIURL, repo, mergeCommitSHA), nil, &commit); err != nil {
-		return 0, fmt.Errorf("get commit: %w", err)
+		fmt.Sprintf("%s/repos/%s/commits/%s", b.APIURL, repo, mergeCommitSHA), nil, &commit); err != nil {
+		return 0, fmt.Errorf("get merge commit: %w", err)
 	}
 	if len(commit.Parents) == 0 {
-		return 0, fmt.Errorf("commit %s has no parent — cannot revert (initial commit?)", mergeCommitSHA)
+		return 0, fmt.Errorf("commit %s has no parent — cannot revert", mergeCommitSHA)
 	}
-	parentSHA := commit.Parents[0].SHA
+	parentTreeSHA := commit.Parents[0].Tree.SHA
+
+	var baseRef struct {
+		Object struct {
+			SHA string `json:"sha"`
+		} `json:"object"`
+	}
+	if err := b.Do(ctx, "GET",
+		fmt.Sprintf("%s/repos/%s/git/refs/heads/%s", b.APIURL, repo, baseBranch), nil, &baseRef); err != nil {
+		return 0, fmt.Errorf("get base branch ref: %w", err)
+	}
+	headSHA := baseRef.Object.SHA
+
+	newCommitPayload, _ := json.Marshal(map[string]string{
+		"message": fmt.Sprintf("revert: %s\n\nSentinel auto-revert of merge commit %s.\nReason: %s", shortSHA, mergeCommitSHA, reason),
+		"tree":    parentTreeSHA,
+		"parents": fmt.Sprintf("[%q]", headSHA),
+	})
+	var newCommit struct {
+		SHA string `json:"sha"`
+	}
+	if err := b.Do(ctx, "POST",
+		fmt.Sprintf("%s/repos/%s/git/commits", b.APIURL, repo),
+		json.RawMessage(newCommitPayload), &newCommit); err != nil {
+		return 0, fmt.Errorf("create revert commit: %w", err)
+	}
 
 	refPayload, _ := json.Marshal(map[string]string{
 		"ref": fmt.Sprintf("refs/heads/%s", branchName),
-		"sha": parentSHA,
+		"sha": newCommit.SHA,
 	})
 	req, err := http.NewRequestWithContext(ctx, "POST",
 		fmt.Sprintf("%s/repos/%s/git/refs", b.APIURL, repo),
@@ -318,8 +346,8 @@ func (b *BaseClient) RevertMergeCommit(ctx context.Context, repo, mergeCommitSHA
 	resp.Body.Close()
 
 	prBody := fmt.Sprintf("Sentinel auto-revert of merge commit %s.\n\n**Reason:** %s\n\n"+
-		"This PR was opened automatically by Sentinel's post-merge regression watcher. "+
-		"Do not re-merge until the root cause is identified.", mergeCommitSHA, reason)
+		"This PR reverts the changes introduced by merge commit %s. "+
+		"Review the diff before merging.", mergeCommitSHA, reason, mergeCommitSHA)
 	prPayload, _ := json.Marshal(map[string]string{
 		"title": fmt.Sprintf("revert: %s (Sentinel auto-revert)", shortSHA),
 		"body":  prBody,

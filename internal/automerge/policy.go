@@ -208,13 +208,16 @@ func (p *Policy) Evaluate(in Input) *Decision {
 				d.GatesFailed = append(d.GatesFailed, "ci")
 				d.Reason = fmt.Sprintf("CI failing (%d/%d checks failing)", in.CIStatus.Failing, in.CIStatus.Checks)
 				return d
-			case "pending":
-				// Don't fail — the merger will wait for CI to complete.
-				d.GatesPassed = append(d.GatesPassed, "ci_pending")
 			case "success":
 				d.GatesPassed = append(d.GatesPassed, "ci")
+			case "pending":
+				d.GatesFailed = append(d.GatesFailed, "ci")
+				d.Reason = "CI pending — waiting for checks to complete"
+				return d
 			default:
-				d.GatesPassed = append(d.GatesPassed, "ci_unknown")
+				d.GatesFailed = append(d.GatesFailed, "ci")
+				d.Reason = "CI status unknown — cannot auto-merge without check results"
+				return d
 			}
 		}
 	}

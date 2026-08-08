@@ -159,9 +159,8 @@ export async function getRuntimeConfig(): Promise<RuntimeConfig> {
   return fetchJSON<RuntimeConfig>(`/settings`);
 }
 
-export async function updateRuntimeConfig(cfg: Partial<RuntimeConfig>): Promise<RuntimeConfig> {
-  // Server expects POST /settings (not PUT — see handleSettings in handlers.go).
-  return fetchJSON<RuntimeConfig>(`/settings`, {
+export async function updateRuntimeConfig(cfg: Partial<RuntimeConfig>): Promise<{ status: string; message: string }> {
+  return fetchJSON<{ status: string; message: string }>(`/settings`, {
     method: "POST",
     body: JSON.stringify(cfg),
   });
@@ -223,7 +222,7 @@ export function subscribeToEvents(handlers: SSEHandlers): EventSource {
 
 export async function validateToken(token: string): Promise<boolean> {
   try {
-    const res = await fetch(`/incidents?limit=1`, {
+    const res = await fetch(`/admin/whoami`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     return res.ok;

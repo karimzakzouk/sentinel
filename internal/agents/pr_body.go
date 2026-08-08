@@ -69,8 +69,8 @@ func BuildPRBody(incident *schemas.Incident, sandboxVerified bool, sandboxSummar
 			if h.Falsified {
 				marker = "~~"
 			}
-			fmt.Fprintf(&b, "%d. **%s%s** (confidence: %.2f)%s — %s\n",
-				int(h.HID[1]-'0'), marker, h.HID, h.Confidence, marker, truncate(h.Statement, 100))
+			fmt.Fprintf(&b, "- %s**%s**%s (confidence: %.2f) — %s\n",
+				marker, h.HID, marker, h.Confidence, truncate(h.Statement, 100))
 
 		}
 		b.WriteString("\n")

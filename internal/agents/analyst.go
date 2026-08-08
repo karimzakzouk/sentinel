@@ -154,10 +154,16 @@ func (a *Analyst) Run(ctx context.Context, state *schemas.AgentState, betaStore 
 	service := state.Cluster.Service
 	var alpha, beta, priorMean float64
 	if betaStore != nil {
-		a, b, _, _, _ := betaStore.GetBetaPrior(ctx, service, category)
-		alpha = a
-		beta = b
-		priorMean = alpha / (alpha + beta)
+		a, b, _, _, err := betaStore.GetBetaPrior(ctx, service, category)
+		if err != nil || a+b == 0 {
+			alpha = 1.0
+			beta = 1.0
+			priorMean = ConfidencePriorMean
+		} else {
+			alpha = a
+			beta = b
+			priorMean = alpha / (alpha + beta)
+		}
 	} else {
 		alpha = 1.0
 		beta = 1.0

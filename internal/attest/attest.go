@@ -197,21 +197,21 @@ func (s *Signer) Sign(ctx context.Context, a Attestation) error {
 		return fmt.Errorf("attest: marshal signed record: %w", err)
 	}
 	hash := sha256.Sum256(signedCanonical)
-	s.prevHash = hex.EncodeToString(hash[:])
 
 	if s.logDir != "" {
 		path := filepath.Join(s.logDir, fmt.Sprintf("attest-%s.jsonl", time.Now().UTC().Format("2006-01-02")))
 		f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 		if err != nil {
-			logging.Error("attest: failed to open log file", "path", path, "err", err)
-			return nil
+			return fmt.Errorf("attest: open log file %s: %w", path, err)
 		}
 		defer f.Close()
 		line, _ := json.Marshal(a)
 		if _, err := f.Write(append(line, '\n')); err != nil {
-			logging.Error("attest: failed to write log line", "err", err)
+			return fmt.Errorf("attest: write log line: %w", err)
 		}
 	}
+
+	s.prevHash = hex.EncodeToString(hash[:])
 
 	logging.Info("attest: signed",
 		"uuid", a.UUID,

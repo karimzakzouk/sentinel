@@ -175,8 +175,9 @@ export const useSentinelStore = create<SentinelState>((set, get) => ({
     }
   },
   saveSettings: async (cfg) => {
-    const updated = await updateRuntimeConfig(cfg);
-    set({ runtimeConfig: updated });
+    await updateRuntimeConfig(cfg);
+    const refreshed = await getRuntimeConfig();
+    set({ runtimeConfig: refreshed });
   },
 
   healthy: false,
@@ -345,6 +346,7 @@ export function useSSE() {
         },
         onError: () => {
           setSseConnected(false);
+          es.close();
           if (reconnectRef.current) clearTimeout(reconnectRef.current);
           reconnectRef.current = setTimeout(connect, 3000);
         },

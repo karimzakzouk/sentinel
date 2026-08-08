@@ -193,6 +193,12 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 405, map[string]string{"error": "method not allowed"})
 }
 
+// handleWhoami returns 200 if the caller has a valid token. Used by the
+// frontend LoginGate to validate the token against an authenticated endpoint.
+func (s *Server) handleWhoami(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, 200, map[string]string{"status": "ok"})
+}
+
 // handleInvestigate is the manual-trigger endpoint. POST with a JSON body
 // {service, namespace, reason} triggers a new investigation.
 func (s *Server) handleInvestigate(w http.ResponseWriter, r *http.Request) {
