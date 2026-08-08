@@ -152,7 +152,7 @@ jobs:
       - name: Run gosec
         run: |
           go install github.com/securego/gosec/v2/cmd/gosec@latest
-          gosec -exclude-dir=internal/web/out ./...
+          gosec -conf=.gosec.toml ./...
 
   codeql:
     name: CodeQL semantic analysis
