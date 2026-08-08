@@ -1,0 +1,17 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: standard
+
+  exclusions:
+    paths:
+      - internal/web/out
+      - web
+    rules:
+      # CLI tools commonly ignore fmt.Fprint*/Sscanf/Close return values.
+      - linters: [errcheck]
+        path: cmd
+        text: "Error return value of"
