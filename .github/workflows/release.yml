@@ -38,7 +38,7 @@ jobs:
           go-version: "1.26"
           cache: true
           cache-dependency-path: go.sum
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
         with:
           version: v3.16.0
       - name: Go tests (with race detector)
@@ -189,7 +189,7 @@ jobs:
           cosign attach sbom --sbom /tmp/sbom.spdx.json \
             ${{ env.GHCR_REGISTRY }}/${{ env.GHCR_OWNER }}/sentinel:${VERSION}
 
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
         with:
           version: v3.16.0
       - name: Package chart
