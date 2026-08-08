@@ -165,6 +165,5 @@ jobs:
       - uses: github/codeql-action/init@v3
         with:
           languages: go
-      - name: Autobuild
-        uses: github/codeql-action/autobuild@v3
+          build-mode: none
       - uses: github/codeql-action/analyze@v3
