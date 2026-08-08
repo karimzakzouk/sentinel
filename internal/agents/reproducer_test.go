@@ -3,7 +3,6 @@ package agents
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -203,8 +202,3 @@ func TestReproducerBuildUserMessage_NoRootCause(t *testing.T) {
 		t.Errorf("expected empty message for missing root cause, got: %s", msg)
 	}
 }
-
-// errReader is a test helper that always errors on Read.
-type errReader struct{}
-
-func (errReader) Read(_ []byte) (int, error) { return 0, errors.New("read error") }

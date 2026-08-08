@@ -110,7 +110,7 @@ func (a *EvidenceGatherer) Run(ctx context.Context, state *schemas.AgentState) e
 			RaisedBy:   "evidence_gatherer",
 			Reason:     reason,
 			NewContext: newCtx,
-			Ts:         time.Now().UTC(),
+			TS:         time.Now().UTC(),
 		}
 		state.RewindEvents = append(state.RewindEvents, ev)
 		state.Hypotheses = nil // wipe — Investigator will re-run
@@ -194,7 +194,7 @@ func (a *EvidenceGatherer) runSingleQuery(ctx context.Context, idx int, q map[st
 		EID:    fmt.Sprintf("E%d", idx+1),
 		Source: qtype,
 		Query:  string(queryJSON),
-		Ts:     time.Now().UTC(),
+		TS:     time.Now().UTC(),
 	}
 	if supportsOrContradicts == "supports" {
 		ev.SupportsHypothesisID = &hypID

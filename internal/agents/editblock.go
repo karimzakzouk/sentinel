@@ -17,12 +17,12 @@ package agents
 //
 // Format:
 //
-//	path/to/file.py
-//	<<<<<<< SEARCH
-//	original code here
-//	=======
-//	new code here
-//	>>>>>>> REPLACE
+//      path/to/file.py
+//      <<<<<<< SEARCH
+//      original code here
+//      =======
+//      new code here
+//      >>>>>>> REPLACE
 //
 // Multiple blocks per file are allowed. Multiple files are allowed.
 // ApplyEditBlocks uses layered matching:
@@ -233,7 +233,7 @@ func applyWhitespaceNormalized(content, search, replace string) (string, bool) {
 	if normSearch == "" {
 		return "", false
 	}
-	if strings.Index(normContent, normSearch) < 0 {
+	if !strings.Contains(normContent, normSearch) {
 		return "", false
 	}
 

@@ -20,8 +20,8 @@ func TestIsRewindBy(t *testing.T) {
 	}
 
 	state.RewindEvents = append(state.RewindEvents,
-		schemas.RewindEvent{RaisedBy: "investigator", Reason: "first", Ts: time.Now()},
-		schemas.RewindEvent{RaisedBy: "evidence_gatherer", Reason: "second", Ts: time.Now()},
+		schemas.RewindEvent{RaisedBy: "investigator", Reason: "first", TS: time.Now()},
+		schemas.RewindEvent{RaisedBy: "evidence_gatherer", Reason: "second", TS: time.Now()},
 	)
 	if !isRewindBy(state, "evidence_gatherer") {
 		t.Error("expected evidence_gatherer to be the last raiser")

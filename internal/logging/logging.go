@@ -76,15 +76,16 @@ func WithComponent(ctx context.Context, component string) context.Context {
 	return context.WithValue(ctx, componentKey, component)
 }
 
-// Debug, Info, Warn, Error log at the corresponding level using the default
-// logger. They mirror slog's variadic API.
+// Debug logs at Debug level using the default logger. Info, Warn, Error
+// log at the corresponding level. They mirror slog's variadic API.
 func Debug(msg string, args ...any) { L().Debug(msg, args...) }
 func Info(msg string, args ...any)  { L().Info(msg, args...) }
 func Warn(msg string, args ...any)  { L().Warn(msg, args...) }
 func Error(msg string, args ...any) { L().Error(msg, args...) }
 
-// DebugCtx, InfoCtx, WarnCtx, ErrorCtx behave like their contextless
-// counterparts but also extract incident_id / component from ctx.
+// DebugCtx logs at Debug level with context-derived fields. InfoCtx,
+// WarnCtx, ErrorCtx behave like their contextless counterparts but also
+// extract incident_id / component from ctx.
 func DebugCtx(ctx context.Context, msg string, args ...any) {
 	L().Debug(msg, withCtx(ctx, args)...)
 }

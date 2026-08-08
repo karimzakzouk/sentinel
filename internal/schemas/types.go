@@ -73,7 +73,7 @@ const (
 // Signal is the canonical cleaned/normalized telemetry event.
 type Signal struct {
 	SignalID      uuid.UUID      `json:"signal_id"`
-	Ts            time.Time      `json:"ts"`
+	TS            time.Time      `json:"ts"`
 	Source        SignalSource   `json:"source"`
 	Service       string         `json:"service"`
 	Namespace     string         `json:"namespace"`
@@ -88,7 +88,7 @@ type Signal struct {
 // Anomaly is a single anomalous observation flagged by a detector.
 type Anomaly struct {
 	AnomalyID   uuid.UUID          `json:"anomaly_id"`
-	Ts          time.Time          `json:"ts"`
+	TS          time.Time          `json:"ts"`
 	SignalID    uuid.UUID          `json:"signal_id"`
 	Service     string             `json:"service"`
 	Namespace   string             `json:"namespace"`
@@ -102,7 +102,7 @@ type Anomaly struct {
 // AnomalyCluster is a group of anomalies the detector decided belong together.
 type AnomalyCluster struct {
 	ClusterID   uuid.UUID         `json:"cluster_id"`
-	Ts          time.Time         `json:"ts"`
+	TS          time.Time         `json:"ts"`
 	Service     string            `json:"service"`
 	Namespace   string            `json:"namespace"`
 	Anomalies   []Anomaly         `json:"anomalies"`
@@ -131,7 +131,7 @@ type Evidence struct {
 	Result                  map[string]any `json:"result"`
 	SupportsHypothesisID    *string        `json:"supports_hypothesis_id,omitempty"`
 	ContradictsHypothesisID *string        `json:"contradicts_hypothesis_id,omitempty"`
-	Ts                      time.Time      `json:"ts"`
+	TS                      time.Time      `json:"ts"`
 }
 
 // RootCause is the survivor hypothesis after the analyst's falsification round.
@@ -189,7 +189,7 @@ type RewindEvent struct {
 	RaisedBy   string         `json:"raised_by"`
 	Reason     string         `json:"reason"`
 	NewContext map[string]any `json:"new_context"`
-	Ts         time.Time      `json:"ts"`
+	TS         time.Time      `json:"ts"`
 }
 
 // GovernanceDecision is the verdict returned by the policy engine for a fix.

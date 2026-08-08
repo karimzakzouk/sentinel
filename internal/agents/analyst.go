@@ -134,7 +134,7 @@ func (a *Analyst) Run(ctx context.Context, state *schemas.AgentState, betaStore 
 			RaisedBy:   "analyst",
 			Reason:     "all_hypotheses_falsified",
 			NewContext: map[string]any{"falsified_hypotheses": state.Hypotheses},
-			Ts:         time.Now().UTC(),
+			TS:         time.Now().UTC(),
 		})
 		state.Hypotheses = nil
 		state.AgentTrace = append(state.AgentTrace, map[string]any{

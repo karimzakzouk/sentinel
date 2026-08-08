@@ -1,6 +1,7 @@
 package github
 
 import (
+	"context"
 	"net/http"
 	"testing"
 )
@@ -78,9 +79,7 @@ func TestBaseClientNewDefaultsAPIURL(t *testing.T) {
 
 func TestBaseClientAuthTokenFallbackToPAT(t *testing.T) {
 	b := NewBaseClient("pat-token", "")
-	// AuthToken takes context.Context; passing nil is safe in the fallback path
-	// because TokenProvider is nil and ctx is never dereferenced.
-	if got := b.AuthToken(nil); got != "pat-token" {
+	if got := b.AuthToken(context.TODO()); got != "pat-token" {
 		t.Errorf("AuthToken without provider = %q, want pat-token", got)
 	}
 }

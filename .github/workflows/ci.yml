@@ -144,7 +144,6 @@ jobs:
   gosec:
     name: Go security scan (gosec)
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -158,7 +157,6 @@ jobs:
   codeql:
     name: CodeQL semantic analysis
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: github/codeql-action/init@v3

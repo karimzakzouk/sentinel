@@ -442,12 +442,6 @@ func (s *mockStore) UpdateAutoMergeStatus(ctx context.Context, incidentID, statu
 	return nil
 }
 
-type mockOutcomeWatcher struct{ called bool }
-
-func (o *mockOutcomeWatcher) WatchPostMerge(ctx context.Context, incidentID, service, namespace string) {
-	o.called = true
-}
-
 // TestMerger_PerPRMutexPreventsDoubleMerge is the regression test for the
 // double-merge bug: EvaluateNow and the poll loop must not both merge the
 // same PR.

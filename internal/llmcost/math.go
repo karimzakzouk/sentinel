@@ -1,12 +1,8 @@
 package llmcost
 
-// Pricing for common LLM models, in USD per 1K tokens. Index 0 = input,
+// PricingTable maps model names to USD per 1K tokens. Index 0 = input,
 // index 1 = output. Prices are public list prices as of late 2024 and
 // are used only for cost estimation — they do NOT drive billing.
-//
-// Operators who negotiate custom pricing can override entries by adding
-// them to PricingTable before the first Complete() call (the map is
-// read-only after construction in practice).
 var PricingTable = map[string][2]float64{
 	// OpenAI
 	"gpt-4o":        {0.0025, 0.01},

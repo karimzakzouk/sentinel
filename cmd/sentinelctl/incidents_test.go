@@ -13,10 +13,6 @@ import (
 	"time"
 )
 
-// incidentJSON is the canonical Incident shape returned by the server. Built
-// once per test using a closure that overrides fields as needed.
-type incidentJSON func(override func(map[string]any))
-
 // marshalIncident returns the JSON bytes for a single incident with the
 // given field overrides applied to a default body.
 func marshalIncident(t *testing.T, override func(map[string]any)) []byte {

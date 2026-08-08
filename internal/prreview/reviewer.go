@@ -389,11 +389,11 @@ func (r *Reviewer) buildReviewComment(warnings []Warning) string {
 			outcomeEmoji = ":x:"
 		}
 
-		b.WriteString(fmt.Sprintf("### Warning %d (similarity: %.0f%%)\n", i+1, w.Sim*100))
-		b.WriteString(fmt.Sprintf("%s **Incident %s** (outcome: %s)\n", outcomeEmoji, w.Incident.IncidentID, w.Incident.Outcome))
-		b.WriteString(fmt.Sprintf("- **Root cause:** %s\n", w.Incident.RootCause))
-		b.WriteString(fmt.Sprintf("- **Fix pattern:** %s\n", w.Incident.FixPattern))
-		b.WriteString(fmt.Sprintf("- **Service:** %s\n\n", w.Incident.Service))
+		fmt.Fprintf(&b, "### Warning %d (similarity: %.0f%%)\n", i+1, w.Sim*100)
+		fmt.Fprintf(&b, "%s **Incident %s** (outcome: %s)\n", outcomeEmoji, w.Incident.IncidentID, w.Incident.Outcome)
+		fmt.Fprintf(&b, "- **Root cause:** %s\n", w.Incident.RootCause)
+		fmt.Fprintf(&b, "- **Fix pattern:** %s\n", w.Incident.FixPattern)
+		fmt.Fprintf(&b, "- **Service:** %s\n\n", w.Incident.Service)
 		b.WriteString("```diff\n")
 		b.WriteString(chunkPreview)
 		b.WriteString("\n```\n\n")

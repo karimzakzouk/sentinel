@@ -85,9 +85,8 @@ func TestWatcherNilHandler(t *testing.T) {
 	w := &Watcher{
 		handler: nil,
 	}
-	if w == nil {
-		t.Error("expected non-nil Watcher")
-	}
+	// Just verify construction didn't panic — if we got here, the test passes.
+	_ = w
 }
 
 // TestWatcherNilClient verifies New rejects a nil k8s client.

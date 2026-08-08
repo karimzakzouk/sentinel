@@ -25,13 +25,6 @@ func (f *fakeQuerier) QueryBurnRate(_ context.Context, _ SLO, _, _ time.Duration
 	return f.long, f.short, f.err
 }
 
-func (f *fakeQuerier) setRates(long, short float64) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.long = long
-	f.short = short
-}
-
 func (f *fakeQuerier) setErr(err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
