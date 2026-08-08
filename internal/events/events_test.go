@@ -14,5 +14,5 @@ func TestNoopBroadcaster(t *testing.T) {
 // TestNoopReturnsBroadcaster verifies Noop satisfies the Broadcaster
 // interface at compile time.
 func TestNoopReturnsBroadcaster(t *testing.T) {
-	var _ Broadcaster = Noop()
+	_ = Noop()
 }

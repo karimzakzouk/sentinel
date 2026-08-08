@@ -34,35 +34,44 @@ func BuildPRBody(incident *schemas.Incident, sandboxVerified bool, sandboxSummar
 	}
 
 	b.WriteString("## Sentinel Autonomous Fix\n\n")
-	b.WriteString(fmt.Sprintf("**Service:** `%s` · **Namespace:** `%s`\n", cluster.Service, cluster.Namespace))
-	b.WriteString(fmt.Sprintf("**Detected:** %s (%s)\n", detected, detectionMethod))
-	b.WriteString(fmt.Sprintf("**Resolved:** %s\n", resolved))
-	b.WriteString(fmt.Sprintf("**Time to fix:** %s\n", formatDuration(duration)))
-	b.WriteString(fmt.Sprintf("**Confidence:** %.1f%%\n\n", rc.Confidence*100))
+	fmt.Fprintf(&b, "**Service:** `%s` · **Namespace:** `%s`\n", cluster.Service, cluster.Namespace)
+
+	fmt.Fprintf(&b, "**Detected:** %s (%s)\n", detected, detectionMethod)
+
+	fmt.Fprintf(&b, "**Resolved:** %s\n", resolved)
+
+	fmt.Fprintf(&b, "**Time to fix:** %s\n", formatDuration(duration))
+
+	fmt.Fprintf(&b, "**Confidence:** %.1f%%\n\n", rc.Confidence*100)
+
 	b.WriteString("---\n\n")
 
 	errorType := extractErrorTypeFromLogs(cluster)
 	b.WriteString("### Incident Summary\n\n")
 	b.WriteString("| Field | Value |\n|-------|-------|\n")
-	b.WriteString(fmt.Sprintf("| Detection method | %s |\n", detectionMethod))
+	fmt.Fprintf(&b, "| Detection method | %s |\n", detectionMethod)
+
 	if errorType != "" {
-		b.WriteString(fmt.Sprintf("| Error type | `%s` |\n", errorType))
+		fmt.Fprintf(&b, "| Error type | `%s` |\n", errorType)
+
 	}
-	b.WriteString(fmt.Sprintf("| Category | %s |\n\n", rc.Category))
+	fmt.Fprintf(&b, "| Category | %s |\n\n", rc.Category)
 
 	b.WriteString("### Root Cause\n\n")
 	b.WriteString(rc.Statement + "\n\n")
 
 	b.WriteString("### Agent Reasoning\n\n")
 	if len(state.Hypotheses) > 0 {
-		b.WriteString(fmt.Sprintf("**Investigator** — formed %d hypotheses:\n", len(state.Hypotheses)))
+		fmt.Fprintf(&b, "**Investigator** — formed %d hypotheses:\n", len(state.Hypotheses))
+
 		for _, h := range state.Hypotheses {
 			marker := " "
 			if h.Falsified {
 				marker = "~~"
 			}
-			b.WriteString(fmt.Sprintf("%d. **%s%s** (confidence: %.2f)%s — %s\n",
-				int(h.HID[1]-'0'), marker, h.HID, h.Confidence, marker, truncate(h.Statement, 100)))
+			fmt.Fprintf(&b, "%d. **%s%s** (confidence: %.2f)%s — %s\n",
+				int(h.HID[1]-'0'), marker, h.HID, h.Confidence, marker, truncate(h.Statement, 100))
+
 		}
 		b.WriteString("\n")
 	}
@@ -75,9 +84,10 @@ func BuildPRBody(incident *schemas.Incident, sandboxVerified bool, sandboxSummar
 		}
 	}
 	if survivorID != "" {
-		b.WriteString(fmt.Sprintf("**Analyst** — %s selected as root cause (highest confidence, no contradicting evidence).\n\n", survivorID))
+		fmt.Fprintf(&b, "**Analyst** — %s selected as root cause (highest confidence, no contradicting evidence).\n\n", survivorID)
+
 	}
-	b.WriteString(fmt.Sprintf("**Fix Proposer** — recommended `%s`: %s\n\n", fp.FixType, truncate(fp.Description, 120)))
+	fmt.Fprintf(&b, "**Fix Proposer** — recommended `%s`: %s\n\n", fp.FixType, truncate(fp.Description, 120))
 
 	b.WriteString("### Sandbox Verification\n\n")
 	if sandboxVerified {
@@ -88,10 +98,12 @@ func BuildPRBody(incident *schemas.Incident, sandboxVerified bool, sandboxSummar
 		b.WriteString("| 4 | Regression test passes | Passed |\n")
 		b.WriteString("| 5 | Reproducer script passes | Passed |\n\n")
 		if canaryImage != "" {
-			b.WriteString(fmt.Sprintf("**Canary image:** `%s`\n\n", canaryImage))
+			fmt.Fprintf(&b, "**Canary image:** `%s`\n\n", canaryImage)
+
 		}
 	} else {
-		b.WriteString(fmt.Sprintf("**NEEDS REVIEW** — %s\n\n", sandboxSummary))
+		fmt.Fprintf(&b, "**NEEDS REVIEW** — %s\n\n", sandboxSummary)
+
 		b.WriteString("This fix was **not** verified in a sandbox. Review the changes carefully before merging.\n\n")
 	}
 
@@ -104,7 +116,8 @@ func BuildPRBody(incident *schemas.Incident, sandboxVerified bool, sandboxSummar
 	}
 
 	b.WriteString("---\n\n")
-	b.WriteString(fmt.Sprintf("_Autonomous fix by Sentinel · Confidence: %.1f%%_\n", rc.Confidence*100))
+	fmt.Fprintf(&b, "_Autonomous fix by Sentinel · Confidence: %.1f%%_\n", rc.Confidence*100)
+
 	if sandboxVerified {
 		b.WriteString("_Review before merging. The canary image was verified in an isolated sandbox namespace._\n")
 	} else {

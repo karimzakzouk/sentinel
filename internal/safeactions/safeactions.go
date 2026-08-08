@@ -173,7 +173,7 @@ func (c *Controller) Rollback(ctx context.Context, namespace, service string) Re
 		rs := &replicaSets.Items[i]
 		rev := rs.Annotations["deployment.kubernetes.io/revision"]
 		if rev != currentRevision && rev != "" {
-			if prevRS == nil || rs.CreationTimestamp.Time.After(prevRS.CreationTimestamp.Time) {
+			if prevRS == nil || rs.CreationTimestamp.After(prevRS.CreationTimestamp.Time) {
 				prevRS = rs
 			}
 		}

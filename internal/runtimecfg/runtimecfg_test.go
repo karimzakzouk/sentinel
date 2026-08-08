@@ -1,6 +1,7 @@
 package runtimecfg
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -295,7 +296,7 @@ func TestSetGitHubApp(t *testing.T) {
 func TestRunConfigMapPollerNilClient(t *testing.T) {
 	mgr := New("")
 	// Should not block or panic.
-	mgr.RunConfigMapPoller(nil, nil, ConfigMapSource{Name: "x", Namespace: "y", Key: "z"})
+	mgr.RunConfigMapPoller(context.TODO(), nil, ConfigMapSource{Name: "x", Namespace: "y", Key: "z"})
 	// Give the goroutine (if it started) a moment to no-op.
 	time.Sleep(10 * time.Millisecond)
 }
@@ -305,7 +306,7 @@ func TestRunConfigMapPollerNilClient(t *testing.T) {
 // fake K8s client wired up here, so this test focuses on the Get path:
 // calling with a nil interface returns an error from the K8s client.
 func TestPollConfigMapOnceNilClient(t *testing.T) {
-	_, err := pollConfigMapOnce(nil, nil, ConfigMapSource{Name: "x", Namespace: "y", Key: "z"})
+	_, err := pollConfigMapOnce(context.TODO(), nil, ConfigMapSource{Name: "x", Namespace: "y", Key: "z"})
 	if err == nil {
 		t.Error("expected error with nil k8s client")
 	}

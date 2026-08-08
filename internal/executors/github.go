@@ -35,7 +35,7 @@ func NewGitHub(token string) *GitHubExecutor {
 // API calls use the App's installation token, making PRs + comments appear
 // as the "Sentinel" bot identity.
 func (e *GitHubExecutor) WithTokenProvider(tp TokenProvider) *GitHubExecutor {
-	e.WithTokenProvider(tp)
+	e.BaseClient.WithTokenProvider(tp)
 	return e
 }
 
