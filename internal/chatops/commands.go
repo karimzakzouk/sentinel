@@ -167,11 +167,15 @@ func cmdTrace(ctx context.Context, cmd *Command, deps *Deps) error {
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("## 📋 Agent Trace for incident `%s`\n\n", inc.ID))
-	sb.WriteString(fmt.Sprintf("**Service:** `%s` (namespace: `%s`)  \n", inc.Service, inc.Namespace))
-	sb.WriteString(fmt.Sprintf("**Status:** `%s`  \n", inc.Status))
+	fmt.Fprintf(&sb, "## 📋 Agent Trace for incident `%s`\n\n", inc.ID)
+
+	fmt.Fprintf(&sb, "**Service:** `%s` (namespace: `%s`)  \n", inc.Service, inc.Namespace)
+
+	fmt.Fprintf(&sb, "**Status:** `%s`  \n", inc.Status)
+
 	if inc.RootCause != "" {
-		sb.WriteString(fmt.Sprintf("**Root cause:** %s (confidence: %.0f%%)\n\n", inc.RootCause, inc.Confidence*100))
+		fmt.Fprintf(&sb, "**Root cause:** %s (confidence: %.0f%%)\n\n", inc.RootCause, inc.Confidence*100)
+
 	}
 
 	if len(inc.Hypotheses) > 0 {
@@ -187,7 +191,8 @@ func cmdTrace(ctx context.Context, cmd *Command, deps *Deps) error {
 			if len(stmt) > 100 {
 				stmt = stmt[:97] + "..."
 			}
-			sb.WriteString(fmt.Sprintf("| %s | %.2f | %s | %s |\n", h.ID, h.Confidence, falsified, stmt))
+			fmt.Fprintf(&sb, "| %s | %.2f | %s | %s |\n", h.ID, h.Confidence, falsified, stmt)
+
 		}
 		sb.WriteString("\n")
 	}
@@ -211,7 +216,8 @@ func cmdTrace(ctx context.Context, cmd *Command, deps *Deps) error {
 					break
 				}
 			}
-			sb.WriteString(fmt.Sprintf("| %d | %s | %s | %s |\n", i+1, agent, action, detail))
+			fmt.Fprintf(&sb, "| %d | %s | %s | %s |\n", i+1, agent, action, detail)
+
 		}
 		sb.WriteString("\n")
 	}
@@ -222,7 +228,8 @@ func cmdTrace(ctx context.Context, cmd *Command, deps *Deps) error {
 		sb.WriteString("\n```\n\n")
 	}
 
-	sb.WriteString(fmt.Sprintf("_Requested by @%s_", cmd.Author))
+	fmt.Fprintf(&sb, "_Requested by @%s_", cmd.Author)
+
 	return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber, sb.String())
 }
 
@@ -327,8 +334,9 @@ func renderAlternatives(result map[string]any, author, incidentID string) string
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("## 🤔 Alternative Fix Approaches\n\nRequested by @%s.\n\n", author))
-	sb.WriteString(fmt.Sprintf("<!-- [SENTINELALTERNATIVES] incident_id=%s count=%d -->\n\n", incidentID, len(alts)))
+	fmt.Fprintf(&sb, "## 🤔 Alternative Fix Approaches\n\nRequested by @%s.\n\n", author)
+
+	fmt.Fprintf(&sb, "<!-- [SENTINELALTERNATIVES] incident_id=%s count=%d -->\n\n", incidentID, len(alts))
 
 	for _, a := range alts {
 		am, ok := a.(map[string]any)
@@ -341,14 +349,19 @@ func renderAlternatives(result map[string]any, author, incidentID string) string
 		cons, _ := am["cons"].(string)
 		files, _ := am["files"].([]any)
 
-		sb.WriteString(fmt.Sprintf("### Approach %s\n\n", id))
-		sb.WriteString(fmt.Sprintf("**Description:** %s\n\n", desc))
-		sb.WriteString(fmt.Sprintf("**Pros:** %s\n\n", pros))
-		sb.WriteString(fmt.Sprintf("**Cons:** %s\n\n", cons))
+		fmt.Fprintf(&sb, "### Approach %s\n\n", id)
+
+		fmt.Fprintf(&sb, "**Description:** %s\n\n", desc)
+
+		fmt.Fprintf(&sb, "**Pros:** %s\n\n", pros)
+
+		fmt.Fprintf(&sb, "**Cons:** %s\n\n", cons)
+
 		if len(files) > 0 {
 			sb.WriteString("**Files changed:**\n")
 			for _, f := range files {
-				sb.WriteString(fmt.Sprintf("- `%v`\n", f))
+				fmt.Fprintf(&sb, "- `%v`\n", f)
+
 			}
 			sb.WriteString("\n")
 		}
