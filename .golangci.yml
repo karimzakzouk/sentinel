@@ -6,6 +6,25 @@ run:
 linters:
   default: standard
 
+  settings:
+    staticcheck:
+      # Disable quick-fix checks (QF*) — they're style suggestions, not bugs.
+      # Keep SA* (static analysis) and ST* (style) checks.
+      checks:
+        - all
+        - -QF1001
+        - -QF1002
+        - -QF1003
+        - -QF1004
+        - -QF1005
+        - -QF1006
+        - -QF1007
+        - -QF1008
+        - -QF1009
+        - -QF1010
+        - -QF1011
+        - -QF1012
+
   exclusions:
     paths:
       - internal/web/out
@@ -33,3 +52,13 @@ linters:
       # the connection is broken; either way there's nothing to do.
       - linters: [errcheck]
         text: "Error return value of `fmt.Fprint"
+      # w.Write to http.ResponseWriter — same as above.
+      - linters: [errcheck]
+        text: "Error return value of `w\\.Write`"
+      # SA9003: empty branch — sometimes intentional for readability.
+      - linters: [staticcheck]
+        text: "SA9003"
+      # SA1012: nil context — tests intentionally pass nil.
+      - linters: [staticcheck]
+        path: _test\.go
+        text: "SA1012"
