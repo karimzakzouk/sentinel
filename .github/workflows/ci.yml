@@ -119,7 +119,7 @@ jobs:
         run: test -f web/package.json && echo "exists=true" >> $GITHUB_OUTPUT || echo "exists=false" >> $GITHUB_OUTPUT
       - name: Build image
         if: steps.check.outputs.exists == 'true'
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           tags: sentinel:ci-scan

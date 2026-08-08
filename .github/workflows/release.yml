@@ -98,7 +98,7 @@ jobs:
             echo "is_tag=false" >> $GITHUB_OUTPUT
           fi
       - name: Build and push (${{ matrix.arch }} only)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: Dockerfile
