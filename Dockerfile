@@ -9,7 +9,7 @@ WORKDIR /web
 COPY web/package.json web/package-lock.json* ./
 
 RUN for i in 1 2 3; do \
-        npm ci --fetch-retries=5 --fetch-retry-mintimeout=20000 && break; \
+        npm ci --legacy-peer-deps --fetch-retries=5 --fetch-retry-mintimeout=20000 && break; \
         echo "npm ci attempt $i failed, retrying in 10s..." >&2; \
         sleep 10; \
     done && test -d node_modules
