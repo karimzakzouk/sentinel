@@ -650,6 +650,35 @@ func wire(cfg *config.Config, listenAddr string) (*wiring, error) {
 	apiServer.SetGitHubAppManager(w.rtCfg)
 	apiServer.SetSlackHandler(http.HandlerFunc(w.slackBot.HandleEvents))
 	apiServer.SetPauseController(w.slackBot)
+
+	apiServer.SetInvestigateWithLogs(func(service, namespace, reason, repo, podLogs string) (string, error) {
+		annotations := map[string]string{}
+		if repo != "" {
+			annotations["sentinel.io/repo"] = repo
+			annotations["sentinel.io/branch"] = cfg.DefaultBranch
+		}
+		cluster := schemas.AnomalyCluster{
+			ClusterID:   uuid.New(),
+			Service:     service,
+			Namespace:   namespace,
+			Severity:    schemas.SeverityWarning,
+			Summary:     fmt.Sprintf("Manual investigation: %s", reason),
+			Annotations: annotations,
+			Anomalies: []schemas.Anomaly{
+				{
+					AnomalyID:   uuid.New(),
+					SignalID:    uuid.New(),
+					Service:     service,
+					Namespace:   namespace,
+					Detector:    "manual",
+					Score:       1.0,
+					Explanation: podLogs,
+				},
+			},
+		}
+		go w.handleInvestigation(context.Background(), cluster, "manual", cfg.Namespace)
+		return cluster.ClusterID.String(), nil
+	})
 	apiServer.SetRuntimeCfgSaver(w.rtCfg)
 	w.apiServer = apiServer
 	w.broadcaster = apiServer

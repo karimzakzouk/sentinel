@@ -46,6 +46,10 @@ type SettingsGetter func() map[string]any
 // the new investigation is filed under.
 type InvestigateFunc func(service, namespace, reason string) (string, error)
 
+// InvestigateWithLogsFunc triggers an investigation with pre-supplied pod logs
+// and repo. Used for manual triggers and testing without a live K8s cluster.
+type InvestigateWithLogsFunc func(service, namespace, reason, repo, podLogs string) (string, error)
+
 // ReadyChecker reports whether Sentinel is ready to serve traffic.
 type ReadyChecker func() bool
 
@@ -88,10 +92,11 @@ type AutoMergeStatusGetter interface {
 
 // Server is the HTTP API server.
 type Server struct {
-	store        Store
-	settings     SettingsGetter
-	investigate  InvestigateFunc
-	readyChecker ReadyChecker
+	store               Store
+	settings            SettingsGetter
+	investigate         InvestigateFunc
+	investigateWithLogs InvestigateWithLogsFunc
+	readyChecker        ReadyChecker
 
 	// Sub-handlers wired by main.go. Each is optional; the corresponding
 	// route returns 503 when the handler is nil.
@@ -401,6 +406,8 @@ func (s *Server) SetGitHubAppManager(m GitHubAppManager) { s.githubAppManager = 
 
 // SetProvidersStatusGetter wires the LLM provider pool status getter.
 func (s *Server) SetProvidersStatusGetter(g ProvidersStatusGetter) { s.providersStatus = g }
+
+func (s *Server) SetInvestigateWithLogs(f InvestigateWithLogsFunc) { s.investigateWithLogs = f }
 
 // SetAutoMergeStatusGetter wires the auto-merge policy status getter.
 func (s *Server) SetAutoMergeStatusGetter(g AutoMergeStatusGetter) { s.autoMergeStatus = g }

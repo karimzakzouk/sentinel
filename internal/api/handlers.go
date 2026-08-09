@@ -210,6 +210,8 @@ func (s *Server) handleInvestigate(w http.ResponseWriter, r *http.Request) {
 		Service   string `json:"service"`
 		Namespace string `json:"namespace"`
 		Reason    string `json:"reason"`
+		Repo      string `json:"repo"`
+		PodLogs   string `json:"pod_logs"`
 	}
 	r.Body = http.MaxBytesReader(nil, r.Body, maxRequestBodyBytes)
 	if err := json.NewDecoder(r.Body).Decode(&spec); err != nil {
@@ -225,6 +227,15 @@ func (s *Server) handleInvestigate(w http.ResponseWriter, r *http.Request) {
 	}
 	if spec.Reason == "" {
 		spec.Reason = "manual trigger"
+	}
+	if s.investigateWithLogs != nil {
+		clusterID, err := s.investigateWithLogs(spec.Service, spec.Namespace, spec.Reason, spec.Repo, spec.PodLogs)
+		if err != nil {
+			writeJSON(w, 500, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, 200, map[string]string{"status": "triggered", "service": spec.Service, "cluster_id": clusterID})
+		return
 	}
 	clusterID, err := s.investigate(spec.Service, spec.Namespace, spec.Reason)
 	if err != nil {
