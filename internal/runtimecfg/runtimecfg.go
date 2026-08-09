@@ -40,6 +40,11 @@ type RuntimeConfig struct {
 	SandboxRequired   *bool `json:"sandbox_required,omitempty"`
 	SandboxMaxRetries int   `json:"sandbox_max_retries,omitempty"`
 
+	// UseAgentLoop hot-toggles the pipeline's hypothesis/root-cause phase
+	// between the legacy 2-round investigator (false) and the N-turn
+	// agent loop (true). Phase 11 feature; default false.
+	UseAgentLoop *bool `json:"use_agent_loop,omitempty"`
+
 	PrometheusURL string `json:"prometheus_url,omitempty"`
 	LokiURL       string `json:"loki_url,omitempty"`
 	JaegerURL     string `json:"jaeger_url,omitempty"`
@@ -77,6 +82,10 @@ func (c RuntimeConfig) Clone() RuntimeConfig {
 	if c.SandboxRequired != nil {
 		v := *c.SandboxRequired
 		out.SandboxRequired = &v
+	}
+	if c.UseAgentLoop != nil {
+		v := *c.UseAgentLoop
+		out.UseAgentLoop = &v
 	}
 	return out
 }
@@ -328,6 +337,9 @@ func countOverrides(c *RuntimeConfig) int {
 		n++
 	}
 	if c.SandboxMaxRetries > 0 {
+		n++
+	}
+	if c.UseAgentLoop != nil {
 		n++
 	}
 	return n
