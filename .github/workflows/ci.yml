@@ -90,7 +90,7 @@ jobs:
         run: test -f web/package-lock.json && echo "exists=true" >> $GITHUB_OUTPUT || echo "exists=false" >> $GITHUB_OUTPUT
       - name: Install dependencies
         if: steps.check.outputs.exists == 'true'
-        run: npm ci
+        run: npm ci --legacy-peer-deps
         working-directory: web
       - name: Lint
         if: steps.check.outputs.exists == 'true'
