@@ -129,7 +129,16 @@ type Config struct {
 	OutcomeWatchDurationMin    int
 	OutcomeCheckIntervalSec    int
 	DetectionCooldownSec       int
-	DetectionTailLines         int64
+
+	// ─── Agent loop (Phase 11) ───────────────────────────────────────────
+	// UseAgentLoop, when true, swaps the pipeline's hypothesis/root-cause
+	// phase from the legacy 2-round investigator to the N-turn agent loop
+	// (internal/agent). Default false — the agent loop is opt-in until it
+	// has been validated against real incidents. The runtime config
+	// equivalent (runtimecfg.UseAgentLoop) hot-toggles this without a
+	// restart via Pipeline.SetAgentLoopRunner.
+	UseAgentLoop       bool
+	DetectionTailLines int64
 
 	ScaleFixDefaultReplicas int32
 	LLMPriorWeight          float64
@@ -293,6 +302,8 @@ func Load() *Config {
 		AnalystTimeoutSec:          getenvInt("SENTINEL_ANALYST_TIMEOUT", 15),
 		FixProposerTimeoutSec:      getenvInt("SENTINEL_FIX_PROPOSER_TIMEOUT", 300),
 		MaxPipelineIterations:      getenvInt("SENTINEL_MAX_PIPELINE_ITERATIONS", 5),
+
+		UseAgentLoop: getenvBool("SENTINEL_USE_AGENT_LOOP", false),
 
 		OutcomeWatchDurationMin: getenvInt("SENTINEL_OUTCOME_WATCH_DURATION_MIN", 10),
 		OutcomeCheckIntervalSec: getenvInt("SENTINEL_OUTCOME_CHECK_INTERVAL_SEC", 30),

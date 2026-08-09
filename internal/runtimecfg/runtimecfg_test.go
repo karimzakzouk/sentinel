@@ -322,3 +322,48 @@ func containsStr(s, sub string) bool {
 	}
 	return false
 }
+
+// --- Phase 11: UseAgentLoop tests ---
+
+// TestClone_UseAgentLoop verifies that Clone deep-copies the UseAgentLoop
+// pointer so mutating the clone does not affect the original.
+func TestClone_UseAgentLoop(t *testing.T) {
+	original := RuntimeConfig{UseAgentLoop: boolPtr(true)}
+	clone := original.Clone()
+	*clone.UseAgentLoop = false
+	if *original.UseAgentLoop != true {
+		t.Error("Clone did not deep-copy UseAgentLoop")
+	}
+}
+
+// TestSaveFromJSON_UseAgentLoop verifies that UseAgentLoop survives a
+// save→load round-trip through JSON.
+func TestSaveFromJSON_UseAgentLoop(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "runtime-config.json")
+	mgr := New(path)
+	mgr.Load()
+
+	jsonBytes, _ := json.Marshal(RuntimeConfig{UseAgentLoop: boolPtr(true)})
+	if err := mgr.SaveFromJSON(jsonBytes); err != nil {
+		t.Fatalf("SaveFromJSON: %v", err)
+	}
+
+	loaded := mgr.Get()
+	if loaded.UseAgentLoop == nil {
+		t.Fatal("UseAgentLoop is nil after round-trip")
+	}
+	if !*loaded.UseAgentLoop {
+		t.Error("UseAgentLoop should be true after round-trip")
+	}
+}
+
+// TestCountOverrides_UseAgentLoop verifies countOverrides increments when
+// UseAgentLoop is set.
+func TestCountOverrides_UseAgentLoop(t *testing.T) {
+	without := countOverrides(&RuntimeConfig{})
+	with := countOverrides(&RuntimeConfig{UseAgentLoop: boolPtr(true)})
+	if with != without+1 {
+		t.Errorf("countOverrides: without=%d, with=%d, expected +1", without, with)
+	}
+}
