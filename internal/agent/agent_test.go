@@ -9,8 +9,11 @@ import (
 
 func TestParseLLMResponse_Done(t *testing.T) {
 	resp := `{"done": true, "root_cause": "DATABASE_URLL typo in deployment", "confidence": 0.9, "files_to_change": ["deployment/k8s.yaml"]}`
-	parsed := parseLLMResponse(resp)
+	parsed, ok := parseLLMResponse(resp)
 
+	if !ok {
+		t.Fatal("expected ok=true for valid JSON")
+	}
 	if !parsed.Done {
 		t.Error("expected done=true")
 	}
@@ -27,8 +30,11 @@ func TestParseLLMResponse_Done(t *testing.T) {
 
 func TestParseLLMResponse_ToolCall(t *testing.T) {
 	resp := `{"tool": "read_file", "args": {"path": "app/main.py"}}`
-	parsed := parseLLMResponse(resp)
+	parsed, ok := parseLLMResponse(resp)
 
+	if !ok {
+		t.Fatal("expected ok=true for valid JSON")
+	}
 	if parsed.Done {
 		t.Error("expected done=false")
 	}
@@ -44,8 +50,11 @@ func TestParseLLMResponse_ProseWithJSON(t *testing.T) {
 	resp := `Let me look at the deployment file.
 
 {"tool": "read_file", "args": {"path": "deployment/k8s.yaml"}}`
-	parsed := parseLLMResponse(resp)
+	parsed, ok := parseLLMResponse(resp)
 
+	if !ok {
+		t.Fatal("expected ok=true — should extract JSON from prose")
+	}
 	if parsed.Tool != "read_file" {
 		t.Errorf("tool = %q, expected read_file", parsed.Tool)
 	}
@@ -53,13 +62,61 @@ func TestParseLLMResponse_ProseWithJSON(t *testing.T) {
 
 func TestParseLLMResponse_Garbage(t *testing.T) {
 	resp := `I think the issue is with the database.`
-	parsed := parseLLMResponse(resp)
+	parsed, ok := parseLLMResponse(resp)
 
+	if ok {
+		t.Error("expected ok=false for non-JSON response")
+	}
 	if parsed.Done {
-		t.Error("expected done=false for non-JSON, non-done response")
+		t.Error("expected done=false for non-JSON response")
 	}
 	if parsed.Tool != "" {
 		t.Errorf("expected no tool, got %q", parsed.Tool)
+	}
+}
+
+func TestParseLLMResponse_MarkdownCodeBlock(t *testing.T) {
+	resp := "Here is my analysis:\n\n```json\n{\"tool\": \"search_code\", \"args\": {\"pattern\": \"DATABASE_URL\"}}\n```\n\nLet me search."
+	parsed, ok := parseLLMResponse(resp)
+
+	if !ok {
+		t.Fatal("expected ok=true — should extract JSON from markdown code block")
+	}
+	if parsed.Tool != "search_code" {
+		t.Errorf("tool = %q, expected search_code", parsed.Tool)
+	}
+}
+
+func TestParseLLMResponse_NestedBraces(t *testing.T) {
+	// The JSON contains nested braces in the root_cause string.
+	// extractFirstJSONObject must track depth correctly and not
+	// stop at the first closing brace.
+	resp := `{"done": true, "root_cause": "config has {server: nil} which causes panic", "confidence": 0.8, "files_to_change": ["main.go"]}`
+	parsed, ok := parseLLMResponse(resp)
+
+	if !ok {
+		t.Fatal("expected ok=true for JSON with nested braces in string")
+	}
+	if !parsed.Done {
+		t.Error("expected done=true")
+	}
+	if !contains(parsed.RootCause, "{server: nil}") {
+		t.Errorf("root_cause = %q, expected to contain '{server: nil}'", parsed.RootCause)
+	}
+}
+
+func TestParseLLMResponse_GarbageWithDoneKeyword(t *testing.T) {
+	// The old lenient fallback would accept this as "done" because it
+	// contains the word "done". The new parser must NOT — it should
+	// return ok=false, forcing a retry.
+	resp := `I think I'm done investigating. The root cause is a database issue.`
+	parsed, ok := parseLLMResponse(resp)
+
+	if ok {
+		t.Error("expected ok=false — prose containing 'done' must not be accepted")
+	}
+	if parsed.Done {
+		t.Error("expected done=false — lenient fallback was removed")
 	}
 }
 
