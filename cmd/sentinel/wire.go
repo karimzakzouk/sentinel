@@ -30,6 +30,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/karimzakzouk/sentinel/internal/agent"
 	"github.com/karimzakzouk/sentinel/internal/agents"
 	"github.com/karimzakzouk/sentinel/internal/alertmanager"
 	"github.com/karimzakzouk/sentinel/internal/api"
@@ -155,7 +156,12 @@ func wire(cfg *config.Config, listenAddr string) (*wiring, error) {
 	}
 
 	// Pipeline + safety policy.
-	pipeline := agents.NewPipeline(router, k8sClient, cfg.GitHubToken, store, &agentsVectorStore{vs: vectorStore})
+	// agentsVS is the agents.VectorStore adapter over vectorStore. Held
+	// on the wiring struct so applyRuntimeConfig can reuse it when
+	// hot-toggling the agent loop.
+	agentsVS := &agentsVectorStore{vs: vectorStore}
+	w.agentsVS = agentsVS
+	pipeline := agents.NewPipeline(router, k8sClient, cfg.GitHubToken, store, agentsVS)
 	pipeline.SetConfig(
 		cfg.InvestigatorTimeoutSec,
 		cfg.EvidenceGathererTimeoutSec,
@@ -171,6 +177,31 @@ func wire(cfg *config.Config, listenAddr string) (*wiring, error) {
 	pipeline.SetDefaultBranch(cfg.DefaultBranch)
 	pipeline.SetLLMPriorWeight(cfg.LLMPriorWeight)
 	pipeline.SetMaxIterations(cfg.MaxPipelineIterations)
+
+	// Phase 11: when SENTINEL_USE_AGENT_LOOP=true, swap the pipeline's
+	// hypothesis/root-cause phase to the N-turn agent loop. The adapter
+	// reuses the same router, K8s client, GitHub token, and vector
+	// store as the legacy investigator so there's no duplicate clone
+	// rate-limit pressure. Toggable at runtime via /settings
+	// (use_agent_loop) — see applyRuntimeConfig in callbacks.go.
+	if cfg.UseAgentLoop {
+		agentAdapter := agent.NewPipelineAdapter(
+			router, k8sClient, cfg.GitHubToken,
+			agentsVS,
+			agent.AgentConfig{
+				MaxTurns:         agent.DefaultMaxTurns,
+				TurnTimeout:      time.Duration(cfg.InvestigatorTimeoutSec) * time.Second,
+				CompactThreshold: agent.DefaultCompactThreshold,
+			},
+		)
+		agentAdapter.SetAllowedRepos(cfg.AllowedGitHubRepos)
+		agentAdapter.SetGitHost(cfg.GitHost)
+		agentAdapter.SetDefaultBranch(cfg.DefaultBranch)
+		pipeline.SetAgentLoopRunner(agentAdapter)
+		logging.Info("agent loop enabled (Phase 11) — pipeline will use N-turn investigator",
+			"max_turns", agent.DefaultMaxTurns,
+			"turn_timeout_sec", cfg.InvestigatorTimeoutSec)
+	}
 	w.pipeline = pipeline
 
 	policy := safety.NewPolicy(cfg.ProductionNamespaces, cfg.ConfidenceAutonomous, cfg.ConfidenceHumanReview).

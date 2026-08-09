@@ -24,6 +24,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/karimzakzouk/sentinel/internal/admission"
+	"github.com/karimzakzouk/sentinel/internal/agent"
 	"github.com/karimzakzouk/sentinel/internal/attest"
 	"github.com/karimzakzouk/sentinel/internal/chaos"
 	"github.com/karimzakzouk/sentinel/internal/chatops"
@@ -188,7 +189,39 @@ func (w *wiring) applyRuntimeConfig(rc *runtimecfg.RuntimeConfig) {
 		if rc.LLMMaxRetries > 0 {
 			cfg.LLMMaxRetries = rc.LLMMaxRetries
 		}
+		if rc.UseAgentLoop != nil {
+			cfg.UseAgentLoop = *rc.UseAgentLoop
+		}
 	})
+
+	// Phase 11: hot-toggle the agent loop. Construct or destroy the
+	// PipelineAdapter in place — no restart needed. The adapter reuses
+	// the same router, K8s client, GitHub token, and vector store that
+	// wire.go already constructed, so we don't need to re-resolve them.
+	if rc.UseAgentLoop != nil {
+		want := *rc.UseAgentLoop
+		cfgSnapshot := w.Config()
+		if want && !w.pipeline.AgentLoopEnabled() {
+			adapter := agent.NewPipelineAdapter(
+				w.router, w.k8sClient, cfgSnapshot.GitHubToken,
+				w.agentsVS,
+				agent.AgentConfig{
+					MaxTurns:         agent.DefaultMaxTurns,
+					TurnTimeout:      time.Duration(cfgSnapshot.InvestigatorTimeoutSec) * time.Second,
+					CompactThreshold: agent.DefaultCompactThreshold,
+				},
+			)
+			adapter.SetAllowedRepos(cfgSnapshot.AllowedGitHubRepos)
+			adapter.SetGitHost(cfgSnapshot.GitHost)
+			adapter.SetDefaultBranch(cfgSnapshot.DefaultBranch)
+			w.pipeline.SetAgentLoopRunner(adapter)
+			logging.Info("agent loop enabled at runtime — pipeline will use N-turn investigator",
+				"max_turns", agent.DefaultMaxTurns)
+		} else if !want && w.pipeline.AgentLoopEnabled() {
+			w.pipeline.SetAgentLoopRunner(nil)
+			logging.Info("agent loop disabled at runtime — pipeline reverted to legacy investigator")
+		}
+	}
 
 	if rc.LogLevel != "" {
 		logging.Init(rc.LogLevel)

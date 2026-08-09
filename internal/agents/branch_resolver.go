@@ -48,6 +48,14 @@ func (a *Investigator) resolveBranch(_ context.Context, state *schemas.AgentStat
 	return db
 }
 
+// DiscoverRepo extracts the GitHub repo from the cluster's annotations,
+// normalized via NormalizeRepo. Returns "" if no annotation is present.
+// Exported so the agent-loop PipelineAdapter (internal/agent) can reuse the
+// same annotation contract without duplicating the lookup.
+func DiscoverRepo(state *schemas.AgentState, gitHost string) string {
+	return discoverRepo(state, gitHost)
+}
+
 // discoverRepo extracts the GitHub repo from the cluster's annotations,
 // normalized via normalizeRepo. Returns "" if no annotation is present.
 func discoverRepo(state *schemas.AgentState, gitHost string) string {

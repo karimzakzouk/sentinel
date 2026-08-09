@@ -205,11 +205,11 @@ func TestLoadLLMProviders(t *testing.T) {
 	}
 
 	t.Setenv("SENTINEL_LLM_PROVIDERS", `[
-		{"id":"or-1","provider":"openrouter","apiKey":"sk-or-x","priority":1},
-		{"id":"bad-1","provider":"","apiKey":"k","priority":2},
-		{"id":"bad-2","provider":"openai","apiKey":"","priority":3},
-		{"id":"ollama-1","provider":"ollama","apiKey":"","priority":4}
-	]`)
+                {"id":"or-1","provider":"openrouter","apiKey":"sk-or-x","priority":1},
+                {"id":"bad-1","provider":"","apiKey":"k","priority":2},
+                {"id":"bad-2","provider":"openai","apiKey":"","priority":3},
+                {"id":"ollama-1","provider":"ollama","apiKey":"","priority":4}
+        ]`)
 	got := loadLLMProviders()
 	if len(got) != 2 {
 		t.Fatalf("expected 2 valid providers, got %d: %+v", len(got), got)
@@ -286,6 +286,39 @@ func TestClamp01(t *testing.T) {
 		if got := clamp01(c.in); got != c.want {
 			t.Errorf("clamp01(%v) = %v, want %v", c.in, got, c.want)
 		}
+	}
+}
+
+// TestUseAgentLoopDefault verifies UseAgentLoop defaults to false (opt-in).
+func TestUseAgentLoopDefault(t *testing.T) {
+	for _, k := range []string{
+		"SENTINEL_LLM_API_KEY", "SENTINEL_LLM_PROVIDER", "SENTINEL_LLM_FAST_MODEL",
+		"SENTINEL_LLM_FRONTIER_MODEL", "SENTINEL_GITHUB_TOKEN",
+		"SENTINEL_LLM_PROVIDERS", "SENTINEL_ALLOWED_GITHUB_REPOS",
+		"SENTINEL_WRITE_NAMESPACES", "SENTINEL_USE_AGENT_LOOP",
+	} {
+		t.Setenv(k, "")
+	}
+	c := Load()
+	if c.UseAgentLoop {
+		t.Error("UseAgentLoop should default to false (opt-in)")
+	}
+}
+
+// TestUseAgentLoopEnabled verifies SENTINEL_USE_AGENT_LOOP=true flips the flag.
+func TestUseAgentLoopEnabled(t *testing.T) {
+	for _, k := range []string{
+		"SENTINEL_LLM_API_KEY", "SENTINEL_LLM_PROVIDER", "SENTINEL_LLM_FAST_MODEL",
+		"SENTINEL_LLM_FRONTIER_MODEL", "SENTINEL_GITHUB_TOKEN",
+		"SENTINEL_LLM_PROVIDERS", "SENTINEL_ALLOWED_GITHUB_REPOS",
+		"SENTINEL_WRITE_NAMESPACES",
+	} {
+		t.Setenv(k, "")
+	}
+	t.Setenv("SENTINEL_USE_AGENT_LOOP", "true")
+	c := Load()
+	if !c.UseAgentLoop {
+		t.Error("UseAgentLoop should be true when SENTINEL_USE_AGENT_LOOP=true")
 	}
 }
 

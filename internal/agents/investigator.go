@@ -129,12 +129,20 @@ func (a *Investigator) SetGitHost(host string) {
 // isRepoAllowed returns true if repo is on the allowlist. Empty allowlist
 // means allow all.
 func (a *Investigator) isRepoAllowed(repo string) bool {
-	if len(a.allowedRepos) == 0 {
+	return IsRepoAllowed(repo, a.allowedRepos)
+}
+
+// IsRepoAllowed returns true if repo is on the allowlist. Empty allowlist
+// means allow all. Exported so the agent-loop PipelineAdapter can enforce the
+// same allowlist as the legacy Investigator without re-implementing the
+// normalization rules.
+func IsRepoAllowed(repo string, allowedRepos []string) bool {
+	if len(allowedRepos) == 0 {
 		return true
 	}
 	normalized := strings.ToLower(strings.TrimSpace(repo))
 	normalized = strings.TrimSuffix(normalized, ".git")
-	for _, allowed := range a.allowedRepos {
+	for _, allowed := range allowedRepos {
 		a := strings.ToLower(strings.TrimSpace(allowed))
 		a = strings.TrimSuffix(a, ".git")
 		if a == normalized {

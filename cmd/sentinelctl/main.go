@@ -99,6 +99,8 @@ func main() {
 		c.handleMetrics()
 	case "app":
 		c.handleApp(positional)
+	case "agent":
+		c.handleAgent(positional)
 	case "version", "v":
 		fmt.Printf("sentinelctl %s\n", Version)
 	case "help", "h", "--help", "-h":
@@ -220,6 +222,12 @@ Commands:
   app set-install <id>    Set the GitHub App install ID
   app status              Show whether the GitHub App is configured
   app remove              Remove the GitHub App config (fall back to PAT)
+  agent investigate       Run the agent loop locally against a pre-cloned repo
+  agent codeintel         Build + dump the code intelligence index for a repo
+  agent symbols           List symbols (functions, classes, types) in a repo
+  agent callers           Find call sites of a symbol in a repo
+  agent callees           Find functions called by a symbol in a repo
+  agent definition        Find definition site(s) of a symbol in a repo
   version                 Show version
   help                    Show this help
 

@@ -4,8 +4,8 @@ package agents
 //
 // Pipeline:
 //
-//	Investigator → EvidenceGatherer → Analyst → FixProposer → Security
-//	                                            (post-fix artifacts in parallel:
+//      Investigator → EvidenceGatherer → Analyst → FixProposer → Security
+//                                                  (post-fix artifacts in parallel:
 //                                             TestGenerator + ReproducerGenerator)
 //
 // Any agent can raise a RewindEvent which wipes hypotheses and returns control
@@ -44,6 +44,16 @@ type Pipeline struct {
 	reproducerGen    *ReproducerGenerator
 	betaStore        BetaStore
 
+	// agentLoopRunner, if set, replaces the legacy investigator's Run method
+	// for the hypothesis/root-cause phase. The legacy investigator is still
+	// used for: (1) repo allowlist propagation via SetAllowedRepos, (2)
+	// SetGitHost / SetDefaultBranch propagation to the cloner, and (3)
+	// router access in RunSecurityCheck. Only the Run call is delegated.
+	//
+	// Set via SetAgentLoopRunner; nil means "use legacy investigator"
+	// (default — preserves backward compatibility).
+	agentLoopRunner InvestigatorRunner
+
 	investigatorTimeoutSec      int
 	evidenceGathererTimeoutSec  int
 	analystTimeoutSec           int
@@ -54,6 +64,14 @@ type Pipeline struct {
 	generateReproducer bool
 	maxIterations      int
 	skipPostFix        bool // when true, Run() skips test/reproducer/security — caller runs RunPostFixArtifacts separately
+}
+
+// InvestigatorRunner is the contract for the hypothesis/root-cause phase of
+// the pipeline. The legacy *Investigator satisfies it; the new
+// internal/agent.PipelineAdapter also satisfies it so the pipeline can swap
+// to the agent loop without touching the rest of the pipeline.
+type InvestigatorRunner interface {
+	Run(ctx context.Context, state *schemas.AgentState) error
 }
 
 // NewPipeline creates a Pipeline with optional vector store for the
@@ -141,6 +159,26 @@ func (p *Pipeline) SetSkipPostFix(skip bool) {
 	p.skipPostFix = skip
 }
 
+// SetAgentLoopRunner swaps the hypothesis/root-cause phase to use the supplied
+// runner (typically *agent.PipelineAdapter) instead of the legacy
+// investigator. Pass nil to revert to the legacy investigator.
+//
+// The legacy *Investigator is still kept around for: repo allowlist/git host
+// propagation (SetAllowedRepos/SetGitHost/SetDefaultBranch still configure
+// the legacy investigator's cloner, which the agent.PipelineAdapter also
+// shares if constructed with the same cloner) and router access in
+// RunSecurityCheck (p.investigator.router).
+func (p *Pipeline) SetAgentLoopRunner(r InvestigatorRunner) {
+	p.agentLoopRunner = r
+}
+
+// AgentLoopEnabled returns true if the agent-loop runner is currently active.
+// Used by sentinelctl status + the API to surface which investigator path is
+// wired in.
+func (p *Pipeline) AgentLoopEnabled() bool {
+	return p.agentLoopRunner != nil
+}
+
 // RetryFixProposal re-runs ONLY the fix proposer with the current state. The
 // caller sets state.SandboxFeedback with the failure details before calling
 // this. The fix proposer sees the feedback in its user message and generates
@@ -169,7 +207,14 @@ func (p *Pipeline) Run(ctx context.Context, state *schemas.AgentState) error {
 		state.Iterations++
 
 		invCtx, invCancel := context.WithTimeout(ctx, time.Duration(p.investigatorTimeoutSec)*time.Second)
-		if err := p.investigator.Run(invCtx, state); err != nil {
+		// Delegate to the agent-loop runner when configured; otherwise fall
+		// back to the legacy 2-round investigator. Either path produces
+		// state.Hypotheses (and optionally state.RootCause) for the analyst.
+		runner := p.agentLoopRunner
+		if runner == nil {
+			runner = p.investigator
+		}
+		if err := runner.Run(invCtx, state); err != nil {
 			invCancel()
 			return fmt.Errorf("investigator: %w", err)
 		}

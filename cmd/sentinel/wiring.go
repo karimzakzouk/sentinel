@@ -71,6 +71,11 @@ type wiring struct {
 	// Storage + vector memory.
 	store       *feedback.Store
 	vectorStore *feedback.VectorStore
+	// agentsVS is the agents.VectorStore adapter over vectorStore. Held
+	// on the wiring struct so applyRuntimeConfig can reuse it when
+	// hot-toggling the agent loop — without it we'd have to re-construct
+	// the adapter from vectorStore on every config change.
+	agentsVS *agentsVectorStore
 
 	// Infrastructure clients.
 	k8sClient   *k8s.Client
