@@ -38,6 +38,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -48,6 +49,47 @@ import (
 	"github.com/karimzakzouk/sentinel/internal/logging"
 	"github.com/karimzakzouk/sentinel/internal/schemas"
 )
+
+// reorderFlagsFirst moves all flag-like tokens (and their values) to the
+// front of the args slice, leaving positional args at the end. This works
+// around Go's flag package stopping at the first non-flag argument.
+//
+// Supports both `--flag value` and `--flag=value` forms. For `--flag value`,
+// the value is only consumed when the flag name is a known flag that takes
+// a value (detected by checking against the flag set's defined flags).
+//
+// Since we don't have access to the FlagSet here, we use a heuristic: a
+// token is a flag value if the previous token was a `--flag` (not `=` form)
+// AND the current token doesn't start with `-`. This is the same heuristic
+// most CLI parsers use.
+func reorderFlagsFirst(args []string) []string {
+	var flags []string
+	var positionals []string
+
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if strings.HasPrefix(a, "--") && strings.Contains(a, "=") {
+			// --flag=value form
+			flags = append(flags, a)
+			continue
+		}
+		if strings.HasPrefix(a, "-") {
+			// --flag form — might take a separate value token
+			flags = append(flags, a)
+			// If the next token exists and doesn't start with `-`, it's
+			// the flag's value. Consume it.
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				flags = append(flags, args[i+1])
+				i++
+			}
+			continue
+		}
+		// Positional arg
+		positionals = append(positionals, a)
+	}
+
+	return append(flags, positionals...)
+}
 
 // handleAgent dispatches the `sentinelctl agent <subcommand>` tree.
 //
@@ -118,6 +160,12 @@ func handleAgentInvestigate(args []string) {
 		fmt.Fprintln(os.Stderr, "  SENTINEL_LLM_FAST_MODEL     fast model name")
 		fmt.Fprintln(os.Stderr, "  SENTINEL_LLM_FRONTIER_MODEL frontier model name")
 	}
+	// Reorder args so flags come before positionals. Go's flag package
+	// stops parsing at the first non-flag argument, so
+	// `investigate /path --max-turns 5` would treat `--max-turns 5` as
+	// positional args and ignore the flag. This pre-pass moves flags
+	// to the front.
+	args = reorderFlagsFirst(args)
 	if err := fs.Parse(args); err != nil {
 		os.Exit(1)
 	}
