@@ -277,7 +277,7 @@ func BuildIndex(repoRoot string, maxFiles int) (*Index, error) {
 	}
 
 	fileCount := 0
-	filepath.WalkDir(repoRoot, func(path string, d os.DirEntry, err error) error {
+	_ = filepath.WalkDir(repoRoot, func(path string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			if d != nil && d.IsDir() && ignoreDirs[d.Name()] {
 				return filepath.SkipDir
