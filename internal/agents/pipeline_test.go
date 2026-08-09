@@ -234,3 +234,119 @@ func TestPipeline_ReasonAboutRewind(t *testing.T) {
 		t.Fatal("latest rewind should match its raiser")
 	}
 }
+
+// --- Phase 11: SetAgentLoopRunner integration tests ---
+
+// fakeInvestigatorRunner is a test InvestigatorRunner that records its
+// calls and optionally populates state with canned hypotheses.
+type fakeInvestigatorRunner struct {
+	calls      int
+	rootCause  string
+	confidence float64
+	files      []string
+}
+
+func (f *fakeInvestigatorRunner) Run(_ context.Context, state *schemas.AgentState) error {
+	f.calls++
+	if f.rootCause != "" {
+		state.Hypotheses = []schemas.Hypothesis{{
+			HID:         "H1",
+			Statement:   f.rootCause,
+			Confidence:  f.confidence,
+			SourceFiles: f.files,
+		}}
+		state.RootCause = &schemas.RootCause{
+			Statement:   f.rootCause,
+			Confidence:  f.confidence,
+			SourceFiles: f.files,
+		}
+		state.Status = schemas.StatusRootCaused
+	}
+	return nil
+}
+
+// TestPipeline_SetAgentLoopRunner verifies that SetAgentLoopRunner stores
+// the runner and AgentLoopEnabled reports its presence.
+func TestPipeline_SetAgentLoopRunner(t *testing.T) {
+	p := NewPipeline(llm.New("", "", "m", "f"), nil, "tok", nil, nil)
+
+	if p.AgentLoopEnabled() {
+		t.Fatal("AgentLoopEnabled should be false by default")
+	}
+
+	runner := &fakeInvestigatorRunner{rootCause: "test", confidence: 0.9}
+	p.SetAgentLoopRunner(runner)
+
+	if !p.AgentLoopEnabled() {
+		t.Fatal("AgentLoopEnabled should be true after SetAgentLoopRunner")
+	}
+
+	// Nil should revert to the legacy investigator.
+	p.SetAgentLoopRunner(nil)
+	if p.AgentLoopEnabled() {
+		t.Fatal("AgentLoopEnabled should be false after SetAgentLoopRunner(nil)")
+	}
+}
+
+// TestPipeline_DelegatesToAgentLoopRunner verifies that Pipeline.Run
+// actually calls the agent-loop runner instead of the legacy investigator
+// when one is set. We use a state that triggers the "no hypotheses"
+// early-return so the rest of the pipeline doesn't need LLM/K8s mocking.
+func TestPipeline_DelegatesToAgentLoopRunner(t *testing.T) {
+	router := llm.New("http://invalid:9", "k", "m", "f")
+	router.SetRetryConfig(0, 0) // fail fast on any accidental LLM call
+	p := NewPipeline(router, nil, "tok", nil, nil)
+	p.SetMaxIterations(1)
+	p.SetSkipPostFix(true)
+
+	runner := &fakeInvestigatorRunner{}
+	// Don't populate hypotheses — the pipeline should see zero hypotheses
+	// and return nil immediately after the investigator runs, without
+	// touching evidence/analyst/fixProposer.
+	p.SetAgentLoopRunner(runner)
+
+	state := &schemas.AgentState{
+		Cluster: schemas.AnomalyCluster{
+			Service:   "svc",
+			Namespace: "ns",
+		},
+	}
+
+	if err := p.Run(context.Background(), state); err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+
+	if runner.calls != 1 {
+		t.Errorf("expected 1 call to agent-loop runner, got %d", runner.calls)
+	}
+}
+
+// TestPipeline_LegacyInvestigatorUsedByDefault verifies that when no
+// agent-loop runner is set, the legacy investigator is still used. We
+// can't easily assert "legacy was called" without mocking it, but we can
+// verify Run doesn't panic and produces the expected "no hypotheses"
+// result (the legacy investigator with an unreachable LLM + no K8s will
+// produce zero hypotheses via the runWithoutRepo fallback).
+func TestPipeline_LegacyInvestigatorUsedByDefault(t *testing.T) {
+	router := llm.New("http://invalid:9", "k", "m", "f")
+	router.SetRetryConfig(0, 0)
+	p := NewPipeline(router, nil, "tok", nil, nil)
+	p.SetMaxIterations(1)
+	p.SetSkipPostFix(true)
+
+	if p.AgentLoopEnabled() {
+		t.Fatal("AgentLoopEnabled should be false by default")
+	}
+
+	state := &schemas.AgentState{
+		Cluster: schemas.AnomalyCluster{
+			Service:   "svc",
+			Namespace: "ns",
+		},
+	}
+
+	// Should not panic; should return nil (no hypotheses → early return).
+	if err := p.Run(context.Background(), state); err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+}

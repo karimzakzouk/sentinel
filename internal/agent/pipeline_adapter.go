@@ -34,6 +34,16 @@ import (
 	"github.com/karimzakzouk/sentinel/internal/schemas"
 )
 
+// Cloner is the minimal subset of *repo.Cloner that PipelineAdapter uses.
+// Defined as an interface so tests can inject a fake cloner that returns a
+// pre-built temp directory instead of actually hitting GitHub.
+//
+// *repo.Cloner satisfies this interface (Clone + Cleanup methods).
+type Cloner interface {
+	Clone(ctx context.Context, repo, ref string) (string, error)
+	Cleanup(path string)
+}
+
 // PipelineAdapter wraps agent.Investigator with the same K8s + GitHub
 // plumbing that the legacy agents.Investigator owns (pod logs fetch, repo
 // allowlist, clone, cleanup). It satisfies agents.InvestigatorRunner so the
@@ -47,7 +57,7 @@ type PipelineAdapter struct {
 	cfg           AgentConfig
 	k8s           *k8s.Client
 	gitHubToken   string
-	cloner        *repo.Cloner
+	cloner        Cloner
 	allowedRepos  []string
 	gitHost       string
 	defaultBranch string
@@ -70,6 +80,11 @@ func NewPipelineAdapter(router *llm.Router, k8sClient *k8s.Client, gitHubToken s
 	}
 }
 
+// setCloner is an internal test hook for injecting a fake Cloner. Not
+// exported — the production path always uses the *repo.Cloner constructed
+// in NewPipelineAdapter.
+func (a *PipelineAdapter) setCloner(c Cloner) { a.cloner = c }
+
 // SetAllowedRepos sets the GitHub repo allowlist. Empty means allow all.
 // Mirrors agents.Investigator.SetAllowedRepos so the pipeline can propagate
 // the same config to both investigator paths.
@@ -80,7 +95,14 @@ func (a *PipelineAdapter) SetAllowedRepos(repos []string) { a.allowedRepos = rep
 func (a *PipelineAdapter) SetGitHost(host string) {
 	if host != "" {
 		a.gitHost = host
-		a.cloner.WithGitHost(host)
+		// Type-assert to *repo.Cloner to access WithGitHost. The interface
+		// only exposes Clone + Cleanup so test fakes don't need to implement
+		// the builder methods. If a fake cloner is injected (tests), the
+		// type assertion simply fails silently — the fake already knows its
+		// host.
+		if c, ok := a.cloner.(*repo.Cloner); ok {
+			c.WithGitHost(host)
+		}
 	}
 }
 
@@ -89,7 +111,9 @@ func (a *PipelineAdapter) SetGitHost(host string) {
 func (a *PipelineAdapter) SetDefaultBranch(branch string) {
 	if branch != "" {
 		a.defaultBranch = branch
-		a.cloner.WithDefaultBranch(branch)
+		if c, ok := a.cloner.(*repo.Cloner); ok {
+			c.WithDefaultBranch(branch)
+		}
 	}
 }
 

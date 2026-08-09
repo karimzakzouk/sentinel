@@ -197,12 +197,27 @@ func (a *Agent) Run(ctx context.Context, systemPrompt string) (*InvestigationRes
 
 	logging.Warn("agent: hit turn cap without completion", "max_turns", a.cfg.MaxTurns)
 
-	lastTurn := turns[len(turns)-1]
+	// Guard against the edge case where the very first LLM call failed
+	// (turns is empty). Without this, turns[len(turns)-1] panics with
+	// "index out of range [-1]". This can happen when the LLM endpoint
+	// is unreachable or the context is cancelled before the first
+	// response arrives.
+	lastResponse := "(no turns completed — first LLM call failed)"
+	turnsUsed := a.cfg.MaxTurns
+	if len(turns) > 0 {
+		lastResponse = truncate(turns[len(turns)-1].LLMResponse, 200)
+	} else {
+		// If no turns completed, TurnsUsed should reflect that we
+		// didn't actually run the full loop — we broke on the first
+		// error. Report 1 so callers know the loop was entered but
+		// immediately failed.
+		turnsUsed = 1
+	}
 	return &InvestigationResult{
-		RootCause:   fmt.Sprintf("Agent did not complete within %d turns. Last response: %s", a.cfg.MaxTurns, truncate(lastTurn.LLMResponse, 200)),
+		RootCause:   fmt.Sprintf("Agent did not complete within %d turns. Last response: %s", a.cfg.MaxTurns, lastResponse),
 		Confidence:  0.0,
 		SourceFiles: nil,
-		TurnsUsed:   a.cfg.MaxTurns,
+		TurnsUsed:   turnsUsed,
 		Trace:       turns,
 	}, nil
 }
