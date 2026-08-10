@@ -86,6 +86,18 @@ type AgentConfig struct {
 	MaxTurns         int
 	TurnTimeout      time.Duration
 	CompactThreshold int
+
+	// NumPlans controls multi-plan generation (MCTS). 1 = single plan (v2
+	// behavior, default). 2+ = generate N plans and pick the best. Only
+	// worth the extra LLM calls on models that can produce diverse plans
+	// (70B+). Default: 1.
+	NumPlans int
+
+	// CriticThreshold is the confidence below which the critic runs. 0.0 =
+	// critic never runs (v2 behavior, default). 0.80 = critic runs when
+	// confidence < 80%. Only useful on models smart enough to evaluate
+	// root causes (70B+). Default: 0.0.
+	CriticThreshold float64
 }
 
 // Agent runs the investigation loop.
@@ -119,6 +131,12 @@ func New(router *llm.Router, cfg AgentConfig) *Agent {
 	}
 	if cfg.CompactThreshold <= 0 {
 		cfg.CompactThreshold = DefaultCompactThreshold
+	}
+	if cfg.NumPlans <= 0 {
+		cfg.NumPlans = 1 // v2 default: single plan
+	}
+	if cfg.CriticThreshold <= 0 {
+		cfg.CriticThreshold = 0.0 // v2 default: critic never runs
 	}
 	return &Agent{
 		router: router,
@@ -155,24 +173,50 @@ func (a *Agent) Run(ctx context.Context, systemPrompt string) (*InvestigationRes
 		"content": fmt.Sprintf("Available tools:\n%s\n\n%s\n\nStart investigating.", toolsJSON, agentInstructions),
 	})
 
-	// Phase 1: Planning turn — one LLM call to produce an investigation plan.
-	planningCtx, planningCancel := context.WithTimeout(ctx, a.cfg.TurnTimeout)
-	plan, err := a.router.FrontierText(planningCtx,
-		"You are an autonomous SRE agent. Read the crash context and write a brief 2-3 step investigation plan. Which files will you read? What will you search for? Be specific.",
-		formatConversation(conversation), 500)
-	planningCancel()
+	// Phase 1: Planning.
+	// When NumPlans=1 (default, v2 behavior): generate a single plan.
+	// When NumPlans>1 (opt-in, for large models): generate N plans,
+	// pick the best by specificity scoring (simplified MCTS).
+	podLogs := ""
+	for _, msg := range conversation {
+		if msg["role"] == "system" {
+			podLogs = msg["content"]
+			break
+		}
+	}
 
-	if err != nil {
-		logging.Warn("agent: planning call failed, skipping plan", "err", err)
+	var plan string
+	if a.cfg.NumPlans > 1 {
+		plans := a.generatePlans(ctx, conversation, a.cfg.NumPlans)
+		if len(plans) > 0 {
+			plan = pickBestPlan(plans, podLogs)
+		}
 	} else {
+		// Single plan — one LLM call (v2 behavior).
+		planningCtx, planningCancel := context.WithTimeout(ctx, a.cfg.TurnTimeout)
+		p, pErr := a.router.FrontierText(planningCtx,
+			"You are an autonomous SRE agent. Read the crash context and write a brief 2-3 step investigation plan. Which files will you read? What will you search for? Be specific.",
+			formatConversation(conversation), 500)
+		planningCancel()
+		if pErr != nil {
+			logging.Warn("agent: planning call failed, skipping plan", "err", pErr)
+		} else {
+			plan = p
+		}
+	}
+
+	if plan != "" {
 		conversation = append(conversation,
 			map[string]string{"role": "assistant", "content": plan},
 			map[string]string{"role": "user", "content": fmt.Sprintf("Here is your investigation plan:\n%s\n\nNow execute it. Call tools one at a time. Respond with JSON only.", truncate(plan, 500))})
-		logging.Info("agent: plan generated", "plan", truncate(plan, 100))
+		logging.Info("agent: plan generated", "plans", a.cfg.NumPlans, "plan", truncate(plan, 100))
+	} else {
+		logging.Warn("agent: planning failed, starting without plan")
 	}
 
 	// Phase 2: Execution loop with stuck detection.
 	stuckDetector := NewStuckDetector()
+	criticUsed := false // only run the critic once per investigation
 
 	for turnNum := 1; turnNum <= a.cfg.MaxTurns; turnNum++ {
 		// Inner retry loop for malformed LLM output.
@@ -217,7 +261,28 @@ func (a *Agent) Run(ctx context.Context, systemPrompt string) (*InvestigationRes
 
 		if parsed.Done {
 			turns = append(turns, turn)
-			logging.Info("agent: investigation complete", "turns", turnNum, "root_cause", parsed.RootCause, "confidence", parsed.Confidence)
+
+			// Multi-agent critic: verify the root cause before
+			// declaring done. Only runs when CriticThreshold > 0
+			// AND confidence is below the threshold. Default
+			// (CriticThreshold=0.0) = critic never runs = v2 behavior.
+			// Only useful on models smart enough to evaluate root
+			// causes (70B+). On small models, the critic rejects
+			// correct answers and wastes turns.
+			if a.cfg.CriticThreshold > 0 && !criticUsed && parsed.Confidence < a.cfg.CriticThreshold && turnNum < a.cfg.MaxTurns {
+				criticUsed = true
+				approved, critique := a.criticReview(ctx, parsed.RootCause, parsed.FilesToChange, podLogs, conversation)
+				if !approved {
+					logging.Warn("agent: critic rejected root cause", "turn", turnNum, "critique", critique)
+					conversation = append(conversation,
+						map[string]string{"role": "user", "content": fmt.Sprintf(
+							"[CRITIC] Your root cause was rejected: %s\n\nContinue investigating. Try a different approach.", critique)})
+					continue
+				}
+			}
+
+			criticApproved := criticUsed || parsed.Confidence >= 0.80
+			logging.Info("agent: investigation complete", "turns", turnNum, "root_cause", parsed.RootCause, "confidence", parsed.Confidence, "critic_approved", criticApproved)
 			return &InvestigationResult{
 				RootCause:   parsed.RootCause,
 				Confidence:  parsed.Confidence,
@@ -256,7 +321,7 @@ func (a *Agent) Run(ctx context.Context, systemPrompt string) (*InvestigationRes
 		logging.Info("agent: turn complete", "turn", turnNum, "tool", parsed.Tool, "done", parsed.Done)
 
 		if turnNum >= a.cfg.CompactThreshold && turnNum%5 == 0 {
-			conversation = compactConversation(conversation, systemPrompt)
+			conversation = a.condenseContext(ctx, conversation, systemPrompt)
 		}
 	}
 
