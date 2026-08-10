@@ -146,7 +146,3 @@ func TestRegisterRepoTools(t *testing.T) {
 		t.Errorf("read_file failed: %s", result.Output)
 	}
 }
-
-func contains(s, sub string) bool {
-	return len(s) >= len(sub) && (s == sub || len(s) > 0 && (s[0:len(sub)] == sub || contains(s[1:], sub)))
-}

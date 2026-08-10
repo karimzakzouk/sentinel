@@ -41,16 +41,16 @@ func (s *StuckDetector) CheckStuck() string {
 		return ""
 	}
 	if s.detectRepeatedSameCall(3) {
-		return fmt.Sprintf("[STUCK DETECTOR] You have called the same tool with the same arguments 3+ times. Try a different approach: read a different file, search for a different pattern, or declare done with your best hypothesis.")
+		return "[STUCK DETECTOR] You have called the same tool with the same arguments 3+ times. Try a different approach: read a different file, search for a different pattern, or declare done with your best hypothesis."
 	}
 	if s.detectRepeatedTool(4) {
-		return fmt.Sprintf("[STUCK DETECTOR] You have called the same tool 4+ times with different arguments. Switch to a different tool or review your findings so far.")
+		return "[STUCK DETECTOR] You have called the same tool 4+ times with different arguments. Switch to a different tool or review your findings so far."
 	}
 	if s.detectRepeatedErrors(3) {
-		return fmt.Sprintf("[STUCK DETECTOR] Your last 3 tool calls all returned errors or no results. Try reading a different file or declaring done.")
+		return "[STUCK DETECTOR] Your last 3 tool calls all returned errors or no results. Try reading a different file or declaring done."
 	}
 	if s.detectAlternating(4) {
-		return fmt.Sprintf("[STUCK DETECTOR] You are alternating between two tools without progress. Step back and declare done if you have a reasonable hypothesis.")
+		return "[STUCK DETECTOR] You are alternating between two tools without progress. Step back and declare done if you have a reasonable hypothesis."
 	}
 	return ""
 }
@@ -121,10 +121,7 @@ func serializeArgs(args map[string]any) string {
 	}
 	var b strings.Builder
 	for k, v := range args {
-		b.WriteString(k)
-		b.WriteString("=")
-		b.WriteString(fmt.Sprintf("%v", v))
-		b.WriteString(",")
+		fmt.Fprintf(&b, "%s=%v,", k, v)
 	}
 	return b.String()
 }
