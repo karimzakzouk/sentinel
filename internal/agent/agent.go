@@ -19,53 +19,38 @@ const (
 	DefaultTurnTimeout      = 30 * time.Second
 	DefaultCompactThreshold = 10
 	MaxFilePreviewLines     = 100
-
-	// maxRetriesPerTurn is the number of correction attempts when the LLM
-	// returns a response that can't be parsed as valid JSON. The retry
-	// sends a correction prompt explaining the expected format. Does not
-	// count as a turn — the agent loop continues from the same turn number.
-	maxRetriesPerTurn = 2
+	maxRetriesPerTurn       = 2
 )
 
-// agentSystemRole is the system-level instruction sent with every LLM call.
-// It enforces JSON-only output and describes the two valid response shapes.
 const agentSystemRole = `You are an autonomous SRE agent investigating a production crash.
 
-CRITICAL: Respond with ONLY a JSON object. No prose, no markdown, no explanation.
-The JSON must be one of:
+CRITICAL: Respond with ONLY a JSON object. No prose, no markdown.
 
-1. To call a tool:
-   {"tool": "<tool_name>", "args": {<tool-specific args>}}
+INVESTIGATION PRINCIPLES:
+1. The error location is often a SYMPTOM, not the root cause. Trace BACKWARDS.
+2. Check CLIENT and STORE files, not just handlers. Bugs are often in code that handlers call.
+3. If a tool returns no results, try a DIFFERENT approach. Do not repeat the same search.
+4. After 3-4 tool calls, declare done with your best hypothesis.
+5. Do not assume the bug matches a known pattern — investigate the actual code.
 
-2. To declare the investigation complete:
-   {"done": true, "root_cause": "<one-sentence root cause>", "confidence": 0.0-1.0, "files_to_change": ["path/to/file"]}
+JSON format (respond with EXACTLY one of these):
+  Tool: {"tool": "<name>", "args": {<args>}}
+  Done: {"done": true, "root_cause": "<one sentence>", "confidence": 0.85, "files_to_change": ["path"]}`
 
-Do not include any text before or after the JSON object.`
-
-// agentInstructions is sent as the first user message. It describes the
-// investigation task and gives an example of the expected output format.
 const agentInstructions = `Investigate the crash using the tools above.
 
-When you have identified the root cause and the files that need to change,
-respond with:
-{"done": true, "root_cause": "...", "confidence": 0.85, "files_to_change": ["path/to/file"]}
+When you have identified the root cause, respond with:
+{"done": true, "root_cause": "...", "confidence": 0.85, "files_to_change": ["path"]}
 
-Otherwise, call a tool to explore the codebase:
+Otherwise, call a tool:
 {"tool": "read_file", "args": {"path": "app/main.py", "start_line": 1}}
 
-IMPORTANT: Your entire response must be a single JSON object — no other text.`
+Your entire response must be a single JSON object — no other text.`
 
-// correctionPrompt is sent when the LLM returns a response that couldn't
-// be parsed as valid JSON. This is the retry-with-error-feedback pattern:
-// the LLM sees its own bad output and is asked to correct it.
-const correctionPrompt = `Your previous response was not a valid JSON object.
-
-Please respond with ONLY a JSON object in one of these formats:
-
-To call a tool: {"tool": "<name>", "args": {...}}
-To finish: {"done": true, "root_cause": "...", "confidence": 0.85, "files_to_change": [...]}
-
-Do not include any text before or after the JSON. Do not wrap it in markdown code fences.`
+const correctionPrompt = `Your previous response was not valid JSON. Respond with ONLY a JSON object:
+  Tool: {"tool": "<name>", "args": {...}}
+  Done: {"done": true, "root_cause": "...", "confidence": 0.85, "files_to_change": [...]}
+No text before or after. No markdown.`
 
 // Tool is a function the LLM can call during the agent loop.
 type Tool struct {
@@ -154,51 +139,56 @@ func (a *Agent) RegisterTool(name, description, parameters string, fn ToolFunc) 
 	a.toolFuncs[name] = fn
 }
 
-// Run executes the agent loop. The system prompt sets up the investigation
-// context (crash logs, repo info, symbol list). The LLM picks tools until
-// it declares "done" or hits the turn cap.
-//
-// When the LLM returns a response that is not valid JSON (a common failure
-// mode for smaller models like glm-4-flash), the agent sends a correction
-// prompt asking the LLM to respond with only the JSON object. This retry
-// does NOT count as a turn — the agent gets up to maxRetriesPerTurn (2)
-// correction attempts before the turn is counted and the loop moves on.
-// This is the RetryWithErrorOutputParser pattern from LangChain, adapted
-// for our text-based tool calling.
+// Run executes the agent loop with planning, stuck detection, and retry.
 func (a *Agent) Run(ctx context.Context, systemPrompt string) (*InvestigationResult, error) {
 	var turns []Turn
 	var conversation []map[string]string
 
 	conversation = append(conversation, map[string]string{
 		"role":    "system",
-		"content": systemPrompt,
+		"content": systemPrompt + "\n\n" + agentSystemRole,
 	})
 
 	toolsJSON, _ := json.Marshal(a.tools)
 	conversation = append(conversation, map[string]string{
-		"role": "user",
-		"content": fmt.Sprintf(
-			"Available tools:\n%s\n\n%s\n\nStart investigating.",
-			toolsJSON, agentInstructions),
+		"role":    "user",
+		"content": fmt.Sprintf("Available tools:\n%s\n\n%s\n\nStart investigating.", toolsJSON, agentInstructions),
 	})
 
+	// Phase 1: Planning turn — one LLM call to produce an investigation plan.
+	planningCtx, planningCancel := context.WithTimeout(ctx, a.cfg.TurnTimeout)
+	plan, err := a.router.FrontierText(planningCtx,
+		"You are an autonomous SRE agent. Read the crash context and write a brief 2-3 step investigation plan. Which files will you read? What will you search for? Be specific.",
+		formatConversation(conversation), 500)
+	planningCancel()
+
+	if err != nil {
+		logging.Warn("agent: planning call failed, skipping plan", "err", err)
+	} else {
+		conversation = append(conversation,
+			map[string]string{"role": "assistant", "content": plan},
+			map[string]string{"role": "user", "content": fmt.Sprintf("Here is your investigation plan:\n%s\n\nNow execute it. Call tools one at a time. Respond with JSON only.", truncate(plan, 500))})
+		logging.Info("agent: plan generated", "plan", truncate(plan, 100))
+	}
+
+	// Phase 2: Execution loop with stuck detection.
+	stuckDetector := NewStuckDetector()
+
 	for turnNum := 1; turnNum <= a.cfg.MaxTurns; turnNum++ {
-		// Inner retry loop for malformed LLM output. Up to 2 retries
-		// per turn — the correction prompt tells the LLM exactly what
-		// was wrong and asks it to respond with only the JSON object.
+		// Inner retry loop for malformed LLM output.
 		var response string
 		var parsed llmResponse
 		var parseOK bool
 
 		for retry := 0; retry <= maxRetriesPerTurn; retry++ {
 			turnCtx, cancel := context.WithTimeout(ctx, a.cfg.TurnTimeout)
-			var err error
-			response, err = a.router.FrontierText(turnCtx,
+			var llmErr error
+			response, llmErr = a.router.FrontierText(turnCtx,
 				agentSystemRole, formatConversation(conversation), 2000)
 			cancel()
 
-			if err != nil {
-				logging.Error("agent: LLM call failed", "turn", turnNum, "retry", retry, "err", err)
+			if llmErr != nil {
+				logging.Error("agent: LLM call failed", "turn", turnNum, "retry", retry, "err", llmErr)
 				break
 			}
 
@@ -207,24 +197,14 @@ func (a *Agent) Run(ctx context.Context, systemPrompt string) (*InvestigationRes
 				break
 			}
 
-			// Malformed output — send a correction prompt and retry.
-			logging.Warn("agent: malformed LLM output, retrying",
-				"turn", turnNum, "retry", retry,
-				"response_len", len(response),
-				"response_preview", truncate(response, 100))
+			logging.Warn("agent: malformed LLM output, retrying", "turn", turnNum, "retry", retry, "response_preview", truncate(response, 100))
 			conversation = append(conversation,
 				map[string]string{"role": "assistant", "content": response},
 				map[string]string{"role": "user", "content": correctionPrompt})
 		}
 
 		if !parseOK {
-			// All retries exhausted — count the turn and move on.
-			// The conversation already has the correction exchanges
-			// appended, so the next turn will see them.
-			turns = append(turns, Turn{
-				TurnNumber:  turnNum,
-				LLMResponse: response,
-			})
+			turns = append(turns, Turn{TurnNumber: turnNum, LLMResponse: response})
 			logging.Warn("agent: turn produced no valid output after retries", "turn", turnNum)
 			continue
 		}
@@ -233,18 +213,11 @@ func (a *Agent) Run(ctx context.Context, systemPrompt string) (*InvestigationRes
 			break
 		}
 
-		turn := Turn{
-			TurnNumber:  turnNum,
-			LLMResponse: response,
-		}
+		turn := Turn{TurnNumber: turnNum, LLMResponse: response}
 
 		if parsed.Done {
 			turns = append(turns, turn)
-			logging.Info("agent: investigation complete",
-				"turns", turnNum,
-				"root_cause", parsed.RootCause,
-				"confidence", parsed.Confidence)
-
+			logging.Info("agent: investigation complete", "turns", turnNum, "root_cause", parsed.RootCause, "confidence", parsed.Confidence)
 			return &InvestigationResult{
 				RootCause:   parsed.RootCause,
 				Confidence:  parsed.Confidence,
@@ -260,29 +233,34 @@ func (a *Agent) Run(ctx context.Context, systemPrompt string) (*InvestigationRes
 			result := a.executeTool(ctx, parsed.Tool, parsed.Args)
 			turn.ToolResult = &result
 
+			// Record for stuck detection.
+			stuckDetector.Record(parsed.Tool, parsed.Args, result)
+
+			// Check if stuck — inject recovery prompt if needed.
+			stuckMsg := stuckDetector.CheckStuck()
+			toolResultMsg := fmt.Sprintf("Tool %s result:\n%s", parsed.Tool, result.Output)
+			if stuckMsg != "" {
+				toolResultMsg += "\n\n" + stuckMsg
+				logging.Warn("agent: stuck detector triggered", "turn", turnNum, "msg", truncate(stuckMsg, 80))
+			}
+
 			conversation = append(conversation,
 				map[string]string{"role": "assistant", "content": response},
-				map[string]string{"role": "user", "content": fmt.Sprintf("Tool %s result:\n%s", parsed.Tool, result.Output)},
-			)
+				map[string]string{"role": "user", "content": toolResultMsg})
 		} else {
-			// Parsed as valid JSON but neither tool nor done — treat
-			// as a no-op turn (the LLM may have returned {"thinking": "..."}).
 			conversation = append(conversation,
-				map[string]string{"role": "assistant", "content": response},
-			)
+				map[string]string{"role": "assistant", "content": response})
 		}
 
 		turns = append(turns, turn)
-		logging.Info("agent: turn complete",
-			"turn", turnNum,
-			"tool", parsed.Tool,
-			"done", parsed.Done)
+		logging.Info("agent: turn complete", "turn", turnNum, "tool", parsed.Tool, "done", parsed.Done)
 
 		if turnNum >= a.cfg.CompactThreshold && turnNum%5 == 0 {
 			conversation = compactConversation(conversation, systemPrompt)
 		}
 	}
 
+	// Phase 3: Turn cap reached.
 	logging.Warn("agent: hit turn cap without completion", "max_turns", a.cfg.MaxTurns)
 
 	// Guard against the edge case where the very first LLM call failed
@@ -331,19 +309,8 @@ type llmResponse struct {
 	FilesToChange []string       `json:"files_to_change"`
 }
 
-// parseLLMResponse tries to extract a valid tool call or done signal from
-// the LLM response. The second return value is false when no valid JSON
-// could be extracted — the caller should retry with a correction prompt.
-//
-// Extraction strategy (in order):
-//  1. Direct parse (response is already clean JSON)
-//  2. Extract from markdown code block (```json ... ```)
-//  3. Extract the first balanced {...} block
-//
-// The previous lenient fallback (accepting any text containing "done" as a
-// completion signal) was removed — it caused the agent to accept garbage
-// output as a root cause. Failing explicitly is better than silently
-// producing wrong results.
+// parseLLMResponse tries to extract a valid tool call or done signal.
+// Returns (result, ok) — ok=false means retry with correction prompt.
 func parseLLMResponse(response string) (llmResponse, bool) {
 	var result llmResponse
 
@@ -359,7 +326,7 @@ func parseLLMResponse(response string) (llmResponse, bool) {
 		}
 	}
 
-	// Strategy 3: extract the first balanced JSON object.
+	// Strategy 3: extract first balanced JSON object.
 	if obj := extractFirstJSONObject(response); obj != "" {
 		if err := json.Unmarshal([]byte(obj), &result); err == nil {
 			return result, true
@@ -369,10 +336,7 @@ func parseLLMResponse(response string) (llmResponse, bool) {
 	return llmResponse{}, false
 }
 
-// extractCodeBlock pulls the content of a ```json or ``` fenced code block
-// from the response. Returns "" if no code block is found.
 func extractCodeBlock(response string) string {
-	// Look for ```json ... ``` or ``` ... ```
 	startMarkers := []string{"```json\n", "```json\r\n", "```\n", "```"}
 	for _, marker := range startMarkers {
 		if idx := strings.Index(response, marker); idx >= 0 {
@@ -385,21 +349,16 @@ func extractCodeBlock(response string) string {
 	return ""
 }
 
-// extractFirstJSONObject finds the first balanced {...} in the response.
-// It tracks brace depth to handle nested objects correctly. Returns "" if
-// no balanced object is found.
 func extractFirstJSONObject(response string) string {
 	start := strings.Index(response, "{")
 	if start < 0 {
 		return ""
 	}
-
 	depth := 0
 	inString := false
 	escaped := false
 	for i := start; i < len(response); i++ {
 		ch := response[i]
-
 		if escaped {
 			escaped = false
 			continue
@@ -415,7 +374,6 @@ func extractFirstJSONObject(response string) string {
 		if inString {
 			continue
 		}
-
 		switch ch {
 		case '{':
 			depth++
