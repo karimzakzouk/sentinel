@@ -12,14 +12,17 @@ type ParallelToolResult struct {
 	Results []ToolResult
 }
 
-// executeToolsParallel runs multiple tool calls concurrently and returns
+// ExecuteToolsParallel runs multiple tool calls concurrently and returns
 // all results. Each tool runs in its own goroutine. If a tool panics,
 // the goroutine recovers and returns an error result.
 //
 // Based on OpenHands "Parallel Tool Execution" pattern — the agent can
 // call read_file on 3 different files in one turn instead of 3 separate
 // turns, reducing the number of LLM calls by 3x.
-func (a *Agent) executeToolsParallel(ctx context.Context, calls []ToolCall) []ToolResult {
+//
+// Exported so it can be used by the agent loop when the LLM returns
+// multiple tool calls in one turn (native function calling).
+func (a *Agent) ExecuteToolsParallel(ctx context.Context, calls []ToolCall) []ToolResult {
 	results := make([]ToolResult, len(calls))
 	var wg sync.WaitGroup
 
