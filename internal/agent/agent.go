@@ -86,6 +86,18 @@ type AgentConfig struct {
 	MaxTurns         int
 	TurnTimeout      time.Duration
 	CompactThreshold int
+
+	// NumPlans controls multi-plan generation (MCTS). 1 = single plan (v2
+	// behavior, default). 2+ = generate N plans and pick the best. Only
+	// worth the extra LLM calls on models that can produce diverse plans
+	// (70B+). Default: 1.
+	NumPlans int
+
+	// CriticThreshold is the confidence below which the critic runs. 0.0 =
+	// critic never runs (v2 behavior, default). 0.80 = critic runs when
+	// confidence < 80%. Only useful on models smart enough to evaluate
+	// root causes (70B+). Default: 0.0.
+	CriticThreshold float64
 }
 
 // Agent runs the investigation loop.
@@ -119,6 +131,12 @@ func New(router *llm.Router, cfg AgentConfig) *Agent {
 	}
 	if cfg.CompactThreshold <= 0 {
 		cfg.CompactThreshold = DefaultCompactThreshold
+	}
+	if cfg.NumPlans <= 0 {
+		cfg.NumPlans = 1 // v2 default: single plan
+	}
+	if cfg.CriticThreshold <= 0 {
+		cfg.CriticThreshold = 0.0 // v2 default: critic never runs
 	}
 	return &Agent{
 		router: router,
@@ -155,9 +173,10 @@ func (a *Agent) Run(ctx context.Context, systemPrompt string) (*InvestigationRes
 		"content": fmt.Sprintf("Available tools:\n%s\n\n%s\n\nStart investigating.", toolsJSON, agentInstructions),
 	})
 
-	// Phase 1: Multi-plan generation (simplified MCTS).
-	// Generate 3 plans, pick the best one based on specificity scoring.
-	// This is the "best-of-N" approach from MCTS research (EMNLP 2025).
+	// Phase 1: Planning.
+	// When NumPlans=1 (default, v2 behavior): generate a single plan.
+	// When NumPlans>1 (opt-in, for large models): generate N plans,
+	// pick the best by specificity scoring (simplified MCTS).
 	podLogs := ""
 	for _, msg := range conversation {
 		if msg["role"] == "system" {
@@ -166,17 +185,31 @@ func (a *Agent) Run(ctx context.Context, systemPrompt string) (*InvestigationRes
 		}
 	}
 
-	plans := a.generatePlans(ctx, conversation, 2)
 	var plan string
-	if len(plans) > 0 {
-		plan = pickBestPlan(plans, podLogs)
+	if a.cfg.NumPlans > 1 {
+		plans := a.generatePlans(ctx, conversation, a.cfg.NumPlans)
+		if len(plans) > 0 {
+			plan = pickBestPlan(plans, podLogs)
+		}
+	} else {
+		// Single plan — one LLM call (v2 behavior).
+		planningCtx, planningCancel := context.WithTimeout(ctx, a.cfg.TurnTimeout)
+		p, pErr := a.router.FrontierText(planningCtx,
+			"You are an autonomous SRE agent. Read the crash context and write a brief 2-3 step investigation plan. Which files will you read? What will you search for? Be specific.",
+			formatConversation(conversation), 500)
+		planningCancel()
+		if pErr != nil {
+			logging.Warn("agent: planning call failed, skipping plan", "err", pErr)
+		} else {
+			plan = p
+		}
 	}
 
 	if plan != "" {
 		conversation = append(conversation,
 			map[string]string{"role": "assistant", "content": plan},
 			map[string]string{"role": "user", "content": fmt.Sprintf("Here is your investigation plan:\n%s\n\nNow execute it. Call tools one at a time. Respond with JSON only.", truncate(plan, 500))})
-		logging.Info("agent: plan selected (best of 2)", "plan", truncate(plan, 100))
+		logging.Info("agent: plan generated", "plans", a.cfg.NumPlans, "plan", truncate(plan, 100))
 	} else {
 		logging.Warn("agent: planning failed, starting without plan")
 	}
@@ -230,10 +263,13 @@ func (a *Agent) Run(ctx context.Context, systemPrompt string) (*InvestigationRes
 			turns = append(turns, turn)
 
 			// Multi-agent critic: verify the root cause before
-			// declaring done. Only run ONCE per investigation, and
-			// only for low-confidence answers (< 80%). High-confidence
-			// answers (≥ 80%) are trusted without critic review.
-			if !criticUsed && parsed.Confidence < 0.80 && turnNum < a.cfg.MaxTurns {
+			// declaring done. Only runs when CriticThreshold > 0
+			// AND confidence is below the threshold. Default
+			// (CriticThreshold=0.0) = critic never runs = v2 behavior.
+			// Only useful on models smart enough to evaluate root
+			// causes (70B+). On small models, the critic rejects
+			// correct answers and wastes turns.
+			if a.cfg.CriticThreshold > 0 && !criticUsed && parsed.Confidence < a.cfg.CriticThreshold && turnNum < a.cfg.MaxTurns {
 				criticUsed = true
 				approved, critique := a.criticReview(ctx, parsed.RootCause, parsed.FilesToChange, podLogs, conversation)
 				if !approved {
