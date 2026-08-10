@@ -31,10 +31,11 @@ INVESTIGATION PRINCIPLES:
 2. Check CLIENT and STORE files, not just handlers. Bugs are often in code that handlers call.
 3. If a tool returns no results, try a DIFFERENT approach. Do not repeat the same search.
 4. After 3-4 tool calls, declare done with your best hypothesis.
+5. Do not assume the bug matches a known pattern — investigate the actual code.
 
-JSON format:
+JSON format (respond with EXACTLY one of these):
   Tool: {"tool": "<name>", "args": {<args>}}
-  Done: {"done": true, "root_cause": "...", "confidence": 0.85, "files_to_change": ["path"]}`
+  Done: {"done": true, "root_cause": "<one sentence>", "confidence": 0.85, "files_to_change": ["path"]}`
 
 const agentInstructions = `Investigate the crash using the tools above.
 
