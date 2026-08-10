@@ -276,8 +276,14 @@ func TestPipelineAdapter_AgentLoopSuccess(t *testing.T) {
 // first calls a tool, then declares done. This exercises the conversation
 // accumulation + tool execution path.
 func TestPipelineAdapter_AgentLoopMultiTurn(t *testing.T) {
-	// Turn 1: list_symbols. Turn 2: done.
+	// The agent now generates 2 plans before the investigation loop.
+	// So the LLM call sequence is:
+	//   Plan 1, Plan 2 (multi-plan generation)
+	//   Turn 1: list_symbols (tool call)
+	//   Turn 2: done (root cause, confidence 0.85 ≥ 0.80 → no critic)
 	responses := []string{
+		`Plan: read greet.go and check buildMessage function.`,
+		`Plan: search for buildMessage callers and read the function.`,
 		`{"tool": "list_symbols", "args": {}}`,
 		`{"done": true, "root_cause": "found bug in buildMessage", "confidence": 0.85, "files_to_change": ["greet.go"]}`,
 	}

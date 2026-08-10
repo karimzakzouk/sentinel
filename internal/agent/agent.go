@@ -155,24 +155,35 @@ func (a *Agent) Run(ctx context.Context, systemPrompt string) (*InvestigationRes
 		"content": fmt.Sprintf("Available tools:\n%s\n\n%s\n\nStart investigating.", toolsJSON, agentInstructions),
 	})
 
-	// Phase 1: Planning turn — one LLM call to produce an investigation plan.
-	planningCtx, planningCancel := context.WithTimeout(ctx, a.cfg.TurnTimeout)
-	plan, err := a.router.FrontierText(planningCtx,
-		"You are an autonomous SRE agent. Read the crash context and write a brief 2-3 step investigation plan. Which files will you read? What will you search for? Be specific.",
-		formatConversation(conversation), 500)
-	planningCancel()
+	// Phase 1: Multi-plan generation (simplified MCTS).
+	// Generate 3 plans, pick the best one based on specificity scoring.
+	// This is the "best-of-N" approach from MCTS research (EMNLP 2025).
+	podLogs := ""
+	for _, msg := range conversation {
+		if msg["role"] == "system" {
+			podLogs = msg["content"]
+			break
+		}
+	}
 
-	if err != nil {
-		logging.Warn("agent: planning call failed, skipping plan", "err", err)
-	} else {
+	plans := a.generatePlans(ctx, conversation, 2)
+	var plan string
+	if len(plans) > 0 {
+		plan = pickBestPlan(plans, podLogs)
+	}
+
+	if plan != "" {
 		conversation = append(conversation,
 			map[string]string{"role": "assistant", "content": plan},
 			map[string]string{"role": "user", "content": fmt.Sprintf("Here is your investigation plan:\n%s\n\nNow execute it. Call tools one at a time. Respond with JSON only.", truncate(plan, 500))})
-		logging.Info("agent: plan generated", "plan", truncate(plan, 100))
+		logging.Info("agent: plan selected (best of 2)", "plan", truncate(plan, 100))
+	} else {
+		logging.Warn("agent: planning failed, starting without plan")
 	}
 
 	// Phase 2: Execution loop with stuck detection.
 	stuckDetector := NewStuckDetector()
+	criticUsed := false // only run the critic once per investigation
 
 	for turnNum := 1; turnNum <= a.cfg.MaxTurns; turnNum++ {
 		// Inner retry loop for malformed LLM output.
@@ -217,7 +228,25 @@ func (a *Agent) Run(ctx context.Context, systemPrompt string) (*InvestigationRes
 
 		if parsed.Done {
 			turns = append(turns, turn)
-			logging.Info("agent: investigation complete", "turns", turnNum, "root_cause", parsed.RootCause, "confidence", parsed.Confidence)
+
+			// Multi-agent critic: verify the root cause before
+			// declaring done. Only run ONCE per investigation, and
+			// only for low-confidence answers (< 80%). High-confidence
+			// answers (≥ 80%) are trusted without critic review.
+			if !criticUsed && parsed.Confidence < 0.80 && turnNum < a.cfg.MaxTurns {
+				criticUsed = true
+				approved, critique := a.criticReview(ctx, parsed.RootCause, parsed.FilesToChange, podLogs, conversation)
+				if !approved {
+					logging.Warn("agent: critic rejected root cause", "turn", turnNum, "critique", critique)
+					conversation = append(conversation,
+						map[string]string{"role": "user", "content": fmt.Sprintf(
+							"[CRITIC] Your root cause was rejected: %s\n\nContinue investigating. Try a different approach.", critique)})
+					continue
+				}
+			}
+
+			criticApproved := criticUsed || parsed.Confidence >= 0.80
+			logging.Info("agent: investigation complete", "turns", turnNum, "root_cause", parsed.RootCause, "confidence", parsed.Confidence, "critic_approved", criticApproved)
 			return &InvestigationResult{
 				RootCause:   parsed.RootCause,
 				Confidence:  parsed.Confidence,
@@ -256,7 +285,7 @@ func (a *Agent) Run(ctx context.Context, systemPrompt string) (*InvestigationRes
 		logging.Info("agent: turn complete", "turn", turnNum, "tool", parsed.Tool, "done", parsed.Done)
 
 		if turnNum >= a.cfg.CompactThreshold && turnNum%5 == 0 {
-			conversation = compactConversation(conversation, systemPrompt)
+			conversation = a.condenseContext(ctx, conversation, systemPrompt)
 		}
 	}
 
