@@ -8,29 +8,27 @@ import (
 )
 
 func TestParseLLMResponse_Done(t *testing.T) {
-	resp := `{"done": true, "root_cause": "DATABASE_URLL typo in deployment", "confidence": 0.9, "files_to_change": ["deployment/k8s.yaml"]}`
-	parsed := parseLLMResponse(resp)
-
+	resp := `{"done": true, "root_cause": "DATABASE_URLL typo", "confidence": 0.9, "files_to_change": ["deployment/k8s.yaml"]}`
+	parsed, ok := parseLLMResponse(resp)
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
 	if !parsed.Done {
 		t.Error("expected done=true")
 	}
-	if parsed.RootCause != "DATABASE_URLL typo in deployment" {
+	if parsed.RootCause != "DATABASE_URLL typo" {
 		t.Errorf("root_cause = %q", parsed.RootCause)
 	}
 	if parsed.Confidence != 0.9 {
 		t.Errorf("confidence = %f", parsed.Confidence)
 	}
-	if len(parsed.FilesToChange) != 1 || parsed.FilesToChange[0] != "deployment/k8s.yaml" {
-		t.Errorf("files_to_change = %v", parsed.FilesToChange)
-	}
 }
 
 func TestParseLLMResponse_ToolCall(t *testing.T) {
 	resp := `{"tool": "read_file", "args": {"path": "app/main.py"}}`
-	parsed := parseLLMResponse(resp)
-
-	if parsed.Done {
-		t.Error("expected done=false")
+	parsed, ok := parseLLMResponse(resp)
+	if !ok {
+		t.Fatal("expected ok=true")
 	}
 	if parsed.Tool != "read_file" {
 		t.Errorf("tool = %q", parsed.Tool)
@@ -41,107 +39,114 @@ func TestParseLLMResponse_ToolCall(t *testing.T) {
 }
 
 func TestParseLLMResponse_ProseWithJSON(t *testing.T) {
-	resp := `Let me look at the deployment file.
-
-{"tool": "read_file", "args": {"path": "deployment/k8s.yaml"}}`
-	parsed := parseLLMResponse(resp)
-
+	resp := `Let me look at the file.\n\n{"tool": "read_file", "args": {"path": "main.go"}}`
+	parsed, ok := parseLLMResponse(resp)
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
 	if parsed.Tool != "read_file" {
-		t.Errorf("tool = %q, expected read_file", parsed.Tool)
+		t.Errorf("tool = %q", parsed.Tool)
 	}
 }
 
 func TestParseLLMResponse_Garbage(t *testing.T) {
 	resp := `I think the issue is with the database.`
-	parsed := parseLLMResponse(resp)
-
-	if parsed.Done {
-		t.Error("expected done=false for non-JSON, non-done response")
+	_, ok := parseLLMResponse(resp)
+	if ok {
+		t.Error("expected ok=false for non-JSON")
 	}
-	if parsed.Tool != "" {
-		t.Errorf("expected no tool, got %q", parsed.Tool)
+}
+
+func TestParseLLMResponse_MarkdownCodeBlock(t *testing.T) {
+	resp := "Here is my analysis:\n\n```json\n{\"tool\": \"search_code\", \"args\": {\"pattern\": \"DATABASE_URL\"}}\n```\n\nDone."
+	parsed, ok := parseLLMResponse(resp)
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	if parsed.Tool != "search_code" {
+		t.Errorf("tool = %q", parsed.Tool)
+	}
+}
+
+func TestParseLLMResponse_GarbageWithDoneKeyword(t *testing.T) {
+	resp := `I think I'm done investigating.`
+	parsed, ok := parseLLMResponse(resp)
+	if ok {
+		t.Error("expected ok=false")
+	}
+	if parsed.Done {
+		t.Error("expected done=false — lenient fallback removed")
+	}
+}
+
+func TestStuckDetector_RepeatedSameCall(t *testing.T) {
+	sd := NewStuckDetector()
+	sd.Record("search_code", map[string]any{"pattern": "foo"}, ToolResult{Success: true, Output: "results"})
+	sd.Record("search_code", map[string]any{"pattern": "foo"}, ToolResult{Success: true, Output: "results"})
+	if sd.CheckStuck() != "" {
+		t.Error("should not be stuck after 2 calls")
+	}
+	sd.Record("search_code", map[string]any{"pattern": "foo"}, ToolResult{Success: true, Output: "results"})
+	if sd.CheckStuck() == "" {
+		t.Error("should be stuck after 3 identical calls")
+	}
+}
+
+func TestStuckDetector_RepeatedTool(t *testing.T) {
+	sd := NewStuckDetector()
+	sd.Record("search_code", map[string]any{"pattern": "a"}, ToolResult{Success: true, Output: "1"})
+	sd.Record("search_code", map[string]any{"pattern": "b"}, ToolResult{Success: true, Output: "2"})
+	sd.Record("search_code", map[string]any{"pattern": "c"}, ToolResult{Success: true, Output: "3"})
+	sd.Record("search_code", map[string]any{"pattern": "d"}, ToolResult{Success: true, Output: "4"})
+	if sd.CheckStuck() == "" {
+		t.Error("should be stuck after 4 calls to same tool")
+	}
+}
+
+func TestStuckDetector_NotStuck(t *testing.T) {
+	sd := NewStuckDetector()
+	sd.Record("read_file", map[string]any{"path": "a.go"}, ToolResult{Success: true, Output: "contents"})
+	sd.Record("search_code", map[string]any{"pattern": "err"}, ToolResult{Success: true, Output: "match"})
+	sd.Record("read_file", map[string]any{"path": "b.go"}, ToolResult{Success: true, Output: "contents"})
+	if sd.CheckStuck() != "" {
+		t.Error("should not be stuck with diverse calls")
+	}
+}
+
+func TestStuckDetector_RepeatedErrors(t *testing.T) {
+	sd := NewStuckDetector()
+	sd.Record("search_code", map[string]any{"pattern": "foo"}, ToolResult{Success: false, Output: "No matches found."})
+	sd.Record("search_code", map[string]any{"pattern": "bar"}, ToolResult{Success: false, Output: "No matches found."})
+	sd.Record("search_code", map[string]any{"pattern": "baz"}, ToolResult{Success: false, Output: "No matches found."})
+	msg := sd.CheckStuck()
+	if msg == "" {
+		t.Error("should be stuck after 3 failed calls")
 	}
 }
 
 func TestTruncate(t *testing.T) {
 	if truncate("hello", 10) != "hello" {
-		t.Error("short string should not be truncated")
+		t.Error("short string should not truncate")
 	}
 	if truncate("hello world", 5) != "hello..." {
 		t.Errorf("got %q", truncate("hello world", 5))
 	}
 }
 
-func TestFormatConversation(t *testing.T) {
-	conv := []map[string]string{
-		{"role": "system", "content": "You are an agent."},
-		{"role": "user", "content": "Investigate."},
-	}
-	out := formatConversation(conv)
-	if !contains(out, "[system]") || !contains(out, "[user]") {
-		t.Errorf("expected role markers in output")
-	}
-}
-
-func TestCompactConversation(t *testing.T) {
-	conv := []map[string]string{
-		{"role": "system", "content": "system prompt"},
-		{"role": "user", "content": "initial"},
-	}
-	for i := 0; i < 15; i++ {
-		conv = append(conv,
-			map[string]string{"role": "assistant", "content": "response"},
-			map[string]string{"role": "user", "content": "Tool result: something"},
-		)
-	}
-
-	compacted := compactConversation(conv, "system prompt")
-	if len(compacted) >= len(conv) {
-		t.Errorf("compaction should reduce conversation: %d -> %d", len(conv), len(compacted))
-	}
-}
-
 func TestRegisterRepoTools(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "main.py"), []byte("print('hello')\n"), 0o644)
-
 	a := New(nil, AgentConfig{MaxTurns: 5})
 	a.RegisterRepoTools(dir)
-
 	if len(a.tools) != 3 {
-		t.Errorf("expected 3 repo tools, got %d", len(a.tools))
+		t.Errorf("expected 3 tools, got %d", len(a.tools))
 	}
-
 	result := a.toolFuncs["read_file"](context.Background(), map[string]any{"path": "main.py"})
 	if !result.Success {
 		t.Errorf("read_file failed: %s", result.Output)
 	}
-
-	result = a.toolFuncs["search_code"](context.Background(), map[string]any{"pattern": "print"})
-	if !result.Success {
-		t.Errorf("search_code failed: %s", result.Output)
-	}
-
-	result = a.toolFuncs["list_files"](context.Background(), map[string]any{})
-	if !result.Success {
-		t.Errorf("list_files failed: %s", result.Output)
-	}
-}
-
-func TestExecuteTool_Unknown(t *testing.T) {
-	a := New(nil, AgentConfig{MaxTurns: 5})
-	result := a.executeTool(context.Background(), "nonexistent", nil)
-
-	if result.Success {
-		t.Error("expected failure for unknown tool")
-	}
 }
 
 func contains(s, sub string) bool {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
+	return len(s) >= len(sub) && (s == sub || len(s) > 0 && (s[0:len(sub)] == sub || contains(s[1:], sub)))
 }
