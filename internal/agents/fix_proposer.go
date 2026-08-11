@@ -697,6 +697,12 @@ func extractMetadataJSON(rawOutput string) map[string]any {
 // the original path if no match.
 func normalizeFilePath(path string, fetchedCode map[string]string) string {
 	if path == "" {
+		// If no path was provided but we have exactly one fetched file, use it.
+		if len(fetchedCode) == 1 {
+			for key := range fetchedCode {
+				return key
+			}
+		}
 		return ""
 	}
 	// Exact match.
@@ -715,6 +721,18 @@ func normalizeFilePath(path string, fetchedCode map[string]string) string {
 		shortPath := strings.Join(parts[i:], "/")
 		if _, ok := fetchedCode[shortPath]; ok {
 			return shortPath
+		}
+	}
+	// Last resort: if the LLM returned a wrong file path (e.g., app/main.py
+	// instead of src/handlers.rs), and there's only one file in fetchedCode,
+	// use that file. This handles the common small-model failure where the
+	// LLM uses file paths from the prompt examples instead of the actual
+	// source code.
+	if len(fetchedCode) == 1 {
+		for key := range fetchedCode {
+			logging.Warn("fix proposer: LLM returned wrong file path, using the only available file",
+				"llm_path", path, "actual_path", key)
+			return key
 		}
 	}
 	// No match — return as-is (the apply step will fail with a clear error).
