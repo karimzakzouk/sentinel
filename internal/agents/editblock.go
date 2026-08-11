@@ -464,6 +464,9 @@ func ParseWholeFileReplacement(llmOutput string) (string, string) {
 	output := stripReasoning(llmOutput)
 
 	lines := strings.Split(output, "\n")
+
+	// Strategy 1: Bare file path line followed by a code block.
+	// Matches: src/handlers.rs\n```\n...code...\n```
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if !filePathLineRe.MatchString(trimmed) {
@@ -489,12 +492,82 @@ func ParseWholeFileReplacement(llmOutput string) (string, string) {
 		}
 	}
 
-	// Fallback: a code block with no file path, where the content looks like
-	// code (contains "def ", "func ", or "class ").
+	// Strategy 2: Markdown header with file path, followed by code block.
+	// Matches: ### src/handlers.rs\n```rust\n...code...\n```
+	// This is what small models (8B) actually produce — they use markdown
+	// headers for structure instead of bare file paths.
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		// Strip markdown header prefix (###, ##, #)
+		if strings.HasPrefix(trimmed, "#") {
+			afterHeader := strings.TrimSpace(strings.TrimLeft(trimmed, "#"))
+			if filePathLineRe.MatchString(afterHeader) {
+				// Look for a code block within the next 3 lines.
+				for j := i + 1; j < len(lines) && j < i+3; j++ {
+					nextTrimmed := strings.TrimSpace(lines[j])
+					if strings.HasPrefix(nextTrimmed, "```") {
+						blockStart := j + 1
+						blockEnd := -1
+						for k := blockStart; k < len(lines); k++ {
+							if strings.HasPrefix(strings.TrimSpace(lines[k]), "```") {
+								blockEnd = k
+								break
+							}
+						}
+						if blockEnd > blockStart {
+							content := strings.Join(lines[blockStart:blockEnd], "\n")
+							return afterHeader, content
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Strategy 3: File path mentioned in the line before a code block
+	// (e.g., "File: src/handlers.rs" or "Edit src/handlers.rs:").
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		// Look for file path patterns in descriptive text.
+		lower := strings.ToLower(trimmed)
+		if strings.Contains(lower, "file:") || strings.Contains(lower, "edit ") ||
+			strings.Contains(lower, "modify ") || strings.Contains(lower, "path:") {
+			// Extract the file path from the line.
+			for _, word := range strings.Fields(trimmed) {
+				cleanWord := strings.Trim(word, ":,;\"'()[]{}")
+				if filePathLineRe.MatchString(cleanWord) {
+					// Look for code block within next 3 lines.
+					for j := i + 1; j < len(lines) && j < i+3; j++ {
+						nextTrimmed := strings.TrimSpace(lines[j])
+						if strings.HasPrefix(nextTrimmed, "```") {
+							blockStart := j + 1
+							blockEnd := -1
+							for k := blockStart; k < len(lines); k++ {
+								if strings.HasPrefix(strings.TrimSpace(lines[k]), "```") {
+									blockEnd = k
+									break
+								}
+							}
+							if blockEnd > blockStart {
+								content := strings.Join(lines[blockStart:blockEnd], "\n")
+								return cleanWord, content
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Strategy 4: Any code block that looks like code (fallback).
 	for _, m := range codeBlockRe.FindAllStringSubmatch(output, -1) {
 		if len(m) >= 2 && (strings.Contains(m[1], "def ") ||
 			strings.Contains(m[1], "func ") ||
-			strings.Contains(m[1], "class ")) {
+			strings.Contains(m[1], "class ") ||
+			strings.Contains(m[1], "pub fn ") ||
+			strings.Contains(m[1], "fn ") ||
+			strings.Contains(m[1], "package ") ||
+			strings.Contains(m[1], "import ")) {
 			return "", m[1]
 		}
 	}
