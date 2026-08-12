@@ -69,19 +69,36 @@ func validateBraceBalance(content, lang string, pairs []rune) error {
 		closeOf[pairs[i+1]] = pairs[i]
 	}
 
-	var stack []rune
+	// stack tracks each unclosed opener along with the line number
+	// where it appeared. The line number is included in the error
+	// message so the fix-proposer retry loop can feed it back to the
+	// LLM ("unclosed '{' at line 12") — without it, the LLM has no
+	// idea which line to fix.
+	type stackEntry struct {
+		r    rune
+		line int
+	}
+	var stack []stackEntry
 	inSingle := false
 	inDouble := false
 	inTripleDouble := false
 	inTripleSingle := false
 	inBacktick := false
 	inLineComment := false
-
-	flushLineComment := func() { inLineComment = false }
+	// skipUntil is the byte offset of the first character to resume
+	// parsing at after a block comment. -1 = no active skip. We need
+	// this because Go's for-range doesn't allow modifying the loop
+	// index, so we use a "skip until" cursor instead.
+	skipUntil := -1
+	lineNum := 1
 
 	for i, r := range content {
 		if r == '\n' {
-			flushLineComment()
+			inLineComment = false
+			lineNum++
+			continue
+		}
+		if i < skipUntil {
 			continue
 		}
 		if inLineComment {
@@ -138,10 +155,12 @@ func validateBraceBalance(content, lang string, pairs []rune) error {
 		if r == '/' && i+1 < len(content) && content[i+1] == '*' {
 			end := strings.Index(content[i+2:], "*/")
 			if end < 0 {
-				return fmt.Errorf("%s: unterminated block comment at offset %d", lang, i)
+				return fmt.Errorf("%s: unterminated block comment at line %d", lang, lineNum)
 			}
-			_ = end
-			inLineComment = true
+			// Skip past the closing */. The next iteration we process
+			// is the first character after */ — so code following a
+			// block comment on the same line is still parsed.
+			skipUntil = i + 2 + end + 2
 			continue
 		}
 
@@ -169,7 +188,6 @@ func validateBraceBalance(content, lang string, pairs []rune) error {
 
 		if open, ok := closeOf[r]; ok {
 			if len(stack) == 0 {
-				lineNum := strings.Count(content[:i], "\n") + 1
 				lineStart := strings.LastIndex(content[:i], "\n") + 1
 				lineEnd := i
 				if idx := strings.Index(content[i:], "\n"); idx >= 0 {
@@ -179,15 +197,14 @@ func validateBraceBalance(content, lang string, pairs []rune) error {
 				return fmt.Errorf("%s: unexpected '%c' at line %d. Content: %s", lang, r, lineNum, lineContent)
 			}
 			top := stack[len(stack)-1]
-			if top != open {
-				lineNum := strings.Count(content[:i], "\n") + 1
-				return fmt.Errorf("%s: mismatched bracket at line %d: expected %q, got %q", lang, lineNum, open, r)
+			if top.r != open {
+				return fmt.Errorf("%s: mismatched bracket at line %d: expected %q, got %q (opener was at line %d)", lang, lineNum, open, r, top.line)
 			}
 			stack = stack[:len(stack)-1]
 			continue
 		}
 		if _, ok := openOf[r]; ok {
-			stack = append(stack, r)
+			stack = append(stack, stackEntry{r: r, line: lineNum})
 			continue
 		}
 	}
@@ -208,7 +225,8 @@ func validateBraceBalance(content, lang string, pairs []rune) error {
 		return fmt.Errorf("%s: unterminated backtick template literal", lang)
 	}
 	if len(stack) > 0 {
-		return fmt.Errorf("%s: unclosed bracket %q", lang, stack[len(stack)-1])
+		top := stack[len(stack)-1]
+		return fmt.Errorf("%s: unclosed %q opened at line %d", lang, top.r, top.line)
 	}
 	return nil
 }
