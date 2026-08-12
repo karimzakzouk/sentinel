@@ -154,23 +154,21 @@ Output a JSON object with the fix metadata. Keep it short.
 
 Use this exact format for each file you want to change:
 
-app/main.py
+internal/handler/handler.go
 <<<<<<< SEARCH
-    result = a / b
+        sku := r.URL.Path[len("/products/"):]
 =======
-    if b == 0:
-        raise HTTPException(status_code=400, detail="Divisor cannot be zero")
-    result = a / b
+        if len(r.URL.Path) <= len("/products/") {
+                http.Error(w, "sku required", http.StatusBadRequest)
+                return
+        }
+        sku := r.URL.Path[len("/products/"):]
 >>>>>>> REPLACE
 
 Rules:
 - CRITICAL: The SEARCH section MUST be COPIED VERBATIM from the source code provided above.
-  Do NOT paraphrase. Do NOT summarize. Do NOT merge lines. Do NOT rename variables.
-  Copy the EXACT text, character-for-character, including all whitespace and indentation.
-  If the source code says "account = ACCOUNTS[account_id]" then your SEARCH block MUST say
-  "account = ACCOUNTS[account_id]" — NOT "balance = ACCOUNTS[account_id]" or any other variant.
+  Do NOT use placeholder text. Copy the ACTUAL code from the source file shown in this prompt.
   The SEARCH block is a literal substring match — if even ONE character differs, it will fail.
-- Before writing each SEARCH block, look at the source code above and copy-paste the exact lines.
 - Keep blocks small (2-10 lines) — only the code that needs to change
 - Multiple blocks per file are OK if multiple spots need fixing
 - The file path goes on the line BEFORE <<<<<<< SEARCH
@@ -178,15 +176,17 @@ Rules:
 
 ## Example Output
 
-{"fix_type":"code_fix","description":"Add zero check before division","pr_title":"[Sentinel] Fix ZeroDivisionError in /divide","pr_body":"Added a guard clause to return 400 when b=0."}
+{"fix_type":"code_fix","description":"Add length check before path slice","pr_title":"[Sentinel] Fix index out of range in handler","pr_body":"Added a length check before slicing the URL path."}
 
-app/main.py
+internal/handler/handler.go
 <<<<<<< SEARCH
-    result = a / b
+        sku := r.URL.Path[len("/products/"):]
 =======
-    if b == 0:
-        raise HTTPException(status_code=400, detail="Divisor cannot be zero")
-    result = a / b
+        if len(r.URL.Path) <= len("/products/") {
+                http.Error(w, "sku required", http.StatusBadRequest)
+                return
+        }
+        sku := r.URL.Path[len("/products/"):]
 >>>>>>> REPLACE`
 
 // FixProposer translates a root cause into a concrete FixProposal. Calls the
@@ -376,6 +376,18 @@ func (a *FixProposer) Run(ctx context.Context, state *schemas.AgentState) error 
 				editResult := ApplyEditBlocks(originalContent, fileBlocks)
 				if !editResult.Success {
 					lastError = editResult.FailedReason
+					allApplied = false
+					break
+				}
+
+				// Syntax-validate the patched content BEFORE accepting it.
+				// This catches broken code that the LLM generated (missing
+				// brackets, invalid syntax, etc.) and feeds the error back
+				// on the next retry. Based on the Aider/SWE-agent pattern
+				// of validate-then-retry.
+				if syntaxErr := validateFixSyntax(filePath, editResult.NewContent); syntaxErr != nil {
+					lastError = fmt.Sprintf("syntax validation failed for %s: %v", filePath, syntaxErr)
+					logging.Error("fix proposer: syntax validation failed", "attempt", attempt+1, "path", filePath, "err", syntaxErr)
 					allApplied = false
 					break
 				}
@@ -697,12 +709,6 @@ func extractMetadataJSON(rawOutput string) map[string]any {
 // the original path if no match.
 func normalizeFilePath(path string, fetchedCode map[string]string) string {
 	if path == "" {
-		// If no path was provided but we have exactly one fetched file, use it.
-		if len(fetchedCode) == 1 {
-			for key := range fetchedCode {
-				return key
-			}
-		}
 		return ""
 	}
 	// Exact match.
@@ -721,18 +727,6 @@ func normalizeFilePath(path string, fetchedCode map[string]string) string {
 		shortPath := strings.Join(parts[i:], "/")
 		if _, ok := fetchedCode[shortPath]; ok {
 			return shortPath
-		}
-	}
-	// Last resort: if the LLM returned a wrong file path (e.g., app/main.py
-	// instead of src/handlers.rs), and there's only one file in fetchedCode,
-	// use that file. This handles the common small-model failure where the
-	// LLM uses file paths from the prompt examples instead of the actual
-	// source code.
-	if len(fetchedCode) == 1 {
-		for key := range fetchedCode {
-			logging.Warn("fix proposer: LLM returned wrong file path, using the only available file",
-				"llm_path", path, "actual_path", key)
-			return key
 		}
 	}
 	// No match — return as-is (the apply step will fail with a clear error).
