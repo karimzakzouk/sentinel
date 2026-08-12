@@ -62,7 +62,7 @@ var (
 	codeBlockRe  = regexp.MustCompile("(?s)```(?:\\w+[/\\.\\w]*)?\\n(.*?)```")
 
 	editBlockRe = regexp.MustCompile(
-		`(?ms)^<<<<<<<\s*SEARCH\s*$\n(.*?)^=======\s*$\n(.*?)^>>>>>>>\s*REPLACE\s*$`,
+		`(?ms)^<<<<<<<\s*\S*\s*$\n(.*?)^=======\s*$\n(.*?)^>>>>>>>\s*\S*\s*$`,
 	)
 
 	// filePathLineRe matches a file path on the line before <<<<<<< SEARCH.

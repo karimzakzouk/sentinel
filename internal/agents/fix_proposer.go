@@ -154,23 +154,21 @@ Output a JSON object with the fix metadata. Keep it short.
 
 Use this exact format for each file you want to change:
 
-app/main.py
+internal/handler/handler.go
 <<<<<<< SEARCH
-    result = a / b
+        sku := r.URL.Path[len("/products/"):]
 =======
-    if b == 0:
-        raise HTTPException(status_code=400, detail="Divisor cannot be zero")
-    result = a / b
+        if len(r.URL.Path) <= len("/products/") {
+                http.Error(w, "sku required", http.StatusBadRequest)
+                return
+        }
+        sku := r.URL.Path[len("/products/"):]
 >>>>>>> REPLACE
 
 Rules:
 - CRITICAL: The SEARCH section MUST be COPIED VERBATIM from the source code provided above.
-  Do NOT paraphrase. Do NOT summarize. Do NOT merge lines. Do NOT rename variables.
-  Copy the EXACT text, character-for-character, including all whitespace and indentation.
-  If the source code says "account = ACCOUNTS[account_id]" then your SEARCH block MUST say
-  "account = ACCOUNTS[account_id]" — NOT "balance = ACCOUNTS[account_id]" or any other variant.
+  Do NOT use placeholder text. Copy the ACTUAL code from the source file shown in this prompt.
   The SEARCH block is a literal substring match — if even ONE character differs, it will fail.
-- Before writing each SEARCH block, look at the source code above and copy-paste the exact lines.
 - Keep blocks small (2-10 lines) — only the code that needs to change
 - Multiple blocks per file are OK if multiple spots need fixing
 - The file path goes on the line BEFORE <<<<<<< SEARCH
@@ -178,15 +176,17 @@ Rules:
 
 ## Example Output
 
-{"fix_type":"code_fix","description":"Add zero check before division","pr_title":"[Sentinel] Fix ZeroDivisionError in /divide","pr_body":"Added a guard clause to return 400 when b=0."}
+{"fix_type":"code_fix","description":"Add length check before path slice","pr_title":"[Sentinel] Fix index out of range in handler","pr_body":"Added a length check before slicing the URL path."}
 
-app/main.py
+internal/handler/handler.go
 <<<<<<< SEARCH
-    result = a / b
+        sku := r.URL.Path[len("/products/"):]
 =======
-    if b == 0:
-        raise HTTPException(status_code=400, detail="Divisor cannot be zero")
-    result = a / b
+        if len(r.URL.Path) <= len("/products/") {
+                http.Error(w, "sku required", http.StatusBadRequest)
+                return
+        }
+        sku := r.URL.Path[len("/products/"):]
 >>>>>>> REPLACE`
 
 // FixProposer translates a root cause into a concrete FixProposal. Calls the
