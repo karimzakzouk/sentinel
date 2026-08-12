@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/karimzakzouk/sentinel/internal/schemas"
+	"github.com/karimzakzouk/sentinel/internal/syntaxvalidate"
 )
 
 // TestTryExactMatch covers the exact-match strategy.
@@ -263,19 +264,19 @@ func TestTryAllStrategies(t *testing.T) {
 // TestValidateSyntax_Dispatch verifies the per-extension dispatch.
 func TestValidateSyntax_Dispatch(t *testing.T) {
 	// .py → Python validator (catches brace imbalance).
-	if err := validateSyntax("a.py", "x = {1: 2\n"); err == nil {
+	if err := syntaxvalidate.Validate("a.py", "x = {1: 2\n"); err == nil {
 		t.Error("expected brace-imbalance error for .py")
 	}
 	// .go → Go AST parser (catches missing brace).
-	if err := validateSyntax("a.go", "package main\nfunc main() {\n"); err == nil {
+	if err := syntaxvalidate.Validate("a.go", "package main\nfunc main() {\n"); err == nil {
 		t.Error("expected unclosed-brace error for .go")
 	}
 	// .json → JSON validator (catches missing brace).
-	if err := validateSyntax("a.json", `{"a": 1`); err == nil {
+	if err := syntaxvalidate.Validate("a.json", `{"a": 1`); err == nil {
 		t.Error("expected missing-brace error for .json")
 	}
 	// Unknown ext → nil.
-	if err := validateSyntax("a.md", "anything { goes }"); err != nil {
+	if err := syntaxvalidate.Validate("a.md", "anything { goes }"); err != nil {
 		t.Errorf("unknown ext should skip validation, got: %v", err)
 	}
 }
@@ -330,7 +331,7 @@ func TestSearchReplaceFlow_HappyPath(t *testing.T) {
 		t.Errorf("result = %q, expected 'return 2' present", content)
 	}
 	// Syntax should still be valid.
-	if err := validatePython(content); err != nil {
+	if err := syntaxvalidate.Validate("test.py", content); err != nil {
 		t.Errorf("syntax validation failed: %v", err)
 	}
 	// Ensure the executor pointer is used (so e isn't "declared and not used").

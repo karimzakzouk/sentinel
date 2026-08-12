@@ -3,11 +3,11 @@ package executors
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"strings"
 
 	"github.com/karimzakzouk/sentinel/internal/logging"
 	"github.com/karimzakzouk/sentinel/internal/schemas"
+	"github.com/karimzakzouk/sentinel/internal/syntaxvalidate"
 )
 
 // applySearchReplace fetches the current file content from the repo, applies
@@ -115,7 +115,7 @@ func (e *GitHubExecutor) applySearchReplace(ctx context.Context, repo, branch, p
 	// blocks one at a time, skipping syntax-breaking ones. We still ship
 	// the partial fix (better than nothing) but log the warning so the
 	// operator (and the LLM retry loop via logs) knows the fix is incomplete.
-	if syntaxErr := validateSyntax(path, content); syntaxErr != nil {
+	if syntaxErr := syntaxvalidate.Validate(path, content); syntaxErr != nil {
 		logging.Error("syntax validation failed on patched content", "err", syntaxErr)
 		content = originalContent
 		goodBlocks := 0
@@ -125,7 +125,7 @@ func (e *GitHubExecutor) applySearchReplace(ctx context.Context, repo, branch, p
 			if !matched {
 				continue
 			}
-			if err := validateSyntax(path, trial); err != nil {
+			if err := syntaxvalidate.Validate(path, trial); err != nil {
 				logging.Error("block produces syntax error — skipping", "block", i, "err", err)
 				droppedBlocks = append(droppedBlocks, i)
 				continue
@@ -340,27 +340,6 @@ func min3(a, b, c int) int {
 	return a
 }
 
-// validateSyntax dispatches to the per-language validator based on file
-// extension. See syntax_validate.go for the per-language implementations.
-func validateSyntax(path, content string) error {
-	ext := strings.ToLower(filepath.Ext(path))
-	switch ext {
-	case ".py":
-		return validatePython(content)
-	case ".go":
-		return validateGo(content)
-	case ".js", ".ts", ".jsx", ".tsx":
-		return validateJS(content)
-	case ".json":
-		return validateJSON(content)
-	case ".yaml", ".yml":
-		return validateYAML(content)
-	case ".java", ".kt", ".kts", ".rs", ".rb", ".cs", ".php", ".swift",
-		".scala", ".sc", ".c", ".cpp", ".cc", ".cxx", ".h", ".hpp", ".hxx":
-		// Brace-balance validation catches the dominant LLM mistake
-		// (unbalanced delimiters) for C-family languages.
-		return validateBraceBalance(content, []rune{'{', '}', '(', ')', '[', ']'})
-	default:
-		return nil
-	}
-}
+// validateSyntax is now syntaxvalidate.Validate (shared package).
+// The old per-language validators in syntax_validate.go are kept for
+// backwards compatibility but are no longer called directly.

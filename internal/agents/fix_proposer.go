@@ -24,6 +24,7 @@ import (
 	"github.com/karimzakzouk/sentinel/internal/llm"
 	"github.com/karimzakzouk/sentinel/internal/logging"
 	"github.com/karimzakzouk/sentinel/internal/schemas"
+	"github.com/karimzakzouk/sentinel/internal/syntaxvalidate"
 )
 
 // validateFilePath validates a file path returned by the LLM for a code fix.
@@ -287,7 +288,7 @@ func (a *FixProposer) Run(ctx context.Context, state *schemas.AgentState) error 
 	var dockerfilePath, prTitle, prBody, description string
 	var lastError string
 
-	maxRetries := 3
+	maxRetries := 5
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		var retryHint string
 		if attempt > 0 {
@@ -385,7 +386,7 @@ func (a *FixProposer) Run(ctx context.Context, state *schemas.AgentState) error 
 				// brackets, invalid syntax, etc.) and feeds the error back
 				// on the next retry. Based on the Aider/SWE-agent pattern
 				// of validate-then-retry.
-				if syntaxErr := validateFixSyntax(filePath, editResult.NewContent); syntaxErr != nil {
+				if syntaxErr := syntaxvalidate.Validate(filePath, editResult.NewContent); syntaxErr != nil {
 					lastError = fmt.Sprintf("syntax validation failed for %s: %v", filePath, syntaxErr)
 					logging.Error("fix proposer: syntax validation failed", "attempt", attempt+1, "path", filePath, "err", syntaxErr)
 					allApplied = false
