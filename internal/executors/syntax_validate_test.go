@@ -3,6 +3,8 @@ package executors
 import (
 	"strings"
 	"testing"
+
+	"github.com/karimzakzouk/sentinel/internal/syntaxvalidate"
 )
 
 // TestSyntaxValidators_NoSilentPass verifies the pure-Go validators
@@ -57,12 +59,12 @@ func TestSyntaxValidators_NoSilentPass(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateSyntax(tt.path, tt.content)
+			err := syntaxvalidate.Validate(tt.path, tt.content)
 			if tt.wantFail && err == nil {
-				t.Errorf("validateSyntax(%q) returned nil, want error (silent-pass bug regression)", tt.path)
+				t.Errorf("syntaxvalidate.Validate(%q) returned nil, want error (silent-pass bug regression)", tt.path)
 			}
 			if !tt.wantFail && err != nil {
-				t.Errorf("validateSyntax(%q) returned error: %v, want nil", tt.path, err)
+				t.Errorf("syntaxvalidate.Validate(%q) returned error: %v, want nil", tt.path, err)
 			}
 		})
 	}
@@ -71,13 +73,13 @@ func TestSyntaxValidators_NoSilentPass(t *testing.T) {
 // TestSyntaxValidators_RunInProcess verifies the validators don't shell
 // out. If they did, they'd fail in distroless (the original v5 bug).
 func TestSyntaxValidators_RunInProcess(t *testing.T) {
-	if err := validateSyntax("a.py", "x = 1\n"); err != nil {
+	if err := syntaxvalidate.Validate("a.py", "x = 1\n"); err != nil {
 		t.Errorf("python validation required external binary: %v", err)
 	}
-	if err := validateSyntax("a.go", "package main\n"); err != nil {
+	if err := syntaxvalidate.Validate("a.go", "package main\n"); err != nil {
 		t.Errorf("go validation required external binary: %v", err)
 	}
-	if err := validateSyntax("a.js", "var x = 1;\n"); err != nil {
+	if err := syntaxvalidate.Validate("a.js", "var x = 1;\n"); err != nil {
 		t.Errorf("js validation required external binary: %v", err)
 	}
 }
