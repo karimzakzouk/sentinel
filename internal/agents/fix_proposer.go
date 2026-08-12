@@ -380,6 +380,18 @@ func (a *FixProposer) Run(ctx context.Context, state *schemas.AgentState) error 
 					break
 				}
 
+				// Syntax-validate the patched content BEFORE accepting it.
+				// This catches broken code that the LLM generated (missing
+				// brackets, invalid syntax, etc.) and feeds the error back
+				// on the next retry. Based on the Aider/SWE-agent pattern
+				// of validate-then-retry.
+				if syntaxErr := validateFixSyntax(filePath, editResult.NewContent); syntaxErr != nil {
+					lastError = fmt.Sprintf("syntax validation failed for %s: %v", filePath, syntaxErr)
+					logging.Error("fix proposer: syntax validation failed", "attempt", attempt+1, "path", filePath, "err", syntaxErr)
+					allApplied = false
+					break
+				}
+
 				// Build FileChange from the result — use Changes (search/replace)
 				// so the GitHub executor can apply them to the branch.
 				var changes []schemas.SearchReplace
