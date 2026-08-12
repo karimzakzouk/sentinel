@@ -331,7 +331,7 @@ func TestSearchReplaceFlow_HappyPath(t *testing.T) {
 		t.Errorf("result = %q, expected 'return 2' present", content)
 	}
 	// Syntax should still be valid.
-	if err := validatePython(content); err != nil {
+	if err := syntaxvalidate.Validate("test.py", content); err != nil {
 		t.Errorf("syntax validation failed: %v", err)
 	}
 	// Ensure the executor pointer is used (so e isn't "declared and not used").
