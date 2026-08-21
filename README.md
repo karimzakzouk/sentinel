@@ -136,7 +136,7 @@ Sentinel reads attacker-controlled pod logs. Five layers prevent prompt-injectio
 
 1. **Repo allowlist** — only investigates repos in the configured allowlist
 2. **Path-confined ReadFile** — LLM-returned file paths cannot escape the cloned repo
-3. **18-pattern security scanner** — blocks `os.system`, `eval`, `pickle.loads`, `curl|bash`, hardcoded secrets, Dockerfile tampering, env exfiltration
+3. **19-pattern security scanner** — blocks `os.system`, `eval`, `pickle.loads`, `curl|bash`, hardcoded secrets, Dockerfile tampering, env exfiltration
 4. **Reviewer-agent LLM** — a second LLM call with a different system prompt audits the fix
 5. **Sandbox NetworkPolicy default-deny** — even a compromised fix cannot exfiltrate secrets from the canary pod
 

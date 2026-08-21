@@ -471,8 +471,8 @@ func wire(cfg *config.Config, listenAddr string) (*wiring, error) {
 		logging.Info("observability: prometheus querier initialized", "url", cfg.PrometheusURL)
 	}
 	if cfg.LokiURL != "" {
-		_ = observability.NewLokiClient(cfg.LokiURL, "")
-		logging.Info("observability: loki client initialized", "url", cfg.LokiURL)
+		logging.Info("observability: loki URL configured (client not yet wired — see Tier 2 TODO)",
+			"url", cfg.LokiURL)
 	}
 
 	// Proactive SLO burn-rate watcher.
