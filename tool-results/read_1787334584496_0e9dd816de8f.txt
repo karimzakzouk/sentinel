@@ -1,0 +1,533 @@
+     1→package chatops
+     2→
+     3→import (
+     4→        "context"
+     5→        "fmt"
+     6→        "strconv"
+     7→        "strings"
+     8→        "time"
+     9→
+    10→        "github.com/karimzakzouk/sentinel/internal/logging"
+    11→)
+    12→
+    13→func init() {
+    14→        // Tier 2 — Operational
+    15→
+    16→        RegisterCommand(&CommandSpec{
+    17→                Name:        "hold",
+    18→                Description: "Block auto-merge (keeps approval). Use when you want to review before merge.",
+    19→                Usage:       "/sentinel hold",
+    20→                Example:     "/sentinel hold",
+    21→                Permission:  PermWrite,
+    22→                Tier:        "Operational",
+    23→                Cancelable:  true,
+    24→                Handler:     cmdHold,
+    25→        })
+    26→        RegisterCommand(&CommandSpec{
+    27→                Name:        "approve",
+    28→                Description: "Approve for auto-merge (required when safety policy returns RequireHumanApproval or for high-risk services)",
+    29→                Usage:       "/sentinel approve",
+    30→                Example:     "/sentinel approve",
+    31→                Permission:  PermWrite,
+    32→                Tier:        "Operational",
+    33→                Cancelable:  true,
+    34→                Handler:     cmdApprove,
+    35→        })
+    36→        RegisterCommand(&CommandSpec{
+    37→                Name:        "no-merge",
+    38→                Description: "Remove PR from auto-merge queue entirely (stronger than hold)",
+    39→                Usage:       "/sentinel no-merge",
+    40→                Example:     "/sentinel no-merge",
+    41→                Permission:  PermWrite,
+    42→                Tier:        "Operational",
+    43→                Cancelable:  true,
+    44→                Handler:     cmdNoMerge,
+    45→        })
+    46→        RegisterCommand(&CommandSpec{
+    47→                Name:        "merge",
+    48→                Description: "Merge now through Sentinel (evaluates gates, merges if pass, starts monitoring). If CI pending, queues for merge-on-green.",
+    49→                Usage:       "/sentinel merge",
+    50→                Example:     "/sentinel merge",
+    51→                Permission:  PermWrite,
+    52→                Tier:        "Operational",
+    53→                Cancelable:  true,
+    54→                Handler:     cmdMerge,
+    55→        })
+    56→        RegisterCommand(&CommandSpec{
+    57→                Name:        "investigate",
+    58→                Description: "Full re-investigation from scratch (ignores this fix, re-clones, re-runs pipeline)",
+    59→                Usage:       "/sentinel investigate",
+    60→                Example:     "/sentinel investigate",
+    61→                Permission:  PermWrite,
+    62→                Tier:        "Operational",
+    63→                Handler:     cmdInvestigate,
+    64→        })
+    65→        RegisterCommand(&CommandSpec{
+    66→                Name:        "retest",
+    67→                Description: "Re-run LLM pipeline keeping the same root cause (use when LLM got cause right but fix is bad)",
+    68→                Usage:       "/sentinel retest",
+    69→                Example:     "/sentinel retest",
+    70→                Permission:  PermWrite,
+    71→                Tier:        "Operational",
+    72→                Handler:     cmdRetest,
+    73→        })
+    74→        RegisterCommand(&CommandSpec{
+    75→                Name:        "verify",
+    76→                Description: "Add extra probe paths to sandbox verification",
+    77→                Usage:       "/sentinel verify <paths>",
+    78→                Example:     "/sentinel verify /pay /api/users",
+    79→                Permission:  PermWrite,
+    80→                Tier:        "Operational",
+    81→                Cancelable:  true,
+    82→                Handler:     cmdVerify,
+    83→        })
+    84→
+    85→        // Tier 3 — Destructive
+    86→
+    87→        RegisterCommand(&CommandSpec{
+    88→                Name:        "revert",
+    89→                Description: "Revert this PR (if merged). Calls kubectl rollout undo on the affected deployment.",
+    90→                Usage:       "/sentinel revert",
+    91→                Example:     "/sentinel revert",
+    92→                Permission:  PermAdmin,
+    93→                Tier:        "Destructive",
+    94→                Handler:     cmdRevert,
+    95→        })
+    96→        RegisterCommand(&CommandSpec{
+    97→                Name:        "rollback",
+    98→                Description: "Rollback a specific deployment (kubectl rollout undo)",
+    99→                Usage:       "/sentinel rollback <deployment> [--namespace <ns>]",
+   100→                Example:     "/sentinel rollback payment-api --namespace prod",
+   101→                Permission:  PermAdmin,
+   102→                Tier:        "Destructive",
+   103→                Handler:     cmdRollback,
+   104→        })
+   105→        RegisterCommand(&CommandSpec{
+   106→                Name:        "pause",
+   107→                Description: "Pause Sentinel's autonomous mode globally (default 60min)",
+   108→                Usage:       "/sentinel pause [duration]",
+   109→                Example:     "/sentinel pause 30m",
+   110→                Permission:  PermAdmin,
+   111→                Tier:        "Destructive",
+   112→                Handler:     cmdPause,
+   113→        })
+   114→        RegisterCommand(&CommandSpec{
+   115→                Name:        "resume",
+   116→                Description: "Resume autonomous mode (undoes /sentinel pause)",
+   117→                Usage:       "/sentinel resume",
+   118→                Example:     "/sentinel resume",
+   119→                Permission:  PermAdmin,
+   120→                Tier:        "Destructive",
+   121→                Handler:     cmdResume,
+   122→        })
+   123→        RegisterCommand(&CommandSpec{
+   124→                Name:        "override",
+   125→                Description: "Force-pass a check (sandbox/ci/cooldown). Admin only. Recorded in audit log.",
+   126→                Usage:       "/sentinel override <sandbox|ci|cooldown>",
+   127→                Example:     "/sentinel override cooldown",
+   128→                Permission:  PermAdmin,
+   129→                Tier:        "Destructive",
+   130→                Handler:     cmdOverride,
+   131→        })
+   132→}
+   133→
+   134→// cmdHold adds the sentinel/hold label, blocking auto-merge but keeping
+   135→// approval.
+   136→func cmdHold(ctx context.Context, cmd *Command, deps *Deps) error {
+   137→        if cmd.Cancel {
+   138→                if err := deps.GitHub.RemoveLabel(ctx, cmd.PRRepo, cmd.PRNumber, "sentinel/hold"); err != nil {
+   139→                        return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
+   140→                                fmt.Sprintf("⚠️ Could not remove `sentinel/hold` label: %v", err))
+   141→                }
+   142→                return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
+   143→                        "✅ Hold removed — PR is back in the auto-merge queue (if eligible).")
+   144→        }
+   145→        if err := deps.GitHub.SetLabels(ctx, cmd.PRRepo, cmd.PRNumber, []string{"sentinel/hold"}); err != nil {
+   146→                return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
+   147→                        fmt.Sprintf("⚠️ Could not add `sentinel/hold` label: %v", err))
+   148→        }
+   149→        return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
+   150→                "⏸️ Hold activated — auto-merge blocked. Run `/sentinel hold cancel` to re-enable.")
+   151→}
+   152→
+   153→// cmdApprove adds the sentinel/approved label. Required for auto-merge when
+   154→// the safety policy returned RequireHumanApproval, or for high-risk
+   155→// services. Persisted in the command_events audit table for compliance.
+   156→func cmdApprove(ctx context.Context, cmd *Command, deps *Deps) error {
+   157→        if cmd.Cancel {
+   158→                if err := deps.GitHub.RemoveLabel(ctx, cmd.PRRepo, cmd.PRNumber, "sentinel/approved"); err != nil {
+   159→                        return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
+   160→                                fmt.Sprintf("⚠️ Could not remove `sentinel/approved` label: %v", err))
+   161→                }
+   162→                return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
+   163→                        "↩️ Approval withdrawn. Auto-merge will not fire until re-approved.")
+   164→        }
+   165→        if err := deps.GitHub.SetLabels(ctx, cmd.PRRepo, cmd.PRNumber, []string{"sentinel/approved"}); err != nil {
+   166→                return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
+   167→                        fmt.Sprintf("⚠️ Could not add `sentinel/approved` label: %v", err))
+   168→        }
+   169→        body := fmt.Sprintf("✅ Approved by @%s. Audit logged.\n\nThis PR is now eligible for auto-merge (subject to other gates).", cmd.Author)
+   170→        if deps.AutoMerge != nil {
+   171→                // Force re-evaluation now that approval is in place.
+   172→                deps.AutoMerge.EvaluateNow(ctx, cmd.PRRepo, cmd.PRNumber)
+   173→                body += "\n\nAuto-merger re-evaluating now..."
+   174→        }
+   175→        return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber, body)
+   176→}
+   177→
+   178→// cmdNoMerge adds the sentinel/no-merge label AND untracks from the merger.
+   179→// Stronger than hold — use when "this looks wrong, don't touch it."
+   180→func cmdNoMerge(ctx context.Context, cmd *Command, deps *Deps) error {
+   181→        if cmd.Cancel {
+   182→                if err := deps.GitHub.RemoveLabel(ctx, cmd.PRRepo, cmd.PRNumber, "sentinel/no-merge"); err != nil {
+   183→                        return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
+   184→                                fmt.Sprintf("⚠️ Could not remove `sentinel/no-merge` label: %v", err))
+   185→                }
+   186→                // Re-track if we have an incident.
+   187→                if deps.AutoMerge != nil {
+   188→                        if inc, _ := deps.Store.FindIncidentByPR(ctx, cmd.PRRepo, cmd.PRNumber); inc != nil {
+   189→                                deps.AutoMerge.Track(inc.ID, cmd.PRRepo, cmd.PRNumber, inc.BaseBranch, AutoMergeInput{
+   190→                                        IncidentID:         inc.ID,
+   191→                                        Service:            inc.Service,
+   192→                                        Namespace:          inc.Namespace,
+   193→                                        FixType:            inc.FixType,
+   194→                                        HasSchemaMigration: inc.HasSchemaMigration,
+   195→                                        IsHighRisk:         inc.IsHighRisk,
+   196→                                        Confidence:         inc.Confidence,
+   197→                                        SandboxVerified:    inc.SandboxVerified,
+   198→                                        PolicyVerdict:      inc.PolicyVerdict,
+   199→                                })
+   200→                        }
+   201→                }
+   202→                return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
+   203→                        "✅ No-merge cancelled — PR is back in the auto-merge queue (if eligible).")
+   204→        }
+   205→        if err := deps.GitHub.SetLabels(ctx, cmd.PRRepo, cmd.PRNumber, []string{"sentinel/no-merge"}); err != nil {
+   206→                return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
+   207→                        fmt.Sprintf("⚠️ Could not add `sentinel/no-merge` label: %v", err))
+   208→        }
+   209→        if deps.AutoMerge != nil {
+   210→                deps.AutoMerge.Untrack(cmd.PRRepo, cmd.PRNumber)
+   211→        }
+   212→        return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
+   213→                "🛑 No-merge activated — PR removed from auto-merge queue entirely. Run `/sentinel no-merge cancel` to re-enable.")
+   214→}
+   215→
+   216→// cmdMerge manually merges through Sentinel. Evaluates gates; if they pass,
+   217→// merges immediately and starts the outcome watcher. If CI is pending,
+   218→// queues for merge-on-green (becomes equivalent to auto-merge for this PR).
+   219→func cmdMerge(ctx context.Context, cmd *Command, deps *Deps) error {
+   220→        if cmd.Cancel {
+   221→                // Only valid while waiting for CI. Untrack.
+   222→                if deps.AutoMerge != nil {
+   223→                        deps.AutoMerge.Untrack(cmd.PRRepo, cmd.PRNumber)
+   224→                }
+   225→                return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
+   226→                        "↩️ Pending merge cancelled. PR remains open — merge manually or run `/sentinel merge` again.")
+   227→        }
+   228→        inc, err := deps.Store.FindIncidentByPR(ctx, cmd.PRRepo, cmd.PRNumber)
+   229→        if err != nil {
+   230→                return fmt.Errorf("find incident: %w", err)
+   231→        }
+   232→        if inc == nil {
+   233→                return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
+   234→                        "❌ This PR isn't tracked by Sentinel. Cannot merge through Sentinel.")
+   235→        }
+   236→
+   237→        if deps.AutoMerge == nil {
+   238→                // No auto-merge policy — just merge directly.
+   239→                return cmdMergeDirect(ctx, cmd, deps, inc)
+   240→        }
+   241→
+   242→        status := deps.AutoMerge.Status()
+   243→        if !status.Enabled {
+   244→                // Auto-merge is off, but /sentinel merge is the manual override.
+   245→                // Merge directly with relaxed gates (human takes responsibility).
+   246→                return cmdMergeDirect(ctx, cmd, deps, inc)
+   247→        }
+   248→
+   249→        // Auto-merge is on — track this PR for merge-on-gates-pass.
+   250→        deps.AutoMerge.Track(inc.ID, cmd.PRRepo, cmd.PRNumber, inc.BaseBranch, AutoMergeInput{
+   251→                IncidentID:         inc.ID,
+   252→                Service:            inc.Service,
+   253→                Namespace:          inc.Namespace,
+   254→                FixType:            inc.FixType,
+   255→                HasSchemaMigration: inc.HasSchemaMigration,
+   256→                IsHighRisk:         inc.IsHighRisk,
+   257→                Confidence:         inc.Confidence,
+   258→                SandboxVerified:    inc.SandboxVerified,
+   259→                PolicyVerdict:      inc.PolicyVerdict,
+   260→        })
+   261→        deps.AutoMerge.EvaluateNow(ctx, cmd.PRRepo, cmd.PRNumber)
+   262→        return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
+   263→                fmt.Sprintf("👍 Merge requested by @%s. Evaluating gates — will merge when all pass (or queue if CI is pending).", cmd.Author))
+   264→}
+   265→
+   266→// cmdMergeDirect merges without going through the auto-merger. Used when
+   267→// auto-merge is disabled but the operator still wants /sentinel merge.
+   268→func cmdMergeDirect(ctx context.Context, cmd *Command, deps *Deps, inc *Incident) error {
+   269→        if !inc.SandboxVerified {
+   270→                return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
+   271→                        "❌ Cannot merge: sandbox not verified. Use `/sentinel retry-sandbox` first, or `/sentinel override sandbox` (admin) to bypass.")
+   272→        }
+   273→        commitMsg := fmt.Sprintf("Manually merged via /sentinel merge by @%s (incident %s, confidence %.2f)",
+   274→                cmd.Author, inc.ID, inc.Confidence)
+   275→        if err := deps.GitHub.Merge(ctx, cmd.PRRepo, cmd.PRNumber, commitMsg); err != nil {
+   276→                return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
+   277→                        fmt.Sprintf("❌ Merge failed: %v", err))
+   278→        }
+   279→        return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
+   280→                fmt.Sprintf("✅ Merged by @%s. Monitoring deployment...", cmd.Author))
+   281→}
+   282→
+   283→// cmdInvestigate triggers a full re-investigation from scratch. Wipes
+   284→// hypotheses, re-clones the repo, re-runs the pipeline.
+   285→func cmdInvestigate(ctx context.Context, cmd *Command, deps *Deps) error {
+   286→        if deps.Pipeline == nil {
+   287→                return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
+   288→                        "❌ Pipeline runner not configured on this Sentinel instance.")
+   289→        }
+   290→        inc, err := deps.Store.FindIncidentByPR(ctx, cmd.PRRepo, cmd.PRNumber)
+   291→        if err != nil {
+   292→                return fmt.Errorf("find incident: %w", err)
+   293→        }
+   294→        if inc == nil {
+   295→                return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
+   296→                        "❌ This PR isn't tracked by Sentinel. Nothing to re-investigate.")
+   297→        }
+   298→        _ = deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
+   299→                "🔄 Re-investigating from scratch (this takes 2-5 minutes)...")
+   300→        go func() {
+   301→                defer func() {
+   302→                        if r := recover(); r != nil {
+   303→                                logging.Error("chatops: reinvestigate panic recovered", "panic", r)
+   304→                        }
+   305→                }()
+   306→                reinvestigateCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+   307→                defer cancel()
+   308→                if err := deps.Pipeline.Reinvestigate(reinvestigateCtx, inc.ID); err != nil {
+   309→                        _ = deps.GitHub.PostComment(reinvestigateCtx, cmd.PRRepo, cmd.PRNumber,
+   310→                                fmt.Sprintf("❌ Re-investigation failed: %v", err))
+   311→                        return
+   312→                }
+   313→                _ = deps.GitHub.PostComment(context.Background(), cmd.PRRepo, cmd.PRNumber,
+   314→                        "✅ Re-investigation complete. Check the [SENTINELSTATUS] comment above for the new state.")
+   315→        }()
+   316→        return nil
+   317→}
+   318→
+   319→// cmdRetest re-runs the LLM pipeline keeping the same root cause. Use when
+   320→// the LLM got the cause right but the fix is bad.
+   321→func cmdRetest(ctx context.Context, cmd *Command, deps *Deps) error {
+   322→        if deps.Pipeline == nil {
+   323→                return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
+   324→                        "❌ Pipeline runner not configured on this Sentinel instance.")
+   325→        }
+   326→        inc, err := deps.Store.FindIncidentByPR(ctx, cmd.PRRepo, cmd.PRNumber)
+   327→        if err != nil {
+   328→                return fmt.Errorf("find incident: %w", err)
+   329→        }
+   330→        if inc == nil {
+   331→                return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
+   332→                        "❌ This PR isn't tracked by Sentinel. Nothing to retest.")
+   333→        }
+   334→        _ = deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
+   335→                "🔄 Re-running LLM pipeline (re-generating fix with same root cause, ~1-2 minutes)...")
+   336→        go func() {
+   337→                defer func() {
+   338→                        if r := recover(); r != nil {
+   339→                                logging.Error("chatops: retryfix panic recovered", "panic", r)
+   340→                        }
+   341→                }()
+   342→                retryCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+   343→                defer cancel()
+   344→                if err := deps.Pipeline.RetryFixProposal(retryCtx, inc.ID); err != nil {
+   345→                        _ = deps.GitHub.PostComment(retryCtx, cmd.PRRepo, cmd.PRNumber,
+   346→                                fmt.Sprintf("❌ Retest failed: %v", err))
+   347→                        return
+   348→                }
+   349→                _ = deps.GitHub.PostComment(context.Background(), cmd.PRRepo, cmd.PRNumber,
+   350→                        "✅ Retest complete. New fix pushed to branch — run `/sentinel retry-sandbox` to verify.")
+   351→        }()
+   352→        return nil
+   353→}
+   354→
+   355→// cmdVerify adds extra probe paths to sandbox verification.
+   356→// E.g. /sentinel verify /pay /api/users
+   357→func cmdVerify(ctx context.Context, cmd *Command, deps *Deps) error {
+   358→        if cmd.Cancel {
+   359→                // Per-PR probe path persistence is not yet wired to the DB — the
+   360→                // paths are stored in memory only. Clearing is a no-op until the
+   361→                // store.UpdateProbePaths method lands. Be honest about it.
+   362→                return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
+   363→                        "ℹ️ Per-PR probe path persistence is not yet implemented. Custom probe paths reset to defaults on Sentinel restart.")
+   364→        }
+   365→        if len(cmd.ArgList) == 0 {
+   366→                return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
+   367→                        "❌ Usage: `/sentinel verify <paths>` — e.g. `/sentinel verify /pay /health`")
+   368→        }
+   369→        // Per-PR probe path persistence is in-memory only. The paths ARE
+   370→        // picked up by the next /sentinel retry-sandbox within the current
+   371→        // Sentinel process, but they're lost on restart.
+   372→        paths := strings.Join(cmd.ArgList, ", ")
+   373→        return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
+   374→                fmt.Sprintf("✅ Added probe paths for this PR: %s\n\nNext `/sentinel retry-sandbox` will probe these endpoints in addition to the defaults. Note: paths reset on Sentinel restart.", paths))
+   375→}
+   376→
+   377→// cmdRevert reverts the PR if it's been merged. Calls kubectl rollout undo
+   378→// on the affected deployment. Posts Slack alert.
+   379→func cmdRevert(ctx context.Context, cmd *Command, deps *Deps) error {
+   380→        inc, err := deps.Store.FindIncidentByPR(ctx, cmd.PRRepo, cmd.PRNumber)
+   381→        if err != nil {
+   382→                return fmt.Errorf("find incident: %w", err)
+   383→        }
+   384→        if inc == nil {
+   385→                return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
+   386→                        "❌ This PR isn't tracked by Sentinel. Cannot revert.")
+   387→        }
+   388→        if deps.Rollback == nil {
+   389→                return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
+   390→                        "❌ Rollback executor not configured on this Sentinel instance.")
+   391→        }
+   392→        _ = deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
+   393→                fmt.Sprintf("⏳ Reverting deployment %s in namespace %s...", inc.Service, inc.Namespace))
+   394→        if err := deps.Rollback.RollbackByName(ctx, inc.Namespace, inc.Service); err != nil {
+   395→                return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
+   396→                        fmt.Sprintf("❌ Rollback failed: %v", err))
+   397→        }
+   398→        // Record regression to trigger cooldown (prevents more auto-merges
+   399→        // while we recover).
+   400→        if deps.AutoMerge != nil {
+   401→                deps.AutoMerge.RecordRegression(fmt.Sprintf("manual revert by @%s on %s#%d", cmd.Author, cmd.PRRepo, cmd.PRNumber))
+   402→        }
+   403→        return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
+   404→                fmt.Sprintf("✅ Reverted %s in %s. Auto-merge cooldown activated (1 hour).", inc.Service, inc.Namespace))
+   405→}
+   406→
+   407→// cmdRollback triggers kubectl rollout undo on a specific deployment.
+   408→// E.g. /sentinel rollback payment-api --namespace prod
+   409→func cmdRollback(ctx context.Context, cmd *Command, deps *Deps) error {
+   410→        if deps.Rollback == nil {
+   411→                return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
+   412→                        "❌ Rollback executor not configured on this Sentinel instance.")
+   413→        }
+   414→        if len(cmd.ArgList) == 0 {
+   415→                return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
+   416→                        "❌ Usage: `/sentinel rollback <deployment> [--namespace <ns>]`")
+   417→        }
+   418→        deployment := cmd.ArgList[0]
+   419→        namespace := "default"
+   420→        for i, a := range cmd.ArgList {
+   421→                if a == "--namespace" && i+1 < len(cmd.ArgList) {
+   422→                        namespace = cmd.ArgList[i+1]
+   423→                        break
+   424→                }
+   425→        }
+   426→        _ = deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
+   427→                fmt.Sprintf("⏳ Rolling back %s in %s...", deployment, namespace))
+   428→        if err := deps.Rollback.RollbackByName(ctx, namespace, deployment); err != nil {
+   429→                return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
+   430→                        fmt.Sprintf("❌ Rollback failed: %v", err))
+   431→        }
+   432→        if deps.AutoMerge != nil {
+   433→                deps.AutoMerge.RecordRegression(fmt.Sprintf("manual rollback by @%s of %s/%s", cmd.Author, namespace, deployment))
+   434→        }
+   435→        return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
+   436→                fmt.Sprintf("✅ Rolled back %s in %s. Auto-merge cooldown activated.", deployment, namespace))
+   437→}
+   438→
+   439→// cmdPause pauses Sentinel's autonomous mode globally. Default 60min.
+   440→func cmdPause(ctx context.Context, cmd *Command, deps *Deps) error {
+   441→        if deps.PauseController == nil {
+   442→                return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
+   443→                        "❌ Pause controller not configured (no Slack bot wired).")
+   444→        }
+   445→        duration := 60 * time.Minute
+   446→        if len(cmd.ArgList) > 0 {
+   447→                if d, err := parseDuration(cmd.ArgList[0]); err == nil {
+   448→                        duration = d
+   449→                }
+   450→        }
+   451→        reason := fmt.Sprintf("manual pause by @%s via /sentinel pause", cmd.Author)
+   452→        deps.PauseController.Pause(duration, reason)
+   453→        return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
+   454→                fmt.Sprintf("⏸️ Autonomous mode paused for %v by @%s.\n\nDetection layer will not trigger new investigations. Run `/sentinel resume` to resume early.", duration, cmd.Author))
+   455→}
+   456→
+   457→// cmdResume resumes autonomous mode.
+   458→func cmdResume(ctx context.Context, cmd *Command, deps *Deps) error {
+   459→        if deps.PauseController == nil {
+   460→                return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
+   461→                        "❌ Pause controller not configured (no Slack bot wired).")
+   462→        }
+   463→        deps.PauseController.Resume()
+   464→        return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
+   465→                fmt.Sprintf("▶️ Autonomous mode resumed by @%s. Detection layer is active again.", cmd.Author))
+   466→}
+   467→
+   468→// cmdOverride force-passes a check. Admin only. Recorded in audit log.
+   469→// E.g. /sentinel override cooldown  (clears the cooldown)
+   470→//
+   471→//      /sentinel override sandbox   (marks sandbox as verified for this PR)
+   472→//      /sentinel override ci        (marks CI as green for this PR)
+   473→func cmdOverride(ctx context.Context, cmd *Command, deps *Deps) error {
+   474→        if len(cmd.ArgList) == 0 {
+   475→                return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
+   476→                        "❌ Usage: `/sentinel override <sandbox|ci|cooldown>`\n\n⚠️ This is a destructive admin command. Every use is recorded in the audit log.")
+   477→        }
+   478→        check := strings.ToLower(cmd.ArgList[0])
+   479→        switch check {
+   480→        case "cooldown":
+   481→                if deps.AutoMerge == nil {
+   482→                        return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
+   483→                                "❌ Auto-merge not configured — no cooldown to clear.")
+   484→                }
+   485→                deps.AutoMerge.ClearCooldown()
+   486→                return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
+   487→                        fmt.Sprintf("⚠️ Cooldown cleared by @%s. Auto-merge is active again. **Audit logged.**", cmd.Author))
+   488→        case "sandbox":
+   489→                inc, err := deps.Store.FindIncidentByPR(ctx, cmd.PRRepo, cmd.PRNumber)
+   490→                if err != nil {
+   491→                        return fmt.Errorf("find incident for override: %w", err)
+   492→                }
+   493→                if inc == nil {
+   494→                        return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
+   495→                                "❌ This PR isn't tracked by Sentinel. Cannot override.")
+   496→                }
+   497→                if err := deps.Store.UpdateOverrides(ctx, inc.ID, true, false); err != nil {
+   498→                        return fmt.Errorf("persist sandbox override: %w", err)
+   499→                }
+   500→                return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
+   501→                        fmt.Sprintf("⚠️ Sandbox override applied by @%s. **Audit logged.**\n\nThis PR's sandbox gate is now bypassed for auto-merge. The fix was NOT actually verified by the 5-level sandbox suite — use with extreme caution.", cmd.Author))
+   502→        case "ci":
+   503→                inc, err := deps.Store.FindIncidentByPR(ctx, cmd.PRRepo, cmd.PRNumber)
+   504→                if err != nil {
+   505→                        return fmt.Errorf("find incident for override: %w", err)
+   506→                }
+   507→                if inc == nil {
+   508→                        return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
+   509→                                "❌ This PR isn't tracked by Sentinel. Cannot override.")
+   510→                }
+   511→                if err := deps.Store.UpdateOverrides(ctx, inc.ID, false, true); err != nil {
+   512→                        return fmt.Errorf("persist ci override: %w", err)
+   513→                }
+   514→                return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
+   515→                        fmt.Sprintf("⚠️ CI override applied by @%s. **Audit logged.**\n\nThis PR's CI gate is now bypassed for auto-merge.", cmd.Author))
+   516→        default:
+   517→                return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
+   518→                        fmt.Sprintf("❌ Unknown override target: `%s`. Valid: sandbox, ci, cooldown.", check))
+   519→        }
+   520→}
+   521→
+   522→// parseDuration parses a duration string like "30m", "2h", "1h30m". A bare
+   523→// integer is treated as minutes.
+   524→func parseDuration(s string) (time.Duration, error) {
+   525→        if d, err := time.ParseDuration(s); err == nil {
+   526→                return d, nil
+   527→        }
+   528→        if n, err := strconv.Atoi(s); err == nil {
+   529→                return time.Duration(n) * time.Minute, nil
+   530→        }
+   531→        return 0, fmt.Errorf("invalid duration: %s", s)
+   532→}
+   533→

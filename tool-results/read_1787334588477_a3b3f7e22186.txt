@@ -1,0 +1,684 @@
+     1→// Package main — wiring.
+     2→//
+     3→// wiring.go collapses v5's 17 adapter structs (chatopsPipelineAdapter,
+     4→// chatopsSandboxAdapter, chatopsAutoMergeClient, prReviewVectorStoreAdapter,
+     5→// autoMergeOutcomeAdapter, alertmanagerAdapter, causalDepGraphAdapter,
+     6→// chaosK8sAdapter, incidentMemoryAdapter, ...) into a single wiring struct
+     7→// holding concrete pointers to every initialized component. Each adapter is
+     8→// now a thin method (2-7 lines) on *wiring that delegates to the concrete
+     9→// pointer. The only adapter types still defined here are the two VectorStore
+    10→// adapters (agents.VectorStore + prreview.VectorStore) — those cannot be
+    11→// methods on *wiring because Go forbids two methods with the same name and
+    12→// different return types.
+    13→package main
+    14→
+    15→import (
+    16→        "context"
+    17→        "encoding/json"
+    18→        "fmt"
+    19→        "net/http"
+    20→        "sync"
+    21→        "sync/atomic"
+    22→        "time"
+    23→
+    24→        "github.com/google/uuid"
+    25→        metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+    26→        "k8s.io/apimachinery/pkg/types"
+    27→
+    28→        "github.com/karimzakzouk/sentinel/internal/admission"
+    29→        "github.com/karimzakzouk/sentinel/internal/agents"
+    30→        "github.com/karimzakzouk/sentinel/internal/alertmanager"
+    31→        "github.com/karimzakzouk/sentinel/internal/api"
+    32→        "github.com/karimzakzouk/sentinel/internal/attest"
+    33→        "github.com/karimzakzouk/sentinel/internal/automerge"
+    34→        "github.com/karimzakzouk/sentinel/internal/causal"
+    35→        "github.com/karimzakzouk/sentinel/internal/chaos"
+    36→        "github.com/karimzakzouk/sentinel/internal/chatops"
+    37→        "github.com/karimzakzouk/sentinel/internal/config"
+    38→        "github.com/karimzakzouk/sentinel/internal/correlation"
+    39→        "github.com/karimzakzouk/sentinel/internal/detection"
+    40→        "github.com/karimzakzouk/sentinel/internal/emb"
+    41→        "github.com/karimzakzouk/sentinel/internal/events"
+    42→        "github.com/karimzakzouk/sentinel/internal/executors"
+    43→        "github.com/karimzakzouk/sentinel/internal/feedback"
+    44→        "github.com/karimzakzouk/sentinel/internal/k8s"
+    45→        "github.com/karimzakzouk/sentinel/internal/llm"
+    46→        "github.com/karimzakzouk/sentinel/internal/logging"
+    47→        "github.com/karimzakzouk/sentinel/internal/observability"
+    48→        "github.com/karimzakzouk/sentinel/internal/postmerge"
+    49→        "github.com/karimzakzouk/sentinel/internal/prreview"
+    50→        "github.com/karimzakzouk/sentinel/internal/runtimecfg"
+    51→        "github.com/karimzakzouk/sentinel/internal/safeactions"
+    52→        "github.com/karimzakzouk/sentinel/internal/safety"
+    53→        "github.com/karimzakzouk/sentinel/internal/slackbot"
+    54→        "github.com/karimzakzouk/sentinel/internal/slo"
+    55→        "github.com/karimzakzouk/sentinel/internal/watcher"
+    56→)
+    57→
+    58→// wiring holds concrete pointers to every initialized Sentinel component.
+    59→// All adapter logic is expressed as methods on *wiring, so the wiring is
+    60→// inspectable in a single place and there is no adapter-of-adapter
+    61→// indirection.
+    62→//
+    63→// The mu field protects cfg and any other field that can be mutated by the
+    64→// runtimecfg apply callback while investigation goroutines read it. Reads
+    65→// from goroutines use RLock via Config(); the apply callback uses Lock via
+    66→// mutateConfig().
+    67→type wiring struct {
+    68→        mu  sync.RWMutex
+    69→        cfg *config.Config
+    70→
+    71→        // Storage + vector memory.
+    72→        store       *feedback.Store
+    73→        vectorStore *feedback.VectorStore
+    74→        // agentsVS is the agents.VectorStore adapter over vectorStore. Held
+    75→        // on the wiring struct so applyRuntimeConfig can reuse it when
+    76→        // hot-toggling the agent loop — without it we'd have to re-construct
+    77→        // the adapter from vectorStore on every config change.
+    78→        agentsVS *agentsVectorStore
+    79→
+    80→        // Infrastructure clients.
+    81→        k8sClient   *k8s.Client
+    82→        embedder    emb.Embedder
+    83→        router      *llm.Router
+    84→        rtCfg       *runtimecfg.Manager
+    85→        broadcaster events.Broadcaster
+    86→
+    87→        // Agents + safety.
+    88→        pipeline    *agents.Pipeline
+    89→        policy      *safety.Policy
+    90→        alertSender *agents.AlertSender
+    91→        safeActions *safeactions.Controller
+    92→
+    93→        // Executors.
+    94→        ghExec      *executors.GitHubExecutor
+    95→        k8sExec     *executors.K8sExecutor
+    96→        sandbox     *executors.SandboxRunner
+    97→        kaniko      *executors.KanikoBuilder
+    98→        remediation *executors.RemediationController
+    99→
+   100→        // Detection + correlation.
+   101→        tracker        *detection.ActiveTracker
+   102→        clusterer      *detection.Clusterer
+   103→        detector       *detection.Detector
+   104→        correlator     *correlation.Correlator
+   105→        outcomeWatcher *feedback.OutcomeWatcher
+   106→        crdWatcher     *watcher.Watcher
+   107→
+   108→        // Chatops + PR review + auto-merge.
+   109→        chatopsGH        *chatops.GitHubClientImpl
+   110→        chatopsStatus    chatops.StatusCommentManager
+   111→        chatopsReactions chatops.ReactionsClient
+   112→        prReviewer       *prreview.Reviewer
+   113→        autoMergeGH      *automerge.GitHubClientImpl
+   114→        autoMergePolicy  *automerge.Policy
+   115→        autoMergeMerger  *automerge.Merger
+   116→        amReceiver       *alertmanager.Receiver
+   117→        slackBot         *slackbot.Bot
+   118→
+   119→        // API server.
+   120→        apiServer *api.Server
+   121→
+   122→        // Tier 1 (optional, nil when disabled).
+   123→        promQuerier    *observability.PrometheusQuerier
+   124→        postMerge      *postmerge.Watcher
+   125→        sloWatcher     *slo.Watcher
+   126→        causalAnalyzer *causal.Analyzer
+   127→        admissionSrv   *http.Server
+   128→
+   129→        // Tier 2 (optional, nil when disabled).
+   130→        attestor    *attest.Signer
+   131→        chaosRunner *chaos.Runner
+   132→
+   133→        // Concurrency primitives for the investigation handler.
+   134→        ready  *atomic.Bool
+   135→        invSem chan struct{}
+   136→        invWG  sync.WaitGroup
+   137→}
+   138→
+   139→// Config returns the current config under a read lock. Callers must not
+   140→// mutate the returned struct; use mutateConfig for that.
+   141→func (w *wiring) Config() *config.Config {
+   142→        w.mu.RLock()
+   143→        defer w.mu.RUnlock()
+   144→        return w.cfg
+   145→}
+   146→
+   147→// mutateConfig holds the write lock while fn mutates the config in place.
+   148→// Used by the runtimecfg apply callback.
+   149→func (w *wiring) mutateConfig(fn func(cfg *config.Config)) {
+   150→        w.mu.Lock()
+   151→        defer w.mu.Unlock()
+   152→        fn(w.cfg)
+   153→}
+   154→
+   155→// --- chatops.Store ---
+   156→
+   157→// FindIncidentByPR satisfies chatops.Store. Loads the incident, then maps
+   158→// the schemas types into chatops's flat Incident view.
+   159→func (w *wiring) FindIncidentByPR(ctx context.Context, repo string, prNumber int) (*chatops.Incident, error) {
+   160→        inc, err := w.store.FindIncidentByPR(ctx, repo, prNumber)
+   161→        if err != nil || inc == nil {
+   162→                return nil, err
+   163→        }
+   164→        out := &chatops.Incident{
+   165→                ID:        inc.IncidentID.String(),
+   166→                Service:   inc.Cluster.Service,
+   167→                Namespace: inc.Cluster.Namespace,
+   168→                Status:    string(inc.Status),
+   169→        }
+   170→        if inc.State.RootCause != nil {
+   171→                out.RootCause = inc.State.RootCause.Statement
+   172→                out.Confidence = inc.State.RootCause.Confidence
+   173→                out.HasSchemaMigration = inc.State.RootCause.HasSchemaMigration
+   174→        }
+   175→        if inc.State.FixProposal != nil {
+   176→                out.FixType = string(inc.State.FixProposal.FixType)
+   177→                if inc.State.FixProposal.BaseBranch != nil {
+   178→                        out.BaseBranch = *inc.State.FixProposal.BaseBranch
+   179→                }
+   180→                if inc.State.FixProposal.BranchName != nil {
+   181→                        out.PRBranch = *inc.State.FixProposal.BranchName
+   182→                }
+   183→        }
+   184→        if inc.State.ExecutionResult != nil {
+   185→                if inc.State.ExecutionResult.PRURL != nil {
+   186→                        out.PRURL = *inc.State.ExecutionResult.PRURL
+   187→                }
+   188→                if inc.State.ExecutionResult.PRNumber != nil {
+   189→                        out.PRNumber = *inc.State.ExecutionResult.PRNumber
+   190→                }
+   191→                out.SandboxVerified = inc.State.ExecutionResult.SandboxVerified
+   192→                if inc.State.ExecutionResult.SandboxSummary != nil {
+   193→                        out.SandboxSummary = *inc.State.ExecutionResult.SandboxSummary
+   194→                }
+   195→        }
+   196→        out.PRRepo = repo
+   197→        out.AgentTrace = inc.State.AgentTrace
+   198→        for _, h := range inc.State.Hypotheses {
+   199→                out.Hypotheses = append(out.Hypotheses, chatops.Hypothesis{
+   200→                        ID:         h.HID,
+   201→                        Statement:  h.Statement,
+   202→                        Confidence: h.Confidence,
+   203→                        Falsified:  h.Falsified,
+   204→                })
+   205→        }
+   206→        if inc.State.GovernanceDecision != nil {
+   207→                out.PolicyVerdict = string(inc.State.GovernanceDecision.Verdict)
+   208→        }
+   209→        return out, nil
+   210→}
+   211→
+   212→// LogCommandEvent satisfies chatops.Store.
+   213→func (w *wiring) LogCommandEvent(ctx context.Context, ev *chatops.CommandEvent) error {
+   214→        fbEv := &feedback.CommandEvent{
+   215→                IncidentID:       ev.IncidentID,
+   216→                PRNumber:         ev.PRNumber,
+   217→                PRRepo:           ev.PRRepo,
+   218→                Command:          ev.Command,
+   219→                Args:             ev.Args,
+   220→                Author:           ev.Author,
+   221→                AuthorPermission: ev.AuthorPermission,
+   222→                Result:           ev.Result,
+   223→                ResultDetail:     ev.ResultDetail,
+   224→                Timestamp:        ev.Timestamp,
+   225→        }
+   226→        return w.store.LogCommandEvent(ctx, fbEv)
+   227→}
+   228→
+   229→// UpdateOverrides satisfies chatops.Store.
+   230→func (w *wiring) UpdateOverrides(ctx context.Context, incidentID string, sandboxOverride, ciOverride bool) error {
+   231→        id, err := uuid.Parse(incidentID)
+   232→        if err != nil {
+   233→                return fmt.Errorf("parse incident ID: %w", err)
+   234→        }
+   235→        return w.store.UpdateOverrides(ctx, id, sandboxOverride, ciOverride)
+   236→}
+   237→
+   238→// --- automerge.Store ---
+   239→
+   240→// UpdateAutoMergeStatus satisfies automerge.Store. The interface takes a
+   241→// string incident ID; the underlying store takes a parsed UUID.
+   242→func (w *wiring) UpdateAutoMergeStatus(ctx context.Context, incidentID, status string) error {
+   243→        return w.store.UpdateAutoMergeStatus(ctx, uuid.MustParse(incidentID), status)
+   244→}
+   245→
+   246→// --- automerge.OutcomeWatcher ---
+   247→
+   248→// WatchPostMerge satisfies automerge.OutcomeWatcher. Spawns the
+   249→// feedback.OutcomeWatcher (10min/24h recovery check) in a goroutine so the
+   250→// merger's tick loop is not blocked.
+   251→func (w *wiring) WatchPostMerge(ctx context.Context, incidentID, service, namespace string) {
+   252→        if w.outcomeWatcher == nil {
+   253→                return
+   254→        }
+   255→        go func() {
+   256→                defer recoverPanic("outcome watcher")
+   257→                w.outcomeWatcher.WatchWithDetails(ctx, service, namespace, incidentID, true, "code_fix", "")
+   258→        }()
+   259→}
+   260→
+   261→// --- chatops.AutoMergeClient ---
+   262→
+   263→// Track satisfies chatops.AutoMergeClient.
+   264→func (w *wiring) Track(incidentID, repo string, prNumber int, baseBranch string, input chatops.AutoMergeInput) {
+   265→        w.autoMergeMerger.Track(&automerge.TrackedPR{
+   266→                IncidentID: incidentID,
+   267→                Repo:       repo,
+   268→                PRNumber:   prNumber,
+   269→                BaseBranch: baseBranch,
+   270→                Input: automerge.Input{
+   271→                        IncidentID:          input.IncidentID,
+   272→                        Service:             input.Service,
+   273→                        Namespace:           input.Namespace,
+   274→                        FixType:             input.FixType,
+   275→                        HasSchemaMigration:  input.HasSchemaMigration,
+   276→                        IsHighRisk:          input.IsHighRisk,
+   277→                        Confidence:          input.Confidence,
+   278→                        SandboxVerified:     input.SandboxVerified,
+   279→                        PolicyVerdict:       input.PolicyVerdict,
+   280→                        AutoMergeAnnotation: input.AutoMergeAnnotation,
+   281→                        SandboxOverride:     input.SandboxOverride,
+   282→                        CIOverride:          input.CIOverride,
+   283→                },
+   284→        })
+   285→}
+   286→
+   287→// Untrack satisfies chatops.AutoMergeClient.
+   288→func (w *wiring) Untrack(repo string, prNumber int) {
+   289→        w.autoMergeMerger.Untrack(repo, prNumber)
+   290→}
+   291→
+   292→// EvaluateNow satisfies chatops.AutoMergeClient.
+   293→func (w *wiring) EvaluateNow(ctx context.Context, repo string, prNumber int) {
+   294→        w.autoMergeMerger.EvaluateNow(ctx, repo, prNumber)
+   295→}
+   296→
+   297→// Status satisfies chatops.AutoMergeClient.
+   298→func (w *wiring) Status() chatops.AutoMergeStatus {
+   299→        s := w.autoMergePolicy.Status()
+   300→        return chatops.AutoMergeStatus{
+   301→                Enabled:        s.Enabled,
+   302→                Namespaces:     s.Namespaces,
+   303→                MinConfidence:  s.MinConfidence,
+   304→                RequireCIGreen: s.RequireCIGreen,
+   305→                MaxPerHour:     s.MaxPerHour,
+   306→                MergesThisHour: s.MergesThisHour,
+   307→                CooldownActive: s.CooldownActive,
+   308→                CooldownReason: s.CooldownReason,
+   309→        }
+   310→}
+   311→
+   312→// RecordRegression satisfies chatops.AutoMergeClient.
+   313→func (w *wiring) RecordRegression(reason string) {
+   314→        w.autoMergePolicy.RecordRegression(reason)
+   315→}
+   316→
+   317→// ClearCooldown satisfies chatops.AutoMergeClient.
+   318→func (w *wiring) ClearCooldown() {
+   319→        w.autoMergePolicy.ClearCooldown()
+   320→}
+   321→
+   322→// --- chatops.PipelineRunner ---
+   323→
+   324→// RetryFixProposal satisfies chatops.PipelineRunner. Loads the incident,
+   325→// then re-runs only the fix proposer with the current state.
+   326→func (w *wiring) RetryFixProposal(ctx context.Context, incidentID string) error {
+   327→        inc, err := w.store.GetIncident(ctx, uuid.MustParse(incidentID))
+   328→        if err != nil || inc == nil {
+   329→                return fmt.Errorf("incident not found: %w", err)
+   330→        }
+   331→        return w.pipeline.RetryFixProposal(ctx, &inc.State)
+   332→}
+   333→
+   334→// Reinvestigate satisfies chatops.PipelineRunner. Loads the incident,
+   335→// clears hypotheses/evidence/root-cause, and re-runs the full pipeline.
+   336→func (w *wiring) Reinvestigate(ctx context.Context, incidentID string) error {
+   337→        inc, err := w.store.GetIncident(ctx, uuid.MustParse(incidentID))
+   338→        if err != nil || inc == nil {
+   339→                return fmt.Errorf("incident not found: %w", err)
+   340→        }
+   341→        inc.State.Hypotheses = nil
+   342→        inc.State.Evidence = nil
+   343→        inc.State.RootCause = nil
+   344→        inc.State.FixProposal = nil
+   345→        inc.State.Iterations = 0
+   346→        return w.pipeline.Run(ctx, &inc.State)
+   347→}
+   348→
+   349→// --- chatops.SandboxRunner ---
+   350→
+   351→// RunForIncident satisfies chatops.SandboxRunner. Loads the incident and
+   352→// invokes the sandbox executor.
+   353→func (w *wiring) RunForIncident(ctx context.Context, incidentID string) (bool, string, error) {
+   354→        inc, err := w.store.GetIncident(ctx, uuid.MustParse(incidentID))
+   355→        if err != nil || inc == nil {
+   356→                return false, "incident not found", err
+   357→        }
+   358→        if inc.State.FixProposal == nil {
+   359→                return false, "no fix proposal on this incident", nil
+   360→        }
+   361→        result := w.sandbox.Run(ctx, inc)
+   362→        return result.Verified, result.Summary, nil
+   363→}
+   364→
+   365→// --- api.ProvidersStatusGetter ---
+   366→
+   367→// ProviderStatuses satisfies api.ProvidersStatusGetter.
+   368→func (w *wiring) ProviderStatuses() []any {
+   369→        pool := w.router.Pool()
+   370→        if pool == nil {
+   371→                return []any{}
+   372→        }
+   373→        statuses := pool.Status()
+   374→        out := make([]any, len(statuses))
+   375→        for i, s := range statuses {
+   376→                out[i] = s
+   377→        }
+   378→        return out
+   379→}
+   380→
+   381→// --- api.AutoMergeStatusGetter ---
+   382→
+   383→// AutoMergeStatus satisfies api.AutoMergeStatusGetter. Combines the policy
+   384→// status with the merger's tracked-PR snapshot for the web UI.
+   385→func (w *wiring) AutoMergeStatus() any {
+   386→        status := w.autoMergePolicy.Status()
+   387→        tracked := w.autoMergeMerger.TrackedPRs()
+   388→        trackedOut := make([]map[string]any, 0, len(tracked))
+   389→        for _, pr := range tracked {
+   390→                trackedOut = append(trackedOut, map[string]any{
+   391→                        "incident_id": pr.IncidentID,
+   392→                        "repo":        pr.Repo,
+   393→                        "pr_number":   pr.PRNumber,
+   394→                        "base_branch": pr.BaseBranch,
+   395→                        "added_at":    pr.AddedAt,
+   396→                        "last_eval":   pr.LastEval,
+   397→                        "ci_state":    pr.Input.CIStatus.State,
+   398→                        "confidence":  pr.Input.Confidence,
+   399→                        "service":     pr.Input.Service,
+   400→                        "namespace":   pr.Input.Namespace,
+   401→                })
+   402→        }
+   403→        return map[string]any{
+   404→                "enabled":          status.Enabled,
+   405→                "namespaces":       status.Namespaces,
+   406→                "min_confidence":   status.MinConfidence,
+   407→                "require_ci_green": status.RequireCIGreen,
+   408→                "max_per_hour":     status.MaxPerHour,
+   409→                "merges_this_hour": status.MergesThisHour,
+   410→                "cooldown_active":  status.CooldownActive,
+   411→                "cooldown_until":   status.CooldownUntil,
+   412→                "cooldown_reason":  status.CooldownReason,
+   413→                "tracked_prs":      trackedOut,
+   414→        }
+   415→}
+   416→
+   417→// --- admission.IncidentMemory ---
+   418→
+   419→// SimilarIncidents satisfies admission.IncidentMemory. Embeds the manifest
+   420→// JSON and asks the vector store for nearest neighbours above threshold.
+   421→func (w *wiring) SimilarIncidents(ctx context.Context, obj admission.Manifest, threshold float64) ([]string, error) {
+   422→        if w.vectorStore == nil {
+   423→                return nil, nil
+   424→        }
+   425→        metas, scores, err := w.vectorStore.Search(ctx, string(obj.JSON), 5)
+   426→        if err != nil {
+   427→                return nil, err
+   428→        }
+   429→        var out []string
+   430→        for i, m := range metas {
+   431→                if i >= len(scores) {
+   432→                        break
+   433→                }
+   434→                if float64(scores[i]) >= threshold {
+   435→                        out = append(out, m.IncidentID)
+   436→                }
+   437→        }
+   438→        return out, nil
+   439→}
+   440→
+   441→// --- causal.DepGraphProvider ---
+   442→
+   443→// GraphFor satisfies causal.DepGraphProvider. Sentinel's dependency graph
+   444→// is currently inferred at runtime from observed anomalies; the static
+   445→// graph just carries the anomalous nodes so the analyzer can compute
+   446→// pairwise Granger scores between them.
+   447→func (w *wiring) GraphFor(_ context.Context, nodes []causal.Node) (*causal.Graph, error) {
+   448→        return &causal.Graph{Nodes: nodes}, nil
+   449→}
+   450→
+   451→// --- chaos.K8sClient ---
+   452→
+   453→// ListPods satisfies chaos.K8sClient.
+   454→func (w *wiring) ListPods(ctx context.Context, namespace string) ([]string, error) {
+   455→        if w.k8sClient == nil || w.k8sClient.Clientset() == nil {
+   456→                return nil, fmt.Errorf("chaos: k8s client not initialized")
+   457→        }
+   458→        pods, err := w.k8sClient.Clientset().CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{})
+   459→        if err != nil {
+   460→                return nil, err
+   461→        }
+   462→        out := make([]string, 0, len(pods.Items))
+   463→        for _, p := range pods.Items {
+   464→                out = append(out, p.Name)
+   465→        }
+   466→        return out, nil
+   467→}
+   468→
+   469→// DeletePod satisfies chaos.K8sClient.
+   470→func (w *wiring) DeletePod(ctx context.Context, namespace, podName string) error {
+   471→        if w.k8sClient == nil || w.k8sClient.Clientset() == nil {
+   472→                return fmt.Errorf("chaos: k8s client not initialized")
+   473→        }
+   474→        return w.k8sClient.Clientset().CoreV1().Pods(namespace).Delete(ctx, podName, metav1.DeleteOptions{})
+   475→}
+   476→
+   477→// GetConfigMap satisfies chaos.K8sClient.
+   478→func (w *wiring) GetConfigMap(ctx context.Context, namespace, name string) (map[string]string, error) {
+   479→        if w.k8sClient == nil || w.k8sClient.Clientset() == nil {
+   480→                return nil, fmt.Errorf("chaos: k8s client not initialized")
+   481→        }
+   482→        cm, err := w.k8sClient.Clientset().CoreV1().ConfigMaps(namespace).Get(ctx, name, metav1.GetOptions{})
+   483→        if err != nil {
+   484→                return nil, err
+   485→        }
+   486→        return cm.Data, nil
+   487→}
+   488→
+   489→// PatchConfigMap satisfies chaos.K8sClient.
+   490→func (w *wiring) PatchConfigMap(ctx context.Context, namespace, name string, data map[string]string) error {
+   491→        if w.k8sClient == nil || w.k8sClient.Clientset() == nil {
+   492→                return fmt.Errorf("chaos: k8s client not initialized")
+   493→        }
+   494→        patch := map[string]any{"data": data}
+   495→        patchBytes, err := json.Marshal(patch)
+   496→        if err != nil {
+   497→                return err
+   498→        }
+   499→        _, err = w.k8sClient.Clientset().CoreV1().ConfigMaps(namespace).Patch(
+   500→                ctx, name, types.MergePatchType, patchBytes, metav1.PatchOptions{},
+   501→        )
+   502→        return err
+   503→}
+   504→
+   505→// RestartDeployment satisfies chaos.K8sClient.
+   506→func (w *wiring) RestartDeployment(ctx context.Context, namespace, name string) error {
+   507→        if w.k8sClient == nil || w.k8sClient.Clientset() == nil {
+   508→                return fmt.Errorf("chaos: k8s client not initialized")
+   509→        }
+   510→        patch := map[string]any{
+   511→                "spec": map[string]any{
+   512→                        "template": map[string]any{
+   513→                                "metadata": map[string]any{
+   514→                                        "annotations": map[string]any{
+   515→                                                "sentinel.io/chaos-restart-at": fmt.Sprintf("%d", time.Now().Unix()),
+   516→                                        },
+   517→                                },
+   518→                        },
+   519→                },
+   520→        }
+   521→        patchBytes, err := json.Marshal(patch)
+   522→        if err != nil {
+   523→                return err
+   524→        }
+   525→        _, err = w.k8sClient.Clientset().AppsV1().Deployments(namespace).Patch(
+   526→                ctx, name, types.MergePatchType, patchBytes, metav1.PatchOptions{},
+   527→        )
+   528→        return err
+   529→}
+   530→
+   531→// ListDeployments satisfies chaos.K8sClient.
+   532→func (w *wiring) ListDeployments(ctx context.Context, namespace string) ([]string, error) {
+   533→        if w.k8sClient == nil || w.k8sClient.Clientset() == nil {
+   534→                return nil, fmt.Errorf("chaos: k8s client not initialized")
+   535→        }
+   536→        deps, err := w.k8sClient.Clientset().AppsV1().Deployments(namespace).List(ctx, metav1.ListOptions{})
+   537→        if err != nil {
+   538→                return nil, err
+   539→        }
+   540→        out := make([]string, 0, len(deps.Items))
+   541→        for _, d := range deps.Items {
+   542→                out = append(out, d.Name)
+   543→        }
+   544→        return out, nil
+   545→}
+   546→
+   547→// ListConfigMaps satisfies chaos.K8sClient.
+   548→func (w *wiring) ListConfigMaps(ctx context.Context, namespace string) ([]string, error) {
+   549→        if w.k8sClient == nil || w.k8sClient.Clientset() == nil {
+   550→                return nil, fmt.Errorf("chaos: k8s client not initialized")
+   551→        }
+   552→        cms, err := w.k8sClient.Clientset().CoreV1().ConfigMaps(namespace).List(ctx, metav1.ListOptions{})
+   553→        if err != nil {
+   554→                return nil, err
+   555→        }
+   556→        out := make([]string, 0, len(cms.Items))
+   557→        for _, c := range cms.Items {
+   558→                out = append(out, c.Name)
+   559→        }
+   560→        return out, nil
+   561→}
+   562→
+   563→// --- alertmanager.SignalHandler ---
+   564→
+   565→// HandleAlert satisfies alertmanager.SignalHandler. Looks up the GitHub
+   566→// repo via K8s annotations when the alert payload didn't carry one, then
+   567→// forwards the alert to the detection clusterer as a SignalLogError signal.
+   568→func (w *wiring) HandleAlert(service, namespace, reason, repo, description string, _ map[string]string) {
+   569→        ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+   570→        defer cancel()
+   571→
+   572→        if repo == "" && w.k8sClient != nil {
+   573→                annotations, _ := w.k8sClient.LookupWorkloadAnnotations(ctx, service, namespace)
+   574→                if annotations != nil {
+   575→                        repo = annotations["sentinel.io/repo"]
+   576→                }
+   577→        }
+   578→
+   579→        chatopsLogInfo("alertmanager → clusterer",
+   580→                "service", service,
+   581→                "namespace", namespace,
+   582→                "reason", reason,
+   583→                "repo", repo,
+   584→        )
+   585→
+   586→        w.clusterer.Send(ctx, detection.Signal{
+   587→                Type:      detection.SignalLogError,
+   588→                Service:   service,
+   589→                Namespace: namespace,
+   590→                Reason:    reason,
+   591→                Repo:      repo,
+   592→                Timestamp: time.Now(),
+   593→        })
+   594→}
+   595→
+   596→// chatopsLogInfo is a thin wrapper that exists only so the alertmanager
+   597→// adapter above stays self-contained. Defined here rather than inlined so
+   598→// future adapters in this file have an obvious call site.
+   599→func chatopsLogInfo(msg string, args ...any) { logging.Info(msg, args...) }
+   600→
+   601→// --- VectorStore adapters (cannot be methods on *wiring due to method-name collision) ---
+   602→
+   603→// agentsVectorStore adapts *feedback.VectorStore to agents.VectorStore.
+   604→// Defined as a separate type because agents.VectorStore and
+   605→// prreview.VectorStore both require a method named Search with different
+   606→// return types — Go cannot express that on a single receiver.
+   607→type agentsVectorStore struct {
+   608→        vs *feedback.VectorStore
+   609→}
+   610→
+   611→// Search satisfies agents.VectorStore.
+   612→func (a *agentsVectorStore) Search(ctx context.Context, text string, k int) ([]*agents.VectorMetadata, []float32, error) {
+   613→        metas, scores, err := a.vs.Search(ctx, text, k)
+   614→        if err != nil || len(metas) == 0 {
+   615→                return nil, nil, err
+   616→        }
+   617→        out := make([]*agents.VectorMetadata, len(metas))
+   618→        for i, m := range metas {
+   619→                out[i] = &agents.VectorMetadata{
+   620→                        IncidentID: m.IncidentID,
+   621→                        Service:    m.Service,
+   622→                        RootCause:  m.RootCause,
+   623→                        FixType:    m.FixType,
+   624→                        FixPattern: m.FixPattern,
+   625→                        Outcome:    m.Outcome,
+   626→                }
+   627→        }
+   628→        return out, scores, nil
+   629→}
+   630→
+   631→// UsingHashFallback satisfies agents.VectorStore.
+   632→func (a *agentsVectorStore) UsingHashFallback() bool {
+   633→        return a.vs.UsingHashFallback()
+   634→}
+   635→
+   636→// prreviewVectorStore adapts *feedback.VectorStore to prreview.VectorStore.
+   637→// See agentsVectorStore for why this cannot be a method on *wiring.
+   638→type prreviewVectorStore struct {
+   639→        vs *feedback.VectorStore
+   640→}
+   641→
+   642→// Search satisfies prreview.VectorStore.
+   643→func (a *prreviewVectorStore) Search(ctx context.Context, text string, k int) ([]*prreview.VectorMetadata, []float32, error) {
+   644→        metas, scores, err := a.vs.Search(ctx, text, k)
+   645→        if err != nil || len(metas) == 0 {
+   646→                return nil, nil, err
+   647→        }
+   648→        out := make([]*prreview.VectorMetadata, len(metas))
+   649→        for i, m := range metas {
+   650→                out[i] = &prreview.VectorMetadata{
+   651→                        IncidentID: m.IncidentID,
+   652→                        Service:    m.Service,
+   653→                        RootCause:  m.RootCause,
+   654→                        FixType:    m.FixType,
+   655→                        FixPattern: m.FixPattern,
+   656→                        Outcome:    m.Outcome,
+   657→                }
+   658→        }
+   659→        return out, scores, nil
+   660→}
+   661→
+   662→// UsingHashFallback satisfies prreview.VectorStore.
+   663→func (a *prreviewVectorStore) UsingHashFallback() bool {
+   664→        return a.vs.UsingHashFallback()
+   665→}
+   666→
+   667→// Compile-time assertions that *wiring satisfies every interface a wired
+   668→// component expects. If one of these breaks, the corresponding method
+   669→// above needs to be updated.
+   670→var (
+   671→        _ chatops.Store              = (*wiring)(nil)
+   672→        _ chatops.AutoMergeClient    = (*wiring)(nil)
+   673→        _ chatops.PipelineRunner     = (*wiring)(nil)
+   674→        _ chatops.SandboxRunner      = (*wiring)(nil)
+   675→        _ automerge.Store            = (*wiring)(nil)
+   676→        _ automerge.OutcomeWatcher   = (*wiring)(nil)
+   677→        _ alertmanager.SignalHandler = (*wiring)(nil)
+   678→        _ admission.IncidentMemory   = (*wiring)(nil)
+   679→        _ causal.DepGraphProvider    = (*wiring)(nil)
+   680→        _ chaos.K8sClient            = (*wiring)(nil)
+   681→        _ agents.VectorStore         = (*agentsVectorStore)(nil)
+   682→        _ prreview.VectorStore       = (*prreviewVectorStore)(nil)
+   683→)
+   684→

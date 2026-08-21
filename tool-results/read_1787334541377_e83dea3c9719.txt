@@ -1,0 +1,621 @@
+     1→package agent
+     2→
+     3→import (
+     4→        "context"
+     5→        "encoding/json"
+     6→        "fmt"
+     7→        "path/filepath"
+     8→        "strings"
+     9→        "time"
+    10→
+    11→        "github.com/karimzakzouk/sentinel/internal/codeintel"
+    12→        "github.com/karimzakzouk/sentinel/internal/llm"
+    13→        "github.com/karimzakzouk/sentinel/internal/logging"
+    14→        "github.com/karimzakzouk/sentinel/internal/repo"
+    15→)
+    16→
+    17→const (
+    18→        DefaultMaxTurns         = 20
+    19→        DefaultTurnTimeout      = 30 * time.Second
+    20→        DefaultCompactThreshold = 10
+    21→        MaxFilePreviewLines     = 100
+    22→        maxRetriesPerTurn       = 2
+    23→)
+    24→
+    25→const agentSystemRole = `You are an autonomous SRE agent investigating a production crash.
+    26→
+    27→CRITICAL: Respond with ONLY a JSON object. No prose, no markdown.
+    28→
+    29→INVESTIGATION PRINCIPLES:
+    30→1. The error location is often a SYMPTOM, not the root cause. Trace BACKWARDS.
+    31→2. Check CLIENT and STORE files, not just handlers. Bugs are often in code that handlers call.
+    32→3. If a tool returns no results, try a DIFFERENT approach. Do not repeat the same search.
+    33→4. After 3-4 tool calls, declare done with your best hypothesis.
+    34→5. Do not assume the bug matches a known pattern — investigate the actual code.
+    35→
+    36→JSON format (respond with EXACTLY one of these):
+    37→  Tool: {"tool": "<name>", "args": {<args>}}
+    38→  Done: {"done": true, "root_cause": "<one sentence>", "confidence": 0.85, "files_to_change": ["path"]}`
+    39→
+    40→const agentInstructions = `Investigate the crash using the tools above.
+    41→
+    42→When you have identified the root cause, respond with:
+    43→{"done": true, "root_cause": "...", "confidence": 0.85, "files_to_change": ["path"]}
+    44→
+    45→Otherwise, call a tool:
+    46→{"tool": "read_file", "args": {"path": "app/main.py", "start_line": 1}}
+    47→
+    48→Your entire response must be a single JSON object — no other text.`
+    49→
+    50→const correctionPrompt = `Your previous response was not valid JSON. Respond with ONLY a JSON object:
+    51→  Tool: {"tool": "<name>", "args": {...}}
+    52→  Done: {"done": true, "root_cause": "...", "confidence": 0.85, "files_to_change": [...]}
+    53→No text before or after. No markdown.`
+    54→
+    55→// Tool is a function the LLM can call during the agent loop.
+    56→type Tool struct {
+    57→        Name        string `json:"name"`
+    58→        Description string `json:"description"`
+    59→        Parameters  string `json:"parameters"`
+    60→}
+    61→
+    62→// ToolResult is the output of a tool call.
+    63→type ToolResult struct {
+    64→        Tool    string `json:"tool"`
+    65→        Success bool   `json:"success"`
+    66→        Output  string `json:"output"`
+    67→}
+    68→
+    69→// Turn is one iteration of the agent loop.
+    70→type Turn struct {
+    71→        TurnNumber  int           `json:"turn"`
+    72→        LLMResponse string        `json:"llm_response"`
+    73→        ToolCall    *ToolCall     `json:"tool_call,omitempty"`
+    74→        ToolResult  *ToolResult   `json:"tool_result,omitempty"`
+    75→        Duration    time.Duration `json:"duration"`
+    76→}
+    77→
+    78→// ToolCall is the LLM's request to execute a tool.
+    79→type ToolCall struct {
+    80→        Tool string         `json:"tool"`
+    81→        Args map[string]any `json:"args"`
+    82→}
+    83→
+    84→// AgentConfig configures the agent loop.
+    85→type AgentConfig struct {
+    86→        MaxTurns         int
+    87→        TurnTimeout      time.Duration
+    88→        CompactThreshold int
+    89→
+    90→        // NumPlans controls multi-plan generation (MCTS). 1 = single plan (v2
+    91→        // behavior, default). 2+ = generate N plans and pick the best. Only
+    92→        // worth the extra LLM calls on models that can produce diverse plans
+    93→        // (70B+). Default: 1.
+    94→        NumPlans int
+    95→
+    96→        // CriticThreshold is the confidence below which the critic runs. 0.0 =
+    97→        // critic never runs (v2 behavior, default). 0.80 = critic runs when
+    98→        // confidence < 80%. Only useful on models smart enough to evaluate
+    99→        // root causes (70B+). Default: 0.0.
+   100→        CriticThreshold float64
+   101→}
+   102→
+   103→// Agent runs the investigation loop.
+   104→type Agent struct {
+   105→        router    *llm.Router
+   106→        cfg       AgentConfig
+   107→        tools     []Tool
+   108→        toolFuncs map[string]ToolFunc
+   109→}
+   110→
+   111→// ToolFunc executes a tool and returns its output.
+   112→type ToolFunc func(ctx context.Context, args map[string]any) ToolResult
+   113→
+   114→// InvestigationResult is the final output of the agent loop.
+   115→type InvestigationResult struct {
+   116→        RootCause   string   `json:"root_cause"`
+   117→        Confidence  float64  `json:"confidence"`
+   118→        SourceFiles []string `json:"source_files"`
+   119→        Hypotheses  []string `json:"hypotheses"`
+   120→        TurnsUsed   int      `json:"turns_used"`
+   121→        TotalTokens int      `json:"total_tokens"`
+   122→        Trace       []Turn   `json:"trace"`
+   123→}
+   124→
+   125→func New(router *llm.Router, cfg AgentConfig) *Agent {
+   126→        if cfg.MaxTurns <= 0 {
+   127→                cfg.MaxTurns = DefaultMaxTurns
+   128→        }
+   129→        if cfg.TurnTimeout <= 0 {
+   130→                cfg.TurnTimeout = DefaultTurnTimeout
+   131→        }
+   132→        if cfg.CompactThreshold <= 0 {
+   133→                cfg.CompactThreshold = DefaultCompactThreshold
+   134→        }
+   135→        if cfg.NumPlans <= 0 {
+   136→                cfg.NumPlans = 1 // v2 default: single plan
+   137→        }
+   138→        if cfg.CriticThreshold <= 0 {
+   139→                cfg.CriticThreshold = 0.0 // v2 default: critic never runs
+   140→        }
+   141→        return &Agent{
+   142→                router: router,
+   143→                cfg:    cfg,
+   144→        }
+   145→}
+   146→
+   147→// RegisterTool adds a tool to the agent's toolset.
+   148→func (a *Agent) RegisterTool(name, description, parameters string, fn ToolFunc) {
+   149→        a.tools = append(a.tools, Tool{
+   150→                Name:        name,
+   151→                Description: description,
+   152→                Parameters:  parameters,
+   153→        })
+   154→        if a.toolFuncs == nil {
+   155→                a.toolFuncs = make(map[string]ToolFunc)
+   156→        }
+   157→        a.toolFuncs[name] = fn
+   158→}
+   159→
+   160→// Run executes the agent loop with planning, stuck detection, and retry.
+   161→func (a *Agent) Run(ctx context.Context, systemPrompt string) (*InvestigationResult, error) {
+   162→        var turns []Turn
+   163→        var conversation []map[string]string
+   164→
+   165→        conversation = append(conversation, map[string]string{
+   166→                "role":    "system",
+   167→                "content": systemPrompt + "\n\n" + agentSystemRole,
+   168→        })
+   169→
+   170→        toolsJSON, _ := json.Marshal(a.tools)
+   171→        conversation = append(conversation, map[string]string{
+   172→                "role":    "user",
+   173→                "content": fmt.Sprintf("Available tools:\n%s\n\n%s\n\nStart investigating.", toolsJSON, agentInstructions),
+   174→        })
+   175→
+   176→        // Phase 1: Planning.
+   177→        // When NumPlans=1 (default, v2 behavior): generate a single plan.
+   178→        // When NumPlans>1 (opt-in, for large models): generate N plans,
+   179→        // pick the best by specificity scoring (simplified MCTS).
+   180→        podLogs := ""
+   181→        for _, msg := range conversation {
+   182→                if msg["role"] == "system" {
+   183→                        podLogs = msg["content"]
+   184→                        break
+   185→                }
+   186→        }
+   187→
+   188→        var plan string
+   189→        if a.cfg.NumPlans > 1 {
+   190→                plans := a.generatePlans(ctx, conversation, a.cfg.NumPlans)
+   191→                if len(plans) > 0 {
+   192→                        plan = pickBestPlan(plans, podLogs)
+   193→                }
+   194→        } else {
+   195→                // Single plan — one LLM call (v2 behavior).
+   196→                planningCtx, planningCancel := context.WithTimeout(ctx, a.cfg.TurnTimeout)
+   197→                p, pErr := a.router.FrontierText(planningCtx,
+   198→                        "You are an autonomous SRE agent. Read the crash context and write a brief 2-3 step investigation plan. Which files will you read? What will you search for? Be specific.",
+   199→                        formatConversation(conversation), 500)
+   200→                planningCancel()
+   201→                if pErr != nil {
+   202→                        logging.Warn("agent: planning call failed, skipping plan", "err", pErr)
+   203→                } else {
+   204→                        plan = p
+   205→                }
+   206→        }
+   207→
+   208→        if plan != "" {
+   209→                conversation = append(conversation,
+   210→                        map[string]string{"role": "assistant", "content": plan},
+   211→                        map[string]string{"role": "user", "content": fmt.Sprintf("Here is your investigation plan:\n%s\n\nNow execute it. Call tools one at a time. Respond with JSON only.", truncate(plan, 500))})
+   212→                logging.Info("agent: plan generated", "plans", a.cfg.NumPlans, "plan", truncate(plan, 100))
+   213→        } else {
+   214→                logging.Warn("agent: planning failed, starting without plan")
+   215→        }
+   216→
+   217→        // Phase 2: Execution loop with stuck detection.
+   218→        stuckDetector := NewStuckDetector()
+   219→        criticUsed := false // only run the critic once per investigation
+   220→
+   221→        for turnNum := 1; turnNum <= a.cfg.MaxTurns; turnNum++ {
+   222→                // Inner retry loop for malformed LLM output.
+   223→                var response string
+   224→                var parsed llmResponse
+   225→                var parseOK bool
+   226→
+   227→                for retry := 0; retry <= maxRetriesPerTurn; retry++ {
+   228→                        turnCtx, cancel := context.WithTimeout(ctx, a.cfg.TurnTimeout)
+   229→                        var llmErr error
+   230→                        response, llmErr = a.router.FrontierText(turnCtx,
+   231→                                agentSystemRole, formatConversation(conversation), 2000)
+   232→                        cancel()
+   233→
+   234→                        if llmErr != nil {
+   235→                                logging.Error("agent: LLM call failed", "turn", turnNum, "retry", retry, "err", llmErr)
+   236→                                break
+   237→                        }
+   238→
+   239→                        parsed, parseOK = parseLLMResponse(response)
+   240→                        if parseOK {
+   241→                                break
+   242→                        }
+   243→
+   244→                        logging.Warn("agent: malformed LLM output, retrying", "turn", turnNum, "retry", retry, "response_preview", truncate(response, 100))
+   245→                        conversation = append(conversation,
+   246→                                map[string]string{"role": "assistant", "content": response},
+   247→                                map[string]string{"role": "user", "content": correctionPrompt})
+   248→                }
+   249→
+   250→                if !parseOK {
+   251→                        turns = append(turns, Turn{TurnNumber: turnNum, LLMResponse: response})
+   252→                        logging.Warn("agent: turn produced no valid output after retries", "turn", turnNum)
+   253→                        continue
+   254→                }
+   255→
+   256→                if err := ctx.Err(); err != nil {
+   257→                        break
+   258→                }
+   259→
+   260→                turn := Turn{TurnNumber: turnNum, LLMResponse: response}
+   261→
+   262→                if parsed.Done {
+   263→                        turns = append(turns, turn)
+   264→
+   265→                        // Multi-agent critic: verify the root cause before
+   266→                        // declaring done. Only runs when CriticThreshold > 0
+   267→                        // AND confidence is below the threshold. Default
+   268→                        // (CriticThreshold=0.0) = critic never runs = v2 behavior.
+   269→                        // Only useful on models smart enough to evaluate root
+   270→                        // causes (70B+). On small models, the critic rejects
+   271→                        // correct answers and wastes turns.
+   272→                        if a.cfg.CriticThreshold > 0 && !criticUsed && parsed.Confidence < a.cfg.CriticThreshold && turnNum < a.cfg.MaxTurns {
+   273→                                criticUsed = true
+   274→                                approved, critique := a.criticReview(ctx, parsed.RootCause, parsed.FilesToChange, podLogs, conversation)
+   275→                                if !approved {
+   276→                                        logging.Warn("agent: critic rejected root cause", "turn", turnNum, "critique", critique)
+   277→                                        conversation = append(conversation,
+   278→                                                map[string]string{"role": "user", "content": fmt.Sprintf(
+   279→                                                        "[CRITIC] Your root cause was rejected: %s\n\nContinue investigating. Try a different approach.", critique)})
+   280→                                        continue
+   281→                                }
+   282→                        }
+   283→
+   284→                        criticApproved := criticUsed || parsed.Confidence >= 0.80
+   285→                        logging.Info("agent: investigation complete", "turns", turnNum, "root_cause", parsed.RootCause, "confidence", parsed.Confidence, "critic_approved", criticApproved)
+   286→                        return &InvestigationResult{
+   287→                                RootCause:   parsed.RootCause,
+   288→                                Confidence:  parsed.Confidence,
+   289→                                SourceFiles: parsed.FilesToChange,
+   290→                                Hypotheses:  []string{parsed.RootCause},
+   291→                                TurnsUsed:   turnNum,
+   292→                                Trace:       turns,
+   293→                        }, nil
+   294→                }
+   295→
+   296→                if parsed.Tool != "" {
+   297→                        turn.ToolCall = &ToolCall{Tool: parsed.Tool, Args: parsed.Args}
+   298→                        result := a.executeTool(ctx, parsed.Tool, parsed.Args)
+   299→                        turn.ToolResult = &result
+   300→
+   301→                        // Record for stuck detection.
+   302→                        stuckDetector.Record(parsed.Tool, parsed.Args, result)
+   303→
+   304→                        // Check if stuck — inject recovery prompt if needed.
+   305→                        stuckMsg := stuckDetector.CheckStuck()
+   306→                        toolResultMsg := fmt.Sprintf("Tool %s result:\n%s", parsed.Tool, result.Output)
+   307→                        if stuckMsg != "" {
+   308→                                toolResultMsg += "\n\n" + stuckMsg
+   309→                                logging.Warn("agent: stuck detector triggered", "turn", turnNum, "msg", truncate(stuckMsg, 80))
+   310→                        }
+   311→
+   312→                        conversation = append(conversation,
+   313→                                map[string]string{"role": "assistant", "content": response},
+   314→                                map[string]string{"role": "user", "content": toolResultMsg})
+   315→                } else {
+   316→                        conversation = append(conversation,
+   317→                                map[string]string{"role": "assistant", "content": response})
+   318→                }
+   319→
+   320→                turns = append(turns, turn)
+   321→                logging.Info("agent: turn complete", "turn", turnNum, "tool", parsed.Tool, "done", parsed.Done)
+   322→
+   323→                if turnNum >= a.cfg.CompactThreshold && turnNum%5 == 0 {
+   324→                        conversation = a.condenseContext(ctx, conversation, systemPrompt)
+   325→                }
+   326→        }
+   327→
+   328→        // Phase 3: Turn cap reached.
+   329→        logging.Warn("agent: hit turn cap without completion", "max_turns", a.cfg.MaxTurns)
+   330→
+   331→        // Guard against the edge case where the very first LLM call failed
+   332→        // (turns is empty). Without this, turns[len(turns)-1] panics with
+   333→        // "index out of range [-1]". This can happen when the LLM endpoint
+   334→        // is unreachable or the context is cancelled before the first
+   335→        // response arrives.
+   336→        lastResponse := "(no turns completed — first LLM call failed)"
+   337→        turnsUsed := a.cfg.MaxTurns
+   338→        if len(turns) > 0 {
+   339→                lastResponse = truncate(turns[len(turns)-1].LLMResponse, 200)
+   340→        } else {
+   341→                // If no turns completed, TurnsUsed should reflect that we
+   342→                // didn't actually run the full loop — we broke on the first
+   343→                // error. Report 1 so callers know the loop was entered but
+   344→                // immediately failed.
+   345→                turnsUsed = 1
+   346→        }
+   347→        return &InvestigationResult{
+   348→                RootCause:   fmt.Sprintf("Agent did not complete within %d turns. Last response: %s", a.cfg.MaxTurns, lastResponse),
+   349→                Confidence:  0.0,
+   350→                SourceFiles: nil,
+   351→                TurnsUsed:   turnsUsed,
+   352→                Trace:       turns,
+   353→        }, nil
+   354→}
+   355→
+   356→func (a *Agent) executeTool(ctx context.Context, name string, args map[string]any) ToolResult {
+   357→        fn, ok := a.toolFuncs[name]
+   358→        if !ok {
+   359→                return ToolResult{
+   360→                        Tool:    name,
+   361→                        Success: false,
+   362→                        Output:  fmt.Sprintf("Unknown tool: %s", name),
+   363→                }
+   364→        }
+   365→        return fn(ctx, args)
+   366→}
+   367→
+   368→type llmResponse struct {
+   369→        Done          bool           `json:"done"`
+   370→        Tool          string         `json:"tool"`
+   371→        Args          map[string]any `json:"args"`
+   372→        RootCause     string         `json:"root_cause"`
+   373→        Confidence    float64        `json:"confidence"`
+   374→        FilesToChange []string       `json:"files_to_change"`
+   375→}
+   376→
+   377→// parseLLMResponse tries to extract a valid tool call or done signal.
+   378→// Returns (result, ok) — ok=false means retry with correction prompt.
+   379→func parseLLMResponse(response string) (llmResponse, bool) {
+   380→        var result llmResponse
+   381→
+   382→        // Strategy 1: direct parse.
+   383→        if err := json.Unmarshal([]byte(response), &result); err == nil {
+   384→                return result, true
+   385→        }
+   386→
+   387→        // Strategy 2: extract from markdown code block.
+   388→        if code := extractCodeBlock(response); code != "" {
+   389→                if err := json.Unmarshal([]byte(code), &result); err == nil {
+   390→                        return result, true
+   391→                }
+   392→        }
+   393→
+   394→        // Strategy 3: extract first balanced JSON object.
+   395→        if obj := extractFirstJSONObject(response); obj != "" {
+   396→                if err := json.Unmarshal([]byte(obj), &result); err == nil {
+   397→                        return result, true
+   398→                }
+   399→        }
+   400→
+   401→        return llmResponse{}, false
+   402→}
+   403→
+   404→func extractCodeBlock(response string) string {
+   405→        startMarkers := []string{"```json\n", "```json\r\n", "```\n", "```"}
+   406→        for _, marker := range startMarkers {
+   407→                if idx := strings.Index(response, marker); idx >= 0 {
+   408→                        rest := response[idx+len(marker):]
+   409→                        if end := strings.Index(rest, "```"); end >= 0 {
+   410→                                return strings.TrimSpace(rest[:end])
+   411→                        }
+   412→                }
+   413→        }
+   414→        return ""
+   415→}
+   416→
+   417→func extractFirstJSONObject(response string) string {
+   418→        start := strings.Index(response, "{")
+   419→        if start < 0 {
+   420→                return ""
+   421→        }
+   422→        depth := 0
+   423→        inString := false
+   424→        escaped := false
+   425→        for i := start; i < len(response); i++ {
+   426→                ch := response[i]
+   427→                if escaped {
+   428→                        escaped = false
+   429→                        continue
+   430→                }
+   431→                if ch == '\\' {
+   432→                        escaped = true
+   433→                        continue
+   434→                }
+   435→                if ch == '"' {
+   436→                        inString = !inString
+   437→                        continue
+   438→                }
+   439→                if inString {
+   440→                        continue
+   441→                }
+   442→                switch ch {
+   443→                case '{':
+   444→                        depth++
+   445→                case '}':
+   446→                        depth--
+   447→                        if depth == 0 {
+   448→                                return response[start : i+1]
+   449→                        }
+   450→                }
+   451→        }
+   452→        return ""
+   453→}
+   454→
+   455→func formatConversation(conv []map[string]string) string {
+   456→        var b strings.Builder
+   457→        for _, msg := range conv {
+   458→                role := msg["role"]
+   459→                content := msg["content"]
+   460→                if len(content) > 4000 {
+   461→                        content = content[:4000] + "...(truncated)"
+   462→                }
+   463→                fmt.Fprintf(&b, "[%s]: %s\n\n", role, content)
+   464→        }
+   465→        return b.String()
+   466→}
+   467→
+   468→func compactConversation(conv []map[string]string, systemPrompt string) []map[string]string {
+   469→        if len(conv) <= 4 {
+   470→                return conv
+   471→        }
+   472→
+   473→        var findings []string
+   474→        for i := 2; i < len(conv)-2; i++ {
+   475→                msg := conv[i]
+   476→                if msg["role"] == "user" && strings.Contains(msg["content"], "Tool ") {
+   477→                        findings = append(findings, msg["content"])
+   478→                }
+   479→        }
+   480→
+   481→        summary := fmt.Sprintf("Previous investigation summary (turns 1-%d):\n%s\n\nContinue investigating.", len(conv)-2, strings.Join(findings, "\n"))
+   482→
+   483→        return []map[string]string{
+   484→                {"role": "system", "content": systemPrompt},
+   485→                {"role": "user", "content": summary},
+   486→                conv[len(conv)-2],
+   487→                conv[len(conv)-1],
+   488→        }
+   489→}
+   490→
+   491→func truncate(s string, n int) string {
+   492→        if len(s) <= n {
+   493→                return s
+   494→        }
+   495→        return s[:n] + "..."
+   496→}
+   497→
+   498→// RegisterCodeIntelTools registers the code intelligence tools (find_definition,
+   499→// find_callers, find_callees, list_symbols) on the agent.
+   500→func (a *Agent) RegisterCodeIntelTools(idx *codeintel.Index) {
+   501→        a.RegisterTool("find_definition", "Find the definition of a function, method, class, or type.", `{"name": "symbol name"}`, func(ctx context.Context, args map[string]any) ToolResult {
+   502→                name, _ := args["name"].(string)
+   503→                if name == "" {
+   504→                        return ToolResult{Tool: "find_definition", Success: false, Output: "missing 'name' argument"}
+   505→                }
+   506→                defs := idx.FindDefinition(name)
+   507→                if len(defs) == 0 {
+   508→                        return ToolResult{Tool: "find_definition", Success: false, Output: fmt.Sprintf("No definition found for %q", name)}
+   509→                }
+   510→                var b strings.Builder
+   511→                for _, d := range defs {
+   512→                        fmt.Fprintf(&b, "%s:%d  %s %s(%s)\n", d.File, d.Line, d.Kind, d.Name, d.Params)
+   513→                }
+   514→                return ToolResult{Tool: "find_definition", Success: true, Output: b.String()}
+   515→        })
+   516→
+   517→        a.RegisterTool("find_callers", "Find all call sites of a function or method.", `{"name": "function name"}`, func(ctx context.Context, args map[string]any) ToolResult {
+   518→                name, _ := args["name"].(string)
+   519→                if name == "" {
+   520→                        return ToolResult{Tool: "find_callers", Success: false, Output: "missing 'name' argument"}
+   521→                }
+   522→                return ToolResult{Tool: "find_callers", Success: true, Output: idx.FormatCallers(name)}
+   523→        })
+   524→
+   525→        a.RegisterTool("find_callees", "Find all functions called by a function.", `{"name": "function name"}`, func(ctx context.Context, args map[string]any) ToolResult {
+   526→                name, _ := args["name"].(string)
+   527→                if name == "" {
+   528→                        return ToolResult{Tool: "find_callees", Success: false, Output: "missing 'name' argument"}
+   529→                }
+   530→                callees := idx.FindCallees(name)
+   531→                if len(callees) == 0 {
+   532→                        return ToolResult{Tool: "find_callees", Success: false, Output: fmt.Sprintf("No callees found for %q", name)}
+   533→                }
+   534→                var b strings.Builder
+   535→                fmt.Fprintf(&b, "%d callee(s) of %q:\n", len(callees), name)
+   536→                for _, c := range callees {
+   537→                        fmt.Fprintf(&b, "  %s:%d  calls %s\n", c.CallFile, c.CallLine, c.Callee)
+   538→                }
+   539→                return ToolResult{Tool: "find_callees", Success: true, Output: b.String()}
+   540→        })
+   541→
+   542→        a.RegisterTool("list_symbols", "List all symbols (functions, classes, types) in the repo.", `{}`, func(ctx context.Context, args map[string]any) ToolResult {
+   543→                return ToolResult{Tool: "list_symbols", Success: true, Output: idx.FormatSymbolList()}
+   544→        })
+   545→}
+   546→
+   547→// RegisterRepoTools registers file I/O tools (read_file, search_code, list_files).
+   548→func (a *Agent) RegisterRepoTools(repoPath string) {
+   549→        a.RegisterTool("read_file", "Read a file from the repo. Returns up to 100 lines.", `{"path": "relative/path", "start_line": 1}`, func(ctx context.Context, args map[string]any) ToolResult {
+   550→                path, _ := args["path"].(string)
+   551→                if path == "" {
+   552→                        return ToolResult{Tool: "read_file", Success: false, Output: "missing 'path' argument"}
+   553→                }
+   554→                content, err := repo.ReadFile(repoPath, path)
+   555→                if err != nil {
+   556→                        return ToolResult{Tool: "read_file", Success: false, Output: err.Error()}
+   557→                }
+   558→                lines := strings.Split(content, "\n")
+   559→                startLine := 1
+   560→                if sl, ok := args["start_line"].(float64); ok {
+   561→                        startLine = int(sl)
+   562→                }
+   563→                if startLine < 1 {
+   564→                        startLine = 1
+   565→                }
+   566→                endLine := startLine + MaxFilePreviewLines - 1
+   567→                if endLine > len(lines) {
+   568→                        endLine = len(lines)
+   569→                }
+   570→                if startLine > len(lines) {
+   571→                        return ToolResult{Tool: "read_file", Success: false, Output: fmt.Sprintf("start_line %d exceeds file length %d", startLine, len(lines))}
+   572→                }
+   573→                var b strings.Builder
+   574→                fmt.Fprintf(&b, "%s (lines %d-%d of %d):\n", path, startLine, endLine, len(lines))
+   575→                for i := startLine - 1; i < endLine; i++ {
+   576→                        fmt.Fprintf(&b, "%4d  %s\n", i+1, lines[i])
+   577→                }
+   578→                if endLine < len(lines) {
+   579→                        fmt.Fprintf(&b, "... (%d more lines)\n", len(lines)-endLine)
+   580→                }
+   581→                return ToolResult{Tool: "read_file", Success: true, Output: b.String()}
+   582→        })
+   583→
+   584→        a.RegisterTool("search_code", "Search the repo for a pattern (regex). Returns matches with context.", `{"pattern": "regex pattern", "max_results": 10}`, func(ctx context.Context, args map[string]any) ToolResult {
+   585→                pattern, _ := args["pattern"].(string)
+   586→                if pattern == "" {
+   587→                        return ToolResult{Tool: "search_code", Success: false, Output: "missing 'pattern' argument"}
+   588→                }
+   589→                maxResults := 10
+   590→                if mr, ok := args["max_results"].(float64); ok {
+   591→                        maxResults = int(mr)
+   592→                }
+   593→                results, err := repo.Search(repoPath, pattern, maxResults)
+   594→                if err != nil {
+   595→                        return ToolResult{Tool: "search_code", Success: false, Output: err.Error()}
+   596→                }
+   597→                if len(results) == 0 {
+   598→                        return ToolResult{Tool: "search_code", Success: false, Output: "No matches found."}
+   599→                }
+   600→                var b strings.Builder
+   601→                fmt.Fprintf(&b, "%d match(es):\n", len(results))
+   602→                for _, r := range results {
+   603→                        fmt.Fprintf(&b, "  %s:%d  %s\n", r.Path, r.Line, r.Match)
+   604→                }
+   605→                return ToolResult{Tool: "search_code", Success: true, Output: b.String()}
+   606→        })
+   607→
+   608→        a.RegisterTool("list_files", "List files in a directory.", `{"dir": "relative/path"}`, func(ctx context.Context, args map[string]any) ToolResult {
+   609→                dir, _ := args["dir"].(string)
+   610→                files, err := repo.WalkTree(filepath.Join(repoPath, dir), 100)
+   611→                if err != nil {
+   612→                        return ToolResult{Tool: "list_files", Success: false, Output: err.Error()}
+   613→                }
+   614→                var b strings.Builder
+   615→                for _, f := range files {
+   616→                        fmt.Fprintf(&b, "  %s\n", f)
+   617→                }
+   618→                return ToolResult{Tool: "list_files", Success: true, Output: b.String()}
+   619→        })
+   620→}
+   621→

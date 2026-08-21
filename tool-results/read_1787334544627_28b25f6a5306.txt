@@ -1,0 +1,1064 @@
+     1→package api
+     2→
+     3→import (
+     4→        "context"
+     5→        "encoding/json"
+     6→        "fmt"
+     7→        "net/http"
+     8→        "net/http/httptest"
+     9→        "strings"
+    10→        "sync"
+    11→        "sync/atomic"
+    12→        "testing"
+    13→        "time"
+    14→
+    15→        "github.com/google/uuid"
+    16→
+    17→        "github.com/karimzakzouk/sentinel/internal/schemas"
+    18→)
+    19→
+    20→// noopStore is a minimal Store for testing — returns empty results.
+    21→type noopStore struct{}
+    22→
+    23→func (n *noopStore) ListRecentIncidents(ctx context.Context, limit int) ([]*schemas.Incident, error) {
+    24→        return nil, nil
+    25→}
+    26→func (n *noopStore) GetIncident(ctx context.Context, id uuid.UUID) (*schemas.Incident, error) {
+    27→        return nil, nil
+    28→}
+    29→func (n *noopStore) FindIncidentByPrefix(ctx context.Context, prefix string) (*schemas.Incident, error) {
+    30→        return nil, nil
+    31→}
+    32→
+    33→// stubStore lets a test customize the Store behavior inline.
+    34→type stubStore struct {
+    35→        list    []*schemas.Incident
+    36→        listErr error
+    37→        get     *schemas.Incident
+    38→        getErr  error
+    39→        find    *schemas.Incident
+    40→        findErr error
+    41→}
+    42→
+    43→func (s *stubStore) ListRecentIncidents(ctx context.Context, limit int) ([]*schemas.Incident, error) {
+    44→        return s.list, s.listErr
+    45→}
+    46→func (s *stubStore) GetIncident(ctx context.Context, id uuid.UUID) (*schemas.Incident, error) {
+    47→        return s.get, s.getErr
+    48→}
+    49→func (s *stubStore) FindIncidentByPrefix(ctx context.Context, prefix string) (*schemas.Incident, error) {
+    50→        return s.find, s.findErr
+    51→}
+    52→
+    53→// fakePauseController records Pause/Resume calls for assertions.
+    54→type fakePauseController struct {
+    55→        mu          sync.Mutex
+    56→        paused      bool
+    57→        pauseDur    time.Duration
+    58→        pauseReason string
+    59→}
+    60→
+    61→func (f *fakePauseController) IsPaused() bool {
+    62→        f.mu.Lock()
+    63→        defer f.mu.Unlock()
+    64→        return f.paused
+    65→}
+    66→
+    67→func (f *fakePauseController) Pause(d time.Duration, reason string) {
+    68→        f.mu.Lock()
+    69→        defer f.mu.Unlock()
+    70→        f.paused = true
+    71→        f.pauseDur = d
+    72→        f.pauseReason = reason
+    73→}
+    74→
+    75→func (f *fakePauseController) Resume() {
+    76→        f.mu.Lock()
+    77→        defer f.mu.Unlock()
+    78→        f.paused = false
+    79→}
+    80→
+    81→// newTestServer builds a Server with a noop store + always-ready ready checker.
+    82→func newTestServer() *Server {
+    83→        return New(":0", &noopStore{},
+    84→                func() map[string]any { return nil },
+    85→                func(s, ns, r string) (string, error) { return "cluster-1", nil },
+    86→                func() bool { return true })
+    87→}
+    88→
+    89→// TestHandleSSEMaxSubscribers verifies the SSE subscriber cap. Opening
+    90→// more than maxSSESubscribers concurrent connections should return 503.
+    91→func TestHandleSSEMaxSubscribers(t *testing.T) {
+    92→        s := newTestServer()
+    93→
+    94→        // Fill eventSubs to the cap directly.
+    95→        s.eventSubsMu.Lock()
+    96→        for i := 0; i < maxSSESubscribers; i++ {
+    97→                s.eventSubs[make(chan ServerEvent, 16)] = true
+    98→        }
+    99→        s.eventSubsMu.Unlock()
+   100→
+   101→        req := httptest.NewRequest("GET", "/events", nil)
+   102→        w := httptest.NewRecorder()
+   103→        s.handleSSE(w, req)
+   104→
+   105→        if w.Code != http.StatusServiceUnavailable {
+   106→                t.Errorf("expected 503 when subscribers at cap, got %d", w.Code)
+   107→        }
+   108→}
+   109→
+   110→// TestReadBodyMaxBytes verifies bodies larger than maxRequestBodyBytes are
+   111→// rejected.
+   112→func TestReadBodyMaxBytes(t *testing.T) {
+   113→        largeBody := strings.Repeat("x", maxRequestBodyBytes+100)
+   114→        req := httptest.NewRequest("POST", "/settings", strings.NewReader(largeBody))
+   115→
+   116→        _, err := readBody(req)
+   117→        if err == nil {
+   118→                t.Error("expected error when reading body > 1MB, got nil")
+   119→        }
+   120→}
+   121→
+   122→// TestHandleSettingsRejectsDelete verifies non-GET/POST methods return 405.
+   123→func TestHandleSettingsRejectsDelete(t *testing.T) {
+   124→        s := newTestServer()
+   125→
+   126→        req := httptest.NewRequest("DELETE", "/settings", nil)
+   127→        w := httptest.NewRecorder()
+   128→        s.handleSettings(w, req)
+   129→
+   130→        if w.Code != http.StatusMethodNotAllowed {
+   131→                t.Errorf("expected 405 for DELETE /settings, got %d", w.Code)
+   132→        }
+   133→}
+   134→
+   135→// TestHandleInvestigateMissingService verifies POST /admin/investigate
+   136→// without a service field returns 400.
+   137→func TestHandleInvestigateMissingService(t *testing.T) {
+   138→        s := newTestServer()
+   139→
+   140→        body := `{"namespace":"sim"}`
+   141→        req := httptest.NewRequest("POST", "/admin/investigate", strings.NewReader(body))
+   142→        w := httptest.NewRecorder()
+   143→        s.handleInvestigate(w, req)
+   144→
+   145→        if w.Code != http.StatusBadRequest {
+   146→                t.Errorf("expected 400 for missing service, got %d", w.Code)
+   147→        }
+   148→}
+   149→
+   150→// TestServer_BearerAuth verifies the bearer-token middleware:
+   151→//   - With apiToken set, admin endpoints require 'Authorization: Bearer <token>'.
+   152→//   - Missing token → 401; wrong token → 401; correct token → 200.
+   153→//   - Public endpoints (healthz, readyz, metrics, /) are always allowed.
+   154→func TestServer_BearerAuth(t *testing.T) {
+   155→        const token = "secret-token"
+   156→
+   157→        cases := []struct {
+   158→                name       string
+   159→                tokenSet   bool
+   160→                path       string
+   161→                method     string
+   162→                authHeader string
+   163→                wantCode   int
+   164→        }{
+   165→                {"no token configured — admin allowed", false, "/admin/pause", "POST", "", 200},
+   166→                {"token set — no auth header", true, "/admin/pause", "POST", "", 401},
+   167→                {"token set — wrong token", true, "/admin/pause", "POST", "Bearer wrong", 401},
+   168→                {"token set — malformed header", true, "/admin/pause", "POST", "Token xyz", 401},
+   169→                {"token set — correct token", true, "/admin/pause", "POST", "Bearer " + token, 200},
+   170→                {"token set — healthz is public", true, "/healthz", "GET", "", 200},
+   171→                {"token set — readyz is public", true, "/readyz", "GET", "", 200},
+   172→                {"token set — metrics is public", true, "/metrics", "GET", "", 200},
+   173→                {"token set — / is public", true, "/", "GET", "", 200},
+   174→                {"token set — GET /incidents is read-only", true, "/incidents", "GET", "", 200},
+   175→                {"token set — GET /providers is read-only", true, "/providers", "GET", "", 200},
+   176→                {"token set — GET /settings is read-only", true, "/settings", "GET", "", 200},
+   177→                {"token set — POST /settings requires token (none)", true, "/settings", "POST", "", 401},
+   178→                {"token set — POST /settings with token", true, "/settings", "POST", "Bearer " + token, 200},
+   179→        }
+   180→
+   181→        for _, tc := range cases {
+   182→                t.Run(tc.name, func(t *testing.T) {
+   183→                        s := newTestServer()
+   184→                        if tc.tokenSet {
+   185→                                s.SetAPIToken(token)
+   186→                        }
+   187→                        // POST /settings needs a runtime cfg saver to return 200.
+   188→                        s.SetRuntimeCfgSaver(&noopCfgSaver{})
+   189→                        // /admin/pause needs a pause controller to return 200.
+   190→                        s.SetPauseController(&fakePauseController{})
+   191→
+   192→                        var body string
+   193→                        if tc.method == "POST" {
+   194→                                switch tc.path {
+   195→                                case "/admin/pause":
+   196→                                        body = `{}`
+   197→                                case "/settings":
+   198→                                        body = `{}`
+   199→                                default:
+   200→                                        body = `{}`
+   201→                                }
+   202→                        }
+   203→                        req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(body))
+   204→                        if tc.authHeader != "" {
+   205→                                req.Header.Set("Authorization", tc.authHeader)
+   206→                        }
+   207→                        w := httptest.NewRecorder()
+   208→                        s.http.Handler.ServeHTTP(w, req)
+   209→
+   210→                        if w.Code != tc.wantCode {
+   211→                                t.Errorf("got %d, want %d (body: %s)", w.Code, tc.wantCode, w.Body.String())
+   212→                        }
+   213→                })
+   214→        }
+   215→}
+   216→
+   217→// noopCfgSaver is a RuntimeCfgSaver that always succeeds.
+   218→type noopCfgSaver struct{}
+   219→
+   220→func (noopCfgSaver) SaveFromJSON(jsonBytes []byte) error { return nil }
+   221→
+   222→// TestServer_SSEBroadcaster verifies that events flow from BroadcastEvent
+   223→// to connected SSE subscribers. We test the broadcaster mechanism directly
+   224→// rather than via an HTTP round-trip because httptest.ResponseRecorder
+   225→// does not support concurrent reads while the handler is still writing.
+   226→func TestServer_SSEBroadcaster(t *testing.T) {
+   227→        s := newTestServer()
+   228→
+   229→        // Register a subscriber directly (same as handleSSE does).
+   230→        ch := make(chan ServerEvent, 16)
+   231→        s.eventSubsMu.Lock()
+   232→        s.eventSubs[ch] = true
+   233→        s.eventSubsMu.Unlock()
+   234→        defer func() {
+   235→                s.eventSubsMu.Lock()
+   236→                delete(s.eventSubs, ch)
+   237→                s.eventSubsMu.Unlock()
+   238→        }()
+   239→
+   240→        // Broadcast an event.
+   241→        s.BroadcastEvent("incident.created", map[string]string{"id": "abc"})
+   242→
+   243→        select {
+   244→        case ev := <-ch:
+   245→                if ev.Type != "incident.created" {
+   246→                        t.Errorf("event Type = %q, want incident.created", ev.Type)
+   247→                }
+   248→                data, ok := ev.Data.(map[string]string)
+   249→                if !ok {
+   250→                        t.Fatalf("event Data type = %T, want map[string]string", ev.Data)
+   251→                }
+   252→                if data["id"] != "abc" {
+   253→                        t.Errorf("event Data[id] = %q, want abc", data["id"])
+   254→                }
+   255→        case <-time.After(time.Second):
+   256→                t.Fatal("did not receive broadcast event within 1s")
+   257→        }
+   258→}
+   259→
+   260→// TestServer_SSEBroadcasterMultipleSubs verifies a broadcast reaches every
+   261→// connected subscriber.
+   262→func TestServer_SSEBroadcasterMultipleSubs(t *testing.T) {
+   263→        s := newTestServer()
+   264→
+   265→        const numSubs = 3
+   266→        subs := make([]chan ServerEvent, numSubs)
+   267→        s.eventSubsMu.Lock()
+   268→        for i := range subs {
+   269→                subs[i] = make(chan ServerEvent, 16)
+   270→                s.eventSubs[subs[i]] = true
+   271→        }
+   272→        s.eventSubsMu.Unlock()
+   273→        defer func() {
+   274→                s.eventSubsMu.Lock()
+   275→                for _, ch := range subs {
+   276→                        delete(s.eventSubs, ch)
+   277→                }
+   278→                s.eventSubsMu.Unlock()
+   279→        }()
+   280→
+   281→        s.BroadcastEvent("test.event", map[string]string{"k": "v"})
+   282→
+   283→        for i, ch := range subs {
+   284→                select {
+   285→                case ev := <-ch:
+   286→                        if ev.Type != "test.event" {
+   287→                                t.Errorf("sub %d: event Type = %q, want test.event", i, ev.Type)
+   288→                        }
+   289→                case <-time.After(time.Second):
+   290→                        t.Fatalf("sub %d: did not receive event within 1s", i)
+   291→                }
+   292→        }
+   293→}
+   294→
+   295→// TestServer_SSEBroadcasterSlowSubDropped verifies a slow subscriber (full
+   296→// channel) is dropped via the non-blocking select rather than blocking
+   297→// the broadcaster.
+   298→func TestServer_SSEBroadcasterSlowSubDropped(t *testing.T) {
+   299→        s := newTestServer()
+   300→
+   301→        // Register a subscriber with a tiny buffer that we never drain.
+   302→        ch := make(chan ServerEvent, 1)
+   303→        s.eventSubsMu.Lock()
+   304→        s.eventSubs[ch] = true
+   305→        s.eventSubsMu.Unlock()
+   306→        defer func() {
+   307→                s.eventSubsMu.Lock()
+   308→                delete(s.eventSubs, ch)
+   309→                s.eventSubsMu.Unlock()
+   310→        }()
+   311→
+   312→        // Broadcast 5 events. Only the first fits in the buffer; the rest are
+   313→        // dropped via the non-blocking select in BroadcastEvent.
+   314→        for i := 0; i < 5; i++ {
+   315→                s.BroadcastEvent("e", i)
+   316→        }
+   317→
+   318→        // Drain: we should get at most 1 event (the first one). The broadcaster
+   319→        // must not have blocked.
+   320→        received := 0
+   321→loop:
+   322→        for {
+   323→                select {
+   324→                case <-ch:
+   325→                        received++
+   326→                default:
+   327→                        break loop
+   328→                }
+   329→        }
+   330→        if received > 1 {
+   331→                t.Errorf("expected at most 1 event in the buffer, got %d", received)
+   332→        }
+   333→}
+   334→
+   335→// TestServer_PauseResume verifies the pause + resume endpoints wire to
+   336→// the PauseController.
+   337→func TestServer_PauseResume(t *testing.T) {
+   338→        s := newTestServer()
+   339→        pc := &fakePauseController{}
+   340→        s.SetPauseController(pc)
+   341→
+   342→        // POST /admin/pause with default duration.
+   343→        req := httptest.NewRequest("POST", "/admin/pause", strings.NewReader(`{}`))
+   344→        w := httptest.NewRecorder()
+   345→        s.http.Handler.ServeHTTP(w, req)
+   346→        if w.Code != 200 {
+   347→                t.Fatalf("pause: got %d, want 200 (body: %s)", w.Code, w.Body.String())
+   348→        }
+   349→        if !pc.paused {
+   350→                t.Error("PauseController.Pause was not called")
+   351→        }
+   352→        if pc.pauseDur != 30*time.Minute {
+   353→                t.Errorf("default pause duration = %v, want 30m", pc.pauseDur)
+   354→        }
+   355→        if pc.pauseReason != "paused via CLI" {
+   356→                t.Errorf("default pause reason = %q, want 'paused via CLI'", pc.pauseReason)
+   357→        }
+   358→
+   359→        // POST /admin/pause with explicit duration + reason.
+   360→        req = httptest.NewRequest("POST", "/admin/pause", strings.NewReader(`{"duration_min":10,"reason":"deploy"}`))
+   361→        w = httptest.NewRecorder()
+   362→        s.http.Handler.ServeHTTP(w, req)
+   363→        if w.Code != 200 {
+   364→                t.Fatalf("pause with body: got %d, want 200 (body: %s)", w.Code, w.Body.String())
+   365→        }
+   366→        if pc.pauseDur != 10*time.Minute {
+   367→                t.Errorf("explicit pause duration = %v, want 10m", pc.pauseDur)
+   368→        }
+   369→        if pc.pauseReason != "deploy" {
+   370→                t.Errorf("explicit pause reason = %q, want 'deploy'", pc.pauseReason)
+   371→        }
+   372→
+   373→        // POST /admin/resume.
+   374→        req = httptest.NewRequest("POST", "/admin/resume", nil)
+   375→        w = httptest.NewRecorder()
+   376→        s.http.Handler.ServeHTTP(w, req)
+   377→        if w.Code != 200 {
+   378→                t.Fatalf("resume: got %d, want 200 (body: %s)", w.Code, w.Body.String())
+   379→        }
+   380→        if pc.paused {
+   381→                t.Error("PauseController.Resume was not called")
+   382→        }
+   383→
+   384→        // 405 on non-POST.
+   385→        req = httptest.NewRequest("GET", "/admin/pause", nil)
+   386→        w = httptest.NewRecorder()
+   387→        s.handlePause(w, req)
+   388→        if w.Code != http.StatusMethodNotAllowed {
+   389→                t.Errorf("GET /admin/pause: got %d, want 405", w.Code)
+   390→        }
+   391→}
+   392→
+   393→// TestServer_PauseWithoutController verifies the endpoint returns 503 when
+   394→// no pause controller is wired.
+   395→func TestServer_PauseWithoutController(t *testing.T) {
+   396→        s := newTestServer() // no SetPauseController
+   397→        req := httptest.NewRequest("POST", "/admin/pause", strings.NewReader(`{}`))
+   398→        w := httptest.NewRecorder()
+   399→        s.handlePause(w, req)
+   400→        if w.Code != http.StatusServiceUnavailable {
+   401→                t.Errorf("expected 503 without pause controller, got %d", w.Code)
+   402→        }
+   403→}
+   404→
+   405→// TestServer_IncidentsList verifies the GET /incidents route uses the Store
+   406→// and applies the limit query param.
+   407→func TestServer_IncidentsList(t *testing.T) {
+   408→        store := &stubStore{
+   409→                list: []*schemas.Incident{
+   410→                        {IncidentID: uuid.New(), Status: schemas.StatusInvestigating},
+   411→                        {IncidentID: uuid.New(), Status: schemas.StatusVerified},
+   412→                },
+   413→        }
+   414→        s := New(":0", store,
+   415→                func() map[string]any { return nil },
+   416→                func(s, ns, r string) (string, error) { return "", nil },
+   417→                func() bool { return true })
+   418→
+   419→        req := httptest.NewRequest("GET", "/incidents?limit=5", nil)
+   420→        w := httptest.NewRecorder()
+   421→        s.http.Handler.ServeHTTP(w, req)
+   422→        if w.Code != 200 {
+   423→                t.Fatalf("got %d, want 200 (body: %s)", w.Code, w.Body.String())
+   424→        }
+   425→        var got []*schemas.Incident
+   426→        if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+   427→                t.Fatalf("unmarshal: %v", err)
+   428→        }
+   429→        if len(got) != 2 {
+   430→                t.Errorf("got %d incidents, want 2", len(got))
+   431→        }
+   432→}
+   433→
+   434→// TestServer_APIMeta verifies /api/meta returns the endpoint list and the
+   435→// chatops command list (so the frontend can render the chatops section
+   436→// without hardcoding commands).
+   437→func TestServer_APIMeta(t *testing.T) {
+   438→        s := newTestServer()
+   439→        req := httptest.NewRequest("GET", "/api/meta", nil)
+   440→        w := httptest.NewRecorder()
+   441→        s.http.Handler.ServeHTTP(w, req)
+   442→        if w.Code != 200 {
+   443→                t.Fatalf("got %d, want 200", w.Code)
+   444→        }
+   445→        var resp map[string]any
+   446→        if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+   447→                t.Fatalf("unmarshal: %v", err)
+   448→        }
+   449→        endpoints, _ := resp["endpoints"].([]any)
+   450→        if len(endpoints) == 0 {
+   451→                t.Error("expected non-empty endpoints list")
+   452→        }
+   453→        // /api/meta should be in the list (self-reference).
+   454→        found := false
+   455→        for _, e := range endpoints {
+   456→                if e == "/api/meta" {
+   457→                        found = true
+   458→                        break
+   459→                }
+   460→        }
+   461→        if !found {
+   462→                t.Error("/api/meta not in endpoints list")
+   463→        }
+   464→        // The chatops command list must be present and non-empty — the registry
+   465→        // is populated at init() time from internal/chatops/commands*.go.
+   466→        commands, _ := resp["commands"].([]any)
+   467→        if len(commands) == 0 {
+   468→                t.Fatal("expected non-empty commands list — chatops registry not loaded")
+   469→        }
+   470→        // Every entry must have a name + tier + permission (the fields the
+   471→        // frontend renders). Don't assert the exact count — that would couple
+   472→        // the test to the chatops command count, which drifts as commands are
+   473→        // added.
+   474→        for _, raw := range commands {
+   475→                c, ok := raw.(map[string]any)
+   476→                if !ok {
+   477→                        t.Errorf("command entry is not an object: %T", raw)
+   478→                        continue
+   479→                }
+   480→                if c["name"] == "" || c["name"] == nil {
+   481→                        t.Error("command entry missing name")
+   482→                }
+   483→                if c["tier"] == "" || c["tier"] == nil {
+   484→                        t.Error("command entry missing tier")
+   485→                }
+   486→                if c["permission"] == "" || c["permission"] == nil {
+   487→                        t.Error("command entry missing permission")
+   488→                }
+   489→        }
+   490→}
+   491→
+   492→// TestServer_ProvidersDefault verifies /providers returns a disabled
+   493→// payload when no providers-status getter is wired.
+   494→func TestServer_ProvidersDefault(t *testing.T) {
+   495→        s := newTestServer()
+   496→        req := httptest.NewRequest("GET", "/providers", nil)
+   497→        w := httptest.NewRecorder()
+   498→        s.http.Handler.ServeHTTP(w, req)
+   499→        if w.Code != 200 {
+   500→                t.Fatalf("got %d, want 200", w.Code)
+   501→        }
+   502→        if !strings.Contains(w.Body.String(), "not configured") {
+   503→                t.Errorf("expected 'not configured' message, got: %s", w.Body.String())
+   504→        }
+   505→}
+   506→
+   507→// TestServer_RateLimiter verifies the per-IP rate limiter blocks the 11th
+   508→// request within a minute.
+   509→func TestServer_RateLimiter(t *testing.T) {
+   510→        rl := newIPRateLimiter(10, time.Minute)
+   511→        addr := "1.2.3.4:5678"
+   512→        for i := 0; i < 10; i++ {
+   513→                if !rl.Allow(addr) {
+   514→                        t.Fatalf("request %d should be allowed", i+1)
+   515→                }
+   516→        }
+   517→        if rl.Allow(addr) {
+   518→                t.Error("11th request should be denied")
+   519→        }
+   520→        // Different IP is allowed.
+   521→        if !rl.Allow("5.6.7.8:9999") {
+   522→                t.Error("different IP should be allowed")
+   523→        }
+   524→}
+   525→
+   526→// TestSecureCompare verifies the constant-time compare helper.
+   527→func TestSecureCompare(t *testing.T) {
+   528→        if !secureCompare("abc", "abc") {
+   529→                t.Error("equal strings should compare equal")
+   530→        }
+   531→        if secureCompare("abc", "abd") {
+   532→                t.Error("different strings should compare unequal")
+   533→        }
+   534→        if secureCompare("abc", "abcd") {
+   535→                t.Error("different-length strings should compare unequal")
+   536→        }
+   537→}
+   538→
+   539→// TestServer_Healthz verifies the healthz payload includes version + auth state.
+   540→func TestServer_Healthz(t *testing.T) {
+   541→        s := newTestServer()
+   542→        s.SetAPIToken("xyz")
+   543→        req := httptest.NewRequest("GET", "/healthz", nil)
+   544→        w := httptest.NewRecorder()
+   545→        s.http.Handler.ServeHTTP(w, req)
+   546→        if w.Code != 200 {
+   547→                t.Fatalf("got %d, want 200", w.Code)
+   548→        }
+   549→        if !strings.Contains(w.Body.String(), `"auth_required":true`) {
+   550→                t.Errorf("expected auth_required=true, got: %s", w.Body.String())
+   551→        }
+   552→}
+   553→
+   554→// TestServer_Readyz verifies readyz reflects the ready checker.
+   555→func TestServer_Readyz(t *testing.T) {
+   556→        s := New(":0", &noopStore{},
+   557→                func() map[string]any { return nil },
+   558→                func(s, ns, r string) (string, error) { return "", nil },
+   559→                func() bool { return false })
+   560→        req := httptest.NewRequest("GET", "/readyz", nil)
+   561→        w := httptest.NewRecorder()
+   562→        s.http.Handler.ServeHTTP(w, req)
+   563→        if w.Code != 200 {
+   564→                t.Fatalf("got %d, want 200", w.Code)
+   565→        }
+   566→        if !strings.Contains(w.Body.String(), `"ready":false`) {
+   567→                t.Errorf("expected ready=false, got: %s", w.Body.String())
+   568→        }
+   569→}
+   570→
+   571→// TestServer_InvestigateTrigger verifies POST /admin/investigate wires to
+   572→// the investigate callback.
+   573→func TestServer_InvestigateTrigger(t *testing.T) {
+   574→        var (
+   575→                mu        sync.Mutex
+   576→                gotSvc    string
+   577→                gotNs     string
+   578→                gotReason string
+   579→        )
+   580→        s := New(":0", &noopStore{},
+   581→                func() map[string]any { return nil },
+   582→                func(svc, ns, reason string) (string, error) {
+   583→                        mu.Lock()
+   584→                        defer mu.Unlock()
+   585→                        gotSvc, gotNs, gotReason = svc, ns, reason
+   586→                        return "cluster-xyz", nil
+   587→                },
+   588→                func() bool { return true })
+   589→
+   590→        body := `{"service":"payments","namespace":"prod","reason":"manual"}`
+   591→        req := httptest.NewRequest("POST", "/admin/investigate", strings.NewReader(body))
+   592→        w := httptest.NewRecorder()
+   593→        s.handleInvestigate(w, req)
+   594→        if w.Code != 200 {
+   595→                t.Fatalf("got %d, want 200 (body: %s)", w.Code, w.Body.String())
+   596→        }
+   597→        mu.Lock()
+   598→        defer mu.Unlock()
+   599→        if gotSvc != "payments" || gotNs != "prod" || gotReason != "manual" {
+   600→                t.Errorf("investigate callback got svc=%q ns=%q reason=%q", gotSvc, gotNs, gotReason)
+   601→        }
+   602→        if !strings.Contains(w.Body.String(), "cluster-xyz") {
+   603→                t.Errorf("expected cluster_id in response, got: %s", w.Body.String())
+   604→        }
+   605→}
+   606→
+   607→// TestServer_InvestigateDefaults verifies missing namespace/reason fall back
+   608→// to "default" / "manual trigger".
+   609→func TestServer_InvestigateDefaults(t *testing.T) {
+   610→        var (
+   611→                mu    sync.Mutex
+   612→                gotNs string
+   613→                gotR  string
+   614→        )
+   615→        s := New(":0", &noopStore{},
+   616→                func() map[string]any { return nil },
+   617→                func(svc, ns, reason string) (string, error) {
+   618→                        mu.Lock()
+   619→                        defer mu.Unlock()
+   620→                        gotNs, gotR = ns, reason
+   621→                        return "c", nil
+   622→                },
+   623→                func() bool { return true })
+   624→
+   625→        body := `{"service":"svc"}`
+   626→        req := httptest.NewRequest("POST", "/admin/investigate", strings.NewReader(body))
+   627→        w := httptest.NewRecorder()
+   628→        s.handleInvestigate(w, req)
+   629→        if w.Code != 200 {
+   630→                t.Fatalf("got %d, want 200", w.Code)
+   631→        }
+   632→        mu.Lock()
+   633→        defer mu.Unlock()
+   634→        if gotNs != "default" {
+   635→                t.Errorf("default namespace = %q, want 'default'", gotNs)
+   636→        }
+   637→        if gotR != "manual trigger" {
+   638→                t.Errorf("default reason = %q, want 'manual trigger'", gotR)
+   639→        }
+   640→}
+   641→
+   642→// TestServer_InvestigateInvalidJSON verifies malformed JSON returns 400.
+   643→func TestServer_InvestigateInvalidJSON(t *testing.T) {
+   644→        s := newTestServer()
+   645→        req := httptest.NewRequest("POST", "/admin/investigate", strings.NewReader("not json"))
+   646→        w := httptest.NewRecorder()
+   647→        s.handleInvestigate(w, req)
+   648→        if w.Code != 400 {
+   649→                t.Errorf("got %d, want 400", w.Code)
+   650→        }
+   651→}
+   652→
+   653→// TestServer_SettingsPOST verifies POST /settings wires to the RuntimeCfgSaver.
+   654→func TestServer_SettingsPOST(t *testing.T) {
+   655→        s := newTestServer()
+   656→        saver := &recordingCfgSaver{}
+   657→        s.SetRuntimeCfgSaver(saver)
+   658→
+   659→        body := `{"llm_provider":"openrouter"}`
+   660→        req := httptest.NewRequest("POST", "/settings", strings.NewReader(body))
+   661→        w := httptest.NewRecorder()
+   662→        s.handleSettings(w, req)
+   663→        if w.Code != 200 {
+   664→                t.Fatalf("got %d, want 200 (body: %s)", w.Code, w.Body.String())
+   665→        }
+   666→        if string(saver.lastJSON) != body {
+   667→                t.Errorf("saver got %q, want %q", saver.lastJSON, body)
+   668→        }
+   669→}
+   670→
+   671→// recordingCfgSaver records the last JSON payload it received.
+   672→type recordingCfgSaver struct {
+   673→        lastJSON []byte
+   674→        err      error
+   675→}
+   676→
+   677→func (r *recordingCfgSaver) SaveFromJSON(b []byte) error {
+   678→        r.lastJSON = b
+   679→        return r.err
+   680→}
+   681→
+   682→// TestServer_SettingsPOSTNoSaver verifies POST /settings returns 501 when
+   683→// no saver is wired.
+   684→func TestServer_SettingsPOSTNoSaver(t *testing.T) {
+   685→        s := newTestServer()
+   686→        req := httptest.NewRequest("POST", "/settings", strings.NewReader(`{}`))
+   687→        w := httptest.NewRecorder()
+   688→        s.handleSettings(w, req)
+   689→        if w.Code != 501 {
+   690→                t.Errorf("got %d, want 501", w.Code)
+   691→        }
+   692→}
+   693→
+   694→// TestServer_AutoMergeDefault verifies /automerge returns a disabled payload
+   695→// when no auto-merge status getter is wired.
+   696→func TestServer_AutoMergeDefault(t *testing.T) {
+   697→        s := newTestServer()
+   698→        req := httptest.NewRequest("GET", "/automerge", nil)
+   699→        w := httptest.NewRecorder()
+   700→        s.http.Handler.ServeHTTP(w, req)
+   701→        if w.Code != 200 {
+   702→                t.Fatalf("got %d, want 200", w.Code)
+   703→        }
+   704→        if !strings.Contains(w.Body.String(), "not configured") {
+   705→                t.Errorf("expected 'not configured' message, got: %s", w.Body.String())
+   706→        }
+   707→}
+   708→
+   709→// TestServer_WebhookNoHandler verifies /webhook/github returns 503 when no
+   710→// handler is wired.
+   711→func TestServer_WebhookNoHandler(t *testing.T) {
+   712→        s := newTestServer()
+   713→        req := httptest.NewRequest("POST", "/webhook/github", strings.NewReader(`{}`))
+   714→        w := httptest.NewRecorder()
+   715→        s.handleWebhook(w, req)
+   716→        if w.Code != 503 {
+   717→                t.Errorf("got %d, want 503", w.Code)
+   718→        }
+   719→}
+   720→
+   721→// TestServer_WebhookDualDispatch verifies /webhook/github dispatches to both
+   722→// the prreview and chatops handlers when both are wired.
+   723→func TestServer_WebhookDualDispatch(t *testing.T) {
+   724→        s := newTestServer()
+   725→        var prCount, chatopsCount atomic.Int32
+   726→        s.SetWebhookHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+   727→                prCount.Add(1)
+   728→                writeJSON(w, 200, map[string]string{"ok": "prreview"})
+   729→        }))
+   730→        s.SetChatopsHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+   731→                chatopsCount.Add(1)
+   732→        }))
+   733→
+   734→        // pull_request event → only prreview.
+   735→        req := httptest.NewRequest("POST", "/webhook/github", strings.NewReader(`{}`))
+   736→        req.Header.Set("X-GitHub-Event", "pull_request")
+   737→        w := httptest.NewRecorder()
+   738→        s.handleWebhook(w, req)
+   739→        if prCount.Load() != 1 {
+   740→                t.Errorf("prreview: got %d, want 1", prCount.Load())
+   741→        }
+   742→        if chatopsCount.Load() != 0 {
+   743→                t.Errorf("chatops: got %d, want 0 for pull_request event", chatopsCount.Load())
+   744→        }
+   745→
+   746→        // issue_comment event → both.
+   747→        prCount.Store(0)
+   748→        req = httptest.NewRequest("POST", "/webhook/github", strings.NewReader(`{}`))
+   749→        req.Header.Set("X-GitHub-Event", "issue_comment")
+   750→        w = httptest.NewRecorder()
+   751→        s.handleWebhook(w, req)
+   752→        if prCount.Load() != 1 {
+   753→                t.Errorf("prreview: got %d, want 1 for issue_comment", prCount.Load())
+   754→        }
+   755→        if chatopsCount.Load() != 1 {
+   756→                t.Errorf("chatops: got %d, want 1 for issue_comment", chatopsCount.Load())
+   757→        }
+   758→}
+   759→
+   760→// TestServer_GitHubAppNotConfigured verifies /settings/github-app returns
+   761→// 503 when no manager is wired.
+   762→func TestServer_GitHubAppNotConfigured(t *testing.T) {
+   763→        s := newTestServer()
+   764→        req := httptest.NewRequest("GET", "/settings/github-app", nil)
+   765→        w := httptest.NewRecorder()
+   766→        s.handleGitHubApp(w, req)
+   767→        if w.Code != 503 {
+   768→                t.Errorf("got %d, want 503", w.Code)
+   769→        }
+   770→}
+   771→
+   772→// TestServer_GitHubAppGET verifies GET /settings/github-app returns the
+   773→// manager's status.
+   774→func TestServer_GitHubAppGET(t *testing.T) {
+   775→        s := newTestServer()
+   776→        s.SetGitHubAppManager(&fakeGitHubAppManager{
+   777→                status: schemas.GitHubAppStatus{Configured: true, AppID: "123", Slug: "sentinel", InstallID: "456"},
+   778→        })
+   779→        req := httptest.NewRequest("GET", "/settings/github-app", nil)
+   780→        w := httptest.NewRecorder()
+   781→        s.handleGitHubApp(w, req)
+   782→        if w.Code != 200 {
+   783→                t.Fatalf("got %d, want 200", w.Code)
+   784→        }
+   785→        if !strings.Contains(w.Body.String(), `"app_id":"123"`) {
+   786→                t.Errorf("expected app_id 123 in response, got: %s", w.Body.String())
+   787→        }
+   788→}
+   789→
+   790→// fakeGitHubAppManager is a GitHubAppManager stub for tests.
+   791→type fakeGitHubAppManager struct {
+   792→        status      schemas.GitHubAppStatus
+   793→        setErr      error
+   794→        removeErr   error
+   795→        installErr  error
+   796→        lastAppID   string
+   797→        lastInstall string
+   798→}
+   799→
+   800→func (f *fakeGitHubAppManager) SetGitHubApp(appID, privateKey, installID, webhookSecret string) (string, error) {
+   801→        f.lastAppID = appID
+   802→        return "sentinel", f.setErr
+   803→}
+   804→func (f *fakeGitHubAppManager) SetGitHubAppInstall(installID string) error {
+   805→        f.lastInstall = installID
+   806→        return f.installErr
+   807→}
+   808→func (f *fakeGitHubAppManager) GetGitHubAppStatus() schemas.GitHubAppStatus { return f.status }
+   809→func (f *fakeGitHubAppManager) RemoveGitHubApp() error                      { return f.removeErr }
+   810→
+   811→// TestServer_GitHubAppPOST verifies POST /settings/github-app validates
+   812→// required fields.
+   813→func TestServer_GitHubAppPOST(t *testing.T) {
+   814→        s := newTestServer()
+   815→        s.SetGitHubAppManager(&fakeGitHubAppManager{})
+   816→
+   817→        // Missing private_key → 400.
+   818→        body := `{"app_id":"123"}`
+   819→        req := httptest.NewRequest("POST", "/settings/github-app", strings.NewReader(body))
+   820→        w := httptest.NewRecorder()
+   821→        s.handleGitHubApp(w, req)
+   822→        if w.Code != 400 {
+   823→                t.Errorf("missing private_key: got %d, want 400", w.Code)
+   824→        }
+   825→
+   826→        // Invalid JSON → 400.
+   827→        req = httptest.NewRequest("POST", "/settings/github-app", strings.NewReader("not json"))
+   828→        w = httptest.NewRecorder()
+   829→        s.handleGitHubApp(w, req)
+   830→        if w.Code != 400 {
+   831→                t.Errorf("invalid JSON: got %d, want 400", w.Code)
+   832→        }
+   833→}
+   834→
+   835→// TestServer_GitHubAppDELETE verifies DELETE /settings/github-app calls RemoveGitHubApp.
+   836→func TestServer_GitHubAppDELETE(t *testing.T) {
+   837→        mgr := &fakeGitHubAppManager{}
+   838→        s := newTestServer()
+   839→        s.SetGitHubAppManager(mgr)
+   840→        req := httptest.NewRequest("DELETE", "/settings/github-app", nil)
+   841→        w := httptest.NewRecorder()
+   842→        s.handleGitHubApp(w, req)
+   843→        if w.Code != 200 {
+   844→                t.Fatalf("got %d, want 200", w.Code)
+   845→        }
+   846→        if !strings.Contains(w.Body.String(), "removed") {
+   847→                t.Errorf("expected 'removed' status, got: %s", w.Body.String())
+   848→        }
+   849→}
+   850→
+   851→// TestServer_GitHubAppInstall verifies POST /settings/github-app-install.
+   852→func TestServer_GitHubAppInstall(t *testing.T) {
+   853→        mgr := &fakeGitHubAppManager{}
+   854→        s := newTestServer()
+   855→        s.SetGitHubAppManager(mgr)
+   856→
+   857→        // Missing install_id → 400.
+   858→        req := httptest.NewRequest("POST", "/settings/github-app-install", strings.NewReader(`{}`))
+   859→        w := httptest.NewRecorder()
+   860→        s.handleGitHubAppInstall(w, req)
+   861→        if w.Code != 400 {
+   862→                t.Errorf("missing install_id: got %d, want 400", w.Code)
+   863→        }
+   864→
+   865→        // Valid → 200.
+   866→        req = httptest.NewRequest("POST", "/settings/github-app-install", strings.NewReader(`{"install_id":"789"}`))
+   867→        w = httptest.NewRecorder()
+   868→        s.handleGitHubAppInstall(w, req)
+   869→        if w.Code != 200 {
+   870→                t.Fatalf("got %d, want 200", w.Code)
+   871→        }
+   872→        if mgr.lastInstall != "789" {
+   873→                t.Errorf("manager received install_id=%q, want 789", mgr.lastInstall)
+   874→        }
+   875→}
+   876→
+   877→// TestServer_Pprof verifies the pprof dispatcher routes to the right
+   878→// function based on URL path. We can't easily test the actual profile
+   879→// output, but we can verify the dispatcher doesn't panic.
+   880→func TestServer_Pprof(t *testing.T) {
+   881→        s := newTestServer()
+   882→        cases := []string{
+   883→                "/debug/pprof/",
+   884→                "/debug/pprof/cmdline",
+   885→                "/debug/pprof/symbol",
+   886→        }
+   887→        for _, path := range cases {
+   888→                t.Run(path, func(t *testing.T) {
+   889→                        req := httptest.NewRequest("GET", path, nil)
+   890→                        w := httptest.NewRecorder()
+   891→                        defer func() {
+   892→                                if r := recover(); r != nil {
+   893→                                        t.Errorf("handlePprof panicked for %s: %v", path, r)
+   894→                                }
+   895→                        }()
+   896→                        s.handlePprof(w, req)
+   897→                })
+   898→        }
+   899→}
+   900→
+   901→// TestServer_WebUIFallback verifies the placeholder HTML is served when no
+   902→// UI handler is wired.
+   903→func TestServer_WebUIFallback(t *testing.T) {
+   904→        s := newTestServer()
+   905→        req := httptest.NewRequest("GET", "/", nil)
+   906→        w := httptest.NewRecorder()
+   907→        s.handleWebUI(w, req)
+   908→        if w.Code != 200 {
+   909→                t.Errorf("got %d, want 200", w.Code)
+   910→        }
+   911→        if !strings.Contains(w.Body.String(), "Sentinel") {
+   912→                t.Errorf("expected placeholder to mention Sentinel, got: %s", w.Body.String())
+   913→        }
+   914→}
+   915→
+   916→// TestServer_IncidentByUUID verifies GET /incidents/{uuid} resolves via
+   917→// the Store.
+   918→func TestServer_IncidentByUUID(t *testing.T) {
+   919→        id := uuid.New()
+   920→        store := &stubStore{
+   921→                get: &schemas.Incident{IncidentID: id, Status: schemas.StatusVerified},
+   922→        }
+   923→        s := New(":0", store,
+   924→                func() map[string]any { return nil },
+   925→                func(s, ns, r string) (string, error) { return "", nil },
+   926→                func() bool { return true })
+   927→
+   928→        req := httptest.NewRequest("GET", "/incidents/"+id.String(), nil)
+   929→        w := httptest.NewRecorder()
+   930→        s.http.Handler.ServeHTTP(w, req)
+   931→        if w.Code != 200 {
+   932→                t.Fatalf("got %d, want 200 (body: %s)", w.Code, w.Body.String())
+   933→        }
+   934→        if !strings.Contains(w.Body.String(), id.String()) {
+   935→                t.Errorf("expected incident_id %s in response, got: %s", id, w.Body.String())
+   936→        }
+   937→}
+   938→
+   939→// TestServer_IncidentByPrefix verifies GET /incidents/{prefix} resolves
+   940→// via FindIncidentByPrefix.
+   941→func TestServer_IncidentByPrefix(t *testing.T) {
+   942→        id := uuid.New()
+   943→        store := &stubStore{
+   944→                find: &schemas.Incident{IncidentID: id, Status: schemas.StatusVerified},
+   945→        }
+   946→        s := New(":0", store,
+   947→                func() map[string]any { return nil },
+   948→                func(s, ns, r string) (string, error) { return "", nil },
+   949→                func() bool { return true })
+   950→
+   951→        prefix := id.String()[:8]
+   952→        req := httptest.NewRequest("GET", "/incidents/"+prefix, nil)
+   953→        w := httptest.NewRecorder()
+   954→        s.http.Handler.ServeHTTP(w, req)
+   955→        if w.Code != 200 {
+   956→                t.Fatalf("got %d, want 200 (body: %s)", w.Code, w.Body.String())
+   957→        }
+   958→}
+   959→
+   960→// TestServer_IncidentNotFound verifies GET /incidents/{id} returns 404 when
+   961→// the Store has no match.
+   962→func TestServer_IncidentNotFound(t *testing.T) {
+   963→        store := &stubStore{} // both get + find return nil
+   964→        s := New(":0", store,
+   965→                func() map[string]any { return nil },
+   966→                func(s, ns, r string) (string, error) { return "", nil },
+   967→                func() bool { return true })
+   968→
+   969→        req := httptest.NewRequest("GET", "/incidents/"+uuid.New().String(), nil)
+   970→        w := httptest.NewRecorder()
+   971→        s.http.Handler.ServeHTTP(w, req)
+   972→        if w.Code != 404 {
+   973→                t.Errorf("got %d, want 404", w.Code)
+   974→        }
+   975→}
+   976→
+   977→// TestServer_MetricsSummary verifies /metrics-summary buckets incidents by
+   978→// lifecycle state.
+   979→func TestServer_MetricsSummary(t *testing.T) {
+   980→        store := &stubStore{
+   981→                list: []*schemas.Incident{
+   982→                        {Status: schemas.StatusInvestigating},
+   983→                        {Status: schemas.StatusVerified},
+   984→                        {Status: schemas.StatusFailed},
+   985→                        {Status: schemas.StatusEscalated},
+   986→                },
+   987→        }
+   988→        s := New(":0", store,
+   989→                func() map[string]any { return nil },
+   990→                func(s, ns, r string) (string, error) { return "", nil },
+   991→                func() bool { return true })
+   992→
+   993→        req := httptest.NewRequest("GET", "/metrics-summary", nil)
+   994→        w := httptest.NewRecorder()
+   995→        s.http.Handler.ServeHTTP(w, req)
+   996→        if w.Code != 200 {
+   997→                t.Fatalf("got %d, want 200", w.Code)
+   998→        }
+   999→        body := w.Body.String()
+  1000→        if !strings.Contains(body, `"active":1`) {
+  1001→                t.Errorf("expected 1 active, got: %s", body)
+  1002→        }
+  1003→        if !strings.Contains(body, `"resolved_24h":1`) {
+  1004→                t.Errorf("expected 1 resolved, got: %s", body)
+  1005→        }
+  1006→        if !strings.Contains(body, `"failed":2`) {
+  1007→                t.Errorf("expected 2 failed (failed+escalated), got: %s", body)
+  1008→        }
+  1009→}
+  1010→
+  1011→// TestEnrichIncidentPRFields verifies the PR-field mirroring from
+  1012→// state.execution_result to the top-level Incident fields.
+  1013→func TestEnrichIncidentPRFields(t *testing.T) {
+  1014→        prNum := 42
+  1015→        prURL := "https://github.com/acme/repo/pull/42"
+  1016→        prBranch := "fix-42"
+  1017→        sandboxSummary := "verified"
+  1018→        inc := &schemas.Incident{
+  1019→                State: schemas.AgentState{
+  1020→                        ExecutionResult: &schemas.ExecutionResult{
+  1021→                                PRNumber:        &prNum,
+  1022→                                PRURL:           &prURL,
+  1023→                                PRBranch:        &prBranch,
+  1024→                                SandboxSummary:  &sandboxSummary,
+  1025→                                SandboxVerified: true,
+  1026→                        },
+  1027→                        FixProposal: &schemas.FixProposal{FixType: schemas.FixCodeFix},
+  1028→                },
+  1029→        }
+  1030→        enrichIncidentPRFields(inc)
+  1031→        if inc.PRNumber == nil || *inc.PRNumber != 42 {
+  1032→                t.Errorf("PRNumber = %v, want 42", inc.PRNumber)
+  1033→        }
+  1034→        if inc.PRURL != prURL {
+  1035→                t.Errorf("PRURL = %q, want %q", inc.PRURL, prURL)
+  1036→        }
+  1037→        if inc.PRBranch != prBranch {
+  1038→                t.Errorf("PRBranch = %q, want %q", inc.PRBranch, prBranch)
+  1039→        }
+  1040→        if inc.SandboxSummary != sandboxSummary {
+  1041→                t.Errorf("SandboxSummary = %q, want %q", inc.SandboxSummary, sandboxSummary)
+  1042→        }
+  1043→        if !inc.SandboxVerified {
+  1044→                t.Error("SandboxVerified should be true")
+  1045→        }
+  1046→        if inc.FixType != string(schemas.FixCodeFix) {
+  1047→                t.Errorf("FixType = %q, want %q", inc.FixType, schemas.FixCodeFix)
+  1048→        }
+  1049→}
+  1050→
+  1051→// TestEnrichIncidentPRFieldsNil verifies the helper is a no-op on a nil incident.
+  1052→func TestEnrichIncidentPRFieldsNil(t *testing.T) {
+  1053→        defer func() {
+  1054→                if r := recover(); r != nil {
+  1055→                        t.Errorf("enrichIncidentPRFields(nil) panicked: %v", r)
+  1056→                }
+  1057→        }()
+  1058→        enrichIncidentPRFields(nil)
+  1059→}
+  1060→
+  1061→// fmt is used in some test names above; this keeps the import if the only
+  1062→// reference is removed.
+  1063→var _ = fmt.Sprintf
+  1064→

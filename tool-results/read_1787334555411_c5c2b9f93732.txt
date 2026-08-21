@@ -1,0 +1,764 @@
+     1→     1→package detection
+     2→     2→
+     3→     3→import (
+     4→     4→        "bufio"
+     5→     5→        "context"
+     6→     6→        "fmt"
+     7→     7→        "regexp"
+     8→     8→        "strings"
+     9→     9→        "sync"
+    10→    10→        "time"
+    11→    11→
+    12→    12→        "github.com/karimzakzouk/sentinel/internal/logging"
+    13→    13→
+    14→    14→        corev1 "k8s.io/api/core/v1"
+    15→    15→        apierrors "k8s.io/apimachinery/pkg/api/errors"
+    16→    16→        metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+    17→    17→        "k8s.io/apimachinery/pkg/watch"
+    18→    18→        "k8s.io/client-go/kubernetes"
+    19→    19→)
+    20→    20→
+    21→    21→// errorPatterns matches error lines across languages. Pre-compiled at init
+    22→    22→// because the detection layer scans every line of every streaming pod log
+    23→    23→// against every pattern — re-compiling per call is measurable CPU waste on
+    24→    24→// chatty pods.
+    25→    25→var errorPatterns = []*regexp.Regexp{
+    26→    26→        // Python
+    27→    27→        regexp.MustCompile(`Traceback \(most recent call last\)`),
+    28→    28→        regexp.MustCompile(`^\w+Error:`),
+    29→    29→        regexp.MustCompile(`^\w+Exception:`),
+    30→    30→        // Go
+    31→    31→        regexp.MustCompile(`panic:`),
+    32→    32→        regexp.MustCompile(`fatal error:`),
+    33→    33→        regexp.MustCompile(`goroutine \d+ \[running\]:`),
+    34→    34→        // Node.js / JavaScript
+    35→    35→        regexp.MustCompile(`TypeError:`),
+    36→    36→        regexp.MustCompile(`ReferenceError:`),
+    37→    37→        regexp.MustCompile(`UnhandledPromiseRejection`),
+    38→    38→        regexp.MustCompile(`SyntaxError:`),
+    39→    39→        // Java
+    40→    40→        regexp.MustCompile(`java\.lang\.\w+Exception`),
+    41→    41→        regexp.MustCompile(`NullPointerException`),
+    42→    42→        regexp.MustCompile(`StackOverflowError`),
+    43→    43→        // Rust
+    44→    44→        regexp.MustCompile(`thread '.*' panicked`),
+    45→    45→        regexp.MustCompile(`panic!`),
+    46→    46→        // Ruby
+    47→    47→        regexp.MustCompile(`\.rb:\d+:.*Error`),
+    48→    48→        // Generic
+    49→    49→        regexp.MustCompile(`FATAL`),
+    50→    50→        regexp.MustCompile(`SEGFAULT`),
+    51→    51→        regexp.MustCompile(`OOMKilled`),
+    52→    52→        regexp.MustCompile(`^\[ERROR\]`),
+    53→    53→        regexp.MustCompile(`level=error`),
+    54→    54→        regexp.MustCompile(`level=fatal`),
+    55→    55→}
+    56→    56→
+    57→    57→// extractErrorTypePatterns extract the error-type name from a log line.
+    58→    58→// fallback is returned when the regex matches but has no capture group
+    59→    59→// (e.g. "panic:" matches but doesn't capture a name).
+    60→    60→var extractErrorTypePatterns = []struct {
+    61→    61→        re       *regexp.Regexp
+    62→    62→        fallback string
+    63→    63→}{
+    64→    64→        {regexp.MustCompile(`(\w+Error):`), ""},
+    65→    65→        {regexp.MustCompile(`(\w+Exception):`), ""},
+    66→    66→        {regexp.MustCompile(`panic:`), "panic"},
+    67→    67→        {regexp.MustCompile(`fatal error:`), "fatal_error"},
+    68→    68→        {regexp.MustCompile(`(\w+Error)\s`), ""},
+    69→    69→        {regexp.MustCompile(`java\.lang\.(\w+)`), ""},
+    70→    70→        {regexp.MustCompile(`thread '.*' panicked`), "rust_panic"},
+    71→    71→}
+    72→    72→
+    73→    73→// ErrorFingerprint uniquely identifies an error for deduplication.
+    74→    74→type ErrorFingerprint struct {
+    75→    75→        Service   string
+    76→    76→        Namespace string
+    77→    77→        ErrorType string
+    78→    78→}
+    79→    79→
+    80→    80→// Detector is the autonomous detection layer. It streams pod logs and
+    81→    81→// watches pod status, producing triggers when error patterns or
+    82→    82→// pod-status transitions (CrashLoopBackOff, OOMKilled, ImagePullBackOff)
+    83→    83→// are observed. Only pods with the sentinel.io/repo annotation (or whose
+    84→    84→// owning Deployment / StatefulSet carries it) are watched.
+    85→    85→type Detector struct {
+    86→    86→        clientset kubernetes.Interface
+    87→    87→        handler   IncidentHandler
+    88→    88→        alertURL  string
+    89→    89→
+    90→    90→        mu         sync.Mutex
+    91→    91→        recentSeen map[ErrorFingerprint]time.Time
+    92→    92→
+    93→    93→        streams   map[string]context.CancelFunc
+    94→    94→        streamsMu sync.Mutex
+    95→    95→
+    96→    96→        // discoveredPods dedupes the discovery log so the watch firing 10x
+    97→    97→        // per second during pod startup doesn't flood the log.
+    98→    98→        discoveredPods map[string]time.Time
+    99→    99→        discoveredMu   sync.Mutex
+   100→   100→
+   101→   101→        cooldown  time.Duration
+   102→   102→        tailLines int64
+   103→   103→
+   104→   104→        skipNamespaces map[string]bool
+   105→   105→}
+   106→   106→
+   107→   107→// New returns a Detector with the default 5-minute cooldown, 100-line tail,
+   108→   108→// and the kube-system / kube-public / kube-node-lease skip list.
+   109→   109→func New(clientset kubernetes.Interface, handler IncidentHandler, alertURL string) *Detector {
+   110→   110→        return NewWithConfig(clientset, handler, alertURL, 5*time.Minute, 100, nil)
+   111→   111→}
+   112→   112→
+   113→   113→// NewWithConfig returns a Detector with the given knobs. Pass cooldown=0 or
+   114→   114→// tailLines=0 to keep the defaults (5m / 100). Pass nil skipNamespaces to
+   115→   115→// keep the default skip list; pass an explicit slice (including an empty
+   116→   116→// one) to override.
+   117→   117→func NewWithConfig(clientset kubernetes.Interface, handler IncidentHandler, alertURL string, cooldown time.Duration, tailLines int64, skipNamespaces []string) *Detector {
+   118→   118→        if cooldown <= 0 {
+   119→   119→                cooldown = 5 * time.Minute
+   120→   120→        }
+   121→   121→        if tailLines <= 0 {
+   122→   122→                tailLines = 100
+   123→   123→        }
+   124→   124→        skip := map[string]bool{}
+   125→   125→        if len(skipNamespaces) > 0 {
+   126→   126→                for _, ns := range skipNamespaces {
+   127→   127→                        skip[ns] = true
+   128→   128→                }
+   129→   129→        } else {
+   130→   130→                for _, ns := range []string{
+   131→   131→                        "kube-system", "kube-public", "kube-node-lease",
+   132→   132→                } {
+   133→   133→                        skip[ns] = true
+   134→   134→                }
+   135→   135→        }
+   136→   136→        return &Detector{
+   137→   137→                clientset:      clientset,
+   138→   138→                handler:        handler,
+   139→   139→                alertURL:       alertURL,
+   140→   140→                recentSeen:     make(map[ErrorFingerprint]time.Time),
+   141→   141→                streams:        make(map[string]context.CancelFunc),
+   142→   142→                discoveredPods: make(map[string]time.Time),
+   143→   143→                cooldown:       cooldown,
+   144→   144→                tailLines:      tailLines,
+   145→   145→                skipNamespaces: skip,
+   146→   146→        }
+   147→   147→}
+   148→   148→
+   149→   149→// Run starts the detection layer and blocks until ctx is cancelled.
+   150→   150→func (d *Detector) Run(ctx context.Context) {
+   151→   151→        logging.Info("detector: starting autonomous detection layer")
+   152→   152→        go d.cleanupLoop(ctx)
+   153→   153→        d.watchPods(ctx)
+   154→   154→}
+   155→   155→
+   156→   156→// watchPods lists every namespace once at startup, fans out a per-namespace
+   157→   157→// watcher, then watches for newly-added namespaces.
+   158→   158→func (d *Detector) watchPods(ctx context.Context) {
+   159→   159→        if d.clientset == nil {
+   160→   160→                logging.Warn("detector: nil clientset — watcher disabled")
+   161→   161→                <-ctx.Done()
+   162→   162→                return
+   163→   163→        }
+   164→   164→        namespaces, err := d.clientset.CoreV1().Namespaces().List(ctx, metav1.ListOptions{})
+   165→   165→        if err != nil {
+   166→   166→                logging.Error("detector: failed to list namespaces", "err", err)
+   167→   167→                return
+   168→   168→        }
+   169→   169→        for _, ns := range namespaces.Items {
+   170→   170→                go d.watchPodsInNamespace(ctx, ns.Name)
+   171→   171→        }
+   172→   172→        go d.watchNamespaces(ctx)
+   173→   173→        <-ctx.Done()
+   174→   174→}
+   175→   175→
+   176→   176→// watchNamespaces opens a Watch on the namespace resource so newly-created
+   177→   177→// namespaces get a pod-watcher goroutine.
+   178→   178→func (d *Detector) watchNamespaces(ctx context.Context) {
+   179→   179→        watcher, err := d.clientset.CoreV1().Namespaces().Watch(ctx, metav1.ListOptions{})
+   180→   180→        if err != nil {
+   181→   181→                logging.Error("detector: failed to watch namespaces", "err", err)
+   182→   182→                return
+   183→   183→        }
+   184→   184→        defer watcher.Stop()
+   185→   185→
+   186→   186→        for {
+   187→   187→                select {
+   188→   188→                case <-ctx.Done():
+   189→   189→                        return
+   190→   190→                case event, ok := <-watcher.ResultChan():
+   191→   191→                        if !ok {
+   192→   192→                                return
+   193→   193→                        }
+   194→   194→                        ns, ok := event.Object.(*corev1.Namespace)
+   195→   195→                        if !ok || ns.Status.Phase != corev1.NamespaceActive {
+   196→   196→                                continue
+   197→   197→                        }
+   198→   198→                        go d.watchPodsInNamespace(ctx, ns.Name)
+   199→   199→                }
+   200→   200→        }
+   201→   201→}
+   202→   202→
+   203→   203→// watchPodsInNamespace lists all pods in the namespace once, then opens a
+   204→   204→// Watch starting from the list's resourceVersion. Skipped namespaces are
+   205→   205→// ignored entirely. On watch close, the loop sleeps briefly and re-lists.
+   206→   206→func (d *Detector) watchPodsInNamespace(ctx context.Context, namespace string) {
+   207→   207→        if d.skipNamespaces[namespace] {
+   208→   208→                return
+   209→   209→        }
+   210→   210→
+   211→   211→watchLoop:
+   212→   212→        for {
+   213→   213→                select {
+   214→   214→                case <-ctx.Done():
+   215→   215→                        return
+   216→   216→                default:
+   217→   217→                }
+   218→   218→
+   219→   219→                pods, err := d.clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{})
+   220→   220→                if err != nil {
+   221→   221→                        time.Sleep(30 * time.Second)
+   222→   222→                        continue
+   223→   223→                }
+   224→   224→
+   225→   225→                for i := range pods.Items {
+   226→   226→                        d.handlePod(ctx, &pods.Items[i])
+   227→   227→                }
+   228→   228→
+   229→   229→                watcher, err := d.clientset.CoreV1().Pods(namespace).Watch(ctx, metav1.ListOptions{
+   230→   230→                        ResourceVersion: pods.ResourceVersion,
+   231→   231→                })
+   232→   232→                if err != nil {
+   233→   233→                        time.Sleep(15 * time.Second)
+   234→   234→                        continue
+   235→   235→                }
+   236→   236→
+   237→   237→                for {
+   238→   238→                        select {
+   239→   239→                        case <-ctx.Done():
+   240→   240→                                watcher.Stop()
+   241→   241→                                return
+   242→   242→                        case event, ok := <-watcher.ResultChan():
+   243→   243→                                if !ok {
+   244→   244→                                        watcher.Stop()
+   245→   245→                                        time.Sleep(5 * time.Second)
+   246→   246→                                        continue watchLoop
+   247→   247→                                }
+   248→   248→                                pod, ok := event.Object.(*corev1.Pod)
+   249→   249→                                if !ok {
+   250→   250→                                        continue
+   251→   251→                                }
+   252→   252→                                // Cancel the log-stream goroutine on pod deletion so the
+   253→   253→                                // retry loop doesn't keep hitting "pod not found" forever.
+   254→   254→                                if event.Type == watch.Deleted {
+   255→   255→                                        d.stopLogStream(string(pod.UID))
+   256→   256→                                        continue
+   257→   257→                                }
+   258→   258→                                d.handlePod(ctx, pod)
+   259→   259→                        }
+   260→   260→                }
+   261→   261→        }
+   262→   262→}
+   263→   263→
+   264→   264→// handlePod resolves the sentinel.io/repo annotation (on the pod or by
+   265→   265→// walking its owner chain), logs the pod once for discoverability, then
+   266→   266→// checks pod status and (if Running) opens a log stream.
+   267→   267→func (d *Detector) handlePod(ctx context.Context, pod *corev1.Pod) {
+   268→   268→        annotations := pod.Annotations
+   269→   269→        repo, hasRepo := "", false
+   270→   270→        if annotations != nil {
+   271→   271→                repo, hasRepo = annotations["sentinel.io/repo"]
+   272→   272→        }
+   273→   273→
+   274→   274→        if !hasRepo {
+   275→   275→                repo = d.lookupRepoFromOwner(ctx, pod)
+   276→   276→                if repo != "" {
+   277→   277→                        hasRepo = true
+   278→   278→                }
+   279→   279→        }
+   280→   280→
+   281→   281→        if !hasRepo {
+   282→   282→                return
+   283→   283→        }
+   284→   284→
+   285→   285→        // Dedupe the discovery log: the watch fires on every status change
+   286→   286→        // (10+ times per second during startup), which would otherwise flood
+   287→   287→        // the log.
+   288→   288→        d.discoveredMu.Lock()
+   289→   289→        podUID := string(pod.UID)
+   290→   290→        if _, seen := d.discoveredPods[podUID]; seen {
+   291→   291→                d.discoveredMu.Unlock()
+   292→   292→        } else {
+   293→   293→                d.discoveredPods[podUID] = time.Now()
+   294→   294→                d.discoveredMu.Unlock()
+   295→   295→                logging.Info("detector: found annotated pod",
+   296→   296→                        "namespace", pod.Namespace, "name", pod.Name,
+   297→   297→                        "phase", pod.Status.Phase, "repo", repo)
+   298→   298→        }
+   299→   299→
+   300→   300→        d.checkPodStatus(ctx, pod, repo)
+   301→   301→
+   302→   302→        if pod.Status.Phase == corev1.PodRunning {
+   303→   303→                d.startLogStream(ctx, pod, repo)
+   304→   304→        }
+   305→   305→}
+   306→   306→
+   307→   307→// lookupRepoFromOwner walks the pod's owner chain (ReplicaSet → Deployment,
+   308→   308→// or StatefulSet directly) looking for the sentinel.io/repo annotation on
+   309→   309→// either the owner's metadata or its pod-template metadata. This handles
+   310→   310→// the common case where users annotate the Deployment instead of the pod
+   311→   311→// template.
+   312→   312→func (d *Detector) lookupRepoFromOwner(ctx context.Context, pod *corev1.Pod) string {
+   313→   313→        for _, ownerRef := range pod.OwnerReferences {
+   314→   314→                switch ownerRef.Kind {
+   315→   315→                case "ReplicaSet":
+   316→   316→                        rs, err := d.clientset.AppsV1().ReplicaSets(pod.Namespace).Get(ctx, ownerRef.Name, metav1.GetOptions{})
+   317→   317→                        if err != nil {
+   318→   318→                                logging.Error("detector: failed to get ReplicaSet",
+   319→   319→                                        "namespace", pod.Namespace, "name", ownerRef.Name, "err", err)
+   320→   320→                                continue
+   321→   321→                        }
+   322→   322→                        if repo, ok := rs.Annotations["sentinel.io/repo"]; ok {
+   323→   323→                                return repo
+   324→   324→                        }
+   325→   325→                        if repo, ok := rs.Spec.Template.Annotations["sentinel.io/repo"]; ok {
+   326→   326→                                return repo
+   327→   327→                        }
+   328→   328→                        for _, rsOwner := range rs.OwnerReferences {
+   329→   329→                                if rsOwner.Kind == "Deployment" {
+   330→   330→                                        if repo := d.getDeploymentRepo(ctx, pod.Namespace, rsOwner.Name); repo != "" {
+   331→   331→                                                return repo
+   332→   332→                                        }
+   333→   333→                                }
+   334→   334→                        }
+   335→   335→                case "Deployment":
+   336→   336→                        if repo := d.getDeploymentRepo(ctx, pod.Namespace, ownerRef.Name); repo != "" {
+   337→   337→                                return repo
+   338→   338→                        }
+   339→   339→                case "StatefulSet":
+   340→   340→                        sts, err := d.clientset.AppsV1().StatefulSets(pod.Namespace).Get(ctx, ownerRef.Name, metav1.GetOptions{})
+   341→   341→                        if err == nil {
+   342→   342→                                if repo, ok := sts.Annotations["sentinel.io/repo"]; ok {
+   343→   343→                                        return repo
+   344→   344→                                }
+   345→   345→                                if repo, ok := sts.Spec.Template.Annotations["sentinel.io/repo"]; ok {
+   346→   346→                                        return repo
+   347→   347→                                }
+   348→   348→                        }
+   349→   349→                }
+   350→   350→        }
+   351→   351→        return ""
+   352→   352→}
+   353→   353→
+   354→   354→// getDeploymentRepo fetches a Deployment and checks both its metadata
+   355→   355→// annotations and pod template annotations for sentinel.io/repo.
+   356→   356→func (d *Detector) getDeploymentRepo(ctx context.Context, namespace, name string) string {
+   357→   357→        deploy, err := d.clientset.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
+   358→   358→        if err != nil {
+   359→   359→                return ""
+   360→   360→        }
+   361→   361→        if repo, ok := deploy.Annotations["sentinel.io/repo"]; ok {
+   362→   362→                return repo
+   363→   363→        }
+   364→   364→        if repo, ok := deploy.Spec.Template.Annotations["sentinel.io/repo"]; ok {
+   365→   365→                return repo
+   366→   366→        }
+   367→   367→        return ""
+   368→   368→}
+   369→   369→
+   370→   370→// checkPodStatus fires triggers for the pod-status transitions Sentinel
+   371→   371→// treats as incidents: CrashLoopBackOff, LastTerminationState with non-zero
+   372→   372→// exit code, OOMKilled, and ImagePullBackOff. Each trigger is subject to
+   373→   373→// the per-fingerprint cooldown.
+   374→   374→func (d *Detector) checkPodStatus(ctx context.Context, pod *corev1.Pod, repo string) {
+   375→   375→        service := d.getServiceFromPod(pod)
+   376→   376→        for _, cs := range pod.Status.ContainerStatuses {
+   377→   377→                if cs.State.Waiting != nil && cs.State.Waiting.Reason == "CrashLoopBackOff" {
+   378→   378→                        if d.shouldTrigger(pod.Namespace, service, "CrashLoopBackOff") {
+   379→   379→                                logging.Info("detector: CrashLoopBackOff",
+   380→   380→                                        "namespace", pod.Namespace, "name", pod.Name)
+   381→   381→                                logs := d.fetchPodLogs(ctx, pod)
+   382→   382→                                reason := fmt.Sprintf("CrashLoopBackOff: %s", cs.State.Waiting.Message)
+   383→   383→                                d.triggerIncident(pod, repo, reason, logs)
+   384→   384→                        }
+   385→   385→                        return
+   386→   386→                }
+   387→   387→                // LastTerminationState fires before CrashLoopBackOff — without it
+   388→   388→                // Sentinel waits 2-3 minutes for CrashLoopBackOff before reacting.
+   389→   389→                if cs.LastTerminationState.Terminated != nil && cs.LastTerminationState.Terminated.ExitCode != 0 {
+   390→   390→                        reason := cs.LastTerminationState.Terminated.Reason
+   391→   391→                        if reason == "" {
+   392→   392→                                reason = fmt.Sprintf("ExitCode=%d", cs.LastTerminationState.Terminated.ExitCode)
+   393→   393→                        }
+   394→   394→                        if d.shouldTrigger(pod.Namespace, service, reason) {
+   395→   395→                                logging.Info("detector: container crashed",
+   396→   396→                                        "namespace", pod.Namespace, "name", pod.Name,
+   397→   397→                                        "reason", reason, "restart_count", cs.RestartCount)
+   398→   398→                                logs := d.fetchPodLogs(ctx, pod)
+   399→   399→                                d.triggerIncident(pod, repo, fmt.Sprintf("Container crash: %s", reason), logs)
+   400→   400→                        }
+   401→   401→                        return
+   402→   402→                }
+   403→   403→                if cs.LastTerminationState.Terminated != nil && cs.LastTerminationState.Terminated.Reason == "OOMKilled" {
+   404→   404→                        if d.shouldTrigger(pod.Namespace, service, "OOMKilled") {
+   405→   405→                                logging.Info("detector: OOMKilled",
+   406→   406→                                        "namespace", pod.Namespace, "name", pod.Name)
+   407→   407→                                logs := d.fetchPodLogs(ctx, pod)
+   408→   408→                                d.triggerIncident(pod, repo, "OOMKilled — container exceeded memory limit", logs)
+   409→   409→                        }
+   410→   410→                        return
+   411→   411→                }
+   412→   412→                if cs.State.Waiting != nil && cs.State.Waiting.Reason == "ImagePullBackOff" {
+   413→   413→                        if d.shouldTrigger(pod.Namespace, service, "ImagePullBackOff") {
+   414→   414→                                logging.Info("detector: ImagePullBackOff",
+   415→   415→                                        "namespace", pod.Namespace, "name", pod.Name)
+   416→   416→                                reason := fmt.Sprintf("ImagePullBackOff: %s", cs.State.Waiting.Message)
+   417→   417→                                d.triggerIncident(pod, repo, reason, "")
+   418→   418→                        }
+   419→   419→                        return
+   420→   420→                }
+   421→   421→        }
+   422→   422→}
+   423→   423→
+   424→   424→// startLogStream opens a streaming log request for the pod and runs
+   425→   425→// streamPodLogs in a goroutine. One stream per pod UID; the streams map
+   426→   426→// lets stopLogStream cancel a specific pod's stream on watch.Deleted.
+   427→   427→func (d *Detector) startLogStream(ctx context.Context, pod *corev1.Pod, repo string) {
+   428→   428→        podUID := string(pod.UID)
+   429→   429→
+   430→   430→        d.streamsMu.Lock()
+   431→   431→        if _, exists := d.streams[podUID]; exists {
+   432→   432→                d.streamsMu.Unlock()
+   433→   433→                return
+   434→   434→        }
+   435→   435→        streamCtx, cancel := context.WithCancel(ctx)
+   436→   436→        d.streams[podUID] = cancel
+   437→   437→        d.streamsMu.Unlock()
+   438→   438→
+   439→   439→        go func() {
+   440→   440→                // Recover here (not in streamPodLogs) so a panic on the streaming
+   441→   441→                // path can't silently kill the goroutine and leave the pod
+   442→   442→                // unmonitored until restart.
+   443→   443→                defer func() {
+   444→   444→                        if r := recover(); r != nil {
+   445→   445→                                logging.Info("detector: log stream recovered",
+   446→   446→                                        "namespace", pod.Namespace, "name", pod.Name, "r", r)
+   447→   447→                        }
+   448→   448→                }()
+   449→   449→                defer func() {
+   450→   450→                        d.streamsMu.Lock()
+   451→   451→                        delete(d.streams, podUID)
+   452→   452→                        d.streamsMu.Unlock()
+   453→   453→                }()
+   454→   454→                logging.Info("detector: log stream started",
+   455→   455→                        "namespace", pod.Namespace, "name", pod.Name)
+   456→   456→                d.streamPodLogs(streamCtx, pod, repo)
+   457→   457→        }()
+   458→   458→}
+   459→   459→
+   460→   460→// stopLogStream cancels the log-stream goroutine for a pod UID. Called on
+   461→   461→// watch.Deleted so the retry loop doesn't keep hitting "pod not found".
+   462→   462→func (d *Detector) stopLogStream(podUID string) {
+   463→   463→        d.streamsMu.Lock()
+   464→   464→        cancel, ok := d.streams[podUID]
+   465→   465→        if ok {
+   466→   466→                delete(d.streams, podUID)
+   467→   467→        }
+   468→   468→        d.streamsMu.Unlock()
+   469→   469→        if ok {
+   470→   470→                cancel()
+   471→   471→                logging.Info("detector: log stream stopped", "pod_uid", podUID)
+   472→   472→        }
+   473→   473→}
+   474→   474→
+   475→   475→// StopAllLogStreams cancels every active log stream. Call on shutdown.
+   476→   476→func (d *Detector) StopAllLogStreams() {
+   477→   477→        d.streamsMu.Lock()
+   478→   478→        defer d.streamsMu.Unlock()
+   479→   479→        for uid, cancel := range d.streams {
+   480→   480→                cancel()
+   481→   481→                delete(d.streams, uid)
+   482→   482→        }
+   483→   483→        logging.Info("detector: stopped all log streams")
+   484→   484→}
+   485→   485→
+   486→   486→// streamPodLogs opens a Follow: true log request and scans lines as they
+   487→   487→// arrive. Python tracebacks are buffered until the error-type line at the
+   488→   488→// bottom (so the investigator gets "KeyError" not "unknown_error"); other
+   489→   489→// error patterns fire on the first matching line, with the next 20 lines
+   490→   490→// captured for context.
+   491→   491→func (d *Detector) streamPodLogs(ctx context.Context, pod *corev1.Pod, repo string) {
+   492→   492→        containerName := ""
+   493→   493→        if len(pod.Spec.Containers) > 0 {
+   494→   494→                containerName = pod.Spec.Containers[0].Name
+   495→   495→        }
+   496→   496→
+   497→   497→        opts := &corev1.PodLogOptions{
+   498→   498→                Follow:    true,
+   499→   499→                Container: containerName,
+   500→   500→                TailLines: ptr(d.tailLines),
+   501→   501→        }
+   502→   502→
+   503→   503→        for {
+   504→   504→                select {
+   505→   505→                case <-ctx.Done():
+   506→   506→                        return
+   507→   507→                default:
+   508→   508→                }
+   509→   509→
+   510→   510→                req := d.clientset.CoreV1().Pods(pod.Namespace).GetLogs(pod.Name, opts)
+   511→   511→                stream, err := req.Stream(ctx)
+   512→   512→                if err != nil {
+   513→   513→                        if apierrors.IsNotFound(err) || apierrors.IsGone(err) {
+   514→   514→                                logging.Info("detector: log stream ended, pod no longer exists",
+   515→   515→                                        "namespace", pod.Namespace, "name", pod.Name)
+   516→   516→                                return
+   517→   517→                        }
+   518→   518→                        select {
+   519→   519→                        case <-ctx.Done():
+   520→   520→                                return
+   521→   521→                        case <-time.After(5 * time.Second):
+   522→   522→                        }
+   523→   523→                        continue
+   524→   524→                }
+   525→   525→
+   526→   526→                scanner := bufio.NewScanner(stream)
+   527→   527→                scanner.Buffer(make([]byte, 0, 256*1024), 256*1024)
+   528→   528→
+   529→   529→                // Traceback buffer: holds lines until the error-type line at the
+   530→   530→                // end is reached, so the trigger fires with the correct error
+   531→   531→                // type instead of "unknown_error".
+   532→   532→                var tracebackBuffer strings.Builder
+   533→   533→                var inTraceback bool
+   534→   534→                var tracebackLines int
+   535→   535→
+   536→   536→                for scanner.Scan() {
+   537→   537→                        select {
+   538→   538→                        case <-ctx.Done():
+   539→   539→                                stream.Close()
+   540→   540→                                return
+   541→   541→                        default:
+   542→   542→                        }
+   543→   543→
+   544→   544→                        line := scanner.Text()
+   545→   545→
+   546→   546→                        if strings.Contains(line, "Traceback (most recent call last)") {
+   547→   547→                                inTraceback = true
+   548→   548→                                tracebackBuffer.Reset()
+   549→   549→                                tracebackLines = 0
+   550→   550→                                tracebackBuffer.WriteString(line + "\n")
+   551→   551→                                tracebackLines++
+   552→   552→                                continue
+   553→   553→                        }
+   554→   554→
+   555→   555→                        if inTraceback {
+   556→   556→                                tracebackBuffer.WriteString(line + "\n")
+   557→   557→                                tracebackLines++
+   558→   558→
+   559→   559→                                errorType := d.extractErrorType(line)
+   560→   560→                                isEndOfTraceback := errorType != "unknown_error" && errorType != ""
+   561→   561→
+   562→   562→                                if !isEndOfTraceback {
+   563→   563→                                        if !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "\t") &&
+   564→   564→                                                (strings.Contains(line, "Error") || strings.Contains(line, "Exception") ||
+   565→   565→                                                        strings.Contains(line, "panic") || strings.Contains(line, "fatal")) {
+   566→   566→                                                errorType = d.extractErrorType(line)
+   567→   567→                                                isEndOfTraceback = errorType != "unknown_error" && errorType != ""
+   568→   568→                                        }
+   569→   569→                                }
+   570→   570→
+   571→   571→                                if isEndOfTraceback || tracebackLines > 50 {
+   572→   572→                                        inTraceback = false
+   573→   573→                                        logs := tracebackBuffer.String()
+   574→   574→                                        tracebackBuffer.Reset()
+   575→   575→
+   576→   576→                                        service := d.getServiceFromPod(pod)
+   577→   577→                                        if d.shouldTrigger(pod.Namespace, service, errorType) {
+   578→   578→                                                reason := fmt.Sprintf("Error detected in pod logs: %s", errorType)
+   579→   579→                                                logging.Error("detector: log error",
+   580→   580→                                                        "namespace", pod.Namespace, "name", pod.Name, "error_type", errorType)
+   581→   581→                                                d.triggerIncident(pod, repo, reason, logs)
+   582→   582→                                        }
+   583→   583→                                }
+   584→   584→                                continue
+   585→   585→                        }
+   586→   586→
+   587→   587→                        if d.isErrorLine(line) {
+   588→   588→                                errorType := d.extractErrorType(line)
+   589→   589→                                service := d.getServiceFromPod(pod)
+   590→   590→
+   591→   591→                                if d.shouldTrigger(pod.Namespace, service, errorType) {
+   592→   592→                                        var buf strings.Builder
+   593→   593→                                        buf.WriteString(line + "\n")
+   594→   594→                                        for i := 0; i < 20 && scanner.Scan(); i++ {
+   595→   595→                                                buf.WriteString(scanner.Text() + "\n")
+   596→   596→                                        }
+   597→   597→
+   598→   598→                                        logs := buf.String()
+   599→   599→                                        reason := fmt.Sprintf("Error detected in pod logs: %s", errorType)
+   600→   600→                                        logging.Error("detector: log error",
+   601→   601→                                                "namespace", pod.Namespace, "name", pod.Name, "error_type", errorType)
+   602→   602→                                        d.triggerIncident(pod, repo, reason, logs)
+   603→   603→                                }
+   604→   604→                        }
+   605→   605→                }
+   606→   606→
+   607→   607→                stream.Close()
+   608→   608→
+   609→   609→                select {
+   610→   610→                case <-ctx.Done():
+   611→   611→                        return
+   612→   612→                case <-time.After(2 * time.Second):
+   613→   613→                }
+   614→   614→        }
+   615→   615→}
+   616→   616→
+   617→   617→// isErrorLine reports whether the line matches any known error pattern.
+   618→   618→func (d *Detector) isErrorLine(line string) bool {
+   619→   619→        for _, p := range errorPatterns {
+   620→   620→                if p.MatchString(line) {
+   621→   621→                        return true
+   622→   622→                }
+   623→   623→        }
+   624→   624→        return false
+   625→   625→}
+   626→   626→
+   627→   627→// extractErrorType returns the error-type name from a line, or
+   628→   628→// "unknown_error" if no pattern matches.
+   629→   629→func (d *Detector) extractErrorType(line string) string {
+   630→   630→        for _, p := range extractErrorTypePatterns {
+   631→   631→                if m := p.re.FindStringSubmatch(line); len(m) > 1 {
+   632→   632→                        return m[1]
+   633→   633→                } else if p.re.MatchString(line) {
+   634→   634→                        if p.fallback != "" {
+   635→   635→                                return p.fallback
+   636→   636→                        }
+   637→   637→                        return "error"
+   638→   638→                }
+   639→   639→        }
+   640→   640→        return "unknown_error"
+   641→   641→}
+   642→   642→
+   643→   643→// shouldTrigger reports whether the (namespace, service, errorType)
+   644→   644→// fingerprint is allowed to fire. The first call records the timestamp;
+   645→   645→// subsequent calls within d.cooldown are suppressed.
+   646→   646→func (d *Detector) shouldTrigger(namespace, service, errorType string) bool {
+   647→   647→        fp := ErrorFingerprint{Service: service, Namespace: namespace, ErrorType: errorType}
+   648→   648→
+   649→   649→        d.mu.Lock()
+   650→   650→        defer d.mu.Unlock()
+   651→   651→
+   652→   652→        if lastSeen, exists := d.recentSeen[fp]; exists {
+   653→   653→                if time.Since(lastSeen) < d.cooldown {
+   654→   654→                        return false
+   655→   655→                }
+   656→   656→        }
+   657→   657→        d.recentSeen[fp] = time.Now()
+   658→   658→        return true
+   659→   659→}
+   660→   660→
+   661→   661→// triggerIncident invokes the configured handler (in a goroutine) and, if
+   662→   662→// alertURL is set, the alert sink.
+   663→   663→func (d *Detector) triggerIncident(pod *corev1.Pod, repo, reason, podLogs string) {
+   664→   664→        service := d.getServiceFromPod(pod)
+   665→   665→
+   666→   666→        if d.handler != nil {
+   667→   667→                go d.handler(service, pod.Namespace, reason, podLogs)
+   668→   668→        }
+   669→   669→
+   670→   670→        if d.alertURL != "" {
+   671→   671→                go d.sendAlert(service, pod.Namespace, reason, podLogs)
+   672→   672→        } else {
+   673→   673→                logging.Info("detector: trigger (no alert URL configured)",
+   674→   674→                        "namespace", pod.Namespace, "service", service, "reason", reason)
+   675→   675→        }
+   676→   676→}
+   677→   677→
+   678→   678→// sendAlert forwards the trigger to the configured alert sink. Currently
+   679→   679→// structured-logged; a real implementation would POST to alertURL.
+   680→   680→func (d *Detector) sendAlert(service, namespace, reason, podLogs string) {
+   681→   681→        logging.Info("detector: alert sent",
+   682→   682→                "namespace", namespace, "service", service, "reason", reason)
+   683→   683→}
+   684→   684→
+   685→   685→// getServiceFromPod resolves the service name from pod labels, falling back
+   686→   686→// to the pod name with the trailing "-<replica>" segment stripped.
+   687→   687→func (d *Detector) getServiceFromPod(pod *corev1.Pod) string {
+   688→   688→        if name, ok := pod.Labels["app.kubernetes.io/name"]; ok {
+   689→   689→                return name
+   690→   690→        }
+   691→   691→        if name, ok := pod.Labels["app"]; ok {
+   692→   692→                return name
+   693→   693→        }
+   694→   694→        name := pod.Name
+   695→   695→        if idx := strings.LastIndex(name, "-"); idx > 0 {
+   696→   696→                name = name[:idx]
+   697→   697→        }
+   698→   698→        return name
+   699→   699→}
+   700→   700→
+   701→   701→// fetchPodLogs returns up to 8KB of previous-container logs (the crash
+   702→   702→// output) for the pod; if that's empty or contains the K8s placeholder, it
+   703→   703→// falls back to current logs.
+   704→   704→func (d *Detector) fetchPodLogs(ctx context.Context, pod *corev1.Pod) string {
+   705→   705→        limitBytes := int64(8192)
+   706→   706→        containerName := ""
+   707→   707→        if len(pod.Spec.Containers) > 0 {
+   708→   708→                containerName = pod.Spec.Containers[0].Name
+   709→   709→        }
+   710→   710→
+   711→   711→        opts := &corev1.PodLogOptions{
+   712→   712→                Previous:   true,
+   713→   713→                LimitBytes: &limitBytes,
+   714→   714→                Container:  containerName,
+   715→   715→        }
+   716→   716→        if logs, err := d.clientset.CoreV1().Pods(pod.Namespace).GetLogs(pod.Name, opts).Do(ctx).Raw(); err == nil {
+   717→   717→                s := string(logs)
+   718→   718→                if strings.TrimSpace(s) != "" && !strings.Contains(s, "unable to retrieve container logs") {
+   719→   719→                        return s
+   720→   720→                }
+   721→   721→        }
+   722→   722→
+   723→   723→        opts.Previous = false
+   724→   724→        if logs, err := d.clientset.CoreV1().Pods(pod.Namespace).GetLogs(pod.Name, opts).Do(ctx).Raw(); err == nil {
+   725→   725→                return string(logs)
+   726→   726→        }
+   727→   727→
+   728→   728→        return ""
+   729→   729→}
+   730→   730→
+   731→   731→// cleanupLoop drops recentSeen entries older than 10 minutes and
+   732→   732→// discoveredPods entries older than 1 hour. Both maps grow without bound
+   733→   733→// otherwise.
+   734→   734→func (d *Detector) cleanupLoop(ctx context.Context) {
+   735→   735→        ticker := time.NewTicker(5 * time.Minute)
+   736→   736→        defer ticker.Stop()
+   737→   737→
+   738→   738→        for {
+   739→   739→                select {
+   740→   740→                case <-ctx.Done():
+   741→   741→                        return
+   742→   742→                case <-ticker.C:
+   743→   743→                        d.mu.Lock()
+   744→   744→                        for fp, seen := range d.recentSeen {
+   745→   745→                                if time.Since(seen) > 10*time.Minute {
+   746→   746→                                        delete(d.recentSeen, fp)
+   747→   747→                                }
+   748→   748→                        }
+   749→   749→                        d.mu.Unlock()
+   750→   750→
+   751→   751→                        d.discoveredMu.Lock()
+   752→   752→                        for uid, seen := range d.discoveredPods {
+   753→   753→                                if time.Since(seen) > time.Hour {
+   754→   754→                                        delete(d.discoveredPods, uid)
+   755→   755→                                }
+   756→   756→                        }
+   757→   757→                        d.discoveredMu.Unlock()
+   758→   758→                }
+   759→   759→        }
+   760→   760→}
+   761→   761→
+   762→   762→// ptr returns a pointer to v — a generic helper for K8s option structs.
+   763→   763→func ptr[T any](v T) *T { return &v }
+   764→   764→

@@ -1,0 +1,744 @@
+     1→package main
+     2→
+     3→import (
+     4→        "context"
+     5→        "encoding/json"
+     6→        "io"
+     7→        "net/http"
+     8→        "net/http/httptest"
+     9→        "os"
+    10→        "path/filepath"
+    11→        "strings"
+    12→        "sync/atomic"
+    13→        "testing"
+    14→        "time"
+    15→)
+    16→
+    17→// --- fixtures ---
+    18→
+    19→// scenarioFixture writes a minimal valid scenario (scenario.yaml +
+    20→// cluster/deployment.yaml + ground-truth.diff + evidence.md) and a
+    21→// MANIFEST.yaml listing it, all under dir/scenarios/. Returns the path
+    22→// to dir/scenarios.
+    23→func scenarioFixture(t *testing.T, dir, id, slug string) string {
+    24→        t.Helper()
+    25→        scnDir := filepath.Join(dir, "scenarios", id+"-"+slug)
+    26→        clusterDir := filepath.Join(scnDir, "cluster")
+    27→        if err := os.MkdirAll(clusterDir, 0o755); err != nil {
+    28→                t.Fatalf("mkdir: %v", err)
+    29→        }
+    30→
+    31→        scenarioYAML := `id: ` + id + `
+    32→slug: ` + slug + `
+    33→title: "fixture"
+    34→category: crashloop
+    35→severity: sev2
+    36→difficulty: trivial
+    37→origin: synthetic
+    38→
+    39→time_budget: 1s
+    40→token_budget: 1000
+    41→cost_budget_usd: 0.50
+    42→
+    43→setup:
+    44→  cluster:
+    45→    kind_version: v0.24.0
+    46→    kubernetes_version: v1.30.0
+    47→    nodes: 1
+    48→  apply:
+    49→    - cluster/deployment.yaml
+    50→  source_repo: "https://github.com/sentinel-bench/fixture"
+    51→  source_ref: "main"
+    52→  source_path: "deployment/k8s.yaml"
+    53→
+    54→trigger:
+    55→  type: alertmanager
+    56→  alert:
+    57→    alertname: KubePodCrashLooping
+    58→    namespace: prod
+    59→    pod: fixture-xxxxx-yyyyy
+    60→    container: app
+    61→    restarts: 5
+    62→    labels:
+    63→      severity: critical
+    64→      service: fixture
+    65→    annotations:
+    66→      summary: "fixture crash-looping"
+    67→
+    68→assertions:
+    69→  - type: pr_opened
+    70→    weight: 0.25
+    71→  - type: pr_ci_green
+    72→    weight: 0.25
+    73→  - type: diff_similarity
+    74→    threshold: 0.80
+    75→    weight: 0.25
+    76→  - type: sentinel_automerge_approved
+    77→    weight: 0.25
+    78→
+    79→ground_truth: ground-truth.diff
+    80→evidence: evidence.md
+    81→`
+    82→        if err := os.WriteFile(filepath.Join(scnDir, "scenario.yaml"), []byte(scenarioYAML), 0o644); err != nil {
+    83→                t.Fatalf("write scenario.yaml: %v", err)
+    84→        }
+    85→
+    86→        deploymentYAML := `apiVersion: apps/v1
+    87→kind: Deployment
+    88→metadata:
+    89→  name: fixture
+    90→  namespace: prod
+    91→spec:
+    92→  replicas: 1
+    93→  selector:
+    94→    matchLabels:
+    95→      app: fixture
+    96→  template:
+    97→    metadata:
+    98→      labels:
+    99→        app: fixture
+   100→    spec:
+   101→      containers:
+   102→        - name: app
+   103→          image: ghcr.io/sentinel-bench/fixture:v1.0.0
+   104→`
+   105→        if err := os.WriteFile(filepath.Join(clusterDir, "deployment.yaml"), []byte(deploymentYAML), 0o644); err != nil {
+   106→                t.Fatalf("write deployment.yaml: %v", err)
+   107→        }
+   108→
+   109→        groundTruth := `--- a/deployment/k8s.yaml
+   110→+++ b/deployment/k8s.yaml
+   111→@@ -12,7 +12,7 @@ spec:
+   112→     spec:
+   113→       containers:
+   114→         - name: app
+   115→-          image: ghcr.io/sentinel-bench/fixture:v1.0.0
+   116→+          image: ghcr.io/sentinel-bench/fixture:v1.0.1
+   117→`
+   118→        if err := os.WriteFile(filepath.Join(scnDir, "ground-truth.diff"), []byte(groundTruth), 0o644); err != nil {
+   119→                t.Fatalf("write ground-truth.diff: %v", err)
+   120→        }
+   121→        if err := os.WriteFile(filepath.Join(scnDir, "evidence.md"), []byte("# fixture\n"), 0o644); err != nil {
+   122→                t.Fatalf("write evidence.md: %v", err)
+   123→        }
+   124→
+   125→        // Compute the SHA256 of the ground-truth.diff for the manifest.
+   126→        s := &Scenario{Dir: scnDir, GroundTruthPath: "ground-truth.diff"}
+   127→        hash, err := s.GroundTruthSHA256()
+   128→        if err != nil {
+   129→                t.Fatalf("sha256: %v", err)
+   130→        }
+   131→
+   132→        manifest := `version: 1
+   133→scenarios:
+   134→  - id: ` + id + `
+   135→    slug: ` + slug + `
+   136→    category: crashloop
+   137→    severity: sev2
+   138→    difficulty: trivial
+   139→    origin: synthetic
+   140→    ground_truth_sha256: ` + hash + `
+   141→    time_budget: 1s
+   142→    token_budget: 1000
+   143→    cost_budget_usd: 0.50
+   144→`
+   145→        if err := os.WriteFile(filepath.Join(dir, "scenarios", "MANIFEST.yaml"), []byte(manifest), 0o644); err != nil {
+   146→                t.Fatalf("write MANIFEST.yaml: %v", err)
+   147→        }
+   148→        return filepath.Join(dir, "scenarios")
+   149→}
+   150→
+   151→// --- fakes ---
+   152→
+   153→// fakeProvisioner records Create/Delete calls without doing any work.
+   154→type fakeProvisioner struct {
+   155→        created []string
+   156→        deleted []string
+   157→}
+   158→
+   159→func (f *fakeProvisioner) Create(_ context.Context, name string) error {
+   160→        f.created = append(f.created, name)
+   161→        return nil
+   162→}
+   163→func (f *fakeProvisioner) Delete(_ context.Context, name string) error {
+   164→        f.deleted = append(f.deleted, name)
+   165→        return nil
+   166→}
+   167→
+   168→// fakeApplier records the manifests it was asked to apply.
+   169→type fakeApplier struct {
+   170→        applied [][]string
+   171→}
+   172→
+   173→func (f *fakeApplier) Apply(_ context.Context, manifests []string) error {
+   174→        f.applied = append(f.applied, manifests)
+   175→        return nil
+   176→}
+   177→
+   178→// fakeDiffFetcher returns a fixed diff for every PR.
+   179→type fakeDiffFetcher struct {
+   180→        diff string
+   181→        err  error
+   182→}
+   183→
+   184→func (f fakeDiffFetcher) Fetch(_ context.Context, _ string, _ int) (string, error) {
+   185→        if f.err != nil {
+   186→                return "", f.err
+   187→        }
+   188→        return f.diff, nil
+   189→}
+   190→
+   191→// --- mock Sentinel API ---
+   192→
+   193→// mockSentinelConfig configures a mockSentinel's behavior.
+   194→type mockSentinelConfig struct {
+   195→        // incidentStatus is returned by GET /incidents/{id}. If empty, the
+   196→        // mock returns 404.
+   197→        incidentStatus string
+   198→        // incidentPRNumber, if non-nil, makes the mock return a PR. nil = no PR.
+   199→        incidentPRNumber *int
+   200→        // incidentSandboxVerified controls the sandbox_verified field.
+   201→        incidentSandboxVerified bool
+   202→        // incidentAutoMergeStatus controls the auto_merge_status field.
+   203→        incidentAutoMergeStatus string
+   204→        // triggerStatus is the HTTP status returned by POST /admin/investigate.
+   205→        // 0 (default) = 200.
+   206→        triggerStatus int
+   207→        // pollAfter counts how many GET /incidents/{id} calls have been made.
+   208→        // When non-zero, the mock returns incidentStatus only after this many
+   209→        // polls; before that it returns "investigating". Lets us test the
+   210→        // polling loop.
+   211→        pollAfter int32
+   212→}
+   213→
+   214→// mockSentinel returns a httptest.Server that emulates Sentinel's API
+   215→// according to cfg. The returned server is already started; tests should
+   216→// defer Close it.
+   217→func mockSentinel(t *testing.T, cfg mockSentinelConfig) *httptest.Server {
+   218→        t.Helper()
+   219→        var pollCount int32
+   220→        srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+   221→                switch {
+   222→                case r.URL.Path == "/healthz":
+   223→                        w.WriteHeader(200)
+   224→                        _ = json.NewEncoder(w).Encode(map[string]any{
+   225→                                "status":  "ok",
+   226→                                "version": "test",
+   227→                        })
+   228→                case r.URL.Path == "/admin/investigate" && r.Method == http.MethodPost:
+   229→                        if cfg.triggerStatus != 0 {
+   230→                                w.WriteHeader(cfg.triggerStatus)
+   231→                                _, _ = w.Write([]byte(`{"error":"mock trigger failure"}`))
+   232→                                return
+   233→                        }
+   234→                        body, _ := io.ReadAll(r.Body)
+   235→                        var req InvestigateRequest
+   236→                        _ = json.Unmarshal(body, &req)
+   237→                        w.WriteHeader(200)
+   238→                        _ = json.NewEncoder(w).Encode(InvestigateResponse{
+   239→                                Status:    "triggered",
+   240→                                Service:   req.Service,
+   241→                                ClusterID: "abc123def456",
+   242→                        })
+   243→                case strings.HasPrefix(r.URL.Path, "/incidents/"):
+   244→                        id := strings.TrimPrefix(r.URL.Path, "/incidents/")
+   245→                        if cfg.incidentStatus == "" {
+   246→                                w.WriteHeader(404)
+   247→                                _, _ = w.Write([]byte(`{"error":"not found"}`))
+   248→                                return
+   249→                        }
+   250→                        // atomic.AddInt32 is safe to call concurrently — no mutex needed.
+   251→                        polls := atomic.AddInt32(&pollCount, 1)
+   252→                        status := cfg.incidentStatus
+   253→                        if cfg.pollAfter > 0 && polls <= cfg.pollAfter {
+   254→                                status = "investigating"
+   255→                        }
+   256→                        inc := Incident{
+   257→                                IncidentID:      id,
+   258→                                Status:          status,
+   259→                                PRRepo:          "sentinel-bench/fixture",
+   260→                                PRNumber:        cfg.incidentPRNumber,
+   261→                                PRURL:           "https://github.com/sentinel-bench/fixture/pull/1",
+   262→                                SandboxVerified: cfg.incidentSandboxVerified,
+   263→                                AutoMergeStatus: cfg.incidentAutoMergeStatus,
+   264→                        }
+   265→                        w.WriteHeader(200)
+   266→                        _ = json.NewEncoder(w).Encode(inc)
+   267→                default:
+   268→                        w.WriteHeader(404)
+   269→                        _, _ = w.Write([]byte(`{"error":"unknown path"}`))
+   270→                }
+   271→        }))
+   272→        return srv
+   273→}
+   274→
+   275→// newTestRunner builds a Runner wired to the mock Sentinel + fakes.
+   276→func newTestRunner(t *testing.T, srv *httptest.Server, scenariosDir, resultsDir, prDiff string) *Runner {
+   277→        t.Helper()
+   278→        prNum := 1
+   279→        _ = prNum
+   280→        client := NewClient(srv.URL, "", 5*time.Second)
+   281→        return &Runner{
+   282→                Sentinel:     client,
+   283→                Provisioner:  &fakeProvisioner{},
+   284→                Applier:      &fakeApplier{},
+   285→                DiffFetcher:  fakeDiffFetcher{diff: prDiff},
+   286→                ScenariosDir: scenariosDir,
+   287→                ResultsDir:   resultsDir,
+   288→                PollInterval: 10 * time.Millisecond,
+   289→        }
+   290→}
+   291→
+   292→// --- tests ---
+   293→
+   294→// TestRunner_HappyPath verifies that when Sentinel returns a fully-
+   295→// successful incident (PR opened, sandbox verified, auto-merge approved)
+   296→// and the PR diff matches the ground truth, all four assertions pass and
+   297→// all four metrics are 100%.
+   298→func TestRunner_HappyPath(t *testing.T) {
+   299→        dir := t.TempDir()
+   300→        scenariosDir := scenarioFixture(t, dir, "T001", "fixture-happy")
+   301→        resultsDir := filepath.Join(dir, "results")
+   302→
+   303→        prDiff := `--- a/deployment/k8s.yaml
+   304→+++ b/deployment/k8s.yaml
+   305→@@ -12,7 +12,7 @@ spec:
+   306→     spec:
+   307→       containers:
+   308→         - name: app
+   309→-          image: ghcr.io/sentinel-bench/fixture:v1.0.0
+   310→+          image: ghcr.io/sentinel-bench/fixture:v1.0.1
+   311→`
+   312→        prNum := 1
+   313→        srv := mockSentinel(t, mockSentinelConfig{
+   314→                incidentStatus:          "verified",
+   315→                incidentPRNumber:        &prNum,
+   316→                incidentSandboxVerified: true,
+   317→                incidentAutoMergeStatus: "approved",
+   318→        })
+   319→        defer srv.Close()
+   320→
+   321→        runner := newTestRunner(t, srv, scenariosDir, resultsDir, prDiff)
+   322→        ctx := context.Background()
+   323→        report, err := runner.Run(ctx, RunOptions{Timeout: 5 * time.Second})
+   324→        if err != nil {
+   325→                t.Fatalf("Run: %v", err)
+   326→        }
+   327→
+   328→        if len(report.Scenarios) != 1 {
+   329→                t.Fatalf("want 1 scenario, got %d", len(report.Scenarios))
+   330→        }
+   331→        s := report.Scenarios[0]
+   332→        if s.Status != "pass" {
+   333→                t.Errorf("status: want pass, got %s (err=%s)", s.Status, s.Error)
+   334→        }
+   335→        if s.Score != 1.0 {
+   336→                t.Errorf("score: want 1.0, got %f", s.Score)
+   337→        }
+   338→        for _, a := range s.Assertions {
+   339→                if !a.Passed {
+   340→                        t.Errorf("assertion %s: want pass, got fail (%s)", a.Type, a.Detail)
+   341→                }
+   342→        }
+   343→        if report.Metrics.DBR != 1.0 || report.Metrics.VPR != 1.0 ||
+   344→                report.Metrics.TAR != 1.0 || report.Metrics.FMR != 1.0 {
+   345→                t.Errorf("metrics: want all 1.0, got DBR=%f VPR=%f TAR=%f FMR=%f",
+   346→                        report.Metrics.DBR, report.Metrics.VPR, report.Metrics.TAR, report.Metrics.FMR)
+   347→        }
+   348→        // Results files were written.
+   349→        if _, err := os.Stat(filepath.Join(resultsDir, "test", report.StartedAt.Format("2006-01-02"), "results.json")); err != nil {
+   350→                t.Errorf("results.json not written: %v", err)
+   351→        }
+   352→}
+   353→
+   354→// TestRunner_NoPR verifies that when Sentinel fails to open a PR, all
+   355→// four assertions fail and all four metrics are 0%.
+   356→func TestRunner_NoPR(t *testing.T) {
+   357→        dir := t.TempDir()
+   358→        scenariosDir := scenarioFixture(t, dir, "T002", "fixture-nopr")
+   359→        resultsDir := filepath.Join(dir, "results")
+   360→
+   361→        srv := mockSentinel(t, mockSentinelConfig{
+   362→                incidentStatus: "failed",
+   363→                // incidentPRNumber nil = no PR.
+   364→        })
+   365→        defer srv.Close()
+   366→
+   367→        runner := newTestRunner(t, srv, scenariosDir, resultsDir, "")
+   368→        ctx := context.Background()
+   369→        report, err := runner.Run(ctx, RunOptions{Timeout: 5 * time.Second})
+   370→        if err != nil {
+   371→                t.Fatalf("Run: %v", err)
+   372→        }
+   373→
+   374→        s := report.Scenarios[0]
+   375→        if s.Status != "fail" {
+   376→                t.Errorf("status: want fail, got %s", s.Status)
+   377→        }
+   378→        if s.Score != 0.0 {
+   379→                t.Errorf("score: want 0.0, got %f", s.Score)
+   380→        }
+   381→        if report.Metrics.DBR != 0 || report.Metrics.VPR != 0 ||
+   382→                report.Metrics.TAR != 0 || report.Metrics.FMR != 0 {
+   383→                t.Errorf("metrics: want all 0, got DBR=%f VPR=%f TAR=%f FMR=%f",
+   384→                        report.Metrics.DBR, report.Metrics.VPR, report.Metrics.TAR, report.Metrics.FMR)
+   385→        }
+   386→}
+   387→
+   388→// TestRunner_PartialFailure verifies that when Sentinel opens a PR but
+   389→// the diff is wrong and CI didn't pass, only pr_opened passes.
+   390→func TestRunner_PartialFailure(t *testing.T) {
+   391→        dir := t.TempDir()
+   392→        scenariosDir := scenarioFixture(t, dir, "T003", "fixture-partial")
+   393→        resultsDir := filepath.Join(dir, "results")
+   394→
+   395→        // PR diff is disjoint from ground truth -> diff_similarity = 0.
+   396→        prDiff := `--- a/deployment/k8s.yaml
+   397→+++ b/deployment/k8s.yaml
+   398→@@ -1,1 +1,1 @@
+   399→-something else
+   400→+entirely different
+   401→`
+   402→        prNum := 7
+   403→        srv := mockSentinel(t, mockSentinelConfig{
+   404→                incidentStatus:          "verified",
+   405→                incidentPRNumber:        &prNum,
+   406→                incidentSandboxVerified: false, // CI not green.
+   407→                incidentAutoMergeStatus: "rejected",
+   408→        })
+   409→        defer srv.Close()
+   410→
+   411→        runner := newTestRunner(t, srv, scenariosDir, resultsDir, prDiff)
+   412→        ctx := context.Background()
+   413→        report, err := runner.Run(ctx, RunOptions{Timeout: 5 * time.Second})
+   414→        if err != nil {
+   415→                t.Fatalf("Run: %v", err)
+   416→        }
+   417→
+   418→        s := report.Scenarios[0]
+   419→        if s.Status != "fail" {
+   420→                t.Errorf("status: want fail, got %s", s.Status)
+   421→        }
+   422→        // Only pr_opened passes.
+   423→        if report.Metrics.DBR != 1.0 {
+   424→                t.Errorf("DBR: want 1.0, got %f", report.Metrics.DBR)
+   425→        }
+   426→        if report.Metrics.VPR != 0 {
+   427→                t.Errorf("VPR: want 0, got %f", report.Metrics.VPR)
+   428→        }
+   429→        if report.Metrics.TAR != 0 {
+   430→                t.Errorf("TAR: want 0, got %f", report.Metrics.TAR)
+   431→        }
+   432→        if report.Metrics.FMR != 0 {
+   433→                t.Errorf("FMR: want 0, got %f", report.Metrics.FMR)
+   434→        }
+   435→}
+   436→
+   437→// TestRunner_TriggerError verifies that when Sentinel's
+   438→// POST /admin/investigate returns an error, the scenario status is
+   439→// "error" and the error message is recorded.
+   440→func TestRunner_TriggerError(t *testing.T) {
+   441→        dir := t.TempDir()
+   442→        scenariosDir := scenarioFixture(t, dir, "T004", "fixture-trigger-err")
+   443→        resultsDir := filepath.Join(dir, "results")
+   444→
+   445→        srv := mockSentinel(t, mockSentinelConfig{
+   446→                triggerStatus: 500,
+   447→        })
+   448→        defer srv.Close()
+   449→
+   450→        runner := newTestRunner(t, srv, scenariosDir, resultsDir, "")
+   451→        ctx := context.Background()
+   452→        report, err := runner.Run(ctx, RunOptions{Timeout: 5 * time.Second})
+   453→        if err != nil {
+   454→                t.Fatalf("Run: %v", err)
+   455→        }
+   456→
+   457→        s := report.Scenarios[0]
+   458→        if s.Status != "error" {
+   459→                t.Errorf("status: want error, got %s", s.Status)
+   460→        }
+   461→        if !strings.Contains(s.Error, "trigger") {
+   462→                t.Errorf("error: want 'trigger', got %q", s.Error)
+   463→        }
+   464→        // Errors don't count in any metric numerator.
+   465→        if report.Metrics.DBR != 0 || report.Metrics.VPR != 0 ||
+   466→                report.Metrics.TAR != 0 || report.Metrics.FMR != 0 {
+   467→                t.Errorf("metrics: want all 0, got DBR=%f VPR=%f TAR=%f FMR=%f",
+   468→                        report.Metrics.DBR, report.Metrics.VPR, report.Metrics.TAR, report.Metrics.FMR)
+   469→        }
+   470→}
+   471→
+   472→// TestRunner_PollTimeout verifies that the runner stops polling after
+   473→// the per-scenario budget elapses and records the last-seen incident.
+   474→func TestRunner_PollTimeout(t *testing.T) {
+   475→        dir := t.TempDir()
+   476→        scenariosDir := scenarioFixture(t, dir, "T005", "fixture-poll-timeout")
+   477→        resultsDir := filepath.Join(dir, "results")
+   478→
+   479→        srv := mockSentinel(t, mockSentinelConfig{
+   480→                // Always "investigating" — never reaches terminal.
+   481→                incidentStatus: "investigating",
+   482→                // pollAfter=0 means: return the configured status immediately. So
+   483→                // to force non-terminal, we set status to "investigating" itself
+   484→                // — IsTerminal() returns false for "investigating".
+   485→        })
+   486→        defer srv.Close()
+   487→
+   488→        runner := newTestRunner(t, srv, scenariosDir, resultsDir, "")
+   489→        runner.PollInterval = 5 * time.Millisecond
+   490→        ctx := context.Background()
+   491→        start := time.Now()
+   492→        report, err := runner.Run(ctx, RunOptions{Timeout: 200 * time.Millisecond})
+   493→        elapsed := time.Since(start)
+   494→        if err != nil {
+   495→                t.Fatalf("Run: %v", err)
+   496→        }
+   497→
+   498→        s := report.Scenarios[0]
+   499→        // Status is "fail" (no assertions passed) but NOT "error" — the
+   500→        // poll timed out cleanly and we have a last-seen incident.
+   501→        if s.Status == "error" {
+   502→                t.Errorf("status: want fail or pass, got error (%s)", s.Error)
+   503→        }
+   504→        // The runner should have respected the timeout (within a generous
+   505→        // tolerance — the polling loop checks the deadline between ticks).
+   506→        if elapsed > 2*time.Second {
+   507→                t.Errorf("runner took too long: %v (timeout was 200ms)", elapsed)
+   508→        }
+   509→}
+   510→
+   511→// TestRunner_PollWaitsForTerminal verifies that the runner keeps polling
+   512→// until the incident reaches a terminal state, even if the first few
+   513→// responses are "investigating".
+   514→func TestRunner_PollWaitsForTerminal(t *testing.T) {
+   515→        dir := t.TempDir()
+   516→        scenariosDir := scenarioFixture(t, dir, "T006", "fixture-poll-wait")
+   517→        resultsDir := filepath.Join(dir, "results")
+   518→
+   519→        prNum := 1
+   520→        srv := mockSentinel(t, mockSentinelConfig{
+   521→                incidentStatus:          "verified",
+   522→                incidentPRNumber:        &prNum,
+   523→                incidentSandboxVerified: true,
+   524→                incidentAutoMergeStatus: "approved",
+   525→                // Return "investigating" for the first 2 polls, then "verified".
+   526→                pollAfter: 2,
+   527→        })
+   528→        defer srv.Close()
+   529→
+   530→        prDiff := `--- a/deployment/k8s.yaml
+   531→+++ b/deployment/k8s.yaml
+   532→@@ -12,7 +12,7 @@ spec:
+   533→     spec:
+   534→       containers:
+   535→         - name: app
+   536→-          image: ghcr.io/sentinel-bench/fixture:v1.0.0
+   537→+          image: ghcr.io/sentinel-bench/fixture:v1.0.1
+   538→`
+   539→        runner := newTestRunner(t, srv, scenariosDir, resultsDir, prDiff)
+   540→        runner.PollInterval = 10 * time.Millisecond
+   541→        ctx := context.Background()
+   542→        report, err := runner.Run(ctx, RunOptions{Timeout: 5 * time.Second})
+   543→        if err != nil {
+   544→                t.Fatalf("Run: %v", err)
+   545→        }
+   546→
+   547→        s := report.Scenarios[0]
+   548→        if s.Status != "pass" {
+   549→                t.Errorf("status: want pass, got %s (err=%s)", s.Status, s.Error)
+   550→        }
+   551→}
+   552→
+   553→// TestRunner_ValidateRejectsBrokenScenario verifies that a scenario with
+   554→// a SHA256 drift in the manifest is rejected before any I/O happens.
+   555→func TestRunner_ValidateRejectsBrokenScenario(t *testing.T) {
+   556→        dir := t.TempDir()
+   557→        scenariosDir := scenarioFixture(t, dir, "T007", "fixture-broken")
+   558→        resultsDir := filepath.Join(dir, "results")
+   559→
+   560→        // Corrupt the manifest's sha256.
+   561→        manifestPath := filepath.Join(scenariosDir, "MANIFEST.yaml")
+   562→        data, _ := os.ReadFile(manifestPath)
+   563→        corrupted := strings.Replace(string(data), "ground_truth_sha256: ", "ground_truth_sha256: 0000", 1)
+   564→        if err := os.WriteFile(manifestPath, []byte(corrupted), 0o644); err != nil {
+   565→                t.Fatalf("rewrite manifest: %v", err)
+   566→        }
+   567→
+   568→        srv := mockSentinel(t, mockSentinelConfig{incidentStatus: "verified"})
+   569→        defer srv.Close()
+   570→
+   571→        runner := newTestRunner(t, srv, scenariosDir, resultsDir, "")
+   572→        ctx := context.Background()
+   573→        report, err := runner.Run(ctx, RunOptions{Timeout: 5 * time.Second})
+   574→        if err != nil {
+   575→                t.Fatalf("Run: %v", err)
+   576→        }
+   577→
+   578→        s := report.Scenarios[0]
+   579→        if s.Status != "error" {
+   580→                t.Errorf("status: want error, got %s", s.Status)
+   581→        }
+   582→        if !strings.Contains(s.Error, "SHA256") && !strings.Contains(s.Error, "drift") {
+   583→                t.Errorf("error: want 'drift' or 'SHA256', got %q", s.Error)
+   584→        }
+   585→}
+   586→
+   587→// TestEvaluateAssertions unit-tests the assertion evaluator directly.
+   588→func TestEvaluateAssertions(t *testing.T) {
+   589→        assertions := []Assertion{
+   590→                {Type: "pr_opened", Weight: 0.25},
+   591→                {Type: "pr_ci_green", Weight: 0.25},
+   592→                {Type: "diff_similarity", Weight: 0.25, Threshold: 0.80},
+   593→                {Type: "sentinel_automerge_approved", Weight: 0.25},
+   594→        }
+   595→        prNum := 1
+   596→        inc := Incident{
+   597→                Status:          "verified",
+   598→                PRNumber:        &prNum,
+   599→                SandboxVerified: true,
+   600→                AutoMergeStatus: "approved",
+   601→        }
+   602→        prDiff := `--- a/foo
+   603→+++ b/foo
+   604→@@ -1,1 +1,1 @@
+   605→-a
+   606→+b
+   607→`
+   608→        gtDiff := prDiff // identical -> similarity 1.0
+   609→
+   610→        results := evaluateAssertions(assertions, inc, prDiff, gtDiff)
+   611→        if len(results) != 4 {
+   612→                t.Fatalf("want 4 results, got %d", len(results))
+   613→        }
+   614→        for _, r := range results {
+   615→                if !r.Passed {
+   616→                        t.Errorf("assertion %s: want pass, got fail (%s)", r.Type, r.Detail)
+   617→                }
+   618→        }
+   619→
+   620→        // diff_similarity assertion records observed + threshold.
+   621→        var ds *AssertionResult
+   622→        for i := range results {
+   623→                if results[i].Type == "diff_similarity" {
+   624→                        ds = &results[i]
+   625→                        break
+   626→                }
+   627→        }
+   628→        if ds == nil {
+   629→                t.Fatal("no diff_similarity result")
+   630→        }
+   631→        if ds.Observed != 1.0 {
+   632→                t.Errorf("observed: want 1.0, got %f", ds.Observed)
+   633→        }
+   634→        if ds.Threshold != 0.80 {
+   635→                t.Errorf("threshold: want 0.80, got %f", ds.Threshold)
+   636→        }
+   637→}
+   638→
+   639→// TestScenarioScore verifies the weighted-sum scoring.
+   640→func TestScenarioScore(t *testing.T) {
+   641→        // 2 of 4 assertions pass with equal weight -> 0.5.
+   642→        results := []AssertionResult{
+   643→                {Type: "pr_opened", Weight: 0.25, Passed: true},
+   644→                {Type: "pr_ci_green", Weight: 0.25, Passed: false},
+   645→                {Type: "diff_similarity", Weight: 0.25, Passed: true},
+   646→                {Type: "sentinel_automerge_approved", Weight: 0.25, Passed: false},
+   647→        }
+   648→        if got := scenarioScore(results); got != 0.5 {
+   649→                t.Fatalf("score: want 0.5, got %f", got)
+   650→        }
+   651→
+   652→        // All pass -> 1.0.
+   653→        for i := range results {
+   654→                results[i].Passed = true
+   655→        }
+   656→        if got := scenarioScore(results); got != 1.0 {
+   657→                t.Fatalf("score (all pass): want 1.0, got %f", got)
+   658→        }
+   659→
+   660→        // Empty -> 0 (avoids divide-by-zero).
+   661→        if got := scenarioScore(nil); got != 0 {
+   662→                t.Fatalf("score (empty): want 0, got %f", got)
+   663→        }
+   664→}
+   665→
+   666→// TestFilterScenarios verifies the ID filter.
+   667→func TestFilterScenarios(t *testing.T) {
+   668→        mk := func(id string) *Scenario { return &Scenario{ID: id} }
+   669→        all := []*Scenario{mk("A"), mk("B"), mk("C")}
+   670→
+   671→        got := filterScenarios(all, nil)
+   672→        if len(got) != 3 {
+   673→                t.Fatalf("no filter: want 3, got %d", len(got))
+   674→        }
+   675→
+   676→        got = filterScenarios(all, []string{"A", "C"})
+   677→        if len(got) != 2 {
+   678→                t.Fatalf("filter A,C: want 2, got %d", len(got))
+   679→        }
+   680→        if got[0].ID != "A" || got[1].ID != "C" {
+   681→                t.Errorf("filter order: want A,C, got %s,%s", got[0].ID, got[1].ID)
+   682→        }
+   683→
+   684→        got = filterScenarios(all, []string{"X"})
+   685→        if len(got) != 0 {
+   686→                t.Fatalf("filter X: want 0, got %d", len(got))
+   687→        }
+   688→}
+   689→
+   690→// TestIncident_IsTerminal covers the terminal-status switch.
+   691→func TestIncident_IsTerminal(t *testing.T) {
+   692→        terminals := []string{"verified", "resolved", "failed", "rejected", "escalated"}
+   693→        for _, s := range terminals {
+   694→                if !(Incident{Status: s}.IsTerminal()) {
+   695→                        t.Errorf("%s: want terminal", s)
+   696→                }
+   697→        }
+   698→        nonTerminals := []string{"", "investigating", "detected", "root_caused", "fix_proposed", "approved", "executing"}
+   699→        for _, s := range nonTerminals {
+   700→                if (Incident{Status: s}).IsTerminal() {
+   701→                        t.Errorf("%s: want non-terminal", s)
+   702→                }
+   703→        }
+   704→}
+   705→
+   706→// TestIncident_HasPR / AutoMergeApproved / CIGreen cover the convenience
+   707→// predicates on Incident.
+   708→func TestIncident_Predicates(t *testing.T) {
+   709→        prNum := 0
+   710→        no := Incident{}
+   711→        if no.HasPR() {
+   712→                t.Error("no PR: want HasPR=false")
+   713→        }
+   714→        if no.AutoMergeApproved() {
+   715→                t.Error("empty automerge: want false")
+   716→        }
+   717→        if no.CIGreen() {
+   718→                t.Error("no sandbox: want false")
+   719→        }
+   720→
+   721→        prNum = 5
+   722→        yes := Incident{
+   723→                PRNumber:        &prNum,
+   724→                SandboxVerified: true,
+   725→                AutoMergeStatus: "approved",
+   726→        }
+   727→        if !yes.HasPR() {
+   728→                t.Error("PR=5: want HasPR=true")
+   729→        }
+   730→        if !yes.AutoMergeApproved() {
+   731→                t.Error("approved: want true")
+   732→        }
+   733→        if !yes.CIGreen() {
+   734→                t.Error("sandbox verified: want true")
+   735→        }
+   736→
+   737→        // PR number 0 / negative does not count as "has PR".
+   738→        zero := Incident{PRNumber: &prNum}
+   739→        *zero.PRNumber = 0
+   740→        if zero.HasPR() {
+   741→                t.Error("PR=0: want HasPR=false")
+   742→        }
+   743→}
+   744→

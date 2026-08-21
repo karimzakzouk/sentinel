@@ -1,0 +1,605 @@
+     1→     1→// Package config loads Sentinel's runtime configuration from environment
+     2→     2→// variables. The Config struct is immutable at startup; runtime-mutable
+     3→     3→// fields live in RuntimeSettings (hot-reloaded by the runtimecfg package).
+     4→     4→package config
+     5→     5→
+     6→     6→import (
+     7→     7→        "encoding/json"
+     8→     8→        "fmt"
+     9→     9→        "os"
+    10→    10→        "slices"
+    11→    11→        "strings"
+    12→    12→
+    13→    13→        "github.com/karimzakzouk/sentinel/internal/logging"
+    14→    14→        "github.com/karimzakzouk/sentinel/internal/schemas"
+    15→    15→)
+    16→    16→
+    17→    17→// Config holds all startup configuration. Fields are populated by Load from
+    18→    18→// environment variables; defaults are documented on each field's env var.
+    19→    19→type Config struct {
+    20→    20→        // ─── Storage ──────────────────────────────────────────────────────────
+    21→    21→        SQLitePath string
+    22→    22→
+    23→    23→        // ─── LLM (single provider; use LLMProviders for the failover pool) ────
+    24→    24→        LLMProvider      string
+    25→    25→        LLMBaseURL       string
+    26→    26→        LLMAPIKey        string
+    27→    27→        LLMFastModel     string
+    28→    28→        LLMFrontierModel string
+    29→    29→
+    30→    30→        // Embedding pipeline. Auto-detects: if EmbeddingAPIKey is set, uses the
+    31→    31→        // remote API; otherwise falls back to local TF-IDF hash embeddings.
+    32→    32→        LLMEmbeddingModel string
+    33→    33→        EmbeddingProvider string
+    34→    34→        EmbeddingAPIKey   string
+    35→    35→        EmbeddingBaseURL  string
+    36→    36→        LLMEmbeddingDim   int
+    37→    37→
+    38→    38→        // Semantic cache. When enabled and embeddings are configured, LLM
+    39→    39→        // responses are cached by prompt similarity (cosine >= threshold).
+    40→    40→        LLMSemanticCacheEnabled   bool
+    41→    41→        LLMSemanticCacheThreshold float64
+    42→    42→
+    43→    43→        // ─── L2 safe actions (restart, rollback, scale) ──────────────────────
+    44→    44→        SafeActionsEnabled          bool
+    45→    45→        SafeActionsNamespaces       []string
+    46→    46→        SafeActionsMaxPerHour       int
+    47→    47→        SafeActionsMaxScaleDeltaPct int
+    48→    48→
+    49→    49→        // ─── Fix verification ────────────────────────────────────────────────
+    50→    50→        FixVerifyEnabled bool
+    51→    51→
+    52→    52→        // ─── Kubernetes ──────────────────────────────────────────────────────
+    53→    53→        Namespace   string
+    54→    54→        ReleaseName string
+    55→    55→
+    56→    56→        // ─── GitHub ──────────────────────────────────────────────────────────
+    57→    57→        GitHubToken               string
+    58→    58→        GitHubWebhookSecret       string
+    59→    59→        AlertmanagerWebhookSecret string
+    60→    60→        AllowedGitHubRepos        []string
+    61→    61→
+    62→    62→        // GitHub App (optional). When configured, the App's installation token
+    63→    63→        // is used for all GitHub API calls; GitHubToken is the fallback.
+    64→    64→        GitHubAppID         string
+    65→    65→        GitHubAppPrivateKey string
+    66→    66→        GitHubAppInstallID  string
+    67→    67→
+    68→    68→        // ─── Container registry (Kaniko) ─────────────────────────────────────
+    69→    69→        DockerHubUsername string
+    70→    70→        DockerHubToken    string
+    71→    71→        KanikoRegistry    string
+    72→    72→
+    73→    73→        // ─── Git host (GitHub Enterprise / GitLab GitHub-compat API) ─────────
+    74→    74→        GitHost      string
+    75→    75→        GitHubAPIURL string
+    76→    76→
+    77→    77→        // DefaultBranch is the fallback when the sentinel.io/branch annotation
+    78→    78→        // is absent. Defaults to "main".
+    79→    79→        DefaultBranch string
+    80→    80→
+    81→    81→        // ─── Namespace policy ────────────────────────────────────────────────
+    82→    82→        HighRiskServices     []string
+    83→    83→        SkipNamespaces       []string
+    84→    84→        ProductionNamespaces []string
+    85→    85→        WriteNamespaces      []string
+    86→    86→
+    87→    87→        // ─── Kaniko images ───────────────────────────────────────────────────
+    88→    88→        KanikoInitImage     string
+    89→    89→        KanikoExecutorImage string
+    90→    90→
+    91→    91→        // ─── Concurrency ─────────────────────────────────────────────────────
+    92→    92→        MaxConcurrentInvestigations int
+    93→    93→
+    94→    94→        // ─── Confidence thresholds ───────────────────────────────────────────
+    95→    95→        ConfidenceAutonomous        float64
+    96→    96→        ConfidenceHumanReview       float64
+    97→    97→        ConfidenceLoopBackThreshold float64
+    98→    98→
+    99→    99→        // ─── Panic-button heuristics ─────────────────────────────────────────
+   100→   100→        PanicCPUThresholdPct      float64
+   101→   101→        PanicConnectionsThreshold int
+   102→   102→
+   103→   103→        // ─── Sandbox ─────────────────────────────────────────────────────────
+   104→   104→        SandboxNamespacePrefix string
+   105→   105→        EnableTrafficMirroring bool
+   106→   106→        SandboxProbePaths      []string
+   107→   107→        SkipSandboxNonProd     bool
+   108→   108→
+   109→   109→        // SandboxEnabled: run the sandbox at all.
+   110→   110→        // SandboxRequired: when sandbox fails, block the PR (true) or open with
+   111→   111→        //   needs-review (false, default).
+   112→   112→        // SandboxMaxRetries: LLM retries on sandbox failure.
+   113→   113→        SandboxEnabled    bool
+   114→   114→        SandboxRequired   bool
+   115→   115→        SandboxMaxRetries int
+   116→   116→
+   117→   117→        // ─── API ─────────────────────────────────────────────────────────────
+   118→   118→        APIToken string
+   119→   119→        APIHost  string
+   120→   120→        APIPort  int
+   121→   121→
+   122→   122→        // ─── Timeouts (seconds) ──────────────────────────────────────────────
+   123→   123→        InvestigationTimeout       int
+   124→   124→        InvestigatorTimeoutSec     int
+   125→   125→        EvidenceGathererTimeoutSec int
+   126→   126→        AnalystTimeoutSec          int
+   127→   127→        FixProposerTimeoutSec      int
+   128→   128→        MaxPipelineIterations      int
+   129→   129→        OutcomeWatchDurationMin    int
+   130→   130→        OutcomeCheckIntervalSec    int
+   131→   131→        DetectionCooldownSec       int
+   132→   132→
+   133→   133→        // ─── Agent loop (Phase 11) ───────────────────────────────────────────
+   134→   134→        // UseAgentLoop, when true, swaps the pipeline's hypothesis/root-cause
+   135→   135→        // phase from the legacy 2-round investigator to the N-turn agent loop
+   136→   136→        // (internal/agent). Default false — the agent loop is opt-in until it
+   137→   137→        // has been validated against real incidents. The runtime config
+   138→   138→        // equivalent (runtimecfg.UseAgentLoop) hot-toggles this without a
+   139→   139→        // restart via Pipeline.SetAgentLoopRunner.
+   140→   140→        UseAgentLoop       bool
+   141→   141→        DetectionTailLines int64
+   142→   142→
+   143→   143→        ScaleFixDefaultReplicas int32
+   144→   144→        LLMPriorWeight          float64
+   145→   145→
+   146→   146→        LLMMaxRetries       int
+   147→   147→        LLMRetryBaseDelayMs int
+   148→   148→
+   149→   149→        // ─── Multi-provider LLM pool ─────────────────────────────────────────
+   150→   150→        LLMProviders []schemas.ProviderConfig
+   151→   151→
+   152→   152→        // ─── Auto-merge (11-gate) ────────────────────────────────────────────
+   153→   153→        AutoMergeEnabled       bool
+   154→   154→        AutoMergeNamespaces    []string
+   155→   155→        AutoMergeMinConfidence float64
+   156→   156→        AutoMergeRequireCI     bool
+   157→   157→        AutoMergeCITimeoutSec  int
+   158→   158→        AutoMergeMaxPerHour    int
+   159→   159→        AutoMergeCooldownMin   int
+   160→   160→
+   161→   161→        AutoRemediationEnabled bool
+   162→   162→
+   163→   163→        // ─── Observability backends ──────────────────────────────────────────
+   164→   164→        PrometheusURL string
+   165→   165→        LokiURL       string
+   166→   166→        JaegerURL     string
+   167→   167→        TempoURL      string
+   168→   168→
+   169→   169→        // ─── Tier 1: post-merge regression watcher ───────────────────────────
+   170→   170→        PostMergeWatchEnabled bool
+   171→   171→
+   172→   172→        // ─── Tier 1: proactive SLO burn-rate watcher ─────────────────────────
+   173→   173→        SLOWatchEnabled bool
+   174→   174→
+   175→   175→        // ─── Tier 1: causal root-cause attribution ───────────────────────────
+   176→   176→        CausalRCAEnabled bool
+   177→   177→
+   178→   178→        // ─── Tier 1: validating admission webhook ────────────────────────────
+   179→   179→        AdmissionWebhookEnabled bool
+   180→   180→        AdmissionWebhookAddr    string
+   181→   181→        AdmissionWebhookCertDir string
+   182→   182→
+   183→   183→        // ─── Tier 2: Ed25519-signed audit trail ──────────────────────────────
+   184→   184→        AttestEnabled bool
+   185→   185→        AttestLogDir  string
+   186→   186→
+   187→   187→        // ─── Tier 2: cost-aware LLM router + semantic cache ──────────────────
+   188→   188→        LLMCostRouterEnabled bool
+   189→   189→
+   190→   190→        // ─── Tier 2: self-chaos against staging ──────────────────────────────
+   191→   191→        ChaosEnabled     bool
+   192→   192→        ChaosNamespaces  []string
+   193→   193→        ChaosIntervalMin int
+   194→   194→
+   195→   195→        // ─── Slack ───────────────────────────────────────────────────────────
+   196→   196→        SlackWebhook       string
+   197→   197→        SlackSigningSecret string
+   198→   198→        SlackBotUserID     string
+   199→   199→        SlackBotToken      string
+   200→   200→
+   201→   201→        // ─── Logging ─────────────────────────────────────────────────────────
+   202→   202→        LogLevel string
+   203→   203→}
+   204→   204→
+   205→   205→// RuntimeSettings is the runtime-mutable subset of Config. These can be
+   206→   206→// changed via the API / CLI without restarting Sentinel.
+   207→   207→type RuntimeSettings struct {
+   208→   208→        LLMProvider               string  `json:"llm_provider"`
+   209→   209→        LLMAPIKey                 string  `json:"llm_api_key"`
+   210→   210→        LLMFastModel              string  `json:"llm_fast_model"`
+   211→   211→        LLMFrontierModel          string  `json:"llm_frontier_model"`
+   212→   212→        GitHubToken               string  `json:"github_token"`
+   213→   213→        PrometheusURL             string  `json:"prometheus_url"`
+   214→   214→        LokiURL                   string  `json:"loki_url"`
+   215→   215→        JaegerURL                 string  `json:"jaeger_url"`
+   216→   216→        ProductionNamespaces      string  `json:"production_namespaces"`
+   217→   217→        WriteNamespaces           string  `json:"write_namespaces"`
+   218→   218→        ConfidenceAutonomous      float64 `json:"confidence_threshold_autonomous"`
+   219→   219→        ConfidenceHumanReview     float64 `json:"confidence_threshold_human_review"`
+   220→   220→        PanicCPUThresholdPct      float64 `json:"panic_cpu_threshold_pct"`
+   221→   221→        PanicConnectionsThreshold int     `json:"panic_connections_threshold"`
+   222→   222→}
+   223→   223→
+   224→   224→// Load reads configuration from environment variables.
+   225→   225→func Load() *Config {
+   226→   226→        return &Config{
+   227→   227→                SQLitePath:       getenv("SENTINEL_SQLITE_PATH", "/data/sentinel.db"),
+   228→   228→                LLMProvider:      getenv("SENTINEL_LLM_PROVIDER", "zai"),
+   229→   229→                LLMBaseURL:       getenv("SENTINEL_LLM_BASE_URL", ""),
+   230→   230→                LLMAPIKey:        getenv("SENTINEL_LLM_API_KEY", ""),
+   231→   231→                LLMFastModel:     getenv("SENTINEL_LLM_FAST_MODEL", "glm-4-flash"),
+   232→   232→                LLMFrontierModel: getenv("SENTINEL_LLM_FRONTIER_MODEL", "glm-4.5"),
+   233→   233→
+   234→   234→                LLMEmbeddingModel: getenv("SENTINEL_LLM_EMBEDDING_MODEL", ""),
+   235→   235→                EmbeddingProvider: getenv("SENTINEL_EMBEDDING_PROVIDER", ""),
+   236→   236→                EmbeddingAPIKey:   getenv("SENTINEL_EMBEDDING_API_KEY", ""),
+   237→   237→                EmbeddingBaseURL:  getenv("SENTINEL_EMBEDDING_BASE_URL", ""),
+   238→   238→
+   239→   239→                LLMSemanticCacheEnabled:   getenvBool("SENTINEL_LLM_SEMANTIC_CACHE", false),
+   240→   240→                LLMSemanticCacheThreshold: getenvFloat("SENTINEL_LLM_CACHE_THRESHOLD", 0.97),
+   241→   241→                LLMEmbeddingDim:           getenvInt("SENTINEL_LLM_EMBEDDING_DIM", 1536),
+   242→   242→
+   243→   243→                SafeActionsEnabled:          getenvBool("SENTINEL_SAFE_ACTIONS_ENABLED", false),
+   244→   244→                SafeActionsNamespaces:       getenvCsv("SENTINEL_SAFE_ACTIONS_NAMESPACES"),
+   245→   245→                SafeActionsMaxPerHour:       getenvInt("SENTINEL_SAFE_ACTIONS_MAX_PER_HOUR", 3),
+   246→   246→                SafeActionsMaxScaleDeltaPct: getenvInt("SENTINEL_SAFE_ACTIONS_MAX_SCALE_DELTA_PCT", 50),
+   247→   247→
+   248→   248→                FixVerifyEnabled: getenvBool("SENTINEL_FIX_VERIFY", true),
+   249→   249→
+   250→   250→                Namespace:   getenv("SENTINEL_NAMESPACE", "sentinel"),
+   251→   251→                ReleaseName: getenv("SENTINEL_RELEASE_NAME", "sentinel"),
+   252→   252→
+   253→   253→                GitHubToken:               getenv("SENTINEL_GITHUB_TOKEN", ""),
+   254→   254→                GitHubWebhookSecret:       getenv("SENTINEL_GITHUB_WEBHOOK_SECRET", ""),
+   255→   255→                AlertmanagerWebhookSecret: getenv("SENTINEL_ALERTMANAGER_WEBHOOK_SECRET", ""),
+   256→   256→                AllowedGitHubRepos:        splitCSV(getenv("SENTINEL_ALLOWED_GITHUB_REPOS", "")),
+   257→   257→                APIToken:                  getenv("SENTINEL_API_TOKEN", ""),
+   258→   258→
+   259→   259→                GitHubAppID:         getenv("SENTINEL_GITHUB_APP_ID", ""),
+   260→   260→                GitHubAppPrivateKey: getenv("SENTINEL_GITHUB_APP_PRIVATE_KEY", ""),
+   261→   261→                GitHubAppInstallID:  getenv("SENTINEL_GITHUB_APP_INSTALL_ID", ""),
+   262→   262→
+   263→   263→                DockerHubUsername: getenv("SENTINEL_DOCKER_HUB_USERNAME", ""),
+   264→   264→                DockerHubToken:    getenv("SENTINEL_DOCKER_HUB_TOKEN", ""),
+   265→   265→
+   266→   266→                KanikoRegistry: getenv("SENTINEL_KANIKO_REGISTRY", "docker.io"),
+   267→   267→
+   268→   268→                GitHost:      getenv("SENTINEL_GIT_HOST", "github.com"),
+   269→   269→                GitHubAPIURL: getenv("SENTINEL_GITHUB_API_URL", "https://api.github.com"),
+   270→   270→
+   271→   271→                DefaultBranch: getenv("SENTINEL_DEFAULT_BRANCH", "main"),
+   272→   272→
+   273→   273→                HighRiskServices: splitCSV(getenv("SENTINEL_HIGH_RISK_SERVICES", "")),
+   274→   274→
+   275→   275→                SkipNamespaces: splitCSV(getenv("SENTINEL_SKIP_NAMESPACES",
+   276→   276→                        "kube-system,kube-public,kube-node-lease,calico-system,calico-apiserver,cert-manager,ingress-nginx,monitoring,prometheus,grafana,loki,metallb-system,longhorn-system,cattle-system,fleet-system,gatekeeper-system,external-secrets,vault,argo-events,argo-rollouts,tekton-pipelines,istio-system,knative-serving,kubernetes-dashboard")),
+   277→   277→
+   278→   278→                KanikoInitImage:     getenv("SENTINEL_KANIKO_INIT_IMAGE", "alpine/git:2.43.0"),
+   279→   279→                KanikoExecutorImage: getenv("SENTINEL_KANIKO_EXECUTOR_IMAGE", "gcr.io/kaniko-project/executor:v1.24.0"),
+   280→   280→
+   281→   281→                MaxConcurrentInvestigations: getenvInt("SENTINEL_MAX_CONCURRENT_INVESTIGATIONS", 3),
+   282→   282→
+   283→   283→                ProductionNamespaces: splitCSV(getenv("SENTINEL_PRODUCTION_NAMESPACES", "prod,production")),
+   284→   284→                WriteNamespaces:      splitCSV(getenv("SENTINEL_WRITE_NAMESPACES", "")),
+   285→   285→
+   286→   286→                ConfidenceAutonomous:        getenvFloat("SENTINEL_CONFIDENCE_THRESHOLD_AUTONOMOUS", 0.92),
+   287→   287→                ConfidenceHumanReview:       getenvFloat("SENTINEL_CONFIDENCE_THRESHOLD_HUMAN_REVIEW", 0.70),
+   288→   288→                ConfidenceLoopBackThreshold: getenvFloat("SENTINEL_CONFIDENCE_LOOP_BACK", 0.3),
+   289→   289→
+   290→   290→                PanicCPUThresholdPct:      getenvFloat("SENTINEL_PANIC_CPU_THRESHOLD_PCT", 95.0),
+   291→   291→                PanicConnectionsThreshold: getenvInt("SENTINEL_PANIC_CONNECTIONS_THRESHOLD", 9000),
+   292→   292→
+   293→   293→                EnableTrafficMirroring: getenvBool("SENTINEL_ENABLE_TRAFFIC_MIRRORING", true),
+   294→   294→                SandboxNamespacePrefix: getenv("SENTINEL_SANDBOX_NAMESPACE_PREFIX", "sentinel-sandbox"),
+   295→   295→
+   296→   296→                APIHost: getenv("SENTINEL_API_HOST", "0.0.0.0"),
+   297→   297→                APIPort: getenvInt("PORT", 8000),
+   298→   298→
+   299→   299→                InvestigationTimeout:       getenvInt("SENTINEL_INVESTIGATION_TIMEOUT", 600),
+   300→   300→                InvestigatorTimeoutSec:     getenvInt("SENTINEL_INVESTIGATOR_TIMEOUT", 120),
+   301→   301→                EvidenceGathererTimeoutSec: getenvInt("SENTINEL_EVIDENCE_GATHERER_TIMEOUT", 90),
+   302→   302→                AnalystTimeoutSec:          getenvInt("SENTINEL_ANALYST_TIMEOUT", 15),
+   303→   303→                FixProposerTimeoutSec:      getenvInt("SENTINEL_FIX_PROPOSER_TIMEOUT", 300),
+   304→   304→                MaxPipelineIterations:      getenvInt("SENTINEL_MAX_PIPELINE_ITERATIONS", 5),
+   305→   305→
+   306→   306→                UseAgentLoop: getenvBool("SENTINEL_USE_AGENT_LOOP", false),
+   307→   307→
+   308→   308→                OutcomeWatchDurationMin: getenvInt("SENTINEL_OUTCOME_WATCH_DURATION_MIN", 10),
+   309→   309→                OutcomeCheckIntervalSec: getenvInt("SENTINEL_OUTCOME_CHECK_INTERVAL_SEC", 30),
+   310→   310→
+   311→   311→                DetectionCooldownSec: getenvInt("SENTINEL_DETECTION_COOLDOWN_SEC", 300),
+   312→   312→                DetectionTailLines:   int64(getenvInt("SENTINEL_DETECTION_TAIL_LINES", 100)),
+   313→   313→
+   314→   314→                ScaleFixDefaultReplicas: int32(getenvInt("SENTINEL_SCALE_FIX_REPLICAS", 2)),
+   315→   315→                LLMPriorWeight:          getenvFloat("SENTINEL_LLM_PRIOR_WEIGHT", 0.4),
+   316→   316→
+   317→   317→                SandboxProbePaths: splitCSV(getenv("SENTINEL_SANDBOX_PROBE_PATHS", "/,/healthz,/readyz")),
+   318→   318→
+   319→   319→                SkipSandboxNonProd: getenvBool("SENTINEL_SKIP_SANDBOX_NON_PROD", false),
+   320→   320→                SandboxEnabled:     getenvBool("SENTINEL_SANDBOX_ENABLED", true),
+   321→   321→                SandboxRequired:    getenvBool("SENTINEL_SANDBOX_REQUIRED", false),
+   322→   322→                SandboxMaxRetries:  getenvInt("SENTINEL_SANDBOX_MAX_RETRIES", 2),
+   323→   323→
+   324→   324→                LLMMaxRetries:       getenvInt("SENTINEL_LLM_MAX_RETRIES", 3),
+   325→   325→                LLMRetryBaseDelayMs: getenvInt("SENTINEL_LLM_RETRY_BASE_DELAY_MS", 500),
+   326→   326→
+   327→   327→                PrometheusURL: getenv("SENTINEL_PROMETHEUS_URL", ""),
+   328→   328→                LokiURL:       getenv("SENTINEL_LOKI_URL", ""),
+   329→   329→                JaegerURL:     getenv("SENTINEL_JAEGER_URL", ""),
+   330→   330→                TempoURL:      getenv("SENTINEL_TEMPO_URL", ""),
+   331→   331→
+   332→   332→                PostMergeWatchEnabled: getenvBool("SENTINEL_POSTMERGE_WATCH_ENABLED", false),
+   333→   333→                SLOWatchEnabled:       getenvBool("SENTINEL_SLO_WATCH_ENABLED", false),
+   334→   334→                CausalRCAEnabled:      getenvBool("SENTINEL_CAUSAL_RCA_ENABLED", false),
+   335→   335→
+   336→   336→                AdmissionWebhookEnabled: getenvBool("SENTINEL_ADMISSION_WEBHOOK_ENABLED", false),
+   337→   337→                AdmissionWebhookAddr:    getenv("SENTINEL_ADMISSION_WEBHOOK_ADDR", ":8443"),
+   338→   338→                AdmissionWebhookCertDir: getenv("SENTINEL_ADMISSION_WEBHOOK_CERT_DIR", "/data/admission-tls"),
+   339→   339→
+   340→   340→                AttestEnabled: getenvBool("SENTINEL_ATTEST_ENABLED", false),
+   341→   341→                AttestLogDir:  getenv("SENTINEL_ATTEST_LOG_DIR", "/data/attest"),
+   342→   342→
+   343→   343→                LLMCostRouterEnabled: getenvBool("SENTINEL_LLMCOST_ROUTER_ENABLED", false),
+   344→   344→
+   345→   345→                ChaosEnabled:     getenvBool("SENTINEL_CHAOS_ENABLED", false),
+   346→   346→                ChaosNamespaces:  getenvCsv("SENTINEL_CHAOS_NAMESPACES"),
+   347→   347→                ChaosIntervalMin: getenvInt("SENTINEL_CHAOS_INTERVAL_MIN", 60),
+   348→   348→
+   349→   349→                SlackWebhook:       getenv("SENTINEL_SLACK_WEBHOOK", ""),
+   350→   350→                SlackSigningSecret: getenv("SENTINEL_SLACK_SIGNING_SECRET", ""),
+   351→   351→                SlackBotUserID:     getenv("SENTINEL_SLACK_BOT_USER_ID", ""),
+   352→   352→                SlackBotToken:      getenv("SENTINEL_SLACK_BOT_TOKEN", ""),
+   353→   353→
+   354→   354→                LogLevel: getenv("SENTINEL_LOG_LEVEL", "INFO"),
+   355→   355→
+   356→   356→                LLMProviders: loadLLMProviders(),
+   357→   357→
+   358→   358→                AutoMergeEnabled:       getenvBool("SENTINEL_AUTO_MERGE_ENABLED", false),
+   359→   359→                AutoMergeNamespaces:    splitCSV(getenv("SENTINEL_AUTO_MERGE_NAMESPACES", "")),
+   360→   360→                AutoMergeMinConfidence: getenvFloat("SENTINEL_AUTO_MERGE_MIN_CONFIDENCE", 0.85),
+   361→   361→                AutoMergeRequireCI:     getenvBool("SENTINEL_AUTO_MERGE_REQUIRE_CI", true),
+   362→   362→                AutoMergeCITimeoutSec:  getenvInt("SENTINEL_AUTO_MERGE_CI_TIMEOUT_SEC", 900),
+   363→   363→                AutoMergeMaxPerHour:    getenvInt("SENTINEL_AUTO_MERGE_MAX_PER_HOUR", 3),
+   364→   364→                AutoMergeCooldownMin:   getenvInt("SENTINEL_AUTO_MERGE_COOLDOWN_MIN", 60),
+   365→   365→
+   366→   366→                AutoRemediationEnabled: getenvBool("SENTINEL_AUTO_REMEDIATION_ENABLED", false),
+   367→   367→        }
+   368→   368→}
+   369→   369→
+   370→   370→// ResolvedBaseURL returns the LLM base URL, deriving from the provider name
+   371→   371→// when LLMBaseURL is unset.
+   372→   372→func (c *Config) ResolvedBaseURL() string {
+   373→   373→        if c.LLMBaseURL != "" {
+   374→   374→                return c.LLMBaseURL
+   375→   375→        }
+   376→   376→        switch strings.ToLower(c.LLMProvider) {
+   377→   377→        case "openai":
+   378→   378→                return "https://api.openai.com/v1"
+   379→   379→        case "zai":
+   380→   380→                return "https://api.z.ai/api/paas/v4"
+   381→   381→        case "gemini":
+   382→   382→                return "https://generativelanguage.googleapis.com/v1beta/openai"
+   383→   383→        case "ollama":
+   384→   384→                return "http://ollama:11434/v1"
+   385→   385→        case "vllm":
+   386→   386→                return "http://vllm:8000/v1"
+   387→   387→        case "litellm":
+   388→   388→                return "http://litellm:4000/v1"
+   389→   389→        default:
+   390→   390→                return "https://api.z.ai/api/paas/v4"
+   391→   391→        }
+   392→   392→}
+   393→   393→
+   394→   394→// CanWriteTo reports whether Sentinel is allowed to apply fixes in this namespace.
+   395→   395→func (c *Config) CanWriteTo(namespace string) bool {
+   396→   396→        if len(c.WriteNamespaces) == 0 {
+   397→   397→                return false
+   398→   398→        }
+   399→   399→        return slices.Contains(c.WriteNamespaces, namespace)
+   400→   400→}
+   401→   401→
+   402→   402→// IsProductionNamespace reports whether the namespace is in the production list.
+   403→   403→func (c *Config) IsProductionNamespace(namespace string) bool {
+   404→   404→        return slices.Contains(c.ProductionNamespaces, namespace)
+   405→   405→}
+   406→   406→
+   407→   407→// IsRepoAllowed reports whether repo is in the AllowedGitHubRepos allowlist.
+   408→   408→// An empty allowlist allows all repos (NOT recommended for production).
+   409→   409→// Matching is case-insensitive and ignores a trailing ".git".
+   410→   410→func (c *Config) IsRepoAllowed(repo string) bool {
+   411→   411→        if len(c.AllowedGitHubRepos) == 0 {
+   412→   412→                return true
+   413→   413→        }
+   414→   414→        target := normalizeRepoForCompare(repo)
+   415→   415→        for _, allowed := range c.AllowedGitHubRepos {
+   416→   416→                if normalizeRepoForCompare(allowed) == target {
+   417→   417→                        return true
+   418→   418→                }
+   419→   419→        }
+   420→   420→        return false
+   421→   421→}
+   422→   422→
+   423→   423→// Validate returns a list of blocking errors and a list of non-blocking
+   424→   424→// warnings. A non-empty errors slice means Sentinel cannot start.
+   425→   425→func (c *Config) Validate() (errors []string, warnings []string) {
+   426→   426→        if c.LLMAPIKey == "" {
+   427→   427→                errors = append(errors, "SENTINEL_LLM_API_KEY is empty — Sentinel cannot run without an LLM API key")
+   428→   428→        }
+   429→   429→        if c.LLMProvider == "" {
+   430→   430→                errors = append(errors, "SENTINEL_LLM_PROVIDER is empty")
+   431→   431→        } else if !isKnownProvider(c.LLMProvider) {
+   432→   432→                warnings = append(warnings, fmt.Sprintf(
+   433→   433→                        "SENTINEL_LLM_PROVIDER=%q is not in the known-providers list — "+
+   434→   434→                                "if this is a typo, LLM calls will be sent to the wrong endpoint with your API key attached",
+   435→   435→                        c.LLMProvider))
+   436→   436→        }
+   437→   437→        if c.LLMFastModel == "" {
+   438→   438→                errors = append(errors, "SENTINEL_LLM_FAST_MODEL is empty")
+   439→   439→        }
+   440→   440→        if c.LLMFrontierModel == "" {
+   441→   441→                errors = append(errors, "SENTINEL_LLM_FRONTIER_MODEL is empty")
+   442→   442→        }
+   443→   443→
+   444→   444→        if c.GitHubToken == "" {
+   445→   445→                errors = append(errors, "SENTINEL_GITHUB_TOKEN is empty — Sentinel needs a GitHub PAT to clone repos and open PRs")
+   446→   446→        }
+   447→   447→
+   448→   448→        if len(c.WriteNamespaces) == 0 {
+   449→   449→                warnings = append(warnings, "SENTINEL_WRITE_NAMESPACES is empty — Sentinel cannot write fixes to any namespace")
+   450→   450→        }
+   451→   451→
+   452→   452→        if c.APIToken == "" {
+   453→   453→                warnings = append(warnings, "SENTINEL_API_TOKEN is empty — admin API is unauthenticated. Set this in production.")
+   454→   454→        }
+   455→   455→
+   456→   456→        if len(c.AllowedGitHubRepos) == 0 && c.GitHubToken != "" {
+   457→   457→                warnings = append(warnings, "SENTINEL_ALLOWED_GITHUB_REPOS is empty — Sentinel will clone ANY repo annotated on a pod using the configured GitHub PAT. Set an explicit allowlist.")
+   458→   458→        }
+   459→   459→
+   460→   460→        if c.SlackBotToken != "" && c.SlackSigningSecret == "" {
+   461→   461→                warnings = append(warnings, "SENTINEL_SLACK_SIGNING_SECRET is empty but SLACK_BOT_TOKEN is set — Slack requests will be rejected")
+   462→   462→        }
+   463→   463→
+   464→   464→        if c.SandboxMaxRetries < 0 {
+   465→   465→                warnings = append(warnings, fmt.Sprintf("SENTINEL_SANDBOX_MAX_RETRIES=%d (negative) — clamping to 0", c.SandboxMaxRetries))
+   466→   466→                c.SandboxMaxRetries = 0
+   467→   467→        }
+   468→   468→        if c.SandboxMaxRetries > 10 {
+   469→   469→                warnings = append(warnings, fmt.Sprintf("SENTINEL_SANDBOX_MAX_RETRIES=%d (very high) — each retry takes ~5-10min", c.SandboxMaxRetries))
+   470→   470→        }
+   471→   471→        if c.InvestigatorTimeoutSec <= 0 {
+   472→   472→                warnings = append(warnings, fmt.Sprintf("SENTINEL_INVESTIGATOR_TIMEOUT=%d (non-positive)", c.InvestigatorTimeoutSec))
+   473→   473→        }
+   474→   474→        if c.ConfidenceAutonomous < 0 || c.ConfidenceAutonomous > 1 {
+   475→   475→                warnings = append(warnings, fmt.Sprintf("SENTINEL_CONFIDENCE_THRESHOLD_AUTONOMOUS=%.2f out of [0,1] — clamping", c.ConfidenceAutonomous))
+   476→   476→                c.ConfidenceAutonomous = clamp01(c.ConfidenceAutonomous)
+   477→   477→        }
+   478→   478→
+   479→   479→        return errors, warnings
+   480→   480→}
+   481→   481→
+   482→   482→func clamp01(f float64) float64 {
+   483→   483→        if f < 0 {
+   484→   484→                return 0
+   485→   485→        }
+   486→   486→        if f > 1 {
+   487→   487→                return 1
+   488→   488→        }
+   489→   489→        return f
+   490→   490→}
+   491→   491→
+   492→   492→// isKnownProvider is a non-exhaustive list of providers recognized by the
+   493→   493→// goai mapping. Unknown providers are allowed (with a warning) so operators
+   494→   494→// can use custom base URLs.
+   495→   495→func isKnownProvider(p string) bool {
+   496→   496→        switch p {
+   497→   497→        case "openai", "anthropic", "zai", "openrouter", "gemini", "bedrock",
+   498→   498→                "azure", "vertex", "mistral", "ollama", "deepseek", "groq",
+   499→   499→                "together", "fireworks", "cohere", "perplexity", "anyscale",
+   500→   500→                "lepton", "replicate", "novita", "siliconflow":
+   501→   501→                return true
+   502→   502→        }
+   503→   503→        return false
+   504→   504→}
+   505→   505→
+   506→   506→func normalizeRepoForCompare(repo string) string {
+   507→   507→        r := strings.ToLower(strings.TrimSpace(repo))
+   508→   508→        r = strings.TrimSuffix(r, ".git")
+   509→   509→        return r
+   510→   510→}
+   511→   511→
+   512→   512→// ─── env var helpers ────────────────────────────────────────────────────
+   513→   513→
+   514→   514→func getenv(key, def string) string {
+   515→   515→        if v := os.Getenv(key); v != "" {
+   516→   516→                return v
+   517→   517→        }
+   518→   518→        return def
+   519→   519→}
+   520→   520→
+   521→   521→func getenvInt(key string, def int) int {
+   522→   522→        v := os.Getenv(key)
+   523→   523→        if v == "" {
+   524→   524→                return def
+   525→   525→        }
+   526→   526→        var n int
+   527→   527→        if _, err := fmt.Sscanf(v, "%d", &n); err != nil {
+   528→   528→                return def
+   529→   529→        }
+   530→   530→        return n
+   531→   531→}
+   532→   532→
+   533→   533→func getenvFloat(key string, def float64) float64 {
+   534→   534→        v := os.Getenv(key)
+   535→   535→        if v == "" {
+   536→   536→                return def
+   537→   537→        }
+   538→   538→        var f float64
+   539→   539→        if _, err := fmt.Sscanf(v, "%f", &f); err != nil {
+   540→   540→                return def
+   541→   541→        }
+   542→   542→        return f
+   543→   543→}
+   544→   544→
+   545→   545→func getenvBool(key string, def bool) bool {
+   546→   546→        v := os.Getenv(key)
+   547→   547→        if v == "" {
+   548→   548→                return def
+   549→   549→        }
+   550→   550→        switch strings.ToLower(v) {
+   551→   551→        case "1", "true", "yes", "on":
+   552→   552→                return true
+   553→   553→        case "0", "false", "no", "off":
+   554→   554→                return false
+   555→   555→        }
+   556→   556→        return def
+   557→   557→}
+   558→   558→
+   559→   559→func getenvCsv(key string) []string {
+   560→   560→        return splitCSV(os.Getenv(key))
+   561→   561→}
+   562→   562→
+   563→   563→func splitCSV(s string) []string {
+   564→   564→        if s == "" {
+   565→   565→                return nil
+   566→   566→        }
+   567→   567→        parts := strings.Split(s, ",")
+   568→   568→        out := make([]string, 0, len(parts))
+   569→   569→        for _, p := range parts {
+   570→   570→                p = strings.TrimSpace(p)
+   571→   571→                if p != "" {
+   572→   572→                        out = append(out, p)
+   573→   573→                }
+   574→   574→        }
+   575→   575→        return out
+   576→   576→}
+   577→   577→
+   578→   578→// loadLLMProviders parses SENTINEL_LLM_PROVIDERS as a JSON array of
+   579→   579→// ProviderConfig. Entries missing ProviderType or APIKey (for non-local
+   580→   580→// providers) are dropped. Returns nil on parse failure (logs a warning).
+   581→   581→func loadLLMProviders() []schemas.ProviderConfig {
+   582→   582→        raw := os.Getenv("SENTINEL_LLM_PROVIDERS")
+   583→   583→        if raw == "" {
+   584→   584→                return nil
+   585→   585→        }
+   586→   586→        var configs []schemas.ProviderConfig
+   587→   587→        if err := json.Unmarshal([]byte(raw), &configs); err != nil {
+   588→   588→                logging.Error("SENTINEL_LLM_PROVIDERS failed to parse as JSON — ignoring", "err", err)
+   589→   589→                return nil
+   590→   590→        }
+   591→   591→        valid := make([]schemas.ProviderConfig, 0, len(configs))
+   592→   592→        for _, c := range configs {
+   593→   593→                if c.ProviderType == "" {
+   594→   594→                        logging.Info("LLM provider entry missing 'provider' field — skipping", "id", c.ID)
+   595→   595→                        continue
+   596→   596→                }
+   597→   597→                if c.APIKey == "" && c.ProviderType != "ollama" && c.ProviderType != "vllm" {
+   598→   598→                        logging.Info("LLM provider has no apiKey — skipping", "id", c.ID, "provider", c.ProviderType)
+   599→   599→                        continue
+   600→   600→                }
+   601→   601→                valid = append(valid, c)
+   602→   602→        }
+   603→   603→        return valid
+   604→   604→}
+   605→   605→

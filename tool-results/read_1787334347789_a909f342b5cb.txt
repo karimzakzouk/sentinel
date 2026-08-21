@@ -1,0 +1,830 @@
+     1→// Package main — investigation orchestrator.
+     2→//
+     3→// investigation.go contains the entry point invoked when any trigger
+     4→// (CRD watcher, autonomous detector, SLO watcher, Slack, manual API call,
+     5→// chaos runner) decides an incident needs the full agent pipeline. The
+     6→// orchestrator runs the pipeline, applies the safety policy, executes the
+     7→// approved fix (with Kaniko + sandbox + PR), records the outcome, and
+     8→// starts the post-fix watcher.
+     9→package main
+    10→
+    11→import (
+    12→        "context"
+    13→        "fmt"
+    14→        "strings"
+    15→        "sync"
+    16→        "time"
+    17→
+    18→        "github.com/karimzakzouk/sentinel/internal/agents"
+    19→        "github.com/karimzakzouk/sentinel/internal/automerge"
+    20→        "github.com/karimzakzouk/sentinel/internal/chatops"
+    21→        "github.com/karimzakzouk/sentinel/internal/executors"
+    22→        "github.com/karimzakzouk/sentinel/internal/feedback"
+    23→        "github.com/karimzakzouk/sentinel/internal/logging"
+    24→        "github.com/karimzakzouk/sentinel/internal/metrics"
+    25→        "github.com/karimzakzouk/sentinel/internal/safety"
+    26→        "github.com/karimzakzouk/sentinel/internal/schemas"
+    27→)
+    28→
+    29→// handleInvestigation runs the full agent pipeline + execution + feedback
+    30→// loop for one anomaly cluster. It is invoked in its own goroutine by
+    31→// every trigger (CRD watcher, detector, SLO, chaos, Slack, manual API).
+    32→// crName + crNamespace identify the SentinelIncident CR (empty/"auto-
+    33→// detected"/"manual"/"slack"/"alertmanager" for non-CR triggers — see
+    34→// isRealCR).
+    35→//
+    36→// The orchestrator never panics: a deferred recover logs the panic and
+    37→// returns, so a buggy agent cannot kill the Sentinel process.
+    38→func (w *wiring) handleInvestigation(ctx context.Context, cluster schemas.AnomalyCluster, crName, crNamespace string) {
+    39→        w.invWG.Add(1)
+    40→        defer w.invWG.Done()
+    41→
+    42→        select {
+    43→        case w.invSem <- struct{}{}:
+    44→                defer func() { <-w.invSem }()
+    45→        case <-ctx.Done():
+    46→                return
+    47→        }
+    48→
+    49→        invStart := time.Now()
+    50→        finalStatus := "failed"
+    51→        metrics.RecordInvestigationStart()
+    52→        defer func() {
+    53→                metrics.RecordInvestigationComplete(finalStatus, time.Since(invStart))
+    54→        }()
+    55→
+    56→        defer func() {
+    57→                if r := recover(); r != nil {
+    58→                        logging.Error("investigation panic recovered",
+    59→                                "panic", r,
+    60→                                "cr_name", crName,
+    61→                                "cr_namespace", crNamespace,
+    62→                                "service", cluster.Service,
+    63→                        )
+    64→                }
+    65→        }()
+    66→
+    67→        logging.Info("investigation started",
+    68→                "cr_name", crName,
+    69→                "cr_namespace", crNamespace,
+    70→                "service", cluster.Service,
+    71→                "namespace", cluster.Namespace,
+    72→        )
+    73→
+    74→        incident := schemas.NewIncident(cluster)
+    75→        incident.Status = schemas.StatusInvestigating
+    76→        if err := w.store.UpsertIncident(ctx, &incident); err != nil {
+    77→                logging.Error("save incident failed", "error", err, "service", cluster.Service)
+    78→                return
+    79→        }
+    80→        w.broadcaster.BroadcastEvent("incident", map[string]any{
+    81→                "type":        "started",
+    82→                "incident_id": incident.IncidentID.String(),
+    83→                "service":     cluster.Service,
+    84→                "namespace":   cluster.Namespace,
+    85→        })
+    86→        w.broadcaster.BroadcastEvent("pipeline", map[string]any{
+    87→                "incident_id": incident.IncidentID.String(),
+    88→                "phase":       "detection",
+    89→                "status":      "complete",
+    90→                "message":     fmt.Sprintf("Error detected in %s/%s: %s", cluster.Service, cluster.Namespace, cluster.Summary),
+    91→                "timestamp":   time.Now().UTC().Format(time.RFC3339),
+    92→        })
+    93→
+    94→        invCtx := logging.WithIncidentID(ctx, incident.IncidentID.String())
+    95→        _ = w.store.AppendEvent(ctx, incident.IncidentID, "reasoning", "investigation_started", nil,
+    96→                map[string]any{"cluster_summary": cluster.Summary})
+    97→
+    98→        w.broadcaster.BroadcastEvent("pipeline", map[string]any{
+    99→                "incident_id": incident.IncidentID.String(),
+   100→                "phase":       "investigation",
+   101→                "status":      "running",
+   102→                "message":     "Investigation started — fetching pod logs + cloning repo",
+   103→                "timestamp":   time.Now().UTC().Format(time.RFC3339),
+   104→        })
+   105→
+   106→        // Run the pipeline WITHOUT post-fix artifacts — those run in parallel
+   107→        // with the Kaniko build in executeCodeFix for a 30-90s speedup.
+   108→        w.pipeline.SetSkipPostFix(true)
+   109→
+   110→        invTimeout := w.Config().InvestigationTimeout
+   111→        investigationCtx, cancel := context.WithTimeout(ctx, time.Duration(invTimeout)*time.Second)
+   112→        defer cancel()
+   113→
+   114→        if err := w.pipeline.Run(investigationCtx, &incident.State); err != nil {
+   115→                logging.ErrorCtx(invCtx, "pipeline error", "error", err)
+   116→                incident.Status = schemas.StatusFailed
+   117→                s := err.Error()
+   118→                incident.State.Error = &s
+   119→                if err := w.store.UpsertIncident(ctx, &incident); err != nil {
+   120→                        logging.ErrorCtx(invCtx, "save incident (pipeline-error) failed", "error", err)
+   121→                }
+   122→                if isRealCR(crName) {
+   123→                        if err := w.k8sClient.PatchCRStatus(ctx, crName, crNamespace, "failed"); err != nil {
+   124→                                logging.ErrorCtx(invCtx, "patch CR status (failed) failed", "error", err)
+   125→                        }
+   126→                }
+   127→                return
+   128→        }
+   129→        incident.Status = incident.State.Status
+   130→        if err := w.store.UpsertIncident(ctx, &incident); err != nil {
+   131→                logging.ErrorCtx(invCtx, "save incident (post-pipeline) failed", "error", err)
+   132→        }
+   133→
+   134→        invMsg := "Investigation complete"
+   135→        if incident.State.RootCause != nil {
+   136→                invMsg = fmt.Sprintf("Root cause: %s (confidence: %.0f%%)", incident.State.RootCause.Statement, incident.State.RootCause.Confidence*100)
+   137→        }
+   138→        w.broadcaster.BroadcastEvent("pipeline", map[string]any{
+   139→                "incident_id": incident.IncidentID.String(),
+   140→                "phase":       "investigation",
+   141→                "status":      "complete",
+   142→                "message":     invMsg,
+   143→                "timestamp":   time.Now().UTC().Format(time.RFC3339),
+   144→        })
+   145→        _ = w.store.AppendEvent(ctx, incident.IncidentID, "reasoning", "investigation_completed", nil,
+   146→                map[string]any{"status": string(incident.Status)})
+   147→
+   148→        if incident.State.FixProposal == nil {
+   149→                logging.InfoCtx(invCtx, "no fix proposed", "status", incident.Status)
+   150→                rootCause := ""
+   151→                if incident.State.RootCause != nil {
+   152→                        rootCause = incident.State.RootCause.Statement
+   153→                }
+   154→                if isRealCR(crName) {
+   155→                        if err := w.k8sClient.PatchCRStatusFull(ctx, crName, crNamespace, string(incident.Status),
+   156→                                incident.IncidentID.String(), rootCause, 0, ""); err != nil {
+   157→                                logging.ErrorCtx(invCtx, "patch CR status (no-fix) failed", "error", err)
+   158→                        }
+   159→                }
+   160→                return
+   161→        }
+   162→
+   163→        // === SAFETY PHASE ===
+   164→        fp := incident.State.FixProposal
+   165→        w.broadcaster.BroadcastEvent("pipeline", map[string]any{
+   166→                "incident_id": incident.IncidentID.String(),
+   167→                "phase":       "safety",
+   168→                "status":      "running",
+   169→                "message":     fmt.Sprintf("Evaluating safety policy for %s fix...", fp.FixType),
+   170→                "timestamp":   time.Now().UTC().Format(time.RFC3339),
+   171→        })
+   172→
+   173→        decision := w.policy.Evaluate(safety.Input{
+   174→                FixType:            fp.FixType,
+   175→                TargetService:      fp.TargetService,
+   176→                TargetNamespace:    fp.TargetNamespace,
+   177→                Confidence:         fp.ProposedConfidence,
+   178→                HasSchemaMigration: incident.State.RootCause.HasSchemaMigration,
+   179→        })
+   180→
+   181→        switch decision.Verdict {
+   182→        case schemas.VerdictAllow:
+   183→                incident.Status = schemas.StatusApproved
+   184→        case schemas.VerdictRequireHumanApproval:
+   185→                incident.Status = schemas.StatusGovernanceReview
+   186→        default:
+   187→                incident.Status = schemas.StatusEscalated
+   188→        }
+   189→        if err := w.store.UpsertIncident(ctx, &incident); err != nil {
+   190→                logging.ErrorCtx(invCtx, "save incident (post-safety) failed", "error", err)
+   191→        }
+   192→        _ = w.store.AppendEvent(ctx, incident.IncidentID, "safety", "governance_decision", nil,
+   193→                map[string]any{"verdict": string(decision.Verdict)})
+   194→
+   195→        if decision.Verdict != schemas.VerdictAllow {
+   196→                if decision.Verdict == schemas.VerdictRequireHumanApproval {
+   197→                        logging.WarnCtx(invCtx, "fix requires human approval",
+   198→                                "verdict", decision.Verdict,
+   199→                                "reason", decision.HumanReviewReason,
+   200→                                "hint", "use 'sentinelctl approve <incident-id>' to override")
+   201→                } else {
+   202→                        logging.WarnCtx(invCtx, "denied by safety", "verdict", decision.Verdict)
+   203→                }
+   204→                if isRealCR(crName) {
+   205→                        if err := w.k8sClient.PatchCRStatus(ctx, crName, crNamespace, string(incident.Status)); err != nil {
+   206→                                logging.ErrorCtx(invCtx, "patch CR status (denied) failed", "error", err)
+   207→                        }
+   208→                }
+   209→                return
+   210→        }
+   211→
+   212→        // === EXECUTION PHASE ===
+   213→        w.broadcaster.BroadcastEvent("pipeline", map[string]any{
+   214→                "incident_id": incident.IncidentID.String(),
+   215→                "phase":       "execution",
+   216→                "status":      "running",
+   217→                "message":     "Approved — preparing fix branch + opening PR",
+   218→                "timestamp":   time.Now().UTC().Format(time.RFC3339),
+   219→        })
+   220→
+   221→        if !w.Config().CanWriteTo(fp.TargetNamespace) {
+   222→                logging.WarnCtx(invCtx, "execution denied — namespace not in allowlist", "namespace", fp.TargetNamespace)
+   223→                incident.Status = schemas.StatusEscalated
+   224→                if err := w.store.UpsertIncident(ctx, &incident); err != nil {
+   225→                        logging.ErrorCtx(invCtx, "save incident (rbac-deny) failed", "error", err)
+   226→                }
+   227→                if isRealCR(crName) {
+   228→                        if err := w.k8sClient.PatchCRStatus(ctx, crName, crNamespace, "escalated"); err != nil {
+   229→                                logging.ErrorCtx(invCtx, "patch CR status (escalated) failed", "error", err)
+   230→                        }
+   231→                }
+   232→                return
+   233→        }
+   234→
+   235→        incident.Status = schemas.StatusExecuting
+   236→        if err := w.store.UpsertIncident(ctx, &incident); err != nil {
+   237→                logging.ErrorCtx(invCtx, "save incident (executing) failed", "error", err)
+   238→        }
+   239→
+   240→        if err := w.executeFix(ctx, &incident); err != nil {
+   241→                logging.ErrorCtx(invCtx, "execution error", "error", err)
+   242→                incident.Status = schemas.StatusFailed
+   243→                s := err.Error()
+   244→                incident.State.Error = &s
+   245→        }
+   246→        if err := w.store.UpsertIncident(ctx, &incident); err != nil {
+   247→                logging.ErrorCtx(invCtx, "save incident (post-execution) failed", "error", err)
+   248→        }
+   249→
+   250→        // === FEEDBACK PHASE ===
+   251→        success := incident.Status == schemas.StatusVerified
+   252→        alpha, beta := recordBetaOutcome(ctx, w.store, incident, success)
+   253→        incident.BetaAlpha = alpha
+   254→        incident.BetaBeta = beta
+   255→
+   256→        if incident.State.RootCause != nil && incident.State.FixProposal != nil {
+   257→                vectorText := incident.Cluster.Summary + " " + incident.State.RootCause.Statement + " " + incident.State.FixProposal.Description
+   258→                embedding, embErr := w.vectorStore.GenerateEmbedding(ctx, vectorText)
+   259→                if embErr != nil {
+   260→                        logging.ErrorCtx(invCtx, "embedding computation failed", "error", embErr)
+   261→                } else {
+   262→                        if err := w.store.StoreIncidentVector(ctx, &incident, success, embedding); err != nil {
+   263→                                logging.ErrorCtx(invCtx, "store incident vector failed", "error", err)
+   264→                        }
+   265→                        if err := w.vectorStore.Add(ctx, vectorText, &feedback.VectorMetadata{
+   266→                                IncidentID: incident.IncidentID.String(),
+   267→                                Service:    incident.Cluster.Service,
+   268→                                RootCause:  incident.State.RootCause.Statement,
+   269→                                FixType:    string(incident.State.FixProposal.FixType),
+   270→                                FixPattern: incident.State.FixProposal.Description,
+   271→                                Outcome:    map[bool]string{true: "success", false: "failure"}[success],
+   272→                        }); err != nil {
+   273→                                logging.ErrorCtx(invCtx, "vector store add failed", "error", err)
+   274→                        }
+   275→                }
+   276→        }
+   277→
+   278→        incident.Status = schemas.StatusResolved
+   279→        if err := w.store.UpsertIncident(ctx, &incident); err != nil {
+   280→                logging.ErrorCtx(invCtx, "save incident (resolved) failed", "error", err)
+   281→        }
+   282→
+   283→        prURL := ""
+   284→        if incident.State.ExecutionResult != nil && incident.State.ExecutionResult.PRURL != nil {
+   285→                prURL = *incident.State.ExecutionResult.PRURL
+   286→        }
+   287→        w.broadcaster.BroadcastEvent("pipeline", map[string]any{
+   288→                "incident_id": incident.IncidentID.String(),
+   289→                "phase":       "resolved",
+   290→                "status":      "complete",
+   291→                "message":     fmt.Sprintf("Incident resolved — PR opened: %s", prURL),
+   292→                "pr_url":      prURL,
+   293→                "success":     success,
+   294→                "timestamp":   time.Now().UTC().Format(time.RFC3339),
+   295→        })
+   296→
+   297→        w.tracker.MarkResolved(incident.Cluster.Service, incident.Cluster.Namespace, success)
+   298→        w.alertSender.SendAlert(incident.Cluster.Service, incident.Cluster.Namespace, incident.Cluster.Summary, prURL)
+   299→
+   300→        if success && prURL != "" {
+   301→                fingerprint := feedback.ExtractErrorFingerprint(extractPodLogsFromIncident(&incident))
+   302→                fixType := "code_fix"
+   303→                if incident.State.FixProposal != nil {
+   304→                        fixType = string(incident.State.FixProposal.FixType)
+   305→                }
+   306→                w.outcomeWatcher.WatchWithDetails(
+   307→                        ctx,
+   308→                        incident.Cluster.Service,
+   309→                        incident.Cluster.Namespace,
+   310→                        incident.IncidentID.String(),
+   311→                        true,
+   312→                        fixType,
+   313→                        fingerprint,
+   314→                )
+   315→        }
+   316→
+   317→        logging.InfoCtx(invCtx, "investigation resolved",
+   318→                "status", incident.Status,
+   319→                "success", success,
+   320→                "alpha", alpha,
+   321→                "beta", beta,
+   322→                "pr_url", prURL,
+   323→        )
+   324→        w.broadcaster.BroadcastEvent("incident", map[string]any{
+   325→                "type":        "resolved",
+   326→                "incident_id": incident.IncidentID.String(),
+   327→                "service":     cluster.Service,
+   328→                "status":      string(incident.Status),
+   329→                "pr_url":      prURL,
+   330→                "success":     success,
+   331→        })
+   332→        finalStatus = string(incident.Status)
+   333→
+   334→        rootCause := ""
+   335→        confidence := 0.0
+   336→        if incident.State.RootCause != nil {
+   337→                rootCause = incident.State.RootCause.Statement
+   338→                confidence = incident.State.RootCause.Confidence
+   339→        }
+   340→        if isRealCR(crName) {
+   341→                if err := w.k8sClient.PatchCRStatusFull(ctx, crName, crNamespace, string(incident.Status),
+   342→                        incident.IncidentID.String(), rootCause, confidence, prURL); err != nil {
+   343→                        logging.ErrorCtx(invCtx, "patch CR status (resolved) failed", "error", err)
+   344→                }
+   345→        }
+   346→}
+   347→
+   348→// executeFix dispatches the approved fix to the appropriate executor. For
+   349→// CODE_FIX / ROLL_FORWARD this is the 4-phase flow (branch → Kaniko →
+   350→// sandbox → PR) implemented in executeCodeFix; for the K8s action fix
+   351→// types it delegates directly to the K8s executor.
+   352→func (w *wiring) executeFix(ctx context.Context, incident *schemas.Incident) error {
+   353→        fp := incident.State.FixProposal
+   354→
+   355→        switch fp.FixType {
+   356→        case schemas.FixCodeFix, schemas.FixRollForward:
+   357→                return w.executeCodeFix(ctx, incident)
+   358→        case schemas.FixRestart:
+   359→                return w.k8sExec.Restart(ctx, fp)
+   360→        case schemas.FixScale:
+   361→                return w.k8sExec.Scale(ctx, fp, w.Config().ScaleFixDefaultReplicas)
+   362→        case schemas.FixRollback:
+   363→                return w.k8sExec.Rollback(ctx, fp)
+   364→        default:
+   365→                return fmt.Errorf("unknown fix type: %s", fp.FixType)
+   366→        }
+   367→}
+   368→
+   369→// executeCodeFix runs the 4-phase code-fix flow:
+   370→//  1. Prepare branch (push fix files to a new Git branch).
+   371→//  2. Build canary image with Kaniko (in parallel with post-fix LLM
+   372→//     artifacts on the first attempt).
+   373→//  3. Run sandbox verification (5 levels). On Level 1-3 failure, feed
+   374→//     level-specific feedback to the fix proposer and retry (up to
+   375→//     SandboxMaxRetries). On infrastructure failure, do not retry.
+   376→//  4. Open PR with sandbox result + track for auto-merge.
+   377→func (w *wiring) executeCodeFix(ctx context.Context, incident *schemas.Incident) error {
+   378→        fp := incident.State.FixProposal
+   379→
+   380→        logging.Info("execution Phase 1: preparing fix branch", "fix_id", fp.FixID)
+   381→        branchInfo := w.ghExec.PrepareBranch(ctx, incident)
+   382→        if !branchInfo.Success {
+   383→                return fmt.Errorf("branch_preparation_failed: %s", branchInfo.Error)
+   384→        }
+   385→        if branchInfo.FilesChanged == 0 {
+   386→                return fmt.Errorf("no_files_in_fix_proposal (LLM response may have been truncated)")
+   387→        }
+   388→
+   389→        // Decide whether to run the sandbox at all. Skipped when:
+   390→        //   - sandbox is globally disabled (fast mode)
+   391→        //   - the target namespace is non-production and SkipSandboxNonProd is set
+   392→        //   - no Docker Hub credentials are configured (can't pull the base image)
+   393→        cfg := w.Config()
+   394→        shouldRunSandbox := cfg.SandboxEnabled
+   395→        skipNonProd := cfg.SkipSandboxNonProd
+   396→        isProd := cfg.IsProductionNamespace(fp.TargetNamespace)
+   397→        hasDockerCreds := cfg.DockerHubToken != ""
+   398→
+   399→        sandboxVerified := false
+   400→        sandboxSummary := "skipped (sandbox disabled)"
+   401→        sandboxRan := false
+   402→
+   403→        if !shouldRunSandbox {
+   404→                sandboxSummary = "skipped (sandbox disabled — fast mode)"
+   405→                logging.Info("sandbox disabled (SENTINEL_SANDBOX_ENABLED=false) — opening PR without verification",
+   406→                        "fix_id", fp.FixID)
+   407→        } else if skipNonProd && !isProd {
+   408→                sandboxSummary = "skipped (non-production namespace — fast mode)"
+   409→                logging.Info("skipping sandbox for non-production namespace (fast mode)",
+   410→                        "fix_id", fp.FixID, "namespace", fp.TargetNamespace)
+   411→                shouldRunSandbox = false
+   412→        } else if !hasDockerCreds {
+   413→                sandboxSummary = "skipped (no Docker Hub credentials)"
+   414→                logging.Info("skipping sandbox — no Docker Hub credentials configured",
+   415→                        "fix_id", fp.FixID)
+   416→                shouldRunSandbox = false
+   417→        }
+   418→
+   419→        if shouldRunSandbox {
+   420→                sandboxRan = true
+   421→                maxRetries := cfg.SandboxMaxRetries
+   422→                if maxRetries < 0 {
+   423→                        maxRetries = 0
+   424→                }
+   425→
+   426→                for sandboxAttempt := 0; sandboxAttempt <= maxRetries; sandboxAttempt++ {
+   427→                        if sandboxAttempt > 0 {
+   428→                                // Only sandbox Level 1-5 failures trigger retries (not Kaniko
+   429→                                // failures — the LLM cannot fix a permissions error).
+   430→                                logging.Info("sandbox retry: feeding level-specific failure back to fix proposer",
+   431→                                        "fix_id", fp.FixID, "attempt", sandboxAttempt+1, "max", maxRetries+1,
+   432→                                        "level", detectSandboxFailureLevel(sandboxSummary))
+   433→
+   434→                                fb := levelSpecificFeedback(sandboxSummary, sandboxSummary)
+   435→                                incident.State.SandboxFeedback = &fb
+   436→
+   437→                                // Fetch the CURRENT file content from the branch so the fix
+   438→                                // proposer generates SEARCH/REPLACE blocks that match the
+   439→                                // current branch state, not the original file content.
+   440→                                if stateFetchedCode := fetchCurrentBranchFiles(ctx, w.ghExec, branchInfo, incident); len(stateFetchedCode) > 0 {
+   441→                                        incident.State.FetchedCode = stateFetchedCode
+   442→                                        logging.Info("fetched current file state from branch for retry",
+   443→                                                "fix_id", fp.FixID, "files", len(stateFetchedCode))
+   444→                                }
+   445→
+   446→                                if err := w.pipeline.RetryFixProposal(ctx, &incident.State); err != nil {
+   447→                                        logging.Error("fix proposer retry failed", "error", err)
+   448→                                        break
+   449→                                }
+   450→                                fp = incident.State.FixProposal
+   451→                                if fp == nil {
+   452→                                        break
+   453→                                }
+   454→                                logging.Info("re-preparing fix branch with corrected code", "fix_id", fp.FixID, "attempt", sandboxAttempt+1)
+   455→                                branchInfo = w.ghExec.PrepareBranch(ctx, incident)
+   456→                                if !branchInfo.Success {
+   457→                                        logging.Error("branch re-preparation failed", "error", branchInfo.Error)
+   458→                                        break
+   459→                                }
+   460→                        }
+   461→
+   462→                        // Phase 2: Build canary image (+ post-fix artifacts in parallel on first attempt).
+   463→                        logging.Info("execution Phase 2: building canary image with Kaniko",
+   464→                                "fix_id", fp.FixID, "attempt", sandboxAttempt+1, "max", maxRetries+1)
+   465→                        prodImage, err := w.k8sClient.GetProdImage(ctx, fp.TargetService, fp.TargetNamespace)
+   466→                        if err != nil || prodImage == "" {
+   467→                                sandboxSummary = "skipped (could not find prod image)"
+   468→                                break
+   469→                        }
+   470→
+   471→                        var kanikoErr error
+   472→                        var canaryImage string
+   473→                        if sandboxAttempt == 0 {
+   474→                                var wg sync.WaitGroup
+   475→                                wg.Add(2)
+   476→                                go func() {
+   477→                                        defer wg.Done()
+   478→                                        canaryImage, kanikoErr = w.kaniko.BuildForIncident(ctx, incident, branchInfo, prodImage)
+   479→                                }()
+   480→                                go func() {
+   481→                                        defer wg.Done()
+   482→                                        if err := w.pipeline.RunPostFixArtifacts(ctx, &incident.State); err != nil {
+   483→                                                logging.Error("post-fix artifacts failed (non-blocking)", "err", err)
+   484→                                        }
+   485→                                }()
+   486→                                wg.Wait()
+   487→                        } else {
+   488→                                canaryImage, kanikoErr = w.kaniko.BuildForIncident(ctx, incident, branchInfo, prodImage)
+   489→                        }
+   490→
+   491→                        if kanikoErr != nil {
+   492→                                sandboxSummary = fmt.Sprintf("kaniko_error: %v", kanikoErr)
+   493→                                logging.Error("kaniko build failed — not retrying (infrastructure error)",
+   494→                                        "fix_id", fp.FixID, "error", kanikoErr, "attempt", sandboxAttempt+1)
+   495→                                break
+   496→                        }
+   497→
+   498→                        logging.Info("canary image built", "image", canaryImage)
+   499→                        fp.CanaryImage = &canaryImage
+   500→
+   501→                        // Phase 3: Sandbox verification.
+   502→                        logging.Info("execution Phase 3: running sandbox verification", "fix_id", fp.FixID, "attempt", sandboxAttempt+1)
+   503→                        metrics.RecordSandboxRetry(sandboxAttempt + 1)
+   504→                        sandboxStart := time.Now()
+   505→                        sb := w.sandbox.Run(ctx, incident)
+   506→                        sandboxVerified = sb.Verified
+   507→                        sandboxSummary = sb.Summary
+   508→                        metrics.RecordSandboxVerification(sandboxVerified, time.Since(sandboxStart))
+   509→                        if !sandboxVerified {
+   510→                                level := detectSandboxFailureLevel(sb.Summary)
+   511→                                metrics.RecordSandboxLevelFailure(level)
+   512→                        }
+   513→                        if sb.PodLogs != "" {
+   514→                                sandboxSummary += "\n\n--- POD LOGS ---\n" + sb.PodLogs
+   515→                        }
+   516→                        if len(sb.ProbeResults) > 0 {
+   517→                                sandboxSummary += "\n\n--- PROBE RESULTS ---\n" + strings.Join(sb.ProbeResults, "\n")
+   518→                        }
+   519→                        logging.Info("sandbox verification complete",
+   520→                                "verified", sandboxVerified,
+   521→                                "summary", sandboxSummary,
+   522→                                "attempt", sandboxAttempt+1,
+   523→                        )
+   524→
+   525→                        if sandboxVerified {
+   526→                                break
+   527→                        }
+   528→
+   529→                        // Infrastructure errors (RBAC, image pull, namespace creation)
+   530→                        // cannot be fixed by the LLM — stop the retry loop.
+   531→                        if sb.InfrastructureError {
+   532→                                logging.Info("sandbox failed with infrastructure error — not retrying",
+   533→                                        "fix_id", fp.FixID, "summary", sandboxSummary)
+   534→                                break
+   535→                        }
+   536→
+   537→                        if sandboxAttempt < maxRetries {
+   538→                                logging.Info("sandbox verification failed — will retry with feedback",
+   539→                                        "fix_id", fp.FixID, "attempt", sandboxAttempt+1, "summary", sandboxSummary)
+   540→                        }
+   541→                }
+   542→        }
+   543→
+   544→        cfg = w.Config()
+   545→        if sandboxRan && !sandboxVerified && cfg.SandboxRequired {
+   546→                logging.Error("sandbox verification failed and sandbox is required — not opening PR",
+   547→                        "fix_id", fp.FixID, "summary", sandboxSummary)
+   548→                return fmt.Errorf("sandbox_required_and_failed: %s", sandboxSummary)
+   549→        }
+   550→
+   551→        // Phase 4: Open PR.
+   552→        logging.Info("execution Phase 4: opening PR", "fix_id", fp.FixID)
+   553→        canaryImg := ""
+   554→        if fp.CanaryImage != nil {
+   555→                canaryImg = *fp.CanaryImage
+   556→        }
+   557→        incident.UpdatedAt = time.Now().UTC()
+   558→        fullPRBody := agents.BuildPRBody(incident, sandboxVerified, sandboxSummary, canaryImg)
+   559→        fp.PRBody = &fullPRBody
+   560→
+   561→        prResult := w.ghExec.OpenPR(ctx, incident, branchInfo, sandboxVerified, sandboxSummary)
+   562→        if !prResult.Success {
+   563→                return fmt.Errorf("pr_open_failed: %s", prResult.Error)
+   564→        }
+   565→
+   566→        incident.Status = schemas.StatusVerified
+   567→        if incident.State.ExecutionResult == nil {
+   568→                incident.State.ExecutionResult = &schemas.ExecutionResult{
+   569→                        FixID:     fp.FixID,
+   570→                        FixType:   fp.FixType,
+   571→                        Success:   true,
+   572→                        StartedAt: time.Now().UTC(),
+   573→                }
+   574→        }
+   575→        incident.State.ExecutionResult.Success = true
+   576→        incident.State.ExecutionResult.PRURL = &prResult.PRURL
+   577→        incident.State.ExecutionResult.PRNumber = &prResult.PRNumber
+   578→        incident.State.ExecutionResult.PRBranch = &prResult.PRBranch
+   579→        incident.State.ExecutionResult.SandboxVerified = sandboxVerified
+   580→        incident.State.ExecutionResult.SandboxSummary = &sandboxSummary
+   581→        now := time.Now().UTC()
+   582→        incident.State.ExecutionResult.FinishedAt = &now
+   583→
+   584→        logging.Info("PR opened",
+   585→                "pr_url", prResult.PRURL,
+   586→                "pr_number", prResult.PRNumber,
+   587→                "sandbox_verified", sandboxVerified,
+   588→        )
+   589→        metrics.RecordPROpened()
+   590→        w.broadcaster.BroadcastEvent("pr_opened", map[string]any{
+   591→                "pr_url":           prResult.PRURL,
+   592→                "pr_number":        prResult.PRNumber,
+   593→                "sandbox_verified": sandboxVerified,
+   594→        })
+   595→
+   596→        repoName := ""
+   597→        if fp.Repo != nil {
+   598→                repoName = *fp.Repo
+   599→        }
+   600→        if repoName != "" && prResult.PRNumber > 0 {
+   601→                if err := w.store.UpdateIncidentPR(ctx, incident.IncidentID, repoName, prResult.PRNumber, prResult.PRBranch, prResult.PRURL); err != nil {
+   602→                        logging.Error("failed to persist PR association for chatops", "error", err)
+   603→                }
+   604→        }
+   605→
+   606→        // Post the initial [SENTINELSTATUS] comment so reviewers see the state
+   607→        // and available commands immediately when they open the PR. Must happen
+   608→        // BEFORE EvaluateNow so the merger's "✅ Merged" callback doesn't get
+   609→        // overwritten with "⏳ Queued".
+   610→        if w.chatopsStatus != nil && repoName != "" {
+   611→                chatopsInc := &chatops.Incident{
+   612→                        ID:               incident.IncidentID.String(),
+   613→                        Service:          incident.Cluster.Service,
+   614→                        Namespace:        incident.Cluster.Namespace,
+   615→                        Status:           string(incident.Status),
+   616→                        PRURL:            prResult.PRURL,
+   617→                        PRNumber:         prResult.PRNumber,
+   618→                        PRRepo:           repoName,
+   619→                        Confidence:       0,
+   620→                        AutoMergeEnabled: w.Config().AutoMergeEnabled,
+   621→                }
+   622→                if incident.State.RootCause != nil {
+   623→                        chatopsInc.RootCause = incident.State.RootCause.Statement
+   624→                        chatopsInc.Confidence = incident.State.RootCause.Confidence
+   625→                }
+   626→                extra := "Available commands: `/sentinel help` for the full list."
+   627→                if !sandboxVerified {
+   628→                        extra += "\n\n⚠️ Sandbox verification did not pass — review carefully before merging."
+   629→                }
+   630→                if err := w.chatopsStatus.Update(ctx, repoName, prResult.PRNumber, chatopsInc, extra); err != nil {
+   631→                        logging.Error("failed to post initial status comment", "error", err)
+   632→                }
+   633→        }
+   634→
+   635→        // Track for auto-merge + force immediate evaluation.
+   636→        autoMergeEnabled := w.Config().AutoMergeEnabled
+   637→        if w.autoMergeMerger != nil && repoName != "" && autoMergeEnabled {
+   638→                baseBranch := "main"
+   639→                if fp.BaseBranch != nil {
+   640→                        baseBranch = *fp.BaseBranch
+   641→                }
+   642→                confidence := 0.0
+   643→                hasSchemaMigration := false
+   644→                if incident.State.RootCause != nil {
+   645→                        confidence = incident.State.RootCause.Confidence
+   646→                        hasSchemaMigration = incident.State.RootCause.HasSchemaMigration
+   647→                }
+   648→                fixType := ""
+   649→                if fp.FixType != "" {
+   650→                        fixType = string(fp.FixType)
+   651→                }
+   652→                cfgSnapshot := w.Config()
+   653→                isHighRisk := false
+   654→                for _, svc := range cfgSnapshot.HighRiskServices {
+   655→                        if svc == incident.Cluster.Service {
+   656→                                isHighRisk = true
+   657→                                break
+   658→                        }
+   659→                }
+   660→                policyVerdict := "allow"
+   661→                if incident.State.GovernanceDecision != nil {
+   662→                        policyVerdict = string(incident.State.GovernanceDecision.Verdict)
+   663→                }
+   664→                autoMergeAnnotation := false
+   665→                if incident.Cluster.Annotations != nil {
+   666→                        if v, ok := incident.Cluster.Annotations["sentinel.io/auto-merge"]; ok && v == "true" {
+   667→                                autoMergeAnnotation = true
+   668→                        }
+   669→                }
+   670→                if !autoMergeAnnotation {
+   671→                        for _, anomaly := range incident.Cluster.Anomalies {
+   672→                                if anomaly.Annotations != nil {
+   673→                                        if v, ok := anomaly.Annotations["sentinel.io/auto-merge"]; ok && v == "true" {
+   674→                                                autoMergeAnnotation = true
+   675→                                                break
+   676→                                        }
+   677→                                }
+   678→                        }
+   679→                }
+   680→                w.autoMergeMerger.Track(&automerge.TrackedPR{
+   681→                        IncidentID: incident.IncidentID.String(),
+   682→                        Repo:       repoName,
+   683→                        PRNumber:   prResult.PRNumber,
+   684→                        BaseBranch: baseBranch,
+   685→                        Input: automerge.Input{
+   686→                                IncidentID:          incident.IncidentID.String(),
+   687→                                Service:             incident.Cluster.Service,
+   688→                                Namespace:           incident.Cluster.Namespace,
+   689→                                FixType:             fixType,
+   690→                                HasSchemaMigration:  hasSchemaMigration,
+   691→                                IsHighRisk:          isHighRisk,
+   692→                                Confidence:          confidence,
+   693→                                SandboxVerified:     sandboxVerified,
+   694→                                PolicyVerdict:       policyVerdict,
+   695→                                AutoMergeAnnotation: autoMergeAnnotation,
+   696→                                SandboxOverride:     incident.State.ExecutionResult != nil && incident.State.ExecutionResult.SandboxOverride,
+   697→                                CIOverride:          incident.State.ExecutionResult != nil && incident.State.ExecutionResult.CIOverride,
+   698→                        },
+   699→                })
+   700→                logging.Info("PR tracked for auto-merge",
+   701→                        "pr_number", prResult.PRNumber,
+   702→                        "repo", repoName,
+   703→                        "confidence", confidence,
+   704→                        "sandbox_verified", sandboxVerified,
+   705→                )
+   706→                w.autoMergeMerger.EvaluateNow(ctx, repoName, prResult.PRNumber)
+   707→        }
+   708→
+   709→        return nil
+   710→}
+   711→
+   712→// detectSandboxFailureLevel parses the sandbox summary to determine which
+   713→// verification level failed. Used for per-level metrics + level-specific
+   714→// LLM feedback.
+   715→//
+   716→//      1 = canary pod not Ready / not sustained (startup crash not fixed)
+   717→//      2 = health endpoints failing (app starts but serves 4xx/5xx)
+   718→//      3 = original error still present in canary logs (PRIMARY ORACLE)
+   719→//      4 = regression test failed
+   720→//      5 = reproducer script crashed (strongest signal)
+   721→//      0 = infrastructure error (RBAC, image pull, namespace creation)
+   722→func detectSandboxFailureLevel(summary string) int {
+   723→        switch {
+   724→        case strings.Contains(summary, "canary_pods_not_ready"):
+   725→                return 1
+   726→        case strings.Contains(summary, "endpoints_unreachable"), strings.Contains(summary, "health_endpoints_failing"):
+   727→                return 2
+   728→        case strings.Contains(summary, "original_error_still_present"):
+   729→                return 3
+   730→        case strings.Contains(summary, "regression_test_failed"):
+   731→                return 4
+   732→        case strings.Contains(summary, "reproducer_failed"):
+   733→                return 5
+   734→        case strings.Contains(summary, "deploy_failed"), strings.Contains(summary, "create_namespace"), strings.Contains(summary, "kaniko_error"):
+   735→                return 0
+   736→        }
+   737→        return 0
+   738→}
+   739→
+   740→// levelSpecificFeedback returns a targeted feedback message for the LLM
+   741→// based on which sandbox level failed. Critical for L4/L5 — without it
+   742→// the LLM just sees "sandbox failed" without knowing its fix passed
+   743→// Levels 1-3 but failed the regression test.
+   744→func levelSpecificFeedback(summary, fullSummary string) string {
+   745→        level := detectSandboxFailureLevel(summary)
+   746→        switch level {
+   747→        case 1:
+   748→                return fmt.Sprintf("Sandbox Level 1 FAILED: the canary pod did not become Ready (or did not stay Ready for the sustained window).\n\nThis means the startup crash was NOT fixed — the app still crashes on boot.\n\nFull failure detail:\n%s\n\nPlease generate a corrected fix that addresses the startup crash.", fullSummary)
+   749→        case 2:
+   750→                return fmt.Sprintf("Sandbox Level 2 FAILED: the canary pod is Ready, but health endpoints (/, /healthz, /readyz) returned 4xx/5xx.\n\nThis means the app starts but is broken at the HTTP layer.\n\nFull failure detail:\n%s\n\nPlease generate a corrected fix that makes the health endpoints return 2xx.", fullSummary)
+   751→        case 3:
+   752→                return fmt.Sprintf("Sandbox Level 3 FAILED: the original error is still present in the canary pod's logs.\n\nThis means the fix did NOT eliminate the original error.\n\nFull failure detail:\n%s\n\nPlease generate a corrected fix that actually eliminates the original error.", fullSummary)
+   753→        case 4:
+   754→                return fmt.Sprintf("Sandbox Level 4 FAILED: the regression test did not pass.\n\nIMPORTANT: Your fix passed Levels 1-3 (pod is Ready, health endpoints OK, original error gone from logs). But the LLM-generated regression test — which reproduces the original bug — still FAILS against your fixed code. This means your fix did not actually fix the underlying bug; it only masked the symptom.\n\nFull failure detail:\n%s\n\nPlease generate a corrected fix that makes the regression test PASS.", fullSummary)
+   755→        case 5:
+   756→                return fmt.Sprintf("Sandbox Level 5 FAILED: the reproducer script crashed (exit code != 0).\n\nIMPORTANT: Your fix passed Levels 1-4. But the LLM-generated reproducer script — which exercises the buggy code path — still crashes against your fixed code. This is the strongest signal that the fix is incomplete.\n\nFull failure detail:\n%s\n\nPlease generate a corrected fix that makes the reproducer script exit 0.", fullSummary)
+   757→        default:
+   758→                return fmt.Sprintf("Sandbox verification failed (infrastructure or unknown error — the LLM may not be able to fix this):\n%s\n\nPlease generate a corrected fix if you can; otherwise the PR will be opened with needs-review.", fullSummary)
+   759→        }
+   760→}
+   761→
+   762→// recordBetaOutcome updates the Beta prior for the fix pattern and returns
+   763→// the new (alpha, beta). Returns (1, 1) when no fix proposal is present.
+   764→func recordBetaOutcome(ctx context.Context, store *feedback.Store, incident schemas.Incident, success bool) (float64, float64) {
+   765→        if incident.State.FixProposal == nil {
+   766→                return 1.0, 1.0
+   767→        }
+   768→        alpha, beta, err := store.RecordBetaOutcome(ctx,
+   769→                incident.State.FixProposal.TargetService,
+   770→                string(incident.State.FixProposal.FixType),
+   771→                success,
+   772→        )
+   773→        if err != nil {
+   774→                logging.Error("record beta outcome failed", "error", err)
+   775→                return 1.0, 1.0
+   776→        }
+   777→        return alpha, beta
+   778→}
+   779→
+   780→// extractPodLogsFromIncident pulls the pod logs from the incident's
+   781→// anomaly explanations. Used to extract the error fingerprint for the
+   782→// 24h re-occurrence watcher.
+   783→func extractPodLogsFromIncident(incident *schemas.Incident) string {
+   784→        var logs string
+   785→        for _, anomaly := range incident.Cluster.Anomalies {
+   786→                logs += anomaly.Explanation + "\n"
+   787→        }
+   788→        return logs
+   789→}
+   790→
+   791→// fetchCurrentBranchFiles fetches the current file content from the fix
+   792→// branch (which has the previous fix applied) so the LLM generates
+   793→// SEARCH/REPLACE blocks against the CURRENT state, not the original code.
+   794→// Without this, the retry loop fails because the LLM's search text
+   795→// references the original code which no longer exists.
+   796→func fetchCurrentBranchFiles(ctx context.Context, ghExec *executors.GitHubExecutor, branchInfo executors.BranchInfo, incident *schemas.Incident) map[string]string {
+   797→        fp := incident.State.FixProposal
+   798→        if fp == nil || branchInfo.Repo == "" || branchInfo.BranchName == "" {
+   799→                return nil
+   800→        }
+   801→        result := map[string]string{}
+   802→        for _, fc := range fp.FilesToChange {
+   803→                if fc.Path == "" {
+   804→                        continue
+   805→                }
+   806→                content, err := ghExec.GetFileContent(ctx, branchInfo.Repo, fc.Path, branchInfo.BranchName)
+   807→                if err != nil {
+   808→                        logging.Error("failed to fetch current file state for retry", "path", fc.Path, "error", err)
+   809→                        continue
+   810→                }
+   811→                result[fc.Path] = content
+   812→        }
+   813→        return result
+   814→}
+   815→
+   816→// isRealCR returns true if crName refers to an actual SentinelIncident CR
+   817→// (created via kubectl apply or the CRD watcher). Auto-detected incidents
+   818→// pass crName="auto-detected"; manual API triggers pass "manual"; Slack
+   819→// triggers pass "slack"; Alertmanager triggers pass "alertmanager"; SLO
+   820→// + chaos triggers pass "slo" / "chaos". None of these correspond to a
+   821→// real CR object, so patching their status generates a 404 + spurious
+   822→// error log.
+   823→func isRealCR(crName string) bool {
+   824→        switch crName {
+   825→        case "", "auto-detected", "manual", "slack", "alertmanager", "slo", "chaos":
+   826→                return false
+   827→        }
+   828→        return true
+   829→}
+   830→

@@ -1,0 +1,736 @@
+     1→package agents
+     2→
+     3→// fix_proposer.go: the LLM agent that writes the fix as Aider-style
+     4→// SEARCH/REPLACE blocks. Calls the LLM, parses metadata JSON + blocks via
+     5→// editblock.go, applies them with layered (exact/whitespace/fuzzy) matching,
+     6→// and feeds actionable errors back on failure (Aider's pattern).
+     7→//
+     8→// Path validation (validateFilePath) is the second layer of defense against
+     9→// prompt injection coaxing the LLM into writing to sensitive paths
+    10→// (.github/workflows/*, Dockerfile, package.json, etc.) — the path comes from
+    11→// the LLM, which was influenced by pod-log content (attacker-controllable).
+    12→
+    13→import (
+    14→        "context"
+    15→        "encoding/json"
+    16→        "fmt"
+    17→        "path/filepath"
+    18→        "strings"
+    19→        "time"
+    20→
+    21→        "github.com/google/uuid"
+    22→
+    23→        "github.com/karimzakzouk/sentinel/internal/k8s"
+    24→        "github.com/karimzakzouk/sentinel/internal/llm"
+    25→        "github.com/karimzakzouk/sentinel/internal/logging"
+    26→        "github.com/karimzakzouk/sentinel/internal/schemas"
+    27→        "github.com/karimzakzouk/sentinel/internal/syntaxvalidate"
+    28→)
+    29→
+    30→// validateFilePath validates a file path returned by the LLM for a code fix.
+    31→// Returns the cleaned path on success, or "" if rejected. Callers should
+    32→// skip files with empty return values (do not abort the whole proposal — one
+    33→// bad path shouldn't kill a fix that has other valid files).
+    34→//
+    35→// Rules:
+    36→//  1. Reject empty paths
+    37→//  2. Reject absolute paths (anything starting with '/')
+    38→//  3. Reject paths containing '..' segments (path traversal)
+    39→//  4. Reject paths that escape the repo root after cleaning
+    40→//  5. Reject sensitive paths by default:
+    41→//     - .github/workflows/*, .github/actions/* (CI/CD tampering)
+    42→//     - .gitlab-ci.yml, .circleci/, Jenkinsfile, .drone.yml, cloudbuild.*, azure-pipelines.yml
+    43→//     - Dockerfile, docker-compose.* (build-chain tampering)
+    44→//     - package.json, package-lock.json (postinstall hooks)
+    45→//     - pyproject.toml, setup.py, requirements.txt, Pipfile, Pipfile.lock
+    46→//     - go.mod, go.sum
+    47→//     - .npmrc, .pypirc, .netrc (registry credentials)
+    48→//     - .env (but allow .env.example)
+    49→//  6. Reject paths with control characters or null bytes
+    50→//  7. Cap path length at 500 chars
+    51→func validateFilePath(path string) string {
+    52→        if path == "" {
+    53→                return ""
+    54→        }
+    55→        if len(path) > 500 {
+    56→                logging.Info("rejecting path (too long)", "path", path)
+    57→                return ""
+    58→        }
+    59→
+    60→        for _, r := range path {
+    61→                if r < 0x20 || r == 0x7f {
+    62→                        logging.Info("rejecting path (control char)", "path", path)
+    63→                        return ""
+    64→                }
+    65→        }
+    66→
+    67→        if filepath.IsAbs(path) {
+    68→                logging.Info("rejecting absolute path", "path", path)
+    69→                return ""
+    70→        }
+    71→
+    72→        clean := filepath.Clean(path)
+    73→        if clean == "." {
+    74→                logging.Info("rejecting path (resolves to repo root)", "path", path)
+    75→                return ""
+    76→        }
+    77→        if strings.HasPrefix(clean, "..") {
+    78→                logging.Info("rejecting path traversal", "path", path)
+    79→                return ""
+    80→        }
+    81→
+    82→        cleanSlash := filepath.ToSlash(clean)
+    83→        sensitive := false
+    84→        sensitiveReason := ""
+    85→        switch {
+    86→        case strings.HasPrefix(cleanSlash, ".github/workflows/"),
+    87→                strings.HasPrefix(cleanSlash, ".github/actions/"),
+    88→                strings.HasPrefix(cleanSlash, ".gitlab-ci.yml"),
+    89→                strings.HasPrefix(cleanSlash, ".circleci/"),
+    90→                strings.HasPrefix(cleanSlash, "Jenkinsfile"),
+    91→                strings.HasPrefix(cleanSlash, ".drone.yml"),
+    92→                strings.HasPrefix(cleanSlash, "cloudbuild.yaml"),
+    93→                strings.HasPrefix(cleanSlash, "cloudbuild.yml"),
+    94→                strings.HasPrefix(cleanSlash, ".azure-pipelines.yml"),
+    95→                strings.HasPrefix(cleanSlash, "azure-pipelines.yml"):
+    96→                sensitive = true
+    97→                sensitiveReason = "CI/CD-sensitive path"
+    98→
+    99→        case cleanSlash == "Dockerfile" || strings.HasPrefix(cleanSlash, "Dockerfile."),
+   100→                strings.HasPrefix(cleanSlash, "docker-compose.yml"),
+   101→                strings.HasPrefix(cleanSlash, "docker-compose.yaml"),
+   102→                cleanSlash == "package.json" || cleanSlash == "package-lock.json",
+   103→                cleanSlash == "pyproject.toml" || cleanSlash == "setup.py" || cleanSlash == "requirements.txt" || cleanSlash == "Pipfile" || cleanSlash == "Pipfile.lock",
+   104→                cleanSlash == "go.mod" || cleanSlash == "go.sum",
+   105→                cleanSlash == ".npmrc" || cleanSlash == ".pypirc" || cleanSlash == ".netrc",
+   106→                cleanSlash == ".env" && cleanSlash != ".env.example":
+   107→                sensitive = true
+   108→                sensitiveReason = "build-chain-sensitive path"
+   109→        }
+   110→        if sensitive {
+   111→                logging.Info("rejecting sensitive path", "reason", sensitiveReason, "path", path)
+   112→                return ""
+   113→        }
+   114→
+   115→        return clean
+   116→}
+   117→
+   118→const fixProposerSystemPrompt = `You are Sentinel's Fix Proposer agent. You write production code fixes for runtime errors.
+   119→
+   120→Given a confirmed root cause and the source code, propose ONE fix using SEARCH/REPLACE blocks.
+   121→
+   122→## Fix Quality Requirements
+   123→- Fix the ROOT CAUSE, not just the symptom. If a collection access crashes (dict/key lookup, array index, map get), add a proper check — don't just wrap it in try/catch.
+   124→- Use proper error handling for the framework + language in use. For web APIs (FastAPI/Flask in Python, Express/Koa in JS/TS, net/http or chi/gin in Go, Spring in Java, Actix in Rust, etc.):
+   125→  - Bad input (missing key, invalid type, out of range) → return appropriate HTTP error (400, 404, 422)
+   126→  - Use the framework's error response mechanism (e.g. raise HTTPException in FastAPI, abort() in Flask, c.JSON(status, err) in gin, ResponseEntity.status(status).body(err) in Spring)
+   127→  - NEVER return error states with HTTP 200 — callers should know something went wrong from the status code
+   128→- For non-web code (CLIs, workers, daemons), use the language's idiomatic error pattern (Python: raise ValueError; Go: fmt.Errorf + return; JS: throw new Error; Java: throw new IllegalArgumentException; Rust: Result::Err).
+   129→- Minimal changes. Only modify what's broken. Don't refactor surrounding code.
+   130→- The fix must be syntactically valid in the target language (the detected language is included in the context).
+   131→
+   132→## CRITICAL: Replacement Completeness
+   133→After your search/replace block is applied, the resulting code must be complete and correct.
+   134→Before submitting, mentally apply your replacement to the search text and verify:
+   135→- Every variable used after the replaced block is assigned on ALL code paths (not just inside an if/try block)
+   136→- Control flow is complete — if you add a guard clause (if/raise, if/return, if/throw), the code AFTER the guard must still execute correctly when the guard condition is FALSE
+   137→- Indentation of your replacement matches the surrounding code — the replaced text must fit seamlessly at the same nesting level
+   138→- The function still returns/exits correctly on all paths — no code becomes unreachable, no variables become undefined
+   139→- If you add an early return/raise/throw, move any code that should still execute ABOVE or AFTER the guard, not inside it
+   140→
+   141→## Root Cause Description
+   142→- Be precise. State WHAT is broken and WHERE.
+   143→- Do NOT speculate about infrastructure, databases, or configuration unless the error traceback explicitly references them.
+   144→- If the error is a missing-key access (e.g. "KeyError: 99", "NullPointerException", "panic: index out of range") at "users[user_id]", the root cause is "the collection doesn't user_id 99" — not "the database doesn't have the user".
+   145→
+   146→## Output Format
+   147→
+   148→Output TWO sections:
+   149→
+   150→### Section 1: Metadata (JSON, small)
+   151→Output a JSON object with the fix metadata. Keep it short.
+   152→{"fix_type":"code_fix","description":"Brief description","pr_title":"[Sentinel] Brief title","pr_body":"Short summary"}
+   153→
+   154→### Section 2: Code Fix (SEARCH/REPLACE blocks)
+   155→
+   156→Use this exact format for each file you want to change:
+   157→
+   158→internal/handler/handler.go
+   159→<<<<<<< SEARCH
+   160→        sku := r.URL.Path[len("/products/"):]
+   161→=======
+   162→        if len(r.URL.Path) <= len("/products/") {
+   163→                http.Error(w, "sku required", http.StatusBadRequest)
+   164→                return
+   165→        }
+   166→        sku := r.URL.Path[len("/products/"):]
+   167→>>>>>>> REPLACE
+   168→
+   169→Rules:
+   170→- CRITICAL: The SEARCH section MUST be COPIED VERBATIM from the source code provided above.
+   171→  Do NOT use placeholder text. Copy the ACTUAL code from the source file shown in this prompt.
+   172→  The SEARCH block is a literal substring match — if even ONE character differs, it will fail.
+   173→- Keep blocks small (2-10 lines) — only the code that needs to change
+   174→- Multiple blocks per file are OK if multiple spots need fixing
+   175→- The file path goes on the line BEFORE <<<<<<< SEARCH
+   176→- Do NOT wrap the SEARCH/REPLACE blocks in JSON or code fences
+   177→
+   178→## Example Output
+   179→
+   180→{"fix_type":"code_fix","description":"Add length check before path slice","pr_title":"[Sentinel] Fix index out of range in handler","pr_body":"Added a length check before slicing the URL path."}
+   181→
+   182→internal/handler/handler.go
+   183→<<<<<<< SEARCH
+   184→        sku := r.URL.Path[len("/products/"):]
+   185→=======
+   186→        if len(r.URL.Path) <= len("/products/") {
+   187→                http.Error(w, "sku required", http.StatusBadRequest)
+   188→                return
+   189→        }
+   190→        sku := r.URL.Path[len("/products/"):]
+   191→>>>>>>> REPLACE`
+   192→
+   193→// FixProposer translates a root cause into a concrete FixProposal. Calls the
+   194→// LLM, parses SEARCH/REPLACE blocks, applies them with layered matching, and
+   195→// feeds actionable errors back on failure (Aider's pattern).
+   196→type FixProposer struct {
+   197→        router      *llm.Router
+   198→        k8s         *k8s.Client
+   199→        gitHubToken string
+   200→
+   201→        gitHost       string
+   202→        defaultBranch string
+   203→}
+   204→
+   205→// NewFixProposer creates a FixProposer.
+   206→func NewFixProposer(router *llm.Router, k8sClient *k8s.Client, gitHubToken string) *FixProposer {
+   207→        return &FixProposer{
+   208→                router:        router,
+   209→                k8s:           k8sClient,
+   210→                gitHubToken:   gitHubToken,
+   211→                gitHost:       "github.com",
+   212→                defaultBranch: "main",
+   213→        }
+   214→}
+   215→
+   216→// SetGitHost sets the git host for repo normalization.
+   217→func (a *FixProposer) SetGitHost(host string) {
+   218→        if host != "" {
+   219→                a.gitHost = host
+   220→        }
+   221→}
+   222→
+   223→// SetDefaultBranch sets the default branch fallback for PR targeting.
+   224→func (a *FixProposer) SetDefaultBranch(branch string) {
+   225→        if branch != "" {
+   226→                a.defaultBranch = branch
+   227→        }
+   228→}
+   229→
+   230→// Run executes the fix proposer agent.
+   231→func (a *FixProposer) Run(ctx context.Context, state *schemas.AgentState) error {
+   232→        if state.RootCause == nil {
+   233→                state.Status = schemas.StatusFailed
+   234→                s := "fix_proposer_no_root_cause"
+   235→                state.Error = &s
+   236→                return nil
+   237→        }
+   238→
+   239→        rc := state.RootCause
+   240→
+   241→        // Fallback: if we have no source code, propose restart. Don't ask the
+   242→        // LLM to write code it can't see — it'll hallucinate.
+   243→        if len(state.FetchedCode) == 0 {
+   244→                logging.Info("no source code fetched — proposing restart fallback")
+   245→                proposal := &schemas.FixProposal{
+   246→                        FixID:              uuid.New(),
+   247→                        FixType:            schemas.FixRestart,
+   248→                        TargetService:      state.Cluster.Service,
+   249→                        TargetNamespace:    state.Cluster.Namespace,
+   250→                        Description:        fmt.Sprintf("Restart fallback: no source code available to generate a code fix. Root cause: %s", rc.Statement),
+   251→                        Repo:               strPtr(discoverRepo(state, a.gitHost)),
+   252→                        PRTitle:            strPtr(fmt.Sprintf("[Sentinel] Restart %s (no source available for code fix)", state.Cluster.Service)),
+   253→                        PRBody:             strPtr(buildPRBody(state, rc, "restart")),
+   254→                        RequiresSandbox:    false,
+   255→                        ProposedConfidence: rc.Confidence * 0.5, // lower confidence — we're guessing
+   256→                }
+   257→                a.finalizeProposal(state, proposal)
+   258→                return nil
+   259→        }
+   260→
+   261→        // Schema migrations block autonomous rollback — force roll_forward.
+   262→        if rc.HasSchemaMigration && (rc.Category == "bad_deploy" || rc.Category == "schema_migration") {
+   263→                proposal := &schemas.FixProposal{
+   264→                        FixID:              uuid.New(),
+   265→                        FixType:            schemas.FixRollForward,
+   266→                        TargetService:      state.Cluster.Service,
+   267→                        TargetNamespace:    state.Cluster.Namespace,
+   268→                        Description:        fmt.Sprintf("Roll-forward fix for %s (schema migration blocks autonomous rollback)", rc.Category),
+   269→                        Repo:               strPtr(discoverRepo(state, a.gitHost)),
+   270→                        PRTitle:            strPtr(fmt.Sprintf("[Sentinel] Roll-forward fix for %s in %s", rc.Category, state.Cluster.Service)),
+   271→                        PRBody:             strPtr(buildPRBody(state, rc, "roll_forward")),
+   272→                        RequiresSandbox:    true,
+   273→                        ProposedConfidence: rc.Confidence,
+   274→                }
+   275→                // Still call the LLM to generate the actual code fix.
+   276→                a.llmCodeFix(ctx, state, proposal)
+   277→                a.finalizeProposal(state, proposal)
+   278→                return nil
+   279→        }
+   280→
+   281→        // Ask the LLM for the fix — with adaptive retry loop. The LLM outputs
+   282→        // metadata JSON (small) + SEARCH/REPLACE blocks (plain text). We parse
+   283→        // the blocks, apply them with layered matching (exact → fuzzy), and feed
+   284→        // actionable errors back on failure (Aider's pattern).
+   285→        userMsg := a.buildUserMessage(state)
+   286→        var files []schemas.FileChange
+   287→        var fixType schemas.FixType
+   288→        var dockerfilePath, prTitle, prBody, description string
+   289→        var lastError string
+   290→
+   291→        maxRetries := 5
+   292→        for attempt := 0; attempt <= maxRetries; attempt++ {
+   293→                var retryHint string
+   294→                if attempt > 0 {
+   295→                        retryHint = fmt.Sprintf("\n\n## PREVIOUS ATTEMPT FAILED\n%s\n\nPlease try again. Fix the issue above and return a corrected response.", lastError)
+   296→                        userMsg = a.buildUserMessage(state) + retryHint
+   297→                }
+   298→
+   299→                // Per-attempt timeout: large reasoning models can take 3-5 minutes
+   300→                // to generate code; the per-call cap is 300s, clipped by ctx.
+   301→                attemptCtx, attemptCancel := context.WithTimeout(ctx, 300*time.Second)
+   302→                logging.Info("fix proposer attempt", "attempt", attempt+1, "max", maxRetries+1)
+   303→                rawOutput, llmErr := a.router.FrontierText(attemptCtx, fixProposerSystemPrompt, userMsg, 8000)
+   304→                attemptCancel()
+   305→                if llmErr != nil {
+   306→                        lastError = fmt.Sprintf("LLM call failed: %v", llmErr)
+   307→                        logging.Error("attempt LLM error", "attempt", attempt+1, "err", llmErr)
+   308→                        continue
+   309→                }
+   310→
+   311→                logging.Info("got LLM output", "attempt", attempt+1, "bytes", len(rawOutput))
+   312→
+   313→                // Parse metadata JSON from the first line(s). The LLM outputs
+   314→                // {"fix_type":"code_fix",...} before the SEARCH/REPLACE blocks.
+   315→                metadata := extractMetadataJSON(rawOutput)
+   316→                fixTypeStr, _ := metadata["fix_type"].(string)
+   317→                if fixTypeStr == "" {
+   318→                        fixTypeStr = "code_fix"
+   319→                }
+   320→                fixType = schemas.FixType(fixTypeStr)
+   321→                if !isValidFixType(fixTypeStr) {
+   322→                        fixType = schemas.FixCodeFix
+   323→                }
+   324→                dockerfilePath, _ = metadata["dockerfile_path"].(string)
+   325→                if dockerfilePath == "" {
+   326→                        dockerfilePath = "Dockerfile"
+   327→                }
+   328→                prTitle, _ = metadata["pr_title"].(string)
+   329→                if prTitle == "" {
+   330→                        prTitle = fmt.Sprintf("[Sentinel] %s for %s", fixType, state.Cluster.Service)
+   331→                }
+   332→                prBody, _ = metadata["pr_body"].(string)
+   333→                if prBody == "" {
+   334→                        prBody = buildPRBody(state, rc, string(fixType))
+   335→                }
+   336→                description, _ = metadata["description"].(string)
+   337→                if description == "" {
+   338→                        description = fmt.Sprintf("Fix %s in %s", fixType, state.Cluster.Service)
+   339→                }
+   340→
+   341→                // Parse SEARCH/REPLACE blocks from the output.
+   342→                blocks := ParseEditBlocks(rawOutput)
+   343→
+   344→                if len(blocks) > 0 {
+   345→                        logging.Info("parsed SEARCH/REPLACE blocks", "attempt", attempt+1, "count", len(blocks))
+   346→
+   347→                        // Group blocks by file path.
+   348→                        blocksByFile := make(map[string][]EditBlock)
+   349→                        for _, b := range blocks {
+   350→                                path := b.FilePath
+   351→                                if path == "" {
+   352→                                        // Use the first fetched file as default.
+   353→                                        for p := range state.FetchedCode {
+   354→                                                path = p
+   355→                                                break
+   356→                                        }
+   357→                                }
+   358→                                path = normalizeFilePath(path, state.FetchedCode)
+   359→                                blocksByFile[path] = append(blocksByFile[path], EditBlock{
+   360→                                        FilePath: path,
+   361→                                        Search:   b.Search,
+   362→                                        Replace:  b.Replace,
+   363→                                })
+   364→                        }
+   365→
+   366→                        // Apply blocks to each file.
+   367→                        allApplied := true
+   368→                        files = []schemas.FileChange{}
+   369→                        for filePath, fileBlocks := range blocksByFile {
+   370→                                originalContent, ok := state.FetchedCode[filePath]
+   371→                                if !ok {
+   372→                                        lastError = fmt.Sprintf("file %s not found in fetched source code. Available files: %v", filePath, keysOf(state.FetchedCode))
+   373→                                        allApplied = false
+   374→                                        break
+   375→                                }
+   376→
+   377→                                editResult := ApplyEditBlocks(originalContent, fileBlocks)
+   378→                                if !editResult.Success {
+   379→                                        lastError = editResult.FailedReason
+   380→                                        allApplied = false
+   381→                                        break
+   382→                                }
+   383→
+   384→                                // Syntax-validate the patched content BEFORE accepting it.
+   385→                                // This catches broken code that the LLM generated (missing
+   386→                                // brackets, invalid syntax, etc.) and feeds the error back
+   387→                                // on the next retry. Based on the Aider/SWE-agent pattern
+   388→                                // of validate-then-retry.
+   389→                                if syntaxErr := syntaxvalidate.Validate(filePath, editResult.NewContent); syntaxErr != nil {
+   390→                                        lastError = fmt.Sprintf("syntax validation failed for %s: %v", filePath, syntaxErr)
+   391→                                        logging.Error("fix proposer: syntax validation failed", "attempt", attempt+1, "path", filePath, "err", syntaxErr)
+   392→                                        allApplied = false
+   393→                                        break
+   394→                                }
+   395→
+   396→                                // Build FileChange from the result — use Changes (search/replace)
+   397→                                // so the GitHub executor can apply them to the branch.
+   398→                                var changes []schemas.SearchReplace
+   399→                                for _, b := range fileBlocks {
+   400→                                        changes = append(changes, schemas.SearchReplace{
+   401→                                                Search:  strings.TrimRight(b.Search, "\n"),
+   402→                                                Replace: strings.TrimRight(b.Replace, "\n"),
+   403→                                        })
+   404→                                }
+   405→                                files = append(files, schemas.FileChange{
+   406→                                        Path:    filePath,
+   407→                                        Changes: changes,
+   408→                                })
+   409→                                logging.Info("applied blocks to file", "attempt", attempt+1, "blocks", len(fileBlocks), "path", filePath)
+   410→                        }
+   411→
+   412→                        if allApplied && len(files) > 0 {
+   413→                                logging.Info("fix attempt succeeded", "attempt", attempt+1, "files", len(files), "blocks", len(blocks))
+   414→                                break
+   415→                        }
+   416→                        logging.Error("fix attempt failed", "attempt", attempt+1, "err", lastError)
+   417→                        continue
+   418→                }
+   419→
+   420→                // No SEARCH/REPLACE blocks found — try whole-file replacement fallback.
+   421→                if filePath, content := ParseWholeFileReplacement(rawOutput); filePath != "" && content != "" {
+   422→                        filePath = normalizeFilePath(filePath, state.FetchedCode)
+   423→                        logging.Info("using whole-file replacement", "attempt", attempt+1, "path", filePath, "bytes", len(content))
+   424→                        files = []schemas.FileChange{{Path: filePath, NewContent: content}}
+   425→                        break
+   426→                }
+   427→
+   428→                lastError = "no SEARCH/REPLACE blocks or whole-file replacement found in LLM output"
+   429→                logging.Error("fix attempt failed", "attempt", attempt+1, "err", lastError)
+   430→        }
+   431→
+   432→        if len(files) == 0 {
+   433→                logging.Error("all fix attempts failed", "attempts", maxRetries+1)
+   434→                state.Status = schemas.StatusFailed
+   435→                s := fmt.Sprintf("fix_proposer_no_files_after_%d_attempts: %s", maxRetries+1, lastError)
+   436→                state.Error = &s
+   437→                return nil
+   438→        }
+   439→
+   440→        if prBody == "" {
+   441→                prBody = buildPRBody(state, rc, string(fixType))
+   442→        }
+   443→
+   444→        proposal := &schemas.FixProposal{
+   445→                FixID:              uuid.New(),
+   446→                FixType:            fixType,
+   447→                TargetService:      state.Cluster.Service,
+   448→                TargetNamespace:    state.Cluster.Namespace,
+   449→                Description:        description,
+   450→                Repo:               strPtr(discoverRepo(state, a.gitHost)),
+   451→                FilesToChange:      files,
+   452→                DockerfilePath:     strPtr(dockerfilePath),
+   453→                PRTitle:            strPtr(prTitle),
+   454→                PRBody:             strPtr(prBody),
+   455→                RequiresSandbox:    true,
+   456→                ProposedConfidence: rc.Confidence,
+   457→        }
+   458→
+   459→        a.finalizeProposal(state, proposal)
+   460→        return nil
+   461→}
+   462→
+   463→// buildUserMessage constructs the prompt for the LLM. Puts sandbox feedback
+   464→// (if any) at the top so the LLM sees it first, then the root cause, evidence,
+   465→// and fetched source code.
+   466→func (a *FixProposer) buildUserMessage(state *schemas.AgentState) string {
+   467→        var parts []string
+   468→        parts = append(parts, fmt.Sprintf("# Service: %s", state.Cluster.Service))
+   469→        parts = append(parts, fmt.Sprintf("# Namespace: %s", state.Cluster.Namespace))
+   470→        parts = append(parts, "")
+   471→
+   472→        if state.SandboxFeedback != nil && *state.SandboxFeedback != "" {
+   473→                parts = append(parts, "## ⚠️ Previous Fix Failed Sandbox Verification")
+   474→                parts = append(parts, "")
+   475→                parts = append(parts, "Your previous fix was deployed to a sandbox and tested. It FAILED:")
+   476→                parts = append(parts, "")
+   477→                parts = append(parts, *state.SandboxFeedback)
+   478→                parts = append(parts, "")
+   479→                parts = append(parts, "Fix the issue described above. The error is real — your previous fix introduced or did not resolve a runtime bug.")
+   480→                parts = append(parts, "Generate a NEW, corrected search/replace block that addresses both the original error AND the sandbox failure.")
+   481→                parts = append(parts, "")
+   482→        }
+   483→
+   484→        if lang := a.detectLanguageHint(state); lang != "" {
+   485→                parts = append(parts, fmt.Sprintf("## Detected Language: %s", lang))
+   486→                parts = append(parts, "")
+   487→        }
+   488→        parts = append(parts, "## Confirmed Root Cause")
+   489→        if state.RootCause == nil {
+   490→                return ""
+   491→        }
+   492→        parts = append(parts, fmt.Sprintf("- statement: %s", state.RootCause.Statement))
+   493→        parts = append(parts, fmt.Sprintf("- category: %s", state.RootCause.Category))
+   494→        parts = append(parts, fmt.Sprintf("- confidence: %.3f", state.RootCause.Confidence))
+   495→        parts = append(parts, fmt.Sprintf("- has_schema_migration: %v", state.RootCause.HasSchemaMigration))
+   496→        if len(state.FetchedCode) > 0 {
+   497→                parts = append(parts, fmt.Sprintf("- source_files: %v", keysOf(state.FetchedCode)))
+   498→        } else {
+   499→                parts = append(parts, fmt.Sprintf("- source_files: %v", state.RootCause.SourceFiles))
+   500→        }
+   501→        parts = append(parts, "")
+   502→        parts = append(parts, "## Evidence")
+   503→        for _, e := range state.Evidence {
+   504→                resultJSON, _ := json.Marshal(e.Result)
+   505→                resultStr := string(resultJSON)
+   506→                if len(resultStr) > MaxFixResultChars {
+   507→                        resultStr = resultStr[:MaxFixResultChars]
+   508→                }
+   509→                parts = append(parts, fmt.Sprintf("- %s (%s): %s", e.EID, e.Source, resultStr))
+   510→        }
+   511→        parts = append(parts, "")
+   512→        parts = append(parts, "## Fetched Source Code")
+   513→        i := 0
+   514→        for path, content := range state.FetchedCode {
+   515→                if i >= 5 {
+   516→                        break
+   517→                }
+   518→                parts = append(parts, fmt.Sprintf("### %s", path))
+   519→                parts = append(parts, "```")
+   520→                if len(content) > 6000 {
+   521→                        content = content[:6000]
+   522→                }
+   523→                parts = append(parts, content)
+   524→                parts = append(parts, "```")
+   525→                i++
+   526→        }
+   527→        parts = append(parts, "")
+   528→        parts = append(parts, "## Your Task")
+   529→        parts = append(parts, "Propose ONE fix. Be specific. If code_fix, output the exact new file contents.")
+   530→        parts = append(parts, "IMPORTANT: Use the EXACT file path from '### <path>' above in your files_to_change.")
+   531→        parts = append(parts, "Do NOT use container paths (like /app/app/main.py) — use the repo path (like app/main.py).")
+   532→        return strings.Join(parts, "\n")
+   533→}
+   534→
+   535→// detectLanguageHint concatenates anomaly explanations (which contain the
+   536→// original pod logs) and runs ParseError to detect the language. Returns ""
+   537→// if no language can be detected.
+   538→func (a *FixProposer) detectLanguageHint(state *schemas.AgentState) string {
+   539→        var logs string
+   540→        for _, anomaly := range state.Cluster.Anomalies {
+   541→                logs += anomaly.Explanation + "\n"
+   542→        }
+   543→        if logs == "" {
+   544→                return ""
+   545→        }
+   546→        parsed := ParseError(logs)
+   547→        if parsed == nil {
+   548→                return ""
+   549→        }
+   550→        if parsed.Language == "" || parsed.Language == "unknown" {
+   551→                return ""
+   552→        }
+   553→        switch parsed.Language {
+   554→        case "python":
+   555→                return "Python (idiomatic errors: KeyError, ValueError, TypeError, ImportError, ZeroDivisionError, AttributeError)"
+   556→        case "go":
+   557→                return "Go (idiomatic errors: panic, runtime error: index out of range, nil pointer dereference, goroutine stack)"
+   558→        case "java":
+   559→                return "Java (idiomatic errors: NullPointerException, ArrayIndexOutOfBoundsException, ClassNotFoundException, IllegalArgumentException)"
+   560→        case "javascript":
+   561→                return "JavaScript/TypeScript (idiomatic errors: TypeError, ReferenceError, SyntaxError, UnhandledPromiseRejection)"
+   562→        case "rust":
+   563→                return "Rust (idiomatic errors: panic, panicked at, unwrap on None/Err, thread 'main' panicked)"
+   564→        case "ruby":
+   565→                return "Ruby (idiomatic errors: NoMethodError, NameError, ArgumentError, TypeError)"
+   566→        case "c":
+   567→                return "C/C++ (idiomatic errors: SIGSEGV, SIGABRT, Segmentation fault, assertion failed)"
+   568→        default:
+   569→                return parsed.Language
+   570→        }
+   571→}
+   572→
+   573→// llmCodeFix is used for roll_forward cases where we still need an
+   574→// LLM-generated patch in addition to the roll_forward action.
+   575→func (a *FixProposer) llmCodeFix(ctx context.Context, state *schemas.AgentState, proposal *schemas.FixProposal) {
+   576→        userMsg := a.buildUserMessage(state)
+   577→        result, err := a.router.FrontierJSON(ctx, fixProposerSystemPrompt, userMsg, 16000)
+   578→        if err != nil {
+   579→                proposal.Description = fmt.Sprintf("%s (LLM code generation failed — needs human)", proposal.Description)
+   580→                return
+   581→        }
+   582→        rawFiles, _ := result["files_to_change"].([]any)
+   583→        for _, rf := range rawFiles {
+   584→                fcMap, ok := rf.(map[string]any)
+   585→                if !ok {
+   586→                        continue
+   587→                }
+   588→                path, _ := fcMap["path"].(string)
+   589→                content, _ := fcMap["new_content"].(string)
+   590→
+   591→                validated := validateFilePath(path)
+   592→                if validated != "" {
+   593→                        proposal.FilesToChange = append(proposal.FilesToChange, schemas.FileChange{Path: validated, NewContent: content})
+   594→                }
+   595→        }
+   596→        if desc, ok := result["description"].(string); ok && desc != "" {
+   597→                proposal.Description = desc
+   598→        }
+   599→}
+   600→
+   601→// finalizeProposal sets the branch name + base branch, attaches the proposal
+   602→// to state, and appends an agent-trace entry.
+   603→func (a *FixProposer) finalizeProposal(state *schemas.AgentState, proposal *schemas.FixProposal) {
+   604→        branchName := fmt.Sprintf("sentinel/%s-%s", state.Cluster.Service, state.IncidentID.String()[:8])
+   605→        proposal.BranchName = strPtr(branchName)
+   606→        proposal.BaseBranch = strPtr(a.resolveBaseBranch(state))
+   607→
+   608→        state.FixProposal = proposal
+   609→        state.Status = schemas.StatusFixProposed
+   610→        state.AgentTrace = append(state.AgentTrace, map[string]any{
+   611→                "agent":         "fix_proposer",
+   612→                "fix_type":      string(proposal.FixType),
+   613→                "files_changed": len(proposal.FilesToChange),
+   614→                "confidence":    proposal.ProposedConfidence,
+   615→        })
+   616→}
+   617→
+   618→// resolveBaseBranch determines which branch the PR should target. Priority:
+   619→// sentinel.io/branch annotation > configured default branch. Mirrors the
+   620→// investigator's resolveBranch but WITHOUT the git-commit case (PRs target
+   621→// branches, not commits).
+   622→func (a *FixProposer) resolveBaseBranch(state *schemas.AgentState) string {
+   623→        if branch, ok := state.Cluster.Annotations["sentinel.io/branch"]; ok && branch != "" {
+   624→                return branch
+   625→        }
+   626→        for _, anomaly := range state.Cluster.Anomalies {
+   627→                if branch, ok := anomaly.Annotations["sentinel.io/branch"]; ok && branch != "" {
+   628→                        return branch
+   629→                }
+   630→        }
+   631→        db := a.defaultBranch
+   632→        if db == "" {
+   633→                db = "main"
+   634→        }
+   635→        return db
+   636→}
+   637→
+   638→// buildPRBody is the placeholder PR body written before sandbox verification.
+   639→// The actual PR body is overwritten by agents.BuildPRBody after the sandbox
+   640→// runs. The placeholder must NOT claim sandbox verification was performed —
+   641→// it hasn't been yet.
+   642→func buildPRBody(state *schemas.AgentState, rc *schemas.RootCause, fixType string) string {
+   643→        var parts []string
+   644→        parts = append(parts, "# Sentinel Autonomous Fix")
+   645→        parts = append(parts, "")
+   646→        parts = append(parts, fmt.Sprintf("**Fix type:** `%s`", fixType))
+   647→        parts = append(parts, fmt.Sprintf("**Service:** `%s` (namespace: `%s`)", state.Cluster.Service, state.Cluster.Namespace))
+   648→        parts = append(parts, fmt.Sprintf("**Confidence:** `%.3f`", rc.Confidence))
+   649→        parts = append(parts, fmt.Sprintf("**Category:** `%s`", rc.Category))
+   650→        parts = append(parts, "")
+   651→        parts = append(parts, "## Root Cause")
+   652→        parts = append(parts, rc.Statement)
+   653→        parts = append(parts, "")
+   654→        parts = append(parts, "## Evidence")
+   655→        for _, e := range state.Evidence {
+   656→                resultJSON, _ := json.Marshal(e.Result)
+   657→                resultStr := string(resultJSON)
+   658→                if len(resultStr) > MaxFixResultChars {
+   659→                        resultStr = resultStr[:MaxFixResultChars]
+   660→                }
+   661→                parts = append(parts, fmt.Sprintf("- **%s** (%s): %s", e.EID, e.Source, resultStr))
+   662→        }
+   663→        parts = append(parts, "")
+   664→        parts = append(parts, "## Files Changed")
+   665→        if state.FixProposal != nil {
+   666→                for _, f := range state.FixProposal.FilesToChange {
+   667→                        parts = append(parts, fmt.Sprintf("- `%s`", f.Path))
+   668→                }
+   669→        }
+   670→        parts = append(parts, "")
+   671→        parts = append(parts, "## Verification")
+   672→        parts = append(parts, "_Sandbox verification status will be appended by the execution layer._")
+   673→        parts = append(parts, "")
+   674→        parts = append(parts, "---")
+   675→        parts = append(parts, "_This PR was opened autonomously by Sentinel. Please review before merging._")
+   676→        return strings.Join(parts, "\n")
+   677→}
+   678→
+   679→// isValidFixType returns true if s is a recognized FixType.
+   680→func isValidFixType(s string) bool {
+   681→        switch schemas.FixType(s) {
+   682→        case schemas.FixRestart, schemas.FixScale, schemas.FixCodeFix,
+   683→                schemas.FixRollback, schemas.FixRollForward, schemas.FixInfrastructure:
+   684→                return true
+   685→        }
+   686→        return false
+   687→}
+   688→
+   689→// strPtr returns a pointer to s. Convenience for optional string fields.
+   690→func strPtr(s string) *string { return &s }
+   691→
+   692→// extractMetadataJSON extracts the small JSON metadata object from the LLM
+   693→// output. The LLM outputs {"fix_type":"code_fix",...} before the SEARCH/REPLACE
+   694→// blocks. If the output starts with SEARCH/REPLACE blocks (no JSON), returns
+   695→// an empty map.
+   696→func extractMetadataJSON(rawOutput string) map[string]any {
+   697→        if strings.Contains(rawOutput, "<<<<<<< SEARCH") {
+   698→                idx := strings.Index(rawOutput, "<<<<<<< SEARCH")
+   699→                if idx > 0 {
+   700→                        beforeBlocks := rawOutput[:idx]
+   701→                        return llm.ExtractJSON(beforeBlocks)
+   702→                }
+   703→        }
+   704→        return llm.ExtractJSON(rawOutput)
+   705→}
+   706→
+   707→// normalizeFilePath matches the LLM-provided file path against the keys in
+   708→// FetchedCode. LLMs often use container paths (e.g. /app/app/main.py) or
+   709→// add/remove leading directories. Returns the matching fetched-code key, or
+   710→// the original path if no match.
+   711→func normalizeFilePath(path string, fetchedCode map[string]string) string {
+   712→        if path == "" {
+   713→                return ""
+   714→        }
+   715→        // Exact match.
+   716→        if _, ok := fetchedCode[path]; ok {
+   717→                return path
+   718→        }
+   719→        // Path is a suffix of a fetched key (LLM used /app/app/main.py, key is app/main.py).
+   720→        for key := range fetchedCode {
+   721→                if strings.HasSuffix(key, path) || strings.HasSuffix(path, key) {
+   722→                        return key
+   723→                }
+   724→        }
+   725→        // Strip leading directories from path.
+   726→        parts := strings.Split(path, "/")
+   727→        for i := 0; i < len(parts); i++ {
+   728→                shortPath := strings.Join(parts[i:], "/")
+   729→                if _, ok := fetchedCode[shortPath]; ok {
+   730→                        return shortPath
+   731→                }
+   732→        }
+   733→        // No match — return as-is (the apply step will fail with a clear error).
+   734→        return path
+   735→}
+   736→

@@ -1,0 +1,618 @@
+     1→package api
+     2→
+     3→import (
+     4→        "bytes"
+     5→        "encoding/json"
+     6→        "fmt"
+     7→        "io"
+     8→        "net/http"
+     9→        "net/http/pprof"
+    10→        "strconv"
+    11→        "strings"
+    12→        "time"
+    13→
+    14→        "github.com/google/uuid"
+    15→
+    16→        "github.com/karimzakzouk/sentinel/internal/chatops"
+    17→        "github.com/karimzakzouk/sentinel/internal/logging"
+    18→        "github.com/karimzakzouk/sentinel/internal/metrics"
+    19→        "github.com/karimzakzouk/sentinel/internal/schemas"
+    20→        "github.com/karimzakzouk/sentinel/internal/version"
+    21→)
+    22→
+    23→// handleHealthz is the liveness probe — always 200 with the version + auth state.
+    24→func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
+    25→        writeJSON(w, 200, map[string]any{
+    26→                "status":        "ok",
+    27→                "service":       "core",
+    28→                "version":       version.Version,
+    29→                "auth_required": s.apiToken != "",
+    30→        })
+    31→}
+    32→
+    33→// handleReadyz is the readiness probe — 200 only when readyChecker returns true.
+    34→func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
+    35→        ready := s.readyChecker()
+    36→        status := "not_ready"
+    37→        if ready {
+    38→                status = "ready"
+    39→        }
+    40→        writeJSON(w, 200, map[string]any{"status": status, "ready": ready})
+    41→}
+    42→
+    43→// handleMetrics serves the Prometheus exposition format from the metrics package.
+    44→func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
+    45→        w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+    46→        metrics.Handler().ServeHTTP(w, r)
+    47→}
+    48→
+    49→// handleMetricsSummary returns a count of incidents by lifecycle bucket
+    50→// (active / resolved / failed) over the most recent 100 incidents.
+    51→func (s *Server) handleMetricsSummary(w http.ResponseWriter, r *http.Request) {
+    52→        incidents, _ := s.store.ListRecentIncidents(r.Context(), 100)
+    53→        active, resolved, failed := 0, 0, 0
+    54→        for _, inc := range incidents {
+    55→                status := string(inc.Status)
+    56→                switch {
+    57→                case strings.Contains("investigating root_caused fix_proposed approved executing", status):
+    58→                        active++
+    59→                case strings.Contains("verified resolved", status):
+    60→                        resolved++
+    61→                case strings.Contains("failed rejected escalated", status):
+    62→                        failed++
+    63→                }
+    64→        }
+    65→        writeJSON(w, 200, map[string]int{
+    66→                "active":       active,
+    67→                "resolved_24h": resolved,
+    68→                "failed":       failed,
+    69→                "total":        len(incidents),
+    70→        })
+    71→}
+    72→
+    73→// handleIncidents lists recent incidents (GET) with a limit query param.
+    74→func (s *Server) handleIncidents(w http.ResponseWriter, r *http.Request) {
+    75→        limit := 50
+    76→        if l := r.URL.Query().Get("limit"); l != "" {
+    77→                if n, err := fmt.Sscanf(l, "%d", &limit); err != nil || n == 0 {
+    78→                        limit = 50
+    79→                }
+    80→        }
+    81→        incidents, err := s.store.ListRecentIncidents(r.Context(), limit)
+    82→        if err != nil {
+    83→                writeJSON(w, 500, map[string]string{"error": err.Error()})
+    84→                return
+    85→        }
+    86→        // Mirror pr_number/pr_url/etc from state.execution_result → top-level
+    87→        // fields so the frontend's PRs tab + incident detail can read them
+    88→        // without digging into the nested state object.
+    89→        for _, inc := range incidents {
+    90→                enrichIncidentPRFields(inc)
+    91→        }
+    92→        writeJSON(w, 200, incidents)
+    93→}
+    94→
+    95→// handleIncident returns a single incident by full UUID or short prefix.
+    96→func (s *Server) handleIncident(w http.ResponseWriter, r *http.Request) {
+    97→        idStr := strings.TrimPrefix(r.URL.Path, "/incidents/")
+    98→
+    99→        id, err := uuid.Parse(idStr)
+   100→        if err == nil {
+   101→                // Full UUID — direct lookup.
+   102→                incident, err := s.store.GetIncident(r.Context(), id)
+   103→                if err != nil {
+   104→                        writeJSON(w, 500, map[string]string{"error": err.Error()})
+   105→                        return
+   106→                }
+   107→                if incident == nil {
+   108→                        writeJSON(w, 404, map[string]string{"error": "incident not found"})
+   109→                        return
+   110→                }
+   111→                enrichIncidentPRFields(incident)
+   112→                writeJSON(w, 200, incident)
+   113→                return
+   114→        }
+   115→
+   116→        // Not a full UUID — try prefix matching. FindIncidentByPrefix requires
+   117→        // ≥4 chars to prevent accidental collisions on short prefixes.
+   118→        incident, err := s.store.FindIncidentByPrefix(r.Context(), idStr)
+   119→        if err != nil {
+   120→                writeJSON(w, 500, map[string]string{"error": err.Error()})
+   121→                return
+   122→        }
+   123→        if incident == nil {
+   124→                writeJSON(w, 404, map[string]string{"error": "no incident matches that ID prefix (need at least 4 chars)"})
+   125→                return
+   126→        }
+   127→        enrichIncidentPRFields(incident)
+   128→        writeJSON(w, 200, incident)
+   129→}
+   130→
+   131→// enrichIncidentPRFields mirrors pr_number/pr_url/pr_branch +
+   132→// sandbox_summary + sandbox_verified from the nested state.execution_result
+   133→// (which is what the agents write to) onto the top-level Incident fields
+   134→// (which is what the frontend reads). Keeps the JSON contract stable
+   135→// without rewriting every SELECT.
+   136→func enrichIncidentPRFields(inc *schemas.Incident) {
+   137→        if inc == nil {
+   138→                return
+   139→        }
+   140→        if er := inc.State.ExecutionResult; er != nil {
+   141→                if inc.PRNumber == nil && er.PRNumber != nil {
+   142→                        inc.PRNumber = er.PRNumber
+   143→                }
+   144→                if inc.PRURL == "" && er.PRURL != nil {
+   145→                        inc.PRURL = *er.PRURL
+   146→                }
+   147→                if inc.PRBranch == "" && er.PRBranch != nil {
+   148→                        inc.PRBranch = *er.PRBranch
+   149→                }
+   150→                if inc.SandboxSummary == "" && er.SandboxSummary != nil {
+   151→                        inc.SandboxSummary = *er.SandboxSummary
+   152→                }
+   153→                if !inc.SandboxVerified && er.SandboxVerified {
+   154→                        inc.SandboxVerified = er.SandboxVerified
+   155→                }
+   156→        }
+   157→        if fp := inc.State.FixProposal; fp != nil {
+   158→                if inc.FixType == "" {
+   159→                        inc.FixType = string(fp.FixType)
+   160→                }
+   161→        }
+   162→}
+   163→
+   164→// handleSettings GET returns the current settings; POST saves new settings
+   165→// via the runtimecfg saver.
+   166→func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
+   167→        if r.Method == http.MethodGet {
+   168→                writeJSON(w, 200, s.settings())
+   169→                return
+   170→        }
+   171→
+   172→        if r.Method == http.MethodPost {
+   173→                if s.rtCfgSaver == nil {
+   174→                        writeJSON(w, 501, map[string]string{"error": "runtime config saver not configured"})
+   175→                        return
+   176→                }
+   177→                body, err := readBody(r)
+   178→                if err != nil {
+   179→                        writeJSON(w, 400, map[string]string{"error": "read body failed"})
+   180→                        return
+   181→                }
+   182→                if err := s.rtCfgSaver.SaveFromJSON([]byte(body)); err != nil {
+   183→                        writeJSON(w, 500, map[string]string{"error": err.Error()})
+   184→                        return
+   185→                }
+   186→                logging.Info("api: runtime config saved via POST /settings")
+   187→                writeJSON(w, 200, map[string]string{
+   188→                        "status":  "saved",
+   189→                        "message": "Configuration saved. Some changes may require a restart to take full effect.",
+   190→                })
+   191→                return
+   192→        }
+   193→        writeJSON(w, 405, map[string]string{"error": "method not allowed"})
+   194→}
+   195→
+   196→// handleWhoami returns 200 if the caller has a valid token. Used by the
+   197→// frontend LoginGate to validate the token against an authenticated endpoint.
+   198→func (s *Server) handleWhoami(w http.ResponseWriter, r *http.Request) {
+   199→        writeJSON(w, 200, map[string]string{"status": "ok"})
+   200→}
+   201→
+   202→// handleInvestigate is the manual-trigger endpoint. POST with a JSON body
+   203→// {service, namespace, reason} triggers a new investigation.
+   204→func (s *Server) handleInvestigate(w http.ResponseWriter, r *http.Request) {
+   205→        if r.Method != http.MethodPost {
+   206→                writeJSON(w, 405, map[string]string{"error": "method not allowed"})
+   207→                return
+   208→        }
+   209→        var spec struct {
+   210→                Service   string `json:"service"`
+   211→                Namespace string `json:"namespace"`
+   212→                Reason    string `json:"reason"`
+   213→                Repo      string `json:"repo"`
+   214→                PodLogs   string `json:"pod_logs"`
+   215→        }
+   216→        r.Body = http.MaxBytesReader(nil, r.Body, maxRequestBodyBytes)
+   217→        if err := json.NewDecoder(r.Body).Decode(&spec); err != nil {
+   218→                writeJSON(w, 400, map[string]string{"error": "invalid JSON"})
+   219→                return
+   220→        }
+   221→        if spec.Service == "" {
+   222→                writeJSON(w, 400, map[string]string{"error": "service is required"})
+   223→                return
+   224→        }
+   225→        if spec.Namespace == "" {
+   226→                spec.Namespace = "default"
+   227→        }
+   228→        if spec.Reason == "" {
+   229→                spec.Reason = "manual trigger"
+   230→        }
+   231→        if s.investigateWithLogs != nil {
+   232→                clusterID, err := s.investigateWithLogs(spec.Service, spec.Namespace, spec.Reason, spec.Repo, spec.PodLogs)
+   233→                if err != nil {
+   234→                        writeJSON(w, 500, map[string]string{"error": err.Error()})
+   235→                        return
+   236→                }
+   237→                writeJSON(w, 200, map[string]string{"status": "triggered", "service": spec.Service, "cluster_id": clusterID})
+   238→                return
+   239→        }
+   240→        clusterID, err := s.investigate(spec.Service, spec.Namespace, spec.Reason)
+   241→        if err != nil {
+   242→                writeJSON(w, 500, map[string]string{"error": err.Error()})
+   243→                return
+   244→        }
+   245→        writeJSON(w, 200, map[string]string{
+   246→                "status":     "triggered",
+   247→                "service":    spec.Service,
+   248→                "cluster_id": clusterID,
+   249→        })
+   250→}
+   251→
+   252→// handlePause pauses autonomous mode for a configurable duration (default 30min).
+   253→func (s *Server) handlePause(w http.ResponseWriter, r *http.Request) {
+   254→        if r.Method != http.MethodPost {
+   255→                writeJSON(w, 405, map[string]string{"error": "method not allowed"})
+   256→                return
+   257→        }
+   258→        if s.pauseController == nil {
+   259→                writeJSON(w, 503, map[string]string{"error": "pause controller not configured"})
+   260→                return
+   261→        }
+   262→        var req struct {
+   263→                DurationMin int    `json:"duration_min"`
+   264→                Reason      string `json:"reason"`
+   265→        }
+   266→        if r.Body != nil {
+   267→                r.Body = http.MaxBytesReader(nil, r.Body, maxRequestBodyBytes)
+   268→                _ = json.NewDecoder(r.Body).Decode(&req)
+   269→        }
+   270→        if req.DurationMin <= 0 {
+   271→                req.DurationMin = 30
+   272→        }
+   273→        if req.Reason == "" {
+   274→                req.Reason = "paused via CLI"
+   275→        }
+   276→        s.pauseController.Pause(time.Duration(req.DurationMin)*time.Minute, req.Reason)
+   277→        writeJSON(w, 200, map[string]any{
+   278→                "status":       "paused",
+   279→                "duration_min": req.DurationMin,
+   280→                "reason":       req.Reason,
+   281→        })
+   282→}
+   283→
+   284→// handleResume resumes autonomous mode immediately.
+   285→func (s *Server) handleResume(w http.ResponseWriter, r *http.Request) {
+   286→        if r.Method != http.MethodPost {
+   287→                writeJSON(w, 405, map[string]string{"error": "method not allowed"})
+   288→                return
+   289→        }
+   290→        if s.pauseController == nil {
+   291→                writeJSON(w, 503, map[string]string{"error": "pause controller not configured"})
+   292→                return
+   293→        }
+   294→        s.pauseController.Resume()
+   295→        writeJSON(w, 200, map[string]string{"status": "resumed"})
+   296→}
+   297→
+   298→// maxSSESubscribers caps concurrent SSE connections to prevent memory
+   299→// exhaustion DoS. SSE is unauthenticated (when apiToken is empty) and
+   300→// each subscriber pins a goroutine + 16-entry buffered channel + map
+   301→// entry (~10KB). 100 subscribers is generous for a single-pod dashboard.
+   302→const maxSSESubscribers = 100
+   303→
+   304→// handleSSE streams events to the client. Subscribes to the broadcaster,
+   305→// writes "data: {...}\n\n" frames, and flushes on each event. A 15s
+   306→// keep-alive ping prevents intermediate proxies from closing the connection.
+   307→func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
+   308→        w.Header().Set("Content-Type", "text/event-stream")
+   309→        w.Header().Set("Cache-Control", "no-cache")
+   310→        w.Header().Set("Connection", "keep-alive")
+   311→        w.Header().Set("Access-Control-Allow-Origin", "*")
+   312→
+   313→        flusher, ok := w.(http.Flusher)
+   314→        if !ok {
+   315→                http.Error(w, "streaming not supported", http.StatusInternalServerError)
+   316→                return
+   317→        }
+   318→
+   319→        s.eventSubsMu.Lock()
+   320→        if len(s.eventSubs) >= maxSSESubscribers {
+   321→                s.eventSubsMu.Unlock()
+   322→                http.Error(w, "too many SSE subscribers (max "+strconv.Itoa(maxSSESubscribers)+")", http.StatusServiceUnavailable)
+   323→                return
+   324→        }
+   325→        ch := make(chan ServerEvent, 16)
+   326→        s.eventSubs[ch] = true
+   327→        s.eventSubsMu.Unlock()
+   328→        defer func() {
+   329→                s.eventSubsMu.Lock()
+   330→                delete(s.eventSubs, ch)
+   331→                s.eventSubsMu.Unlock()
+   332→        }()
+   333→
+   334→        // Send events as unnamed SSE messages (no `event:` line) so the
+   335→        // frontend's EventSource.onmessage handler fires for every event.
+   336→        // The event type is embedded in the JSON payload's `type` field.
+   337→        fmt.Fprintf(w, "data: {\"type\":\"connected\",\"status\":\"connected\"}\n\n")
+   338→        flusher.Flush()
+   339→
+   340→        ticker := time.NewTicker(15 * time.Second)
+   341→        defer ticker.Stop()
+   342→
+   343→        for {
+   344→                select {
+   345→                case <-r.Context().Done():
+   346→                        return
+   347→                case event := <-ch:
+   348→                        data, _ := json.Marshal(event)
+   349→                        fmt.Fprintf(w, "data: %s\n\n", data)
+   350→                        flusher.Flush()
+   351→                case <-ticker.C:
+   352→                        fmt.Fprintf(w, ": ping\n\n")
+   353→                        flusher.Flush()
+   354→                }
+   355→        }
+   356→}
+   357→
+   358→// handleWebhook dispatches /webhook/github to the prreview + chatops
+   359→// handlers. The body is buffered once so both handlers can read it; each
+   360→// handler ignores event types it doesn't care about.
+   361→func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
+   362→        if s.webhookHandler == nil && s.chatopsHandler == nil {
+   363→                writeJSON(w, 503, map[string]string{"error": "webhook handler not configured"})
+   364→                return
+   365→        }
+   366→
+   367→        bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, 1<<20)) // 1MB cap.
+   368→        if err != nil {
+   369→                writeJSON(w, 400, map[string]string{"error": "read body failed"})
+   370→                return
+   371→        }
+   372→        multiReader := func() io.Reader { return bytes.NewReader(bodyBytes) }
+   373→
+   374→        // 1. Dispatch to prreview (predictive PR review — pull_request events).
+   375→        if s.webhookHandler != nil {
+   376→                req := r.Clone(r.Context())
+   377→                req.Body = io.NopCloser(multiReader())
+   378→                s.webhookHandler.ServeHTTP(w, req)
+   379→        }
+   380→
+   381→        // 2. Dispatch to chatops (issue_comment events for /sentinel commands).
+   382→        // Short-circuit for non-issue_comment events so we don't buffer +
+   383→        // parse for events chatops doesn't care about.
+   384→        if s.chatopsHandler != nil {
+   385→                eventType := r.Header.Get("X-GitHub-Event")
+   386→                if eventType == "issue_comment" {
+   387→                        req := r.Clone(r.Context())
+   388→                        req.Body = io.NopCloser(multiReader())
+   389→                        s.chatopsHandler.ServeHTTP(w, req)
+   390→                }
+   391→        }
+   392→}
+   393→
+   394→// handleSlack forwards /slack/events to the Slack Events API handler.
+   395→func (s *Server) handleSlack(w http.ResponseWriter, r *http.Request) {
+   396→        if s.slackHandler == nil {
+   397→                writeJSON(w, 503, map[string]string{"error": "slack handler not configured"})
+   398→                return
+   399→        }
+   400→        s.slackHandler.ServeHTTP(w, r)
+   401→}
+   402→
+   403→// handleAlertmanager forwards /webhook/alertmanager to the Alertmanager
+   404→// webhook receiver.
+   405→func (s *Server) handleAlertmanager(w http.ResponseWriter, r *http.Request) {
+   406→        if s.alertmanagerHandler == nil {
+   407→                writeJSON(w, 503, map[string]string{"error": "alertmanager handler not configured"})
+   408→                return
+   409→        }
+   410→        s.alertmanagerHandler.ServeHTTP(w, r)
+   411→}
+   412→
+   413→// handleGitHubApp manages the GitHub App config.
+   414→// GET    → status (configured? app_id? slug? install_id?).
+   415→// POST   → store App ID + PEM + optional install ID + webhook secret.
+   416→// DELETE → remove App config (fall back to PAT).
+   417→func (s *Server) handleGitHubApp(w http.ResponseWriter, r *http.Request) {
+   418→        if s.githubAppManager == nil {
+   419→                writeJSON(w, 503, map[string]string{"error": "github app manager not configured"})
+   420→                return
+   421→        }
+   422→
+   423→        switch r.Method {
+   424→        case http.MethodGet:
+   425→                status := s.githubAppManager.GetGitHubAppStatus()
+   426→                writeJSON(w, 200, status)
+   427→
+   428→        case http.MethodPost:
+   429→                r.Body = http.MaxBytesReader(nil, r.Body, maxRequestBodyBytes)
+   430→                var req struct {
+   431→                        AppID         string `json:"app_id"`
+   432→                        PrivateKey    string `json:"private_key"`
+   433→                        InstallID     string `json:"install_id"`
+   434→                        WebhookSecret string `json:"webhook_secret"`
+   435→                }
+   436→                if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+   437→                        writeJSON(w, 400, map[string]string{"error": "invalid JSON: " + err.Error()})
+   438→                        return
+   439→                }
+   440→                if req.AppID == "" || req.PrivateKey == "" {
+   441→                        writeJSON(w, 400, map[string]string{"error": "app_id and private_key are required"})
+   442→                        return
+   443→                }
+   444→                slug, err := s.githubAppManager.SetGitHubApp(req.AppID, req.PrivateKey, req.InstallID, req.WebhookSecret)
+   445→                if err != nil {
+   446→                        writeJSON(w, 500, map[string]string{"error": err.Error()})
+   447→                        return
+   448→                }
+   449→                logging.Info("api: GitHub App configured", "app_id", req.AppID, "slug", slug)
+   450→                writeJSON(w, 200, map[string]string{
+   451→                        "status": "configured",
+   452→                        "slug":   slug,
+   453→                        "bot":    slug + "[bot]",
+   454→                        "hint":   "If install_id was empty, run `sentinelctl app set-install <id>` after installing the App.",
+   455→                })
+   456→
+   457→        case http.MethodDelete:
+   458→                if err := s.githubAppManager.RemoveGitHubApp(); err != nil {
+   459→                        writeJSON(w, 500, map[string]string{"error": err.Error()})
+   460→                        return
+   461→                }
+   462→                logging.Info("api: GitHub App config removed")
+   463→                writeJSON(w, 200, map[string]string{
+   464→                        "status":  "removed",
+   465→                        "message": "Falling back to PAT.",
+   466→                })
+   467→
+   468→        default:
+   469→                writeJSON(w, 405, map[string]string{"error": "method not allowed"})
+   470→        }
+   471→}
+   472→
+   473→// handleGitHubAppInstall sets just the installation ID. Called separately
+   474→// from the App credentials because the install ID isn't known until the
+   475→// user installs the App on their repo.
+   476→func (s *Server) handleGitHubAppInstall(w http.ResponseWriter, r *http.Request) {
+   477→        if s.githubAppManager == nil {
+   478→                writeJSON(w, 503, map[string]string{"error": "github app manager not configured"})
+   479→                return
+   480→        }
+   481→        if r.Method != http.MethodPost {
+   482→                writeJSON(w, 405, map[string]string{"error": "method not allowed"})
+   483→                return
+   484→        }
+   485→        var req struct {
+   486→                InstallID string `json:"install_id"`
+   487→        }
+   488→        if err := json.NewDecoder(http.MaxBytesReader(nil, r.Body, maxRequestBodyBytes)).Decode(&req); err != nil {
+   489→                writeJSON(w, 400, map[string]string{"error": "invalid JSON: " + err.Error()})
+   490→                return
+   491→        }
+   492→        if req.InstallID == "" {
+   493→                writeJSON(w, 400, map[string]string{"error": "install_id is required"})
+   494→                return
+   495→        }
+   496→        if err := s.githubAppManager.SetGitHubAppInstall(req.InstallID); err != nil {
+   497→                writeJSON(w, 500, map[string]string{"error": err.Error()})
+   498→                return
+   499→        }
+   500→        logging.Info("api: GitHub App install ID set", "install_id", req.InstallID)
+   501→        writeJSON(w, 200, map[string]string{"status": "configured", "install_id": req.InstallID})
+   502→}
+   503→
+   504→// handleProviders returns the LLM provider pool status. Used by the web UI's
+   505→// "LLM Providers" panel.
+   506→func (s *Server) handleProviders(w http.ResponseWriter, r *http.Request) {
+   507→        if s.providersStatus == nil {
+   508→                writeJSON(w, 200, map[string]any{
+   509→                        "enabled":   false,
+   510→                        "providers": []any{},
+   511→                        "message":   "multi-provider pool not configured (single-provider mode)",
+   512→                })
+   513→                return
+   514→        }
+   515→        statuses := s.providersStatus.ProviderStatuses()
+   516→        writeJSON(w, 200, map[string]any{
+   517→                "enabled":   len(statuses) > 0,
+   518→                "providers": statuses,
+   519→        })
+   520→}
+   521→
+   522→// handleAutoMerge returns the auto-merge policy status + tracked PRs.
+   523→func (s *Server) handleAutoMerge(w http.ResponseWriter, r *http.Request) {
+   524→        if s.autoMergeStatus == nil {
+   525→                writeJSON(w, 200, map[string]any{
+   526→                        "enabled": false,
+   527→                        "message": "auto-merge not configured",
+   528→                })
+   529→                return
+   530→        }
+   531→        writeJSON(w, 200, s.autoMergeStatus.AutoMergeStatus())
+   532→}
+   533→
+   534→// handleAPIMeta returns the chatops command list + available API endpoints
+   535→// so the frontend doesn't have to hardcode them. This avoids the v5 bug
+   536→// where the frontend drifted from the backend command registry.
+   537→func (s *Server) handleAPIMeta(w http.ResponseWriter, r *http.Request) {
+   538→        // chatopsCommands is the serialized form of chatops.AllCommands(). Built
+   539→        // once per request from the live registry — never hardcoded.
+   540→        type chatopsCommandMeta struct {
+   541→                Name        string `json:"name"`
+   542→                Description string `json:"description"`
+   543→                Usage       string `json:"usage"`
+   544→                Example     string `json:"example"`
+   545→                Permission  string `json:"permission"`
+   546→                Tier        string `json:"tier"`
+   547→                Cancelable  bool   `json:"cancelable"`
+   548→        }
+   549→        commands := make([]chatopsCommandMeta, 0, len(chatops.AllCommands()))
+   550→        for _, c := range chatops.AllCommands() {
+   551→                commands = append(commands, chatopsCommandMeta{
+   552→                        Name:        c.Name,
+   553→                        Description: c.Description,
+   554→                        Usage:       c.Usage,
+   555→                        Example:     c.Example,
+   556→                        Permission:  c.Permission.String(),
+   557→                        Tier:        c.Tier,
+   558→                        Cancelable:  c.Cancelable,
+   559→                })
+   560→        }
+   561→        writeJSON(w, 200, map[string]any{
+   562→                "version":       version.Version,
+   563→                "endpoints":     apiMetaEndpoints,
+   564→                "commands":      commands,
+   565→                "auth_required": s.apiToken != "",
+   566→        })
+   567→}
+   568→
+   569→// apiMetaEndpoints is the static list of routes the API exposes. Kept as a
+   570→// package-level var so it isn't reallocated on every /api/meta call.
+   571→var apiMetaEndpoints = []string{
+   572→        "/healthz",
+   573→        "/readyz",
+   574→        "/incidents",
+   575→        "/incidents/{id}",
+   576→        "/admin/investigate",
+   577→        "/admin/pause",
+   578→        "/admin/resume",
+   579→        "/settings",
+   580→        "/settings/github-app",
+   581→        "/settings/github-app-install",
+   582→        "/providers",
+   583→        "/automerge",
+   584→        "/metrics",
+   585→        "/metrics-summary",
+   586→        "/events",
+   587→        "/api/meta",
+   588→}
+   589→
+   590→// handleWebUI serves the embedded Next.js dashboard. Falls back to a small
+   591→// placeholder HTML page when the UI is not built.
+   592→func (s *Server) handleWebUI(w http.ResponseWriter, r *http.Request) {
+   593→        if s.webUIHandler == nil {
+   594→                w.Header().Set("Content-Type", "text/html; charset=utf-8")
+   595→                w.Write([]byte(`<!DOCTYPE html><html><head><title>Sentinel</title></head><body style="background:#0A0A0B;color:#A1A1AA;font-family:monospace;padding:40px"><h1 style="color:#06B6D4">Sentinel</h1><p>Web UI not built. API at /healthz, /incidents, /metrics.</p></body></html>`))
+   596→                return
+   597→        }
+   598→        s.webUIHandler.ServeHTTP(w, r)
+   599→}
+   600→
+   601→// handlePprof delegates to net/http/pprof for production profiling. The
+   602→// URL path selects the pprof function — pprof.Index handles the index
+   603→// page + heap/goroutine/threadcreate/block/mutex profiles.
+   604→func (s *Server) handlePprof(w http.ResponseWriter, r *http.Request) {
+   605→        switch r.URL.Path {
+   606→        case "/debug/pprof/cmdline":
+   607→                pprof.Cmdline(w, r)
+   608→        case "/debug/pprof/profile":
+   609→                pprof.Profile(w, r)
+   610→        case "/debug/pprof/symbol":
+   611→                pprof.Symbol(w, r)
+   612→        case "/debug/pprof/trace":
+   613→                pprof.Trace(w, r)
+   614→        default:
+   615→                pprof.Index(w, r)
+   616→        }
+   617→}
+   618→

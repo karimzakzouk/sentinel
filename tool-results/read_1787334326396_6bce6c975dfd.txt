@@ -1,0 +1,748 @@
+     1→     1→// Package main — wiring constructor.
+     2→     2→//
+     3→     3→// wire.go contains the wire() function that instantiates every Sentinel
+     4→     4→// component in dependency order and returns a fully-constructed *wiring.
+     5→     5→// Split from main.go so main.go stays a small, readable entry point
+     6→     6→// (main + run); the construction logic is linear and reads top-to-bottom
+     7→     7→// here.
+     8→     8→//
+     9→     9→// Construction is in five phases:
+    10→    10→//
+    11→    11→//  1. Storage + infra (store, k8s, router, embedder, vectorStore, pipeline).
+    12→    12→//  2. Executors + safety (ghExec, k8sExec, sandbox, kaniko, policy).
+    13→    13→//  3. Detection + correlation (tracker, clusterer, detector, correlator,
+    14→    14→//     outcomeWatcher, alertmanager receiver, CRD watcher).
+    15→    15→//  4. Tier 1/2 features (attest, prometheus, postmerge, slo, causal,
+    16→    16→//     admission, llmcost-implicit, chaos).
+    17→    17→//  5. API surface (prreview, chatops, automerge, slackbot, apiServer).
+    18→    18→//
+    19→    19→// The runtimecfg apply callback is registered LAST, after every component
+    20→    20→// it mutates has been constructed.
+    21→    21→package main
+    22→    22→
+    23→    23→import (
+    24→    24→        "context"
+    25→    25→        "fmt"
+    26→    26→        "net/http"
+    27→    27→        "os"
+    28→    28→        "sync/atomic"
+    29→    29→        "time"
+    30→    30→
+    31→    31→        "github.com/google/uuid"
+    32→    32→
+    33→    33→        "github.com/karimzakzouk/sentinel/internal/agent"
+    34→    34→        "github.com/karimzakzouk/sentinel/internal/agents"
+    35→    35→        "github.com/karimzakzouk/sentinel/internal/alertmanager"
+    36→    36→        "github.com/karimzakzouk/sentinel/internal/api"
+    37→    37→        "github.com/karimzakzouk/sentinel/internal/attest"
+    38→    38→        "github.com/karimzakzouk/sentinel/internal/automerge"
+    39→    39→        "github.com/karimzakzouk/sentinel/internal/causal"
+    40→    40→        "github.com/karimzakzouk/sentinel/internal/chaos"
+    41→    41→        "github.com/karimzakzouk/sentinel/internal/chatops"
+    42→    42→        "github.com/karimzakzouk/sentinel/internal/config"
+    43→    43→        "github.com/karimzakzouk/sentinel/internal/correlation"
+    44→    44→        "github.com/karimzakzouk/sentinel/internal/detection"
+    45→    45→        "github.com/karimzakzouk/sentinel/internal/emb"
+    46→    46→        "github.com/karimzakzouk/sentinel/internal/events"
+    47→    47→        "github.com/karimzakzouk/sentinel/internal/executors"
+    48→    48→        "github.com/karimzakzouk/sentinel/internal/feedback"
+    49→    49→        "github.com/karimzakzouk/sentinel/internal/k8s"
+    50→    50→        "github.com/karimzakzouk/sentinel/internal/llm"
+    51→    51→        "github.com/karimzakzouk/sentinel/internal/logging"
+    52→    52→        "github.com/karimzakzouk/sentinel/internal/metrics"
+    53→    53→        "github.com/karimzakzouk/sentinel/internal/observability"
+    54→    54→        "github.com/karimzakzouk/sentinel/internal/postmerge"
+    55→    55→        "github.com/karimzakzouk/sentinel/internal/prreview"
+    56→    56→        "github.com/karimzakzouk/sentinel/internal/runtimecfg"
+    57→    57→        "github.com/karimzakzouk/sentinel/internal/safeactions"
+    58→    58→        "github.com/karimzakzouk/sentinel/internal/safety"
+    59→    59→        "github.com/karimzakzouk/sentinel/internal/schemas"
+    60→    60→        "github.com/karimzakzouk/sentinel/internal/slackbot"
+    61→    61→        "github.com/karimzakzouk/sentinel/internal/slo"
+    62→    62→        "github.com/karimzakzouk/sentinel/internal/watcher"
+    63→    63→        "github.com/karimzakzouk/sentinel/internal/web"
+    64→    64→)
+    65→    65→
+    66→    66→func wire(cfg *config.Config, listenAddr string) (*wiring, error) {
+    67→    67→        w := &wiring{
+    68→    68→                cfg:         cfg,
+    69→    69→                broadcaster: events.Noop(),
+    70→    70→                ready:       &atomic.Bool{},
+    71→    71→        }
+    72→    72→
+    73→    73→        // --- Phase 1: Storage + infra ---
+    74→    74→
+    75→    75→        store, err := feedback.New(cfg.SQLitePath)
+    76→    76→        if err != nil {
+    77→    77→                return nil, fmt.Errorf("storage init: %w", err)
+    78→    78→        }
+    79→    79→        w.store = store
+    80→    80→
+    81→    81→        k8sClient, err := k8s.New()
+    82→    82→        if err != nil {
+    83→    83→                _ = store.Close()
+    84→    84→                return nil, fmt.Errorf("k8s client: %w", err)
+    85→    85→        }
+    86→    86→        w.k8sClient = k8sClient
+    87→    87→
+    88→    88→        router := llm.NewWithProvider(cfg.LLMProvider, cfg.ResolvedBaseURL(), cfg.LLMAPIKey, cfg.LLMFastModel, cfg.LLMFrontierModel)
+    89→    89→        router.SetRetryConfig(cfg.LLMMaxRetries, time.Duration(cfg.LLMRetryBaseDelayMs)*time.Millisecond)
+    90→    90→        if cfg.LLMProvider == "bedrock" {
+    91→    91→                router.SetBedrockRegion(func() string {
+    92→    92→                        r := os.Getenv("AWS_REGION")
+    93→    93→                        if r == "" {
+    94→    94→                                return "us-east-1"
+    95→    95→                        }
+    96→    96→                        return r
+    97→    97→                }())
+    98→    98→        }
+    99→    99→        if len(cfg.LLMProviders) > 0 {
+   100→   100→                pool := llm.NewPool(cfg.LLMProviders)
+   101→   101→                pool.SetRetryConfig(cfg.LLMMaxRetries, time.Duration(cfg.LLMRetryBaseDelayMs)*time.Millisecond)
+   102→   102→                router.SetPool(pool)
+   103→   103→                logging.Info("LLM failover pool enabled",
+   104→   104→                        "providers", len(cfg.LLMProviders),
+   105→   105→                        "mode", "multi-provider",
+   106→   106→                )
+   107→   107→        } else {
+   108→   108→                logging.Info("LLM failover pool disabled (single-provider mode)",
+   109→   109→                        "provider", cfg.LLMProvider,
+   110→   110→                        "hint", "set SENTINEL_LLM_PROVIDERS to enable multi-key failover",
+   111→   111→                )
+   112→   112→        }
+   113→   113→        w.router = router
+   114→   114→
+   115→   115→        llm.SetMetricsRecorder(func(model, status string, duration time.Duration, inputTokens, outputTokens int) {
+   116→   116→                metrics.RecordLLMCall(model, status, duration)
+   117→   117→                if status == "success" && (inputTokens > 0 || outputTokens > 0) {
+   118→   118→                        metrics.RecordLLMTokens(model, inputTokens, outputTokens)
+   119→   119→                }
+   120→   120→        })
+   121→   121→        llm.SetInFlightHooks(metrics.LLMCallStart, metrics.LLMCallEnd)
+   122→   122→
+   123→   123→        // Embedder + vector store. Auto-detects remote embeddings when an API
+   124→   124→        // key is set; falls back to TF-IDF otherwise.
+   125→   125→        embAPIKey := cfg.EmbeddingAPIKey
+   126→   126→        if embAPIKey == "" && cfg.LLMEmbeddingModel != "" {
+   127→   127→                embAPIKey = cfg.LLMAPIKey
+   128→   128→        }
+   129→   129→        embBaseURL := cfg.EmbeddingBaseURL
+   130→   130→        if embBaseURL == "" && cfg.LLMEmbeddingModel != "" {
+   131→   131→                embBaseURL = cfg.ResolvedBaseURL()
+   132→   132→        }
+   133→   133→        embedder, err := emb.New(emb.Config{
+   134→   134→                Provider:  cfg.EmbeddingProvider,
+   135→   135→                Model:     cfg.LLMEmbeddingModel,
+   136→   136→                APIKey:    embAPIKey,
+   137→   137→                BaseURL:   embBaseURL,
+   138→   138→                Dimension: cfg.LLMEmbeddingDim,
+   139→   139→        })
+   140→   140→        if err != nil {
+   141→   141→                logging.Error("failed to create embedder, using TF-IDF fallback", "err", err)
+   142→   142→                embedder, _ = emb.New(emb.Config{Provider: "tfidf", Dimension: cfg.LLMEmbeddingDim})
+   143→   143→        }
+   144→   144→        logging.Info("embedding pipeline configured", "provider", embedder.Name(), "semantic", embedder.IsSemantic())
+   145→   145→        w.embedder = embedder
+   146→   146→
+   147→   147→        vectorStore := feedback.NewVectorStore(embedder)
+   148→   148→        w.vectorStore = vectorStore
+   149→   149→
+   150→   150→        if cfg.LLMSemanticCacheEnabled && embedder.IsSemantic() {
+   151→   151→                cache := llm.NewSemanticCache(embedder, float32(cfg.LLMSemanticCacheThreshold), 24*time.Hour, 1000)
+   152→   152→                router.SetCache(cache)
+   153→   153→                logging.Info("LLM semantic cache enabled", "threshold", cfg.LLMSemanticCacheThreshold)
+   154→   154→        } else if cfg.LLMSemanticCacheEnabled && !embedder.IsSemantic() {
+   155→   155→                logging.Warn("LLM semantic cache requested but embeddings are non-semantic (TF-IDF) — cache disabled. Set SENTINEL_LLM_EMBEDDING_MODEL to enable.")
+   156→   156→        }
+   157→   157→
+   158→   158→        // Pipeline + safety policy.
+   159→   159→        // agentsVS is the agents.VectorStore adapter over vectorStore. Held
+   160→   160→        // on the wiring struct so applyRuntimeConfig can reuse it when
+   161→   161→        // hot-toggling the agent loop.
+   162→   162→        agentsVS := &agentsVectorStore{vs: vectorStore}
+   163→   163→        w.agentsVS = agentsVS
+   164→   164→        pipeline := agents.NewPipeline(router, k8sClient, cfg.GitHubToken, store, agentsVS)
+   165→   165→        pipeline.SetConfig(
+   166→   166→                cfg.InvestigatorTimeoutSec,
+   167→   167→                cfg.EvidenceGathererTimeoutSec,
+   168→   168→                cfg.AnalystTimeoutSec,
+   169→   169→                cfg.FixProposerTimeoutSec,
+   170→   170→                cfg.ConfidenceLoopBackThreshold,
+   171→   171→        )
+   172→   172→        if cfg.PrometheusURL != "" {
+   173→   173→                pipeline.SetPrometheusURL(cfg.PrometheusURL)
+   174→   174→        }
+   175→   175→        pipeline.SetAllowedRepos(cfg.AllowedGitHubRepos)
+   176→   176→        pipeline.SetGitHost(cfg.GitHost)
+   177→   177→        pipeline.SetDefaultBranch(cfg.DefaultBranch)
+   178→   178→        pipeline.SetLLMPriorWeight(cfg.LLMPriorWeight)
+   179→   179→        pipeline.SetMaxIterations(cfg.MaxPipelineIterations)
+   180→   180→
+   181→   181→        // Phase 11: when SENTINEL_USE_AGENT_LOOP=true, swap the pipeline's
+   182→   182→        // hypothesis/root-cause phase to the N-turn agent loop. The adapter
+   183→   183→        // reuses the same router, K8s client, GitHub token, and vector
+   184→   184→        // store as the legacy investigator so there's no duplicate clone
+   185→   185→        // rate-limit pressure. Toggable at runtime via /settings
+   186→   186→        // (use_agent_loop) — see applyRuntimeConfig in callbacks.go.
+   187→   187→        if cfg.UseAgentLoop {
+   188→   188→                agentAdapter := agent.NewPipelineAdapter(
+   189→   189→                        router, k8sClient, cfg.GitHubToken,
+   190→   190→                        agentsVS,
+   191→   191→                        agent.AgentConfig{
+   192→   192→                                MaxTurns:         agent.DefaultMaxTurns,
+   193→   193→                                TurnTimeout:      time.Duration(cfg.InvestigatorTimeoutSec) * time.Second,
+   194→   194→                                CompactThreshold: agent.DefaultCompactThreshold,
+   195→   195→                        },
+   196→   196→                )
+   197→   197→                agentAdapter.SetAllowedRepos(cfg.AllowedGitHubRepos)
+   198→   198→                agentAdapter.SetGitHost(cfg.GitHost)
+   199→   199→                agentAdapter.SetDefaultBranch(cfg.DefaultBranch)
+   200→   200→                pipeline.SetAgentLoopRunner(agentAdapter)
+   201→   201→                logging.Info("agent loop enabled (Phase 11) — pipeline will use N-turn investigator",
+   202→   202→                        "max_turns", agent.DefaultMaxTurns,
+   203→   203→                        "turn_timeout_sec", cfg.InvestigatorTimeoutSec)
+   204→   204→        }
+   205→   205→        w.pipeline = pipeline
+   206→   206→
+   207→   207→        policy := safety.NewPolicy(cfg.ProductionNamespaces, cfg.ConfidenceAutonomous, cfg.ConfidenceHumanReview).
+   208→   208→                WithHighRiskServices(cfg.HighRiskServices)
+   209→   209→        w.policy = policy
+   210→   210→
+   211→   211→        // L2 safe-actions controller.
+   212→   212→        w.safeActions = safeactions.New(k8sClient.Clientset(), safeactions.Config{
+   213→   213→                Enabled:           cfg.SafeActionsEnabled,
+   214→   214→                AllowedNamespaces: cfg.SafeActionsNamespaces,
+   215→   215→                MaxActionsPerHour: cfg.SafeActionsMaxPerHour,
+   216→   216→                MaxScaleDeltaPct:  cfg.SafeActionsMaxScaleDeltaPct,
+   217→   217→        })
+   218→   218→        if cfg.SafeActionsEnabled {
+   219→   219→                logging.Info("L2 safe-actions enabled",
+   220→   220→                        "namespaces", cfg.SafeActionsNamespaces,
+   221→   221→                        "max_per_hour", cfg.SafeActionsMaxPerHour,
+   222→   222→                )
+   223→   223→        }
+   224→   224→
+   225→   225→        // --- Phase 2: Executors ---
+   226→   226→
+   227→   227→        ghExec := executors.NewGitHub(cfg.GitHubToken).
+   228→   228→                WithAPIURL(cfg.GitHubAPIURL).
+   229→   229→                WithGitHost(cfg.GitHost).
+   230→   230→                WithDefaultBranch(cfg.DefaultBranch)
+   231→   231→        w.ghExec = ghExec
+   232→   232→
+   233→   233→        w.k8sExec = executors.NewK8s(k8sClient.Clientset())
+   234→   234→
+   235→   235→        w.sandbox = executors.NewSandbox(k8sClient.Clientset(), cfg.SandboxNamespacePrefix, cfg.EnableTrafficMirroring).
+   236→   236→                WithProbePaths(cfg.SandboxProbePaths).
+   237→   237→                WithSentinelNamespace(cfg.Namespace)
+   238→   238→
+   239→   239→        w.kaniko = executors.NewKaniko(k8sClient.Clientset(), cfg.Namespace).
+   240→   240→                WithDockerHubUsername(cfg.DockerHubUsername).
+   241→   241→                WithRegistry(cfg.KanikoRegistry).
+   242→   242→                WithInitImage(cfg.KanikoInitImage).
+   243→   243→                WithExecutorImage(cfg.KanikoExecutorImage).
+   244→   244→                WithGitHost(cfg.GitHost).
+   245→   245→                WithGitHubToken(cfg.GitHubToken)
+   246→   246→
+   247→   247→        if cfg.AutoRemediationEnabled {
+   248→   248→                w.remediation = executors.NewRemediationController(k8sClient.Clientset(), cfg.SkipNamespaces)
+   249→   249→        }
+   250→   250→
+   251→   251→        // --- Phase 3: Detection + correlation ---
+   252→   252→
+   253→   253→        w.tracker = detection.NewActiveTracker()
+   254→   254→        w.alertSender = agents.NewAlertSender(cfg.SlackWebhook)
+   255→   255→
+   256→   256→        w.outcomeWatcher = feedback.NewOutcomeWatcher(k8sClient.Clientset(), store)
+   257→   257→        if cfg.OutcomeWatchDurationMin > 0 || cfg.OutcomeCheckIntervalSec > 0 {
+   258→   258→                w.outcomeWatcher.SetDurations(
+   259→   259→                        time.Duration(cfg.OutcomeWatchDurationMin)*time.Minute,
+   260→   260→                        time.Duration(cfg.OutcomeCheckIntervalSec)*time.Second,
+   261→   261→                        0, // Phase 2 long watch — keep default 24h
+   262→   262→                        0, // Phase 2 long interval — keep default 5min
+   263→   263→                )
+   264→   264→        }
+   265→   265→
+   266→   266→        // Load existing vectors into the HNSW index in the background. Runs
+   267→   267→        // after a 2s delay so the SQLite pool is warm.
+   268→   268→        go func() {
+   269→   269→                defer recoverPanic("vector store loader")
+   270→   270→                time.Sleep(2 * time.Second)
+   271→   271→                loadCtx, loadCancel := context.WithTimeout(context.Background(), 60*time.Second)
+   272→   272→                defer loadCancel()
+   273→   273→                if err := vectorStore.LoadFromDB(loadCtx, store); err != nil {
+   274→   274→                        logging.Error("vector store load failed", "error", err)
+   275→   275→                }
+   276→   276→        }()
+   277→   277→
+   278→   278→        maxConcurrent := cfg.MaxConcurrentInvestigations
+   279→   279→        if maxConcurrent <= 0 {
+   280→   280→                maxConcurrent = 3
+   281→   281→        }
+   282→   282→        w.invSem = make(chan struct{}, maxConcurrent)
+   283→   283→
+   284→   284→        // Correlator must be constructed before the clusterer handler because
+   285→   285→        // the handler captures it. pkgCausalAnalyzer is set later in Phase 4
+   286→   286→        // (Tier 1); early cascades just skip causal attribution.
+   287→   287→        w.correlator = correlation.New(func(event correlation.CorrelationEvent) {
+   288→   288→                logging.Warn("cascade event detected",
+   289→   289→                        "services", event.Services,
+   290→   290→                        "likely_cause", event.LikelyCause,
+   291→   291→                        "incident_count", event.IncidentCount,
+   292→   292→                )
+   293→   293→                w.alertSender.SendAlert(
+   294→   294→                        event.LikelyCause,
+   295→   295→                        "cascade",
+   296→   296→                        fmt.Sprintf("Cascade detected: %d services failing. Likely cause: %s", event.IncidentCount, event.LikelyCause),
+   297→   297→                        "",
+   298→   298→                )
+   299→   299→                if w.causalAnalyzer != nil {
+   300→   300→                        cascade := causal.Cascade{
+   301→   301→                                ID:        uuid.New().String(),
+   302→   302→                                StartedAt: event.Timestamp,
+   303→   303→                        }
+   304→   304→                        for _, svc := range event.Services {
+   305→   305→                                ns := "default"
+   306→   306→                                for _, n := range event.Namespaces {
+   307→   307→                                        ns = n
+   308→   308→                                        break
+   309→   309→                                }
+   310→   310→                                cascade.Anomalies = append(cascade.Anomalies, causal.Anomaly{
+   311→   311→                                        Node:      causal.Node{Service: svc, Namespace: ns},
+   312→   312→                                        Metric:    "error_rate",
+   313→   313→                                        StartedAt: event.Timestamp,
+   314→   314→                                        Magnitude: 1.0,
+   315→   315→                                })
+   316→   316→                        }
+   317→   317→                        if rc, err := w.causalAnalyzer.Analyze(context.Background(), cascade); err != nil {
+   318→   318→                                logging.Warn("causal: analysis failed", "error", err)
+   319→   319→                        } else {
+   320→   320→                                logging.Info("causal: root cause attributed",
+   321→   321→                                        "node", rc.Node.Service+"/"+rc.Node.Namespace,
+   322→   322→                                        "confidence", rc.Confidence,
+   323→   323→                                        "reasoning", rc.Reasoning,
+   324→   324→                                )
+   325→   325→                                if w.attestor != nil {
+   326→   326→                                        _ = w.attestor.Sign(context.Background(), attest.Attestation{
+   327→   327→                                                IncidentID: cascade.ID,
+   328→   328→                                                Action:     "causal.root_cause_attributed",
+   329→   329→                                                Reason:     rc.Reasoning,
+   330→   330→                                                Outcome:    true,
+   331→   331→                                                Timestamp:  time.Now(),
+   332→   332→                                                Evidence: []attest.Evidence{{
+   333→   333→                                                        Kind: "causal",
+   334→   334→                                                        Payload: map[string]any{
+   335→   335→                                                                "root_cause":   rc.Node.Service + "/" + rc.Node.Namespace,
+   336→   336→                                                                "confidence":   rc.Confidence,
+   337→   337→                                                                "alternatives": rc.AlternativeCandidates,
+   338→   338→                                                        },
+   339→   339→                                                }},
+   340→   340→                                        })
+   341→   341→                                }
+   342→   342→                        }
+   343→   343→                }
+   344→   344→        })
+   345→   345→
+   346→   346→        // Clusterer handler: groups signals, dedupes via the tracker, and
+   347→   347→        // invokes the investigation orchestrator.
+   348→   348→        clustererHandler := func(service, namespace, reason, podLogs string) {
+   349→   349→                annotations, _ := k8sClient.LookupWorkloadAnnotations(context.Background(), service, namespace)
+   350→   350→                if annotations == nil {
+   351→   351→                        annotations = map[string]string{}
+   352→   352→                }
+   353→   353→
+   354→   354→                // When a cascade is detected (3+ services failing within the
+   355→   355→                // correlator window), the correlator emits an event + we skip
+   356→   356→                // the individual investigation — the cascade handler will
+   357→   357→                // trigger a rollback instead.
+   358→   358→                if w.correlator.RegisterIncident(service, namespace, time.Now()) {
+   359→   359→                        logging.Info("cascade detected — skipping individual investigation",
+   360→   360→                                "service", service,
+   361→   361→                                "namespace", namespace,
+   362→   362→                        )
+   363→   363→                        return
+   364→   364→                }
+   365→   365→
+   366→   366→                explanation := fmt.Sprintf("Auto-detected incident: %s", reason)
+   367→   367→                if podLogs != "" {
+   368→   368→                        explanation = fmt.Sprintf("%s\n\n## Pod Logs (preprocessed)\n%s", explanation, podLogs)
+   369→   369→                }
+   370→   370→
+   371→   371→                cluster := schemas.AnomalyCluster{
+   372→   372→                        ClusterID: uuid.New(),
+   373→   373→                        Service:   service,
+   374→   374→                        Namespace: namespace,
+   375→   375→                        Anomalies: []schemas.Anomaly{
+   376→   376→                                {
+   377→   377→                                        AnomalyID:   uuid.New(),
+   378→   378→                                        SignalID:    uuid.New(),
+   379→   379→                                        Service:     service,
+   380→   380→                                        Namespace:   namespace,
+   381→   381→                                        Detector:    "auto_detection",
+   382→   382→                                        Score:       0.9,
+   383→   383→                                        Dimensions:  map[string]float64{"auto": 1.0},
+   384→   384→                                        Explanation: explanation,
+   385→   385→                                        Annotations: annotations,
+   386→   386→                                },
+   387→   387→                        },
+   388→   388→                        Summary:     reason,
+   389→   389→                        Severity:    schemas.SeverityWarning,
+   390→   390→                        Annotations: annotations,
+   391→   391→                }
+   392→   392→
+   393→   393→                w.alertSender.SendAlert(service, namespace, reason, "")
+   394→   394→                go w.handleInvestigation(context.Background(), cluster, "auto-detected", namespace)
+   395→   395→        }
+   396→   396→
+   397→   397→        w.clusterer = detection.NewClusterer(clustererHandler, w.tracker)
+   398→   398→
+   399→   399→        detectionHandler := func(service, namespace, reason, _ string) {
+   400→   400→                logging.Info("detection signal",
+   401→   401→                        "namespace", namespace,
+   402→   402→                        "service", service,
+   403→   403→                        "reason", reason,
+   404→   404→                )
+   405→   405→                annotations, _ := k8sClient.LookupWorkloadAnnotations(context.Background(), service, namespace)
+   406→   406→                repo := ""
+   407→   407→                if annotations != nil {
+   408→   408→                        repo = annotations["sentinel.io/repo"]
+   409→   409→                }
+   410→   410→                w.clusterer.Send(context.Background(), detection.Signal{
+   411→   411→                        Type:      detection.SignalLogError,
+   412→   412→                        Service:   service,
+   413→   413→                        Namespace: namespace,
+   414→   414→                        Reason:    reason,
+   415→   415→                        Repo:      repo,
+   416→   416→                        Timestamp: time.Now(),
+   417→   417→                })
+   418→   418→        }
+   419→   419→
+   420→   420→        w.detector = detection.NewWithConfig(
+   421→   421→                k8sClient.Clientset(), detectionHandler, cfg.SlackWebhook,
+   422→   422→                time.Duration(cfg.DetectionCooldownSec)*time.Second,
+   423→   423→                cfg.DetectionTailLines,
+   424→   424→                cfg.SkipNamespaces,
+   425→   425→        )
+   426→   426→
+   427→   427→        // Alertmanager webhook receiver — converts firing alerts into
+   428→   428→        // detection Signals. w satisfies alertmanager.SignalHandler.
+   429→   429→        w.amReceiver = alertmanager.NewReceiver(w).WithSharedSecret(cfg.AlertmanagerWebhookSecret)
+   430→   430→
+   431→   431→        // CRD watcher — invokes the investigation orchestrator on every new
+   432→   432→        // SentinelIncident CR.
+   433→   433→        w.crdWatcher, err = watcher.New(k8sClient, w.handleInvestigation)
+   434→   434→        if err != nil {
+   435→   435→                _ = store.Close()
+   436→   436→                return nil, fmt.Errorf("watcher init: %w", err)
+   437→   437→        }
+   438→   438→
+   439→   439→        // runtimecfg.Manager — reads /data/runtime-config.json (or the path
+   440→   440→        // in SENTINEL_RUNTIME_CONFIG_PATH). The apply callback is registered
+   441→   441→        // at the end of wire() so every component it mutates exists.
+   442→   442→        runtimeCfgPath := os.Getenv("SENTINEL_RUNTIME_CONFIG_PATH")
+   443→   443→        if runtimeCfgPath == "" {
+   444→   444→                runtimeCfgPath = "/data/runtime-config.json"
+   445→   445→        }
+   446→   446→        w.rtCfg = runtimecfg.New(runtimeCfgPath)
+   447→   447→
+   448→   448→        // --- Phase 4: Tier 1/2 features (all opt-in via env, default off) ---
+   449→   449→
+   450→   450→        // Attest (signed audit trail) — created first because postmerge +
+   451→   451→        // chaos depend on it.
+   452→   452→        if cfg.AttestEnabled {
+   453→   453→                signer, err := attest.NewSigner(cfg.AttestLogDir+"/signer.key", cfg.AttestLogDir)
+   454→   454→                if err != nil {
+   455→   455→                        logging.Error("attest: init failed", "error", err)
+   456→   456→                } else {
+   457→   457→                        w.attestor = signer
+   458→   458→                        logging.Info("attest: signed audit trail enabled",
+   459→   459→                                "log_dir", cfg.AttestLogDir,
+   460→   460→                                "public_key", signer.PublicKeyHex(),
+   461→   461→                        )
+   462→   462→                }
+   463→   463→        }
+   464→   464→
+   465→   465→        // Observability (Prometheus + Loki + Tempo clients).
+   466→   466→        if cfg.PrometheusURL != "" {
+   467→   467→                w.promQuerier = observability.NewPrometheusQuerier(observability.PrometheusConfig{
+   468→   468→                        URL:     cfg.PrometheusURL,
+   469→   469→                        Timeout: 10 * time.Second,
+   470→   470→                })
+   471→   471→                logging.Info("observability: prometheus querier initialized", "url", cfg.PrometheusURL)
+   472→   472→        }
+   473→   473→        if cfg.LokiURL != "" {
+   474→   474→                _ = observability.NewLokiClient(cfg.LokiURL, "")
+   475→   475→                logging.Info("observability: loki client initialized", "url", cfg.LokiURL)
+   476→   476→        }
+   477→   477→
+   478→   478→        // Proactive SLO burn-rate watcher.
+   479→   479→        if cfg.SLOWatchEnabled && w.promQuerier != nil {
+   480→   480→                sloW := slo.NewWatcher(w.promQuerier)
+   481→   481→                sloW.OnIncident = func(inc slo.Incident) {
+   482→   482→                        w.handleSLOIncident(inc)
+   483→   483→                }
+   484→   484→                w.sloWatcher = sloW
+   485→   485→                logging.Info("slo: proactive burn-rate watcher initialized", "interval", "1m")
+   486→   486→        } else if cfg.SLOWatchEnabled && w.promQuerier == nil {
+   487→   487→                logging.Warn("slo: watch enabled but PrometheusURL not set — feature disabled")
+   488→   488→        }
+   489→   489→        if cfg.PostMergeWatchEnabled && w.promQuerier == nil {
+   490→   490→                logging.Warn("postmerge: watch enabled but PrometheusURL not set — feature disabled")
+   491→   491→        }
+   492→   492→
+   493→   493→        // Causal RCA — subscribes to correlator events.
+   494→   494→        if cfg.CausalRCAEnabled {
+   495→   495→                w.causalAnalyzer = causal.NewAnalyzer(w)
+   496→   496→                logging.Info("causal: RCA enabled (Granger + topological sort) — subscribed to correlator events")
+   497→   497→        }
+   498→   498→
+   499→   499→        // Validating admission webhook.
+   500→   500→        if cfg.AdmissionWebhookEnabled {
+   501→   501→                w.admissionSrv = w.buildAdmissionServer()
+   502→   502→        }
+   503→   503→
+   504→   504→        // Cost-aware LLM routing. When enabled, implicitly turn on the
+   505→   505→        // semantic cache (if embeddings are available) so trivial/medium
+   506→   506→        // prompts hit the cache.
+   507→   507→        if cfg.LLMCostRouterEnabled && !cfg.LLMSemanticCacheEnabled && embedder.IsSemantic() {
+   508→   508→                cache := llm.NewSemanticCache(embedder, 0.95, 24*time.Hour, 1000)
+   509→   509→                router.SetCache(cache)
+   510→   510→                logging.Info("llmcost: implicitly enabled LLM semantic cache (0.95 threshold) for cost routing")
+   511→   511→        }
+   512→   512→        if cfg.LLMCostRouterEnabled {
+   513→   513→                logging.Info("llmcost: cost-aware routing enabled (semantic cache + task-hint classification via existing router)")
+   514→   514→        }
+   515→   515→
+   516→   516→        // --- Phase 5: API surface (chatops, prreview, automerge, slackbot, api) ---
+   517→   517→
+   518→   518→        // GitHub clients — created before the API server so the webhook
+   519→   519→        // handlers can be wired.
+   520→   520→        w.chatopsGH = chatops.NewGitHubClient(cfg.GitHubToken, cfg.GitHubAPIURL)
+   521→   521→        w.chatopsReactions = chatops.NewReactionsClient(w.chatopsGH)
+   522→   522→        w.chatopsStatus = chatops.NewStatusCommentManager(w.chatopsGH)
+   523→   523→
+   524→   524→        w.autoMergeGH = automerge.NewGitHubClient(cfg.GitHubToken, cfg.GitHubAPIURL)
+   525→   525→        autoMergeCfg := automerge.Config{
+   526→   526→                Enabled:              cfg.AutoMergeEnabled,
+   527→   527→                Namespaces:           cfg.AutoMergeNamespaces,
+   528→   528→                MinConfidence:        cfg.AutoMergeMinConfidence,
+   529→   529→                RequireCIGreen:       cfg.AutoMergeRequireCI,
+   530→   530→                CITimeoutSec:         cfg.AutoMergeCITimeoutSec,
+   531→   531→                MaxPerHour:           cfg.AutoMergeMaxPerHour,
+   532→   532→                CooldownAfterFailMin: cfg.AutoMergeCooldownMin,
+   533→   533→        }
+   534→   534→        w.autoMergePolicy = automerge.NewPolicy(autoMergeCfg, policy)
+   535→   535→        w.autoMergeMerger = automerge.NewMerger(w.autoMergePolicy, w.autoMergeGH, w, w)
+   536→   536→
+   537→   537→        w.autoMergeMerger.SetOnMerged(func(repo string, prNumber int) {
+   538→   538→                inc := &chatops.Incident{
+   539→   539→                        AutoMergeEnabled: true,
+   540→   540→                        AutoMergeMerged:  true,
+   541→   541→                        Status:           "verified",
+   542→   542→                }
+   543→   543→                statusCtx, statusCancel := context.WithTimeout(context.Background(), 10*time.Second)
+   544→   544→                defer statusCancel()
+   545→   545→                _ = w.chatopsStatus.Update(statusCtx, repo, prNumber, inc, "✅ PR auto-merged. Monitoring deployment...")
+   546→   546→        })
+   547→   547→        w.autoMergeMerger.SetOnSkipped(func(repo string, prNumber int, reason string) {
+   548→   548→                inc := &chatops.Incident{
+   549→   549→                        AutoMergeEnabled: true,
+   550→   550→                        AutoMergeSkipped: reason,
+   551→   551→                        Status:           "verified",
+   552→   552→                }
+   553→   553→                statusCtx, statusCancel := context.WithTimeout(context.Background(), 10*time.Second)
+   554→   554→                defer statusCancel()
+   555→   555→                _ = w.chatopsStatus.Update(statusCtx, repo, prNumber, inc, "")
+   556→   556→        })
+   557→   557→
+   558→   558→        // Post-merge regression watcher — constructed after autoMergeGH so it
+   559→   559→        // can use the same GitHub client as the reverter.
+   560→   560→        if cfg.PostMergeWatchEnabled && w.promQuerier != nil {
+   561→   561→                w.postMerge = postmerge.NewWatcher(w.promQuerier, w.autoMergeGH)
+   562→   562→                if w.attestor != nil {
+   563→   563→                        // Attestor is wired via the OnRollback callback — the
+   564→   564→                        // postmerge watcher has no direct attestor field in v1.
+   565→   565→                        w.postMerge.OnRollback = func(ev postmerge.RollbackEvent) {
+   566→   566→                                _ = w.attestor.Sign(context.Background(), attest.Attestation{
+   567→   567→                                        IncidentID: ev.IncidentID,
+   568→   568→                                        Action:     "postmerge.rollback",
+   569→   569→                                        Reason:     ev.Reason,
+   570→   570→                                        Outcome:    ev.AutoRolledBack,
+   571→   571→                                        Timestamp:  ev.DetectedAt,
+   572→   572→                                        Evidence: []attest.Evidence{{
+   573→   573→                                                Kind: "postmerge",
+   574→   574→                                                Payload: map[string]any{
+   575→   575→                                                        "repo":             ev.Repo,
+   576→   576→                                                        "pr":               ev.PRNumber,
+   577→   577→                                                        "merge_commit":     ev.MergeCommit,
+   578→   578→                                                        "auto_rolled_back": ev.AutoRolledBack,
+   579→   579→                                                },
+   580→   580→                                        }},
+   581→   581→                                })
+   582→   582→                        }
+   583→   583→                }
+   584→   584→                logging.Info("postmerge: regression watcher initialized",
+   585→   585→                        "phase1", "10m",
+   586→   586→                        "phase2", "24h",
+   587→   587→                )
+   588→   588→        }
+   589→   589→
+   590→   590→        prReviewer := prreview.New(cfg.GitHubToken, cfg.GitHubWebhookSecret, &prreviewVectorStore{vs: vectorStore}).
+   591→   591→                WithAPIURL(cfg.GitHubAPIURL)
+   592→   592→        w.prReviewer = prReviewer
+   593→   593→
+   594→   594→        // Self-chaos runner. The trigger callback constructs a synthetic
+   595→   595→        // AnomalyCluster from the chaos incident and feeds it into the
+   596→   596→        // investigation orchestrator.
+   597→   597→        if cfg.ChaosEnabled && len(cfg.ChaosNamespaces) > 0 {
+   598→   598→                trigger := func(ctx context.Context, exp chaos.Experiment, namespace string) chaos.Outcome {
+   599→   599→                        return w.runChaosInvestigation(ctx, exp, namespace)
+   600→   600→                }
+   601→   601→                w.chaosRunner = chaos.New(w, cfg, trigger)
+   602→   602→                w.chaosRunner.SetAttestor(w.attestor)
+   603→   603→                logging.Info("chaos: runner initialized",
+   604→   604→                        "interval_min", cfg.ChaosIntervalMin,
+   605→   605→                        "namespaces", cfg.ChaosNamespaces,
+   606→   606→                )
+   607→   607→        } else if cfg.ChaosEnabled {
+   608→   608→                logging.Warn("chaos: enabled but no namespaces configured — feature disabled")
+   609→   609→        }
+   610→   610→
+   611→   611→        // Slack bot — the investigate callback is what /sentinel investigate
+   612→   612→        // from Slack invokes.
+   613→   613→        w.slackBot = slackbot.New(cfg.SlackSigningSecret, cfg.SlackBotUserID,
+   614→   614→                func(service, namespace, reason string) (string, error) {
+   615→   615→                        cluster := schemas.AnomalyCluster{
+   616→   616→                                ClusterID: uuid.New(),
+   617→   617→                                Service:   service,
+   618→   618→                                Namespace: namespace,
+   619→   619→                                Severity:  schemas.SeverityWarning,
+   620→   620→                                Summary:   fmt.Sprintf("Slack-triggered: %s", reason),
+   621→   621→                        }
+   622→   622→                        go w.handleInvestigation(context.Background(), cluster, "slack", cfg.Namespace)
+   623→   623→                        return cluster.ClusterID.String(), nil
+   624→   624→                },
+   625→   625→                func(ctx context.Context, limit int) ([]map[string]any, error) {
+   626→   626→                        incidents, err := store.ListRecentIncidents(ctx, limit)
+   627→   627→                        if err != nil {
+   628→   628→                                return nil, err
+   629→   629→                        }
+   630→   630→                        out := make([]map[string]any, 0, len(incidents))
+   631→   631→                        for _, inc := range incidents {
+   632→   632→                                out = append(out, map[string]any{
+   633→   633→                                        "incident_id": inc.IncidentID.String(),
+   634→   634→                                        "service":     inc.Cluster.Service,
+   635→   635→                                        "namespace":   inc.Cluster.Namespace,
+   636→   636→                                        "status":      string(inc.Status),
+   637→   637→                                        "created_at":  inc.CreatedAt,
+   638→   638→                                })
+   639→   639→                        }
+   640→   640→                        return out, nil
+   641→   641→                },
+   642→   642→        )
+   643→   643→        if cfg.SlackBotToken != "" {
+   644→   644→                w.slackBot.SetBotToken(cfg.SlackBotToken)
+   645→   645→        }
+   646→   646→
+   647→   647→        // API server. The investigate func is what POST /admin/investigate
+   648→   648→        // invokes.
+   649→   649→        apiServer := api.New(
+   650→   650→                listenAddr,
+   651→   651→                store,
+   652→   652→                func() map[string]any {
+   653→   653→                        return map[string]any{
+   654→   654→                                "llm_provider":       cfg.LLMProvider,
+   655→   655→                                "llm_fast_model":     cfg.LLMFastModel,
+   656→   656→                                "llm_frontier_model": cfg.LLMFrontierModel,
+   657→   657→                                "github_token_set":   cfg.GitHubToken != "",
+   658→   658→                                "write_namespaces":   cfg.WriteNamespaces,
+   659→   659→                        }
+   660→   660→                },
+   661→   661→                func(service, namespace, reason string) (string, error) {
+   662→   662→                        cluster := schemas.AnomalyCluster{
+   663→   663→                                ClusterID: uuid.New(),
+   664→   664→                                Service:   service,
+   665→   665→                                Namespace: namespace,
+   666→   666→                                Severity:  schemas.SeverityWarning,
+   667→   667→                                Summary:   fmt.Sprintf("Manual investigation: %s", reason),
+   668→   668→                        }
+   669→   669→                        go w.handleInvestigation(context.Background(), cluster, "manual", cfg.Namespace)
+   670→   670→                        return cluster.ClusterID.String(), nil
+   671→   671→                },
+   672→   672→                func() bool { return w.ready.Load() },
+   673→   673→        )
+   674→   674→        apiServer.SetAPIToken(cfg.APIToken)
+   675→   675→        apiServer.SetWebUIHandler(web.Handler())
+   676→   676→        apiServer.SetWebhookHandler(http.HandlerFunc(prReviewer.HandleWebhook))
+   677→   677→        apiServer.SetAlertmanagerHandler(w.amReceiver)
+   678→   678→        apiServer.SetChatopsHandler(chatops.NewWebhookHandler(w.buildChatopsDeps(), cfg.GitHubWebhookSecret))
+   679→   679→        apiServer.SetProvidersStatusGetter(w)
+   680→   680→        apiServer.SetAutoMergeStatusGetter(w)
+   681→   681→        apiServer.SetGitHubAppManager(w.rtCfg)
+   682→   682→        apiServer.SetSlackHandler(http.HandlerFunc(w.slackBot.HandleEvents))
+   683→   683→        apiServer.SetPauseController(w.slackBot)
+   684→   684→
+   685→   685→        apiServer.SetInvestigateWithLogs(func(service, namespace, reason, repo, podLogs string) (string, error) {
+   686→   686→                annotations := map[string]string{}
+   687→   687→                if repo != "" {
+   688→   688→                        annotations["sentinel.io/repo"] = repo
+   689→   689→                        annotations["sentinel.io/branch"] = cfg.DefaultBranch
+   690→   690→                }
+   691→   691→                cluster := schemas.AnomalyCluster{
+   692→   692→                        ClusterID:   uuid.New(),
+   693→   693→                        Service:     service,
+   694→   694→                        Namespace:   namespace,
+   695→   695→                        Severity:    schemas.SeverityWarning,
+   696→   696→                        Summary:     fmt.Sprintf("Manual investigation: %s", reason),
+   697→   697→                        Annotations: annotations,
+   698→   698→                        Anomalies: []schemas.Anomaly{
+   699→   699→                                {
+   700→   700→                                        AnomalyID:   uuid.New(),
+   701→   701→                                        SignalID:    uuid.New(),
+   702→   702→                                        Service:     service,
+   703→   703→                                        Namespace:   namespace,
+   704→   704→                                        Detector:    "manual",
+   705→   705→                                        Score:       1.0,
+   706→   706→                                        Explanation: podLogs,
+   707→   707→                                },
+   708→   708→                        },
+   709→   709→                }
+   710→   710→                go w.handleInvestigation(context.Background(), cluster, "manual", cfg.Namespace)
+   711→   711→                return cluster.ClusterID.String(), nil
+   712→   712→        })
+   713→   713→        apiServer.SetRuntimeCfgSaver(w.rtCfg)
+   714→   714→        w.apiServer = apiServer
+   715→   715→        w.broadcaster = apiServer
+   716→   716→
+   717→   717→        // Wire the clusterer's pause checker to the Slack bot so /sentinel
+   718→   718→        // pause via Slack suppresses new triggers.
+   719→   719→        w.clusterer.SetPauseChecker(w.slackBot)
+   720→   720→
+   721→   721→        // Optional GitHub App — when configured, all GitHub operations
+   722→   722→        // appear as "Sentinel[bot]" instead of the PAT owner.
+   723→   723→        w.configureGitHubApp()
+   724→   724→
+   725→   725→        // Register the runtimecfg apply callback LAST so every component it
+   726→   726→        // mutates has been constructed.
+   727→   727→        w.rtCfg.SetApplyCallback(w.applyRuntimeConfig)
+   728→   728→
+   729→   729→        logging.Info("chatops enabled",
+   730→   730→                "commands", len(chatops.AllCommands()),
+   731→   731→                "webhook_secret_set", cfg.GitHubWebhookSecret != "",
+   732→   732→        )
+   733→   733→        logging.Info("auto-merge configured",
+   734→   734→                "enabled", cfg.AutoMergeEnabled,
+   735→   735→                "namespaces", cfg.AutoMergeNamespaces,
+   736→   736→                "min_confidence", cfg.AutoMergeMinConfidence,
+   737→   737→                "max_per_hour", cfg.AutoMergeMaxPerHour,
+   738→   738→        )
+   739→   739→
+   740→   740→        return w, nil
+   741→   741→}
+   742→   742→
+   743→   743→// run spawns every long-running goroutine, starts the API server, and
+   744→   744→// blocks until SIGTERM/SIGINT. On signal, it stops the clusterer +
+   745→   745→// detector + Tier 1/2 features, cancels the root context, waits for
+   746→   746→// in-flight investigations (15s deadline), then shuts down the API
+   747→   747→// server (10s deadline) and closes the SQLite store.
+   748→   748→

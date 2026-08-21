@@ -1,0 +1,695 @@
+     1→     1→package agents
+     2→     2→
+     3→     3→// investigator.go: the LLM agent loop that forms root cause hypotheses.
+     4→     4→// Two-round agentic loop, same pattern used by SWE-agent and OpenHands:
+     5→     5→//
+     6→     6→//  1. Round 1: LLM sees pod logs + repo file tree -> emits search queries.
+     7→     7→//  2. Local regex search runs against the cloned repo (no API calls).
+     8→     8→//  3. Round 2: LLM sees logs + tree + search results -> emits hypotheses +
+     9→     9→//     files to read in full. The files are read and attached to the state
+    10→    10→//     for the fix proposer.
+    11→    11→//
+    12→    12→// Falls back to runWithoutRepo when no repo annotation is present, the repo
+    13→    13→// is not on the allowlist, or clone fails. Falls back to stack-trace parsing
+    14→    14→// when the LLM returns zero files to read.
+    15→    15→
+    16→    16→import (
+    17→    17→        "context"
+    18→    18→        "fmt"
+    19→    19→        "strings"
+    20→    20→
+    21→    21→        "github.com/karimzakzouk/sentinel/internal/k8s"
+    22→    22→        "github.com/karimzakzouk/sentinel/internal/llm"
+    23→    23→        "github.com/karimzakzouk/sentinel/internal/logging"
+    24→    24→        "github.com/karimzakzouk/sentinel/internal/repo"
+    25→    25→        "github.com/karimzakzouk/sentinel/internal/schemas"
+    26→    26→)
+    27→    27→
+    28→    28→const investigatorRound1Prompt = `You are Sentinel's Investigator agent — a senior SRE forming root cause hypotheses.
+    29→    29→
+    30→    30→You are given:
+    31→    31→- An anomaly cluster describing what's wrong with a service
+    32→    32→- Pod logs from the crashing container (may be empty if logs weren't available)
+    33→    33→- The file tree of the service's GitHub repository
+    34→    34→- The detected programming language (if recognizable from the error)
+    35→    35→
+    36→    36→Your job is to decide what to SEARCH for in the source code to investigate the incident. You'll emit search queries (regex patterns) that will be run against the local clone of the repo.
+    37→    37→
+    38→    38→Think about:
+    39→    39→- Error messages or stack traces in the logs → search for the error type (e.g. "KeyError", "NullPointerException", "panic", "TypeError", "SIGSEGV")
+    40→    40→- Variable names or config keys mentioned in errors → search for those exact strings
+    41→    41→- Function or class names in stack traces → search for the function/class name as a bare identifier (the local search is language-agnostic regex — do NOT prefix with "def", "func", "function", or "class"; just use the bare name)
+    42→    42→- Import errors → search for the module name
+    43→    43→
+    44→    44→Respond with a JSON object of shape:
+    45→    45→{
+    46→    46→  "search_queries": ["DB_PASSWORD", "KeyError", "main", "import os"]
+    47→    47→}
+    48→    48→
+    49→    49→Emit 3-8 search queries. Be specific — exact strings from the error are better than generic terms.`
+    50→    50→
+    51→    51→const investigatorRound2Prompt = `You are Sentinel's Investigator agent — a senior SRE forming root cause hypotheses.
+    52→    52→
+    53→    53→You are given:
+    54→    54→- An anomaly cluster describing what's wrong with a service
+    55→    55→- Pod logs from the crashing container
+    56→    56→- The file tree of the service's GitHub repository
+    57→    57→- Search results from running queries against the local repo clone
+    58→    58→- The detected programming language (if recognizable from the error)
+    59→    59→
+    60→    60→Your job: produce UP TO 5 root cause hypotheses AND list the files we should read in full to write a fix.
+    61→    61→
+    62→    62→## Hypothesis Rules
+    63→    63→- Base your hypothesis on the ACTUAL ERROR TRACEBACK, not on unrelated code you see in the file.
+    64→    64→- If the error is a missing-key access (e.g. Python "KeyError: 99" at "name = users[user_id]", Java "NullPointerException" at "users.get(user_id)", Go "panic: runtime error: index out of range" at "users[user_id]"), the root cause is "the collection doesn't contain key 99". Do NOT speculate about databases, config, or infrastructure unless the traceback mentions them.
+    65→    65→- If the error is a division by zero (e.g. Python "ZeroDivisionError", Java "ArithmeticException", Go "panic: runtime error: integer divide by zero"), the root cause is "no zero check before division". Do NOT mention database connections.
+    66→    66→- Be specific: reference the exact variable, function, and line that caused the error.
+    67→    67→- Do NOT hallucinate infrastructure that isn't in the traceback. If you see DATABASE_URL in the code but the error is about a dict key, the database is irrelevant.
+    68→    68→
+    69→    69→Each hypothesis must be:
+    70→    70→  - Specific (reference the exact line and variable that caused the crash)
+    71→    71→  - Based on the traceback (not on code that wasn't involved in the crash)
+    72→    72→  - Testable
+    73→    73→  - Independent
+    74→    74→
+    75→    75→Respond with a JSON object of shape:
+    76→    76→{
+    77→    77→  "hypotheses": [
+    78→    78→    {
+    79→    79→      "statement": "...",
+    80→    80→      "supporting_evidence": ["..."],
+    81→    81→      "confidence": 0.0-1.0,
+    82→    82→      "source_files": ["src/handler.<ext>"]
+    83→    83→    }
+    84→    84→  ],
+    85→    85→  "files_to_read": ["app/main.<ext>", "app/config.<ext>"]
+    86→    86→}
+    87→    87→
+    88→    88→List 1-5 files in files_to_read — the files most likely to contain the bug. These will be read in full and passed to the Fix Proposer. Use the file extensions that actually appear in the file tree (e.g. .py, .go, .js, .ts, .java, .rs, .rb).
+    89→    89→
+    90→    90→Do NOT make up evidence — only cite things that appear in the context.`
+    91→    91→
+    92→    92→// Investigator forms root cause hypotheses using a two-round LLM loop:
+    93→    93→// search -> reason -> read. Optional vector store enables a "second time,
+    94→    94→// already fixed" fast path that skips the loop entirely.
+    95→    95→type Investigator struct {
+    96→    96→        router      *llm.Router
+    97→    97→        k8s         *k8s.Client
+    98→    98→        gitHubToken string
+    99→    99→        cloner      *repo.Cloner
+   100→   100→        vectorStore VectorStore
+   101→   101→
+   102→   102→        allowedRepos  []string
+   103→   103→        defaultBranch string
+   104→   104→        gitHost       string
+   105→   105→}
+   106→   106→
+   107→   107→// SetAllowedRepos sets the GitHub repo allowlist. Empty means allow all.
+   108→   108→func (a *Investigator) SetAllowedRepos(repos []string) {
+   109→   109→        a.allowedRepos = repos
+   110→   110→}
+   111→   111→
+   112→   112→// SetDefaultBranch sets the default branch fallback when neither the
+   113→   113→// sentinel.io/git-commit nor sentinel.io/branch annotation is present.
+   114→   114→func (a *Investigator) SetDefaultBranch(branch string) {
+   115→   115→        if branch != "" {
+   116→   116→                a.defaultBranch = branch
+   117→   117→        }
+   118→   118→}
+   119→   119→
+   120→   120→// SetGitHost propagates the git host to the cloner so GitHub Enterprise
+   121→   121→// (or any other git host) is supported for clone URLs.
+   122→   122→func (a *Investigator) SetGitHost(host string) {
+   123→   123→        if host != "" {
+   124→   124→                a.gitHost = host
+   125→   125→                a.cloner.WithGitHost(host)
+   126→   126→        }
+   127→   127→}
+   128→   128→
+   129→   129→// isRepoAllowed returns true if repo is on the allowlist. Empty allowlist
+   130→   130→// means allow all.
+   131→   131→func (a *Investigator) isRepoAllowed(repo string) bool {
+   132→   132→        return IsRepoAllowed(repo, a.allowedRepos)
+   133→   133→}
+   134→   134→
+   135→   135→// IsRepoAllowed returns true if repo is on the allowlist. Empty allowlist
+   136→   136→// means allow all. Exported so the agent-loop PipelineAdapter can enforce the
+   137→   137→// same allowlist as the legacy Investigator without re-implementing the
+   138→   138→// normalization rules.
+   139→   139→func IsRepoAllowed(repo string, allowedRepos []string) bool {
+   140→   140→        if len(allowedRepos) == 0 {
+   141→   141→                return true
+   142→   142→        }
+   143→   143→        normalized := strings.ToLower(strings.TrimSpace(repo))
+   144→   144→        normalized = strings.TrimSuffix(normalized, ".git")
+   145→   145→        for _, allowed := range allowedRepos {
+   146→   146→                a := strings.ToLower(strings.TrimSpace(allowed))
+   147→   147→                a = strings.TrimSuffix(a, ".git")
+   148→   148→                if a == normalized {
+   149→   149→                        return true
+   150→   150→                }
+   151→   151→        }
+   152→   152→        return false
+   153→   153→}
+   154→   154→
+   155→   155→// VectorStore is the interface for incident-memory retrieval used by the
+   156→   156→// "second time, already fixed" fast path.
+   157→   157→type VectorStore interface {
+   158→   158→        Search(ctx context.Context, text string, k int) ([]*VectorMetadata, []float32, error)
+   159→   159→        UsingHashFallback() bool
+   160→   160→}
+   161→   161→
+   162→   162→// VectorMetadata is one past incident stored in the vector index.
+   163→   163→type VectorMetadata struct {
+   164→   164→        IncidentID string
+   165→   165→        Service    string
+   166→   166→        RootCause  string
+   167→   167→        FixType    string
+   168→   168→        FixPattern string
+   169→   169→        Outcome    string
+   170→   170→}
+   171→   171→
+   172→   172→// NewInvestigator creates an Investigator. vectorStore may be nil.
+   173→   173→func NewInvestigator(router *llm.Router, k8sClient *k8s.Client, gitHubToken string, vectorStore VectorStore) *Investigator {
+   174→   174→        return &Investigator{
+   175→   175→                router:        router,
+   176→   176→                k8s:           k8sClient,
+   177→   177→                gitHubToken:   gitHubToken,
+   178→   178→                cloner:        repo.NewCloner(gitHubToken),
+   179→   179→                vectorStore:   vectorStore,
+   180→   180→                defaultBranch: "main",
+   181→   181→                gitHost:       "github.com",
+   182→   182→        }
+   183→   183→}
+   184→   184→
+   185→   185→// Run executes the investigator agent.
+   186→   186→func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error {
+   187→   187→        cluster := state.Cluster
+   188→   188→
+   189→   189→        // Always fetch fresh pod logs via the K8s API (up to 8KB, retry 3x).
+   190→   190→        // Falls back to whatever the detection layer already captured.
+   191→   191→        var podLogs string
+   192→   192→        if a.k8s != nil {
+   193→   193→                podLogs, _ = a.k8s.FetchCrashingPodLogs(ctx, cluster.Service, cluster.Namespace)
+   194→   194→        }
+   195→   195→        if podLogs != "" {
+   196→   196→                logging.Info("fetched pod logs via K8s API", "bytes", len(podLogs))
+   197→   197→                fullExplanation := cluster.Summary + "\n\n## Pod Logs (full, from K8s API)\n" + podLogs
+   198→   198→                if len(cluster.Anomalies) > 0 {
+   199→   199→                        cluster.Anomalies[0].Explanation = fullExplanation
+   200→   200→                }
+   201→   201→                state.Cluster = cluster
+   202→   202→        } else {
+   203→   203→                podLogs = a.extractPodLogs(cluster)
+   204→   204→                logging.Info("K8s API logs unavailable, using detection logs", "bytes", len(podLogs))
+   205→   205→        }
+   206→   206→
+   207→   207→        // Memory loop: query the vector index for similar past incidents.
+   208→   208→        // Hash-embedding fallbacks can produce false high-similarity scores, so
+   209→   209→        // the applyKnownFix fast path is gated on UsingHashFallback() == false.
+   210→   210→        if a.vectorStore != nil && podLogs != "" {
+   211→   211→                similar, scores, err := a.vectorStore.Search(ctx, podLogs, 5)
+   212→   212→                if err == nil && len(similar) > 0 {
+   213→   213→                        logging.Info("found similar incidents", "count", len(similar), "top_score", scores[0])
+   214→   214→
+   215→   215→                        if scores[0] > ConfidenceHighMatch && similar[0].Outcome == "success" && !a.vectorStore.UsingHashFallback() {
+   216→   216→                                logging.Info("high-similarity match — applying known fix from past incident",
+   217→   217→                                        "score", scores[0], "incident_id", similar[0].IncidentID)
+   218→   218→                                return a.applyKnownFix(ctx, state, similar[0], podLogs)
+   219→   219→                        } else if scores[0] > ConfidenceHighMatch && a.vectorStore.UsingHashFallback() {
+   220→   220→                                logging.Info("high-similarity match but hash embeddings in use — skipping applyKnownFix for safety", "score", scores[0])
+   221→   221→                        }
+   222→   222→
+   223→   223→                        if scores[0] > ConfidenceMediumMatch {
+   224→   224→                                logging.Info("medium-similarity match — using past incident as LLM context",
+   225→   225→                                        "score", scores[0], "incident_id", similar[0].IncidentID)
+   226→   226→                                state.RetrievedIncidents = []map[string]any{{
+   227→   227→                                        "root_cause":  similar[0].RootCause,
+   228→   228→                                        "fix_pattern": similar[0].FixPattern,
+   229→   229→                                        "fix_type":    similar[0].FixType,
+   230→   230→                                        "outcome":     similar[0].Outcome,
+   231→   231→                                        "similarity":  scores[0],
+   232→   232→                                        "incident_id": similar[0].IncidentID,
+   233→   233→                                }}
+   234→   234→                        }
+   235→   235→                }
+   236→   236→        }
+   237→   237→
+   238→   238→        // Discover the GitHub repo from cluster annotations.
+   239→   239→        repoName := discoverRepo(state, a.gitHost)
+   240→   240→        if repoName == "" {
+   241→   241→                logging.Info("no repo discovered — skipping code fetch")
+   242→   242→                return a.runWithoutRepo(ctx, state, podLogs)
+   243→   243→        }
+   244→   244→
+   245→   245→        // Enforce the repo allowlist before cloning. Without this, a user with
+   246→   246→        // pod-edit permission could annotate their pod with an arbitrary repo and
+   247→   247→        // have Sentinel clone it (sending the GitHub PAT to github.com for any
+   248→   248→        // repo the PAT can read).
+   249→   249→        if !a.isRepoAllowed(repoName) {
+   250→   250→                logging.Info("repo not in allowlist — refusing to clone", "repo", repoName)
+   251→   251→                return a.runWithoutRepo(ctx, state, podLogs)
+   252→   252→        }
+   253→   253→
+   254→   254→        // Resolve which branch/commit to clone.
+   255→   255→        branch := a.resolveBranch(ctx, state, repoName)
+   256→   256→        logging.Info("cloning repo", "repo", repoName, "branch", branch)
+   257→   257→
+   258→   258→        repoPath, err := a.cloner.Clone(ctx, repoName, branch)
+   259→   259→        if err != nil {
+   260→   260→                logging.Error("clone failed — falling back to no-repo mode", "err", err)
+   261→   261→                return a.runWithoutRepo(ctx, state, podLogs)
+   262→   262→        }
+   263→   263→        defer a.cloner.Cleanup(repoPath)
+   264→   264→        logging.Info("repo cloned", "path", repoPath)
+   265→   265→
+   266→   266→        // Walk the file tree (filtered, capped).
+   267→   267→        fileTree, err := repo.WalkTree(repoPath, 500)
+   268→   268→        if err != nil {
+   269→   269→                logging.Error("walk tree failed", "err", err)
+   270→   270→                return a.runWithoutRepo(ctx, state, podLogs)
+   271→   271→        }
+   272→   272→        logging.Info("file tree walked", "files", len(fileTree))
+   273→   273→
+   274→   274→        // Round 1: ask the LLM what to search for.
+   275→   275→        round1Msg := a.buildRound1Message(state, podLogs, fileTree)
+   276→   276→        round1Result, err := a.router.FrontierJSON(ctx, investigatorRound1Prompt, round1Msg, 1000)
+   277→   277→        if err != nil {
+   278→   278→                logging.Error("round 1 LLM failed", "err", err)
+   279→   279→                return a.runWithoutRepo(ctx, state, podLogs)
+   280→   280→        }
+   281→   281→
+   282→   282→        searchQueries, _ := round1Result["search_queries"].([]any)
+   283→   283→        if len(searchQueries) == 0 {
+   284→   284→                // The error type and the variable name are right there in the traceback.
+   285→   285→                logging.Info("LLM returned no search queries — extracting from pod logs")
+   286→   286→                for _, q := range ExtractSearchQueriesUniversal(podLogs) {
+   287→   287→                        searchQueries = append(searchQueries, q)
+   288→   288→                }
+   289→   289→                if len(searchQueries) == 0 {
+   290→   290→                        logging.Info("no search queries from logs either — falling back to no-repo mode")
+   291→   291→                        return a.runWithoutRepo(ctx, state, podLogs)
+   292→   292→                }
+   293→   293→        }
+   294→   294→
+   295→   295→        // Run the searches locally (instant, no API calls).
+   296→   296→        var allResults []repo.SearchResult
+   297→   297→        seenPaths := map[string]bool{}
+   298→   298→        for i, q := range searchQueries {
+   299→   299→                if i >= 8 {
+   300→   300→                        break
+   301→   301→                }
+   302→   302→                pattern, _ := q.(string)
+   303→   303→                if pattern == "" {
+   304→   304→                        continue
+   305→   305→                }
+   306→   306→                results, err := repo.Search(repoPath, pattern, 20)
+   307→   307→                if err != nil {
+   308→   308→                        continue // invalid regex, skip
+   309→   309→                }
+   310→   310→                for _, r := range results {
+   311→   311→                        if !seenPaths[r.Path] {
+   312→   312→                                allResults = append(allResults, r)
+   313→   313→                                seenPaths[r.Path] = true
+   314→   314→                        }
+   315→   315→                }
+   316→   316→        }
+   317→   317→        logging.Info("local search complete", "unique_files", len(allResults))
+   318→   318→
+   319→   319→        // Round 2: ask the LLM for hypotheses + files to read.
+   320→   320→        round2Msg := a.buildRound2Message(state, podLogs, fileTree, allResults)
+   321→   321→        round2Result, err := a.router.FrontierJSON(ctx, investigatorRound2Prompt, round2Msg, 4000)
+   322→   322→        if err != nil {
+   323→   323→                logging.Error("round 2 LLM failed", "err", err)
+   324→   324→                return a.runWithoutRepo(ctx, state, podLogs)
+   325→   325→        }
+   326→   326→        logging.Info("round 2 LLM returned", "keys", keysOfAny(round2Result))
+   327→   327→
+   328→   328→        // Parse hypotheses.
+   329→   329→        rawHyps, _ := round2Result["hypotheses"].([]any)
+   330→   330→        logging.Info("round 2 returned hypotheses", "count", len(rawHyps))
+   331→   331→
+   332→   332→        var newHyps []schemas.Hypothesis
+   333→   333→
+   334→   334→        // If the LLM returned zero hypotheses, generate from the error context
+   335→   335→        // directly so the analyst has something to falsify.
+   336→   336→        if len(rawHyps) == 0 && podLogs != "" {
+   337→   337→                logging.Error("LLM returned 0 hypotheses — generating from error context")
+   338→   338→                newHyps = GenerateHypothesesUniversal(podLogs, state)
+   339→   339→        }
+   340→   340→
+   341→   341→        if len(newHyps) == 0 {
+   342→   342→                for i, h := range rawHyps {
+   343→   343→                        if i >= MaxStackFilesToRead {
+   344→   344→                                break
+   345→   345→                        }
+   346→   346→                        hMap, ok := h.(map[string]any)
+   347→   347→                        if !ok {
+   348→   348→                                continue
+   349→   349→                        }
+   350→   350→                        statement, _ := hMap["statement"].(string)
+   351→   351→                        confidence, _ := hMap["confidence"].(float64)
+   352→   352→                        if confidence == 0 {
+   353→   353→                                confidence = 0.5
+   354→   354→                        }
+   355→   355→                        supporting, _ := hMap["supporting_evidence"].([]any)
+   356→   356→                        supportingStrs := toStringSlice(supporting)
+   357→   357→                        srcFiles, _ := hMap["source_files"].([]any)
+   358→   358→                        srcFilesStrs := toStringSlice(srcFiles)
+   359→   359→                        newHyps = append(newHyps, schemas.Hypothesis{
+   360→   360→                                HID:                fmt.Sprintf("H%d", i+1),
+   361→   361→                                Statement:          statement,
+   362→   362→                                SupportingEvidence: supportingStrs,
+   363→   363→                                Confidence:         confidence,
+   364→   364→                                SourceFiles:        srcFilesStrs,
+   365→   365→                        })
+   366→   366→                }
+   367→   367→        }
+   368→   368→
+   369→   369→        // Read the files the LLM asked for.
+   370→   370→        filesToRead, _ := round2Result["files_to_read"].([]any)
+   371→   371→        fetched := map[string]string{}
+   372→   372→        for _, f := range filesToRead {
+   373→   373→                path, _ := f.(string)
+   374→   374→                if path == "" {
+   375→   375→                        continue
+   376→   376→                }
+   377→   377→                content, err := repo.ReadFile(repoPath, path)
+   378→   378→                if err != nil {
+   379→   379→                        logging.Info("could not read file", "path", path, "err", err)
+   380→   380→                        continue
+   381→   381→                }
+   382→   382→                fetched[path] = content
+   383→   383→        }
+   384→   384→
+   385→   385→        // Fallback: if the LLM returned zero files, try files from the stack
+   386→   386→        // trace and the search results.
+   387→   387→        if len(fetched) == 0 {
+   388→   388→                logging.Info("LLM returned 0 files — falling back to stack trace parsing")
+   389→   389→                stackFiles := k8s.ParseStackTrace(podLogs)
+   390→   390→                for _, r := range allResults {
+   391→   391→                        stackFiles = append(stackFiles, r.Path)
+   392→   392→                }
+   393→   393→                for _, path := range stackFiles {
+   394→   394→                        if _, alreadyRead := fetched[path]; alreadyRead {
+   395→   395→                                continue
+   396→   396→                        }
+   397→   397→                        content, err := repo.ReadFile(repoPath, path)
+   398→   398→                        if err != nil {
+   399→   399→                                logging.Error("failed to read stack file", "path", path, "err", err)
+   400→   400→                                continue
+   401→   401→                        }
+   402→   402→                        fetched[path] = content
+   403→   403→                        if len(fetched) >= MaxFilesToRead {
+   404→   404→                                break
+   405→   405→                        }
+   406→   406→                }
+   407→   407→        }
+   408→   408→
+   409→   409→        logging.Info("fetched files", "count", len(fetched), "paths", keysOf(fetched))
+   410→   410→
+   411→   411→        state.Hypotheses = newHyps
+   412→   412→        state.FetchedCode = fetched
+   413→   413→        state.SourceFiles = keysOf(fetched)
+   414→   414→        // pipeline.Run owns state.Iterations; do not increment here.
+   415→   415→
+   416→   416→        trace := map[string]any{
+   417→   417→                "agent":            "investigator",
+   418→   418→                "iteration":        state.Iterations,
+   419→   419→                "hypothesis_count": len(newHyps),
+   420→   420→                "search_queries":   len(searchQueries),
+   421→   421→                "search_results":   len(allResults),
+   422→   422→                "fetched_files":    keysOf(fetched),
+   423→   423→        }
+   424→   424→        state.AgentTrace = append(state.AgentTrace, trace)
+   425→   425→
+   426→   426→        return nil
+   427→   427→}
+   428→   428→
+   429→   429→// runWithoutRepo is the fallback when we can't clone the repo (private repo,
+   430→   430→// network issue, no annotation, allowlist rejection). Forms hypotheses from
+   431→   431→// logs alone, no source code.
+   432→   432→func (a *Investigator) runWithoutRepo(ctx context.Context, state *schemas.AgentState, podLogs string) error {
+   433→   433→        if podLogs == "" {
+   434→   434→                podLogs = a.extractPodLogs(state.Cluster)
+   435→   435→        }
+   436→   436→
+   437→   437→        sourceFiles := k8s.ParseStackTrace(podLogs)
+   438→   438→        state.SourceFiles = sourceFiles
+   439→   439→        state.FetchedCode = map[string]string{}
+   440→   440→
+   441→   441→        msg := fmt.Sprintf("# Service: %s\n# Namespace: %s\n\n## Pod Logs\n%s\n\n## Your Task\nProduce up to 5 root cause hypotheses based on the logs above. Be specific.",
+   442→   442→                state.Cluster.Service, state.Cluster.Namespace, podLogs)
+   443→   443→
+   444→   444→        result, err := a.router.FrontierJSON(ctx, investigatorRound2Prompt, msg, 2000)
+   445→   445→        if err != nil {
+   446→   446→                state.Status = schemas.StatusFailed
+   447→   447→                s := fmt.Sprintf("investigator_llm_failure: %v", err)
+   448→   448→                state.Error = &s
+   449→   449→                return nil
+   450→   450→        }
+   451→   451→
+   452→   452→        rawHyps, _ := result["hypotheses"].([]any)
+   453→   453→        var newHyps []schemas.Hypothesis
+   454→   454→        for i, h := range rawHyps {
+   455→   455→                if i >= MaxStackFilesToRead {
+   456→   456→                        break
+   457→   457→                }
+   458→   458→                hMap, ok := h.(map[string]any)
+   459→   459→                if !ok {
+   460→   460→                        continue
+   461→   461→                }
+   462→   462→                statement, _ := hMap["statement"].(string)
+   463→   463→                confidence, _ := hMap["confidence"].(float64)
+   464→   464→                if confidence == 0 {
+   465→   465→                        confidence = 0.3 // lower confidence without source
+   466→   466→                }
+   467→   467→                newHyps = append(newHyps, schemas.Hypothesis{
+   468→   468→                        HID:        fmt.Sprintf("H%d", i+1),
+   469→   469→                        Statement:  statement,
+   470→   470→                        Confidence: confidence,
+   471→   471→                })
+   472→   472→        }
+   473→   473→        state.Hypotheses = newHyps
+   474→   474→        // pipeline.Run owns state.Iterations; do not increment here.
+   475→   475→        return nil
+   476→   476→}
+   477→   477→
+   478→   478→// applyKnownFix skips the full investigation and applies a fix from a similar
+   479→   479→// past incident. Clones the repo, fetches the file that was fixed last time,
+   480→   480→// and creates a hypothesis directly — no LLM calls needed.
+   481→   481→func (a *Investigator) applyKnownFix(_ context.Context, state *schemas.AgentState, meta *VectorMetadata, podLogs string) error {
+   482→   482→        logging.Info("applying known fix from memory", "fix_pattern", meta.FixPattern, "fix_type", meta.FixType, "incident_id", meta.IncidentID)
+   483→   483→
+   484→   484→        parsed := ParseError(podLogs)
+   485→   485→        srcFiles := []string{}
+   486→   486→        if parsed != nil && parsed.SourceFile != "" {
+   487→   487→                srcFiles = append(srcFiles, parsed.SourceFile)
+   488→   488→        }
+   489→   489→
+   490→   490→        state.Hypotheses = []schemas.Hypothesis{{
+   491→   491→                HID:       "H1",
+   492→   492→                Statement: fmt.Sprintf("Known issue from incident %s: %s", meta.IncidentID, meta.RootCause),
+   493→   493→                SupportingEvidence: []string{
+   494→   494→                        fmt.Sprintf("Memory match (similarity > 0.85) with incident %s", meta.IncidentID),
+   495→   495→                        fmt.Sprintf("Prior fix: %s", meta.FixPattern),
+   496→   496→                },
+   497→   497→                Confidence:  0.9, // high confidence — we've fixed this before
+   498→   498→                SourceFiles: srcFiles,
+   499→   499→        }}
+   500→   500→        state.Iterations = 1
+   501→   501→
+   502→   502→        state.RootCause = &schemas.RootCause{
+   503→   503→                Statement:  meta.RootCause,
+   504→   504→                Confidence: 0.9,
+   505→   505→                Category:   "known_pattern",
+   506→   506→        }
+   507→   507→        state.Status = schemas.StatusRootCaused
+   508→   508→
+   509→   509→        state.AgentTrace = append(state.AgentTrace, map[string]any{
+   510→   510→                "agent":       "investigator",
+   511→   511→                "action":      "memory_match",
+   512→   512→                "incident_id": meta.IncidentID,
+   513→   513→                "similarity":  "high",
+   514→   514→        })
+   515→   515→
+   516→   516→        logging.Info("root cause set from memory", "root_cause", meta.RootCause)
+   517→   517→        return nil
+   518→   518→}
+   519→   519→
+   520→   520→// extractPodLogs concatenates the cluster summary + all anomaly explanations
+   521→   521→// as a fallback when the K8s API fetch returned nothing.
+   522→   522→func (a *Investigator) extractPodLogs(cluster schemas.AnomalyCluster) string {
+   523→   523→        allText := cluster.Summary + "\n"
+   524→   524→        for _, anomaly := range cluster.Anomalies {
+   525→   525→                allText += anomaly.Explanation + "\n"
+   526→   526→        }
+   527→   527→        return allText
+   528→   528→}
+   529→   529→
+   530→   530→// extractCrashLocation formats the crash location from the traceback so the
+   531→   531→// LLM focuses on the actual crash, not other similar-looking code in the file.
+   532→   532→// Placed at the top of the investigator prompt.
+   533→   533→func extractCrashLocation(podLogs string) string {
+   534→   534→        parsed := ParseError(podLogs)
+   535→   535→        if parsed == nil {
+   536→   536→                return ""
+   537→   537→        }
+   538→   538→
+   539→   539→        var sb strings.Builder
+   540→   540→        sb.WriteString("## CRASH LOCATION (from traceback — THIS is the bug, not other code in the file)\n")
+   541→   541→        fmt.Fprintf(&sb, "- Error type: %s\n", parsed.ErrorType)
+   542→   542→        if parsed.ErrorDetail != "" {
+   543→   543→                fmt.Fprintf(&sb, "- Error detail: %s\n", parsed.ErrorDetail)
+   544→   544→        }
+   545→   545→        if parsed.SourceFile != "" {
+   546→   546→                fmt.Fprintf(&sb, "- Source file: %s\n", parsed.SourceFile)
+   547→   547→        }
+   548→   548→        if parsed.SourceLine != "" {
+   549→   549→                fmt.Fprintf(&sb, "- Source line: %s\n", parsed.SourceLine)
+   550→   550→        }
+   551→   551→        if parsed.RawLine != "" {
+   552→   552→                fmt.Fprintf(&sb, "- Crash line: %s\n", parsed.RawLine)
+   553→   553→        }
+   554→   554→        if parsed.Function != "" {
+   555→   555→                fmt.Fprintf(&sb, "- Function: %s\n", parsed.Function)
+   556→   556→        }
+   557→   557→
+   558→   558→        sb.WriteString("\nIMPORTANT: The crash is in the function/file/line above. Do NOT form hypotheses about OTHER functions in the same file — they may have similar bugs but are NOT the crash you need to fix.\n")
+   559→   559→
+   560→   560→        return sb.String()
+   561→   561→}
+   562→   562→
+   563→   563→// buildRound1Message builds the round 1 prompt: service info, pod logs,
+   564→   564→// file tree, and a "emit search queries" task.
+   565→   565→func (a *Investigator) buildRound1Message(state *schemas.AgentState, podLogs string, fileTree []string) string {
+   566→   566→        var parts []string
+   567→   567→        parts = append(parts, fmt.Sprintf("# Service: %s", state.Cluster.Service))
+   568→   568→        parts = append(parts, fmt.Sprintf("# Namespace: %s", state.Cluster.Namespace))
+   569→   569→        parts = append(parts, "")
+   570→   570→        parts = append(parts, "## Anomaly Cluster Summary")
+   571→   571→        parts = append(parts, state.Cluster.Summary)
+   572→   572→        parts = append(parts, "")
+   573→   573→
+   574→   574→        if lang := detectLanguageHint(podLogs); lang != "" {
+   575→   575→                parts = append(parts, fmt.Sprintf("## Detected Language: %s", lang))
+   576→   576→                parts = append(parts, "")
+   577→   577→        }
+   578→   578→        if crashLoc := extractCrashLocation(podLogs); crashLoc != "" {
+   579→   579→                parts = append(parts, crashLoc)
+   580→   580→        }
+   581→   581→        parts = append(parts, "## Pod Logs")
+   582→   582→        if podLogs != "" {
+   583→   583→                if len(podLogs) > MaxPodLogsBytes {
+   584→   584→                        podLogs = podLogs[:MaxPodLogsBytes]
+   585→   585→                }
+   586→   586→                parts = append(parts, podLogs)
+   587→   587→        } else {
+   588→   588→                parts = append(parts, "(no logs available — pod may have crashed before writing any)")
+   589→   589→        }
+   590→   590→        parts = append(parts, "")
+   591→   591→        parts = append(parts, fmt.Sprintf("## Repository File Tree (%d files)", len(fileTree)))
+   592→   592→        treeStr := strings.Join(fileTree[:min(300, len(fileTree))], "\n")
+   593→   593→        parts = append(parts, treeStr)
+   594→   594→        parts = append(parts, "")
+   595→   595→        parts = append(parts, "## Your Task")
+   596→   596→        parts = append(parts, "Emit 3-8 search queries (regex patterns) to find the source of the bug in the repo above.")
+   597→   597→        return strings.Join(parts, "\n")
+   598→   598→}
+   599→   599→
+   600→   600→// buildRound2Message builds the round 2 prompt: service info, pod logs, file
+   601→   601→// tree, search results, and a "produce hypotheses + files to read" task.
+   602→   602→func (a *Investigator) buildRound2Message(state *schemas.AgentState, podLogs string, fileTree []string, searchResults []repo.SearchResult) string {
+   603→   603→        var parts []string
+   604→   604→        parts = append(parts, fmt.Sprintf("# Service: %s", state.Cluster.Service))
+   605→   605→        parts = append(parts, fmt.Sprintf("# Namespace: %s", state.Cluster.Namespace))
+   606→   606→        parts = append(parts, "")
+   607→   607→
+   608→   608→        if lang := detectLanguageHint(podLogs); lang != "" {
+   609→   609→                parts = append(parts, fmt.Sprintf("## Detected Language: %s", lang))
+   610→   610→                parts = append(parts, "")
+   611→   611→        }
+   612→   612→        if crashLoc := extractCrashLocation(podLogs); crashLoc != "" {
+   613→   613→                parts = append(parts, crashLoc)
+   614→   614→        }
+   615→   615→        parts = append(parts, "## Pod Logs")
+   616→   616→        if podLogs != "" {
+   617→   617→                if len(podLogs) > MaxPodLogsBytes {
+   618→   618→                        podLogs = podLogs[:MaxPodLogsBytes]
+   619→   619→                }
+   620→   620→                parts = append(parts, podLogs)
+   621→   621→        } else {
+   622→   622→                parts = append(parts, "(no logs available)")
+   623→   623→        }
+   624→   624→        parts = append(parts, "")
+   625→   625→        parts = append(parts, fmt.Sprintf("## Repository File Tree (%d files)", len(fileTree)))
+   626→   626→        parts = append(parts, strings.Join(fileTree[:min(200, len(fileTree))], "\n"))
+   627→   627→        parts = append(parts, "")
+   628→   628→        parts = append(parts, fmt.Sprintf("## Search Results (%d matches)", len(searchResults)))
+   629→   629→        for i, r := range searchResults {
+   630→   630→                if i >= MaxStackFilesToRead {
+   631→   631→                        break
+   632→   632→                }
+   633→   633→                parts = append(parts, fmt.Sprintf("- %s:%d — %s", r.Path, r.Line, r.Context))
+   634→   634→        }
+   635→   635→        parts = append(parts, "")
+   636→   636→        parts = append(parts, "## Your Task")
+   637→   637→        parts = append(parts, "Produce up to 5 root cause hypotheses AND list 1-5 files to read in full. Be specific.")
+   638→   638→        return strings.Join(parts, "\n")
+   639→   639→}
+   640→   640→
+   641→   641→// detectLanguageHint parses the pod logs for the error type + language and
+   642→   642→// returns a human-readable language hint for the LLM prompt. Returns "" if no
+   643→   643→// language can be detected.
+   644→   644→func detectLanguageHint(podLogs string) string {
+   645→   645→        if podLogs == "" {
+   646→   646→                return ""
+   647→   647→        }
+   648→   648→        parsed := ParseError(podLogs)
+   649→   649→        if parsed == nil {
+   650→   650→                return ""
+   651→   651→        }
+   652→   652→        if parsed.Language == "" || parsed.Language == "unknown" {
+   653→   653→                return ""
+   654→   654→        }
+   655→   655→        switch parsed.Language {
+   656→   656→        case "python":
+   657→   657→                return "Python (idiomatic errors: KeyError, ValueError, TypeError, ImportError, ZeroDivisionError, AttributeError)"
+   658→   658→        case "go":
+   659→   659→                return "Go (idiomatic errors: panic, runtime error: index out of range, nil pointer dereference, goroutine stack)"
+   660→   660→        case "java":
+   661→   661→                return "Java (idiomatic errors: NullPointerException, ArrayIndexOutOfBoundsException, ClassNotFoundException, IllegalArgumentException)"
+   662→   662→        case "javascript":
+   663→   663→                return "JavaScript/TypeScript (idiomatic errors: TypeError, ReferenceError, SyntaxError, UnhandledPromiseRejection)"
+   664→   664→        case "rust":
+   665→   665→                return "Rust (idiomatic errors: panic, panicked at, unwrap on None/Err, thread 'main' panicked)"
+   666→   666→        case "ruby":
+   667→   667→                return "Ruby (idiomatic errors: NoMethodError, NameError, ArgumentError, TypeError)"
+   668→   668→        case "c":
+   669→   669→                return "C/C++ (idiomatic errors: SIGSEGV, SIGABRT, Segmentation fault, assertion failed)"
+   670→   670→        default:
+   671→   671→                return parsed.Language
+   672→   672→        }
+   673→   673→}
+   674→   674→
+   675→   675→// toStringSlice converts []any to []string, skipping non-string entries.
+   676→   676→func toStringSlice(in []any) []string {
+   677→   677→        out := make([]string, 0, len(in))
+   678→   678→        for _, v := range in {
+   679→   679→                if s, ok := v.(string); ok {
+   680→   680→                        out = append(out, s)
+   681→   681→                }
+   682→   682→        }
+   683→   683→        return out
+   684→   684→}
+   685→   685→
+   686→   686→// keysOfAny returns the keys of m as a slice with no defined order. Used for
+   687→   687→// debug logging of LLM JSON responses.
+   688→   688→func keysOfAny(m map[string]any) []string {
+   689→   689→        keys := make([]string, 0, len(m))
+   690→   690→        for k := range m {
+   691→   691→                keys = append(keys, k)
+   692→   692→        }
+   693→   693→        return keys
+   694→   694→}
+   695→   695→
