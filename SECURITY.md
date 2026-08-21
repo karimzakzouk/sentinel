@@ -40,7 +40,7 @@ generating malicious code. Sentinel defends against this with five layers:
 2. **Path-confined ReadFile** (`internal/repo/cloner.go`) — LLM-returned file
    paths cannot escape the cloned repo (absolute paths, parent escapes, and
    symlinks pointing outside root are all rejected).
-3. **18-pattern security scanner** (`internal/agents/security.go`) — blocks
+3. **19-pattern security scanner** (`internal/agents/security.go`) — blocks
    `os.system`, `eval`, `exec`, `pickle.loads`, `yaml.load`, `curl|bash`,
    reverse shells, hardcoded secrets, Dockerfile tampering, env exfiltration.
 4. **Reviewer-agent LLM** (`internal/agents/security.go`) — a second LLM call

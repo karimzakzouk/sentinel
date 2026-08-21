@@ -5,21 +5,37 @@ import "regexp"
 // ErrorTypeRegexes match the error-type prefix of a log line. The detection
 // layer uses these for the fast "is this an error?" check.
 var ErrorTypeRegexes = []*regexp.Regexp{
+	// Python
 	regexp.MustCompile(`Traceback \(most recent call last\)`),
 	regexp.MustCompile(`^\w+Error:`),
 	regexp.MustCompile(`^\w+Exception:`),
+	// Go
 	regexp.MustCompile(`panic:`),
 	regexp.MustCompile(`fatal error:`),
 	regexp.MustCompile(`goroutine \d+ \[running\]:`),
+	// Node.js / JavaScript
 	regexp.MustCompile(`TypeError:`),
 	regexp.MustCompile(`ReferenceError:`),
 	regexp.MustCompile(`UnhandledPromiseRejection`),
 	regexp.MustCompile(`SyntaxError:`),
+	// Java
 	regexp.MustCompile(`java\.lang\.\w+Exception`),
 	regexp.MustCompile(`NullPointerException`),
 	regexp.MustCompile(`StackOverflowError`),
 	regexp.MustCompile(`OutOfMemoryError`),
+	// Rust
+	regexp.MustCompile(`thread '.*' panicked`),
+	regexp.MustCompile(`panic!`),
+	// Ruby
+	regexp.MustCompile(`\.rb:\d+:.*Error`),
+	// Generic / log-format
 	regexp.MustCompile(`SIGABRT|SIGSEGV|SIGBUS`),
+	regexp.MustCompile(`FATAL`),
+	regexp.MustCompile(`SEGFAULT`),
+	regexp.MustCompile(`OOMKilled`),
+	regexp.MustCompile(`^\[ERROR\]`),
+	regexp.MustCompile(`level=error`),
+	regexp.MustCompile(`level=fatal`),
 }
 
 // ExtractTypePatterns extract the error type name from a log line. When a
@@ -35,6 +51,8 @@ var ExtractTypePatterns = []struct {
 	{regexp.MustCompile(`fatal error:`), "fatal_error"},
 	{regexp.MustCompile(`(\w+Error)\b`), ""},
 	{regexp.MustCompile(`(\w+Exception)\b`), ""},
+	{regexp.MustCompile(`java\.lang\.(\w+)`), ""},
+	{regexp.MustCompile(`thread '.*' panicked`), "rust_panic"},
 }
 
 // IsErrorLine reports whether the line matches any known error pattern. This

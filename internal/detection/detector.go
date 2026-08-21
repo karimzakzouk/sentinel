@@ -4,11 +4,11 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/karimzakzouk/sentinel/internal/errorparse"
 	"github.com/karimzakzouk/sentinel/internal/logging"
 
 	corev1 "k8s.io/api/core/v1"
@@ -17,58 +17,6 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes"
 )
-
-// errorPatterns matches error lines across languages. Pre-compiled at init
-// because the detection layer scans every line of every streaming pod log
-// against every pattern — re-compiling per call is measurable CPU waste on
-// chatty pods.
-var errorPatterns = []*regexp.Regexp{
-	// Python
-	regexp.MustCompile(`Traceback \(most recent call last\)`),
-	regexp.MustCompile(`^\w+Error:`),
-	regexp.MustCompile(`^\w+Exception:`),
-	// Go
-	regexp.MustCompile(`panic:`),
-	regexp.MustCompile(`fatal error:`),
-	regexp.MustCompile(`goroutine \d+ \[running\]:`),
-	// Node.js / JavaScript
-	regexp.MustCompile(`TypeError:`),
-	regexp.MustCompile(`ReferenceError:`),
-	regexp.MustCompile(`UnhandledPromiseRejection`),
-	regexp.MustCompile(`SyntaxError:`),
-	// Java
-	regexp.MustCompile(`java\.lang\.\w+Exception`),
-	regexp.MustCompile(`NullPointerException`),
-	regexp.MustCompile(`StackOverflowError`),
-	// Rust
-	regexp.MustCompile(`thread '.*' panicked`),
-	regexp.MustCompile(`panic!`),
-	// Ruby
-	regexp.MustCompile(`\.rb:\d+:.*Error`),
-	// Generic
-	regexp.MustCompile(`FATAL`),
-	regexp.MustCompile(`SEGFAULT`),
-	regexp.MustCompile(`OOMKilled`),
-	regexp.MustCompile(`^\[ERROR\]`),
-	regexp.MustCompile(`level=error`),
-	regexp.MustCompile(`level=fatal`),
-}
-
-// extractErrorTypePatterns extract the error-type name from a log line.
-// fallback is returned when the regex matches but has no capture group
-// (e.g. "panic:" matches but doesn't capture a name).
-var extractErrorTypePatterns = []struct {
-	re       *regexp.Regexp
-	fallback string
-}{
-	{regexp.MustCompile(`(\w+Error):`), ""},
-	{regexp.MustCompile(`(\w+Exception):`), ""},
-	{regexp.MustCompile(`panic:`), "panic"},
-	{regexp.MustCompile(`fatal error:`), "fatal_error"},
-	{regexp.MustCompile(`(\w+Error)\s`), ""},
-	{regexp.MustCompile(`java\.lang\.(\w+)`), ""},
-	{regexp.MustCompile(`thread '.*' panicked`), "rust_panic"},
-}
 
 // ErrorFingerprint uniquely identifies an error for deduplication.
 type ErrorFingerprint struct {
@@ -615,27 +563,16 @@ func (d *Detector) streamPodLogs(ctx context.Context, pod *corev1.Pod, repo stri
 }
 
 // isErrorLine reports whether the line matches any known error pattern.
+// Delegates to the shared errorparse package to avoid pattern drift.
 func (d *Detector) isErrorLine(line string) bool {
-	for _, p := range errorPatterns {
-		if p.MatchString(line) {
-			return true
-		}
-	}
-	return false
+	return errorparse.IsErrorLine(line)
 }
 
 // extractErrorType returns the error-type name from a line, or
 // "unknown_error" if no pattern matches.
 func (d *Detector) extractErrorType(line string) string {
-	for _, p := range extractErrorTypePatterns {
-		if m := p.re.FindStringSubmatch(line); len(m) > 1 {
-			return m[1]
-		} else if p.re.MatchString(line) {
-			if p.fallback != "" {
-				return p.fallback
-			}
-			return "error"
-		}
+	if t := errorparse.ExtractErrorType(line); t != "" {
+		return t
 	}
 	return "unknown_error"
 }
