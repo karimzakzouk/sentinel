@@ -481,9 +481,9 @@ func (l *LokiClient) QueryLogQL(ctx context.Context, logql string) (map[string]a
 		}
 	}
 	return map[string]any{
-		"query":  logql,
-		"count":  len(lines),
-		"lines":  lines,
+		"query": logql,
+		"count": len(lines),
+		"lines": lines,
 	}, nil
 }
 
