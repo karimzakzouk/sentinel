@@ -41,6 +41,11 @@ type Router struct {
 
 	pool  *Pool
 	cache *SemanticCache
+
+	// noop, when true, makes every call return a stub response and logs the
+	// prompt instead of making an API call. Used when SENTINEL_LLM_API_KEY is
+	// empty (auto-degrade) or SENTINEL_OBSERVE_ONLY=true.
+	noop bool
 }
 
 // New returns a Router with providerType "custom". Use NewWithProvider for
@@ -61,6 +66,27 @@ func NewWithProvider(providerType, baseURL, apiKey, fastModel, frontierModel str
 		maxRetries:     3,
 		retryBaseDelay: 500 * time.Millisecond,
 	}
+}
+
+// NewNoop returns a Router that never calls an LLM. Every call logs the
+// prompt and returns a stub response. Used when LLM credentials are not
+// configured (auto-degrade) or in observe-only mode.
+func NewNoop() *Router {
+	return &Router{
+		noop:           true,
+		providerType:   "noop",
+		fastModel:      "noop",
+		frontierModel:  "noop",
+		maxRetries:     0,
+		retryBaseDelay: 0,
+	}
+}
+
+// IsNoop reports whether the router is in noop mode (no real LLM calls).
+func (r *Router) IsNoop() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.noop
 }
 
 // SetBedrockRegion sets the AWS region for Bedrock calls.
@@ -147,24 +173,36 @@ func (r *Router) snapshot() (providerType, baseURL, apiKey, fastModel, frontierM
 
 // FastJSON calls the fast model and parses the response as JSON.
 func (r *Router) FastJSON(ctx context.Context, system, user string, maxTokens int) (map[string]any, error) {
+	if r.IsNoop() {
+		return r.noopCall(ctx, "fast_json", system, user)
+	}
 	_, _, _, fastModel, _, _, _, _ := r.snapshot()
 	return r.completeJSON(ctx, fastModel, system, user, maxTokens)
 }
 
 // FrontierJSON calls the frontier model and parses the response as JSON.
 func (r *Router) FrontierJSON(ctx context.Context, system, user string, maxTokens int) (map[string]any, error) {
+	if r.IsNoop() {
+		return r.noopCall(ctx, "frontier_json", system, user)
+	}
 	_, _, _, _, frontierModel, _, _, _ := r.snapshot()
 	return r.completeJSON(ctx, frontierModel, system, user, maxTokens)
 }
 
 // FastText calls the fast model and returns the raw text.
 func (r *Router) FastText(ctx context.Context, system, user string, maxTokens int) (string, error) {
+	if r.IsNoop() {
+		return r.noopText(ctx, "fast_text", system, user)
+	}
 	_, _, _, fastModel, _, _, _, _ := r.snapshot()
 	return r.complete(ctx, fastModel, system, user, maxTokens)
 }
 
 // FrontierText calls the frontier model and returns the raw text.
 func (r *Router) FrontierText(ctx context.Context, system, user string, maxTokens int) (string, error) {
+	if r.IsNoop() {
+		return r.noopText(ctx, "frontier_text", system, user)
+	}
 	_, _, _, _, frontierModel, _, _, _ := r.snapshot()
 	return r.complete(ctx, frontierModel, system, user, maxTokens)
 }
@@ -535,4 +573,39 @@ func repairTruncated(text string) string {
 		}
 	}
 	return s
+}
+
+// noopCall logs the prompt and returns a stub JSON response. Used when the
+// router is in noop mode (no LLM credentials configured).
+func (r *Router) noopCall(ctx context.Context, callType, system, user string) (map[string]any, error) {
+	logging.Info("noop LLM call (no API key configured)",
+		"call_type", callType,
+		"system_prompt_len", len(system),
+		"user_prompt_len", len(user),
+		"system_preview", truncatePrompt(system, 200),
+		"user_preview", truncatePrompt(user, 200),
+	)
+	return map[string]any{
+		"status":  "noop",
+		"message": "LLM not configured — set SENTINEL_LLM_API_KEY to enable autonomous diagnosis",
+	}, nil
+}
+
+// noopText logs the prompt and returns a stub text response.
+func (r *Router) noopText(ctx context.Context, callType, system, user string) (string, error) {
+	logging.Info("noop LLM call (no API key configured)",
+		"call_type", callType,
+		"system_prompt_len", len(system),
+		"user_prompt_len", len(user),
+		"system_preview", truncatePrompt(system, 200),
+		"user_preview", truncatePrompt(user, 200),
+	)
+	return "", nil
+}
+
+func truncatePrompt(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "..."
 }

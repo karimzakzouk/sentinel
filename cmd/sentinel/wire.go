@@ -78,37 +78,52 @@ func wire(cfg *config.Config, listenAddr string) (*wiring, error) {
 	}
 	w.store = store
 
-	k8sClient, err := k8s.New()
-	if err != nil {
-		_ = store.Close()
-		return nil, fmt.Errorf("k8s client: %w", err)
+	// K8s client: gracefully degrade when no cluster is available.
+	var k8sClient *k8s.Client
+	if cfg.IsObserveOnly() {
+		k8sClient = k8s.NewNoop()
+		logging.Warn("K8s client initialized in NOOP mode (observe-only) — no cluster operations will be performed")
+	} else {
+		k8sClient, err = k8s.New()
+		if err != nil {
+			logging.Warn("K8s client init failed — running in degraded mode (no cluster access)", "error", err)
+			k8sClient = k8s.NewNoop()
+		}
 	}
 	w.k8sClient = k8sClient
 
-	router := llm.NewWithProvider(cfg.LLMProvider, cfg.ResolvedBaseURL(), cfg.LLMAPIKey, cfg.LLMFastModel, cfg.LLMFrontierModel)
-	router.SetRetryConfig(cfg.LLMMaxRetries, time.Duration(cfg.LLMRetryBaseDelayMs)*time.Millisecond)
-	if cfg.LLMProvider == "bedrock" {
-		router.SetBedrockRegion(func() string {
-			r := os.Getenv("AWS_REGION")
-			if r == "" {
-				return "us-east-1"
-			}
-			return r
-		}())
-	}
-	if len(cfg.LLMProviders) > 0 {
-		pool := llm.NewPool(cfg.LLMProviders)
-		pool.SetRetryConfig(cfg.LLMMaxRetries, time.Duration(cfg.LLMRetryBaseDelayMs)*time.Millisecond)
-		router.SetPool(pool)
-		logging.Info("LLM failover pool enabled",
-			"providers", len(cfg.LLMProviders),
-			"mode", "multi-provider",
-		)
+	// LLM router: use noop mode when LLM is not configured (auto-degrade)
+	// or observe-only mode is enabled.
+	var router *llm.Router
+	if cfg.IsLLMConfigured() {
+		router = llm.NewWithProvider(cfg.LLMProvider, cfg.ResolvedBaseURL(), cfg.LLMAPIKey, cfg.LLMFastModel, cfg.LLMFrontierModel)
+		router.SetRetryConfig(cfg.LLMMaxRetries, time.Duration(cfg.LLMRetryBaseDelayMs)*time.Millisecond)
+		if cfg.LLMProvider == "bedrock" {
+			router.SetBedrockRegion(func() string {
+				r := os.Getenv("AWS_REGION")
+				if r == "" {
+					return "us-east-1"
+				}
+				return r
+			}())
+		}
+		if len(cfg.LLMProviders) > 0 {
+			pool := llm.NewPool(cfg.LLMProviders)
+			pool.SetRetryConfig(cfg.LLMMaxRetries, time.Duration(cfg.LLMRetryBaseDelayMs)*time.Millisecond)
+			router.SetPool(pool)
+			logging.Info("LLM failover pool enabled",
+				"providers", len(cfg.LLMProviders),
+				"mode", "multi-provider",
+			)
+		} else {
+			logging.Info("LLM failover pool disabled (single-provider mode)",
+				"provider", cfg.LLMProvider,
+				"hint", "set SENTINEL_LLM_PROVIDERS to enable multi-key failover",
+			)
+		}
 	} else {
-		logging.Info("LLM failover pool disabled (single-provider mode)",
-			"provider", cfg.LLMProvider,
-			"hint", "set SENTINEL_LLM_PROVIDERS to enable multi-key failover",
-		)
+		router = llm.NewNoop()
+		logging.Warn("LLM router initialized in NOOP mode — no API calls will be made. Set SENTINEL_LLM_API_KEY to enable.")
 	}
 	w.router = router
 
