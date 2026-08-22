@@ -335,7 +335,214 @@ func (t *TempoClient) RecentSlowTraces(ctx context.Context, service string, look
 	return out, nil
 }
 
+// --- Jaeger client ---
+
+// JaegerClient queries Jaeger for traces. It is read-only.
+type JaegerClient struct {
+	URL    string
+	Auth   string
+	client *http.Client
+}
+
+// NewJaegerClient creates a JaegerClient. A 10s timeout is used.
+func NewJaegerClient(url, auth string) *JaegerClient {
+	return &JaegerClient{
+		URL:    url,
+		Auth:   auth,
+		client: &http.Client{Timeout: 10 * time.Second},
+	}
+}
+
+// JaegerTrace is a trace from Jaeger with its duration and service info.
+type JaegerTrace struct {
+	TraceID    string
+	DurationMs float64
+	Service    string
+	Spans      int
+}
+
+// RecentTraces returns the most recent traces for a service in the lookback
+// window. Jaeger's API returns traces sorted by start time (most recent first).
+func (j *JaegerClient) RecentTraces(ctx context.Context, service string, lookback time.Duration, limit int) ([]JaegerTrace, error) {
+	u := fmt.Sprintf("%s/api/traces?service=%s&limit=%d&start=%d&end=%d",
+		j.URL,
+		url.QueryEscape(service),
+		limit,
+		time.Now().Add(-lookback).UnixMicro(),
+		time.Now().UnixMicro(),
+	)
+	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build jaeger request: %w", err)
+	}
+	if j.Auth != "" {
+		req.Header.Set("Authorization", "Bearer "+j.Auth)
+	}
+	resp, err := j.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("jaeger request: %w", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("jaeger status %d: %s", resp.StatusCode, string(body))
+	}
+	var jr struct {
+		Data []struct {
+			TraceID string `json:"traceID"`
+			Spans   []struct {
+				OperationName string `json:"operationName"`
+				Duration      int64  `json:"duration"` // microseconds
+			} `json:"spans"`
+			Processes map[string]struct {
+				ServiceName string `json:"serviceName"`
+			} `json:"processes"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &jr); err != nil {
+		return nil, fmt.Errorf("parse jaeger response: %w", err)
+	}
+	var out []JaegerTrace
+	for _, trace := range jr.Data {
+		var totalDurUs int64
+		svc := service
+		for _, span := range trace.Spans {
+			if span.Duration > totalDurUs {
+				totalDurUs = span.Duration
+			}
+		}
+		for _, proc := range trace.Processes {
+			if proc.ServiceName != "" {
+				svc = proc.ServiceName
+				break
+			}
+		}
+		out = append(out, JaegerTrace{
+			TraceID:    trace.TraceID,
+			DurationMs: float64(totalDurUs) / 1000.0,
+			Service:    svc,
+			Spans:      len(trace.Spans),
+		})
+	}
+	return out, nil
+}
+
+// --- Pluggable evidence querier methods ---
+//
+// These methods are called by the agents.EvidenceGatherer when the LLM
+// generates a query of the corresponding type. Each returns a simplified
+// map that the LLM analyst can reason about.
+
+// QueryLogQL runs a LogQL query against Loki and returns matching log lines.
+// The query is expected to be a full LogQL expression (e.g. '{service="x"}|~"error"').
+func (l *LokiClient) QueryLogQL(ctx context.Context, logql string) (map[string]any, error) {
+	if l == nil || l.URL == "" {
+		return map[string]any{"error": "loki_url not configured"}, nil
+	}
+	u := fmt.Sprintf("%s/loki/api/v1/query_range?query=%s&limit=50&start=%d&end=%d",
+		l.URL,
+		url.QueryEscape(logql),
+		time.Now().Add(-15*time.Minute).UnixNano(),
+		time.Now().UnixNano(),
+	)
+	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build loki request: %w", err)
+	}
+	if l.Auth != "" {
+		req.Header.Set("Authorization", "Bearer "+l.Auth)
+	}
+	resp, err := l.client.Do(req)
+	if err != nil {
+		return map[string]any{"error": fmt.Sprintf("loki request: %v", err)}, nil
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		return map[string]any{"error": fmt.Sprintf("loki status %d", resp.StatusCode), "body": string(body[:min(len(body), 500)])}, nil
+	}
+	var lr struct {
+		Status string `json:"status"`
+		Data   struct {
+			Result []struct {
+				Values [][]string `json:"values"`
+			} `json:"result"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &lr); err != nil {
+		return map[string]any{"error": fmt.Sprintf("parse loki: %v", err)}, nil
+	}
+	var lines []string
+	for _, stream := range lr.Data.Result {
+		for _, v := range stream.Values {
+			if len(v) >= 2 {
+				lines = append(lines, v[1])
+			}
+		}
+	}
+	return map[string]any{
+		"query":  logql,
+		"count":  len(lines),
+		"lines":  lines,
+	}, nil
+}
+
+// QueryTraceAPI searches Tempo for traces matching the service. The query
+// is expected to be a service name (Tempo's search API uses tags, not a
+// query language).
+func (t *TempoClient) QueryTraceAPI(ctx context.Context, service string) (map[string]any, error) {
+	if t == nil || t.URL == "" {
+		return map[string]any{"error": "tempo_url not configured"}, nil
+	}
+	traces, err := t.RecentSlowTraces(ctx, service, 15*time.Minute, 20)
+	if err != nil {
+		return map[string]any{"error": fmt.Sprintf("tempo: %v", err)}, nil
+	}
+	return map[string]any{
+		"service": service,
+		"count":   len(traces),
+		"traces":  traces,
+	}, nil
+}
+
+// QueryJaegerTraces searches Jaeger for traces matching the service.
+func (j *JaegerClient) QueryJaegerTraces(ctx context.Context, service string) (map[string]any, error) {
+	if j == nil || j.URL == "" {
+		return map[string]any{"error": "jaeger_url not configured"}, nil
+	}
+	traces, err := j.RecentTraces(ctx, service, 15*time.Minute, 20)
+	if err != nil {
+		return map[string]any{"error": fmt.Sprintf("jaeger: %v", err)}, nil
+	}
+	return map[string]any{
+		"service": service,
+		"count":   len(traces),
+		"traces":  traces,
+	}, nil
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 // Compile-time checks that PrometheusQuerier satisfies the slo.MetricsQuerier
 // and postmerge.MetricsSource interfaces owned by the consumer packages.
 var _ slo.MetricsQuerier = (*PrometheusQuerier)(nil)
 var _ postmerge.MetricsSource = (*PrometheusQuerier)(nil)
+
+// --- TraceQuerier interface adapters ---
+//
+// TempoClient has QueryTraceAPI but not QueryJaegerTraces. Add a stub so
+// it satisfies the agents.TraceQuerier interface (used by the composite).
+func (t *TempoClient) QueryJaegerTraces(ctx context.Context, service string) (map[string]any, error) {
+	return map[string]any{"error": "jaeger not configured (tempo is configured instead)"}, nil
+}
+
+// JaegerClient has QueryJaegerTraces but not QueryTraceAPI. Add a stub so
+// it satisfies the agents.TraceQuerier interface.
+func (j *JaegerClient) QueryTraceAPI(ctx context.Context, service string) (map[string]any, error) {
+	return map[string]any{"error": "tempo not configured (jaeger is configured instead)"}, nil
+}
