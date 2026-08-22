@@ -188,6 +188,13 @@ type Config struct {
 	AdmissionWebhookAddr    string
 	AdmissionWebhookCertDir string
 
+	// CVE scanner for the admission webhook. Values: "trivy", "grype",
+	// "noop" (default). When "trivy" or "grype", the binary must be in
+	// PATH (sidecar or in-process).
+	CVEScannerType     string
+	CVEScannerBinary   string // path to binary (default "trivy" or "grype")
+	CVEScannerCacheTTL int    // seconds (default 1800 = 30min)
+
 	// ─── Tier 2: Ed25519-signed audit trail ──────────────────────────────
 	AttestEnabled bool
 	AttestLogDir  string
@@ -357,6 +364,10 @@ func Load() *Config {
 		AdmissionWebhookAddr:    getenv("SENTINEL_ADMISSION_WEBHOOK_ADDR", ":8443"),
 		AdmissionWebhookCertDir: getenv("SENTINEL_ADMISSION_WEBHOOK_CERT_DIR", "/data/admission-tls"),
 
+		CVEScannerType:     getenv("SENTINEL_CVE_SCANNER", "noop"),
+		CVEScannerBinary:   getenv("SENTINEL_CVE_SCANNER_BINARY", ""),
+		CVEScannerCacheTTL: getenvInt("SENTINEL_CVE_SCANNER_CACHE_TTL", 1800),
+
 		AttestEnabled: getenvBool("SENTINEL_ATTEST_ENABLED", false),
 		AttestLogDir:  getenv("SENTINEL_ATTEST_LOG_DIR", "/data/attest"),
 
@@ -375,8 +386,6 @@ func Load() *Config {
 
 		ObserveOnly: getenvBool("SENTINEL_OBSERVE_ONLY", false),
 
-		LLMProviders: loadLLMProviders(),
-
 		AutoMergeEnabled:         getenvBool("SENTINEL_AUTO_MERGE_ENABLED", false),
 		AutoMergeNamespaces:      splitCSV(getenv("SENTINEL_AUTO_MERGE_NAMESPACES", "")),
 		AutoMergeMinConfidence:   getenvFloat("SENTINEL_AUTO_MERGE_MIN_CONFIDENCE", 0.85),
@@ -385,6 +394,14 @@ func Load() *Config {
 		AutoMergeMaxPerHour:      getenvInt("SENTINEL_AUTO_MERGE_MAX_PER_HOUR", 3),
 		AutoMergeMinSandboxLevel: getenvInt("SENTINEL_AUTOMERGE_MIN_SANDBOX_LEVEL", 3),
 		AutoMergeCooldownMin:     getenvInt("SENTINEL_AUTO_MERGE_COOLDOWN_MIN", 60),
+
+		AutoMergeEnabled:       getenvBool("SENTINEL_AUTO_MERGE_ENABLED", false),
+		AutoMergeNamespaces:    splitCSV(getenv("SENTINEL_AUTO_MERGE_NAMESPACES", "")),
+		AutoMergeMinConfidence: getenvFloat("SENTINEL_AUTO_MERGE_MIN_CONFIDENCE", 0.85),
+		AutoMergeRequireCI:     getenvBool("SENTINEL_AUTO_MERGE_REQUIRE_CI", true),
+		AutoMergeCITimeoutSec:  getenvInt("SENTINEL_AUTO_MERGE_CI_TIMEOUT_SEC", 900),
+		AutoMergeMaxPerHour:    getenvInt("SENTINEL_AUTO_MERGE_MAX_PER_HOUR", 3),
+		AutoMergeCooldownMin:   getenvInt("SENTINEL_AUTO_MERGE_COOLDOWN_MIN", 60),
 
 		AutoRemediationEnabled: getenvBool("SENTINEL_AUTO_REMEDIATION_ENABLED", false),
 	}
