@@ -24,7 +24,7 @@ RUN find out -type f \( -name '*.js' -o -name '*.css' -o -name '*.html' -o -name
 RUN mkdir -p /out && cp -r out/* /out/
 
 # ── Stage 2: Compile the Go binary ─────────────────────────────────────────
-FROM golang:1.26-alpine AS builder
+FROM golang:1.27-alpine AS builder
 
 RUN apk add --no-cache git ca-certificates
 
