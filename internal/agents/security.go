@@ -191,7 +191,7 @@ func NewReviewerAgent(router *llm.Router) *ReviewerAgent {
 // layer of defense — uses a separate LLM call with a different system prompt.
 //
 // If the reviewer times out (common with free/slow models), the fix is
-// allowed with a warning. The pattern scanner (18 dangerous patterns) is
+// allowed with a warning. The pattern scanner (19 dangerous patterns) is
 // the primary defense and has already run.
 func (r *ReviewerAgent) Review(ctx context.Context, state *schemas.AgentState) *SecurityResult {
 	if state.FixProposal == nil || len(state.FixProposal.FilesToChange) == 0 {

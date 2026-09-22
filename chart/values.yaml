@@ -3,14 +3,14 @@
 # Sentinel is a single Go binary in a single pod. 43MB image, ~50MB RAM at idle.
 #
 # Install:
-#   helm install sentinel sentinel/sentinel --version 1.6.0 -n sentinel --create-namespace \
+#   helm install sentinel sentinel/sentinel --version 1.7.0 -n sentinel --create-namespace \
 #     --set sentinel.githubToken=YOUR_GITHUB_TOKEN \
 #     --set sentinel.llm.apiKey=YOUR_LLM_API_KEY
 
 image:
   registry: "docker.io/karimzakzouk"
   repository: "sentinel"
-  tag: "1.6.0"
+  tag: "1.7.0"
   pullPolicy: Always
 
 sentinel:
@@ -67,6 +67,10 @@ sentinel:
     ciTimeoutSec: 900
     maxPerHour: 3
     cooldownMin: 60
+    # Minimum sandbox-verification depth required to auto-merge.
+    # 3 = L1-L3 (default, historical behavior), 5 = require the full
+    # suite incl. regression test + reproducer.
+    minSandboxLevel: 3
 
   # L2 safe-actions — immediate remediation (restart, rollback, scale)
   safeActions:
@@ -190,6 +194,11 @@ sentinel:
     enabled: true
     required: false
     maxRetries: 2
+    # Fail the sandbox run when the default-deny NetworkPolicy cannot be
+    # created. true (default) = fail-closed — a canary with unrestricted
+    # egress never runs. Set false only on clusters that forbid
+    # NetworkPolicy writes.
+    networkPolicyRequired: true
 
   # Slack webhook (optional)
   slackWebhook: ""

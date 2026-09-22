@@ -53,87 +53,103 @@ func (s *Store) Close() error {
 // idempotent additive migrations on the incidents table.
 func (s *Store) initSchema() error {
 	_, err := s.db.Exec(`
-		CREATE TABLE IF NOT EXISTS incidents (
-			incident_id TEXT PRIMARY KEY,
-			created_at DATETIME NOT NULL,
-			updated_at DATETIME NOT NULL,
-			service TEXT NOT NULL,
-			namespace TEXT NOT NULL,
-			status TEXT NOT NULL,
-			severity TEXT,
-			cluster_json TEXT NOT NULL,
-			state_json TEXT NOT NULL,
-			beta_alpha REAL DEFAULT 1.0,
-			beta_beta REAL DEFAULT 1.0,
-			git_commit_at_resolution TEXT,
-			postmortem TEXT
-		);
-		CREATE INDEX IF NOT EXISTS idx_incidents_service ON incidents(service);
-		CREATE INDEX IF NOT EXISTS idx_incidents_status ON incidents(status);
-		CREATE INDEX IF NOT EXISTS idx_incidents_updated ON incidents(updated_at DESC);
+                CREATE TABLE IF NOT EXISTS incidents (
+                        incident_id TEXT PRIMARY KEY,
+                        created_at DATETIME NOT NULL,
+                        updated_at DATETIME NOT NULL,
+                        service TEXT NOT NULL,
+                        namespace TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        severity TEXT,
+                        cluster_json TEXT NOT NULL,
+                        state_json TEXT NOT NULL,
+                        beta_alpha REAL DEFAULT 1.0,
+                        beta_beta REAL DEFAULT 1.0,
+                        git_commit_at_resolution TEXT,
+                        postmortem TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_incidents_service ON incidents(service);
+                CREATE INDEX IF NOT EXISTS idx_incidents_status ON incidents(status);
+                CREATE INDEX IF NOT EXISTS idx_incidents_updated ON incidents(updated_at DESC);
 
-		CREATE TABLE IF NOT EXISTS events (
-			event_id INTEGER PRIMARY KEY AUTOINCREMENT,
-			incident_id TEXT NOT NULL,
-			ts DATETIME NOT NULL,
-			layer TEXT NOT NULL,
-			event_type TEXT NOT NULL,
-			agent TEXT,
-			payload_json TEXT,
-			FOREIGN KEY (incident_id) REFERENCES incidents(incident_id)
-		);
-		CREATE INDEX IF NOT EXISTS idx_events_incident ON events(incident_id);
+                CREATE TABLE IF NOT EXISTS events (
+                        event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        incident_id TEXT NOT NULL,
+                        ts DATETIME NOT NULL,
+                        layer TEXT NOT NULL,
+                        event_type TEXT NOT NULL,
+                        agent TEXT,
+                        payload_json TEXT,
+                        FOREIGN KEY (incident_id) REFERENCES incidents(incident_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_events_incident ON events(incident_id);
 
-		CREATE TABLE IF NOT EXISTS beta_priors (
-			service TEXT NOT NULL,
-			fix_type TEXT NOT NULL,
-			alpha REAL DEFAULT 1.0,
-			beta REAL DEFAULT 1.0,
-			successes INTEGER DEFAULT 0,
-			failures INTEGER DEFAULT 0,
-			PRIMARY KEY (service, fix_type)
-		);
+                CREATE TABLE IF NOT EXISTS beta_priors (
+                        service TEXT NOT NULL,
+                        fix_type TEXT NOT NULL,
+                        alpha REAL DEFAULT 1.0,
+                        beta REAL DEFAULT 1.0,
+                        successes INTEGER DEFAULT 0,
+                        failures INTEGER DEFAULT 0,
+                        PRIMARY KEY (service, fix_type)
+                );
 
-		-- incident_vectors is the RAG table. Embeddings are stored as JSON
-		-- float arrays; the in-memory VectorStore overlays an HNSW graph
-		-- for fast cosine-similarity search at query time.
-		CREATE TABLE IF NOT EXISTS incident_vectors (
-			incident_id TEXT PRIMARY KEY,
-			service TEXT NOT NULL,
-			root_cause_category TEXT,
-			fix_type TEXT,
-			summary TEXT NOT NULL,
-			root_cause TEXT,
-			fix_pattern TEXT,
-			source_files_json TEXT,
-			git_commit TEXT,
-			outcome_verified INTEGER DEFAULT 0,
-			outcome_success INTEGER DEFAULT 0,
-			embedding_json TEXT NOT NULL,
-			created_at DATETIME NOT NULL,
-			FOREIGN KEY (incident_id) REFERENCES incidents(incident_id)
-		);
-		CREATE INDEX IF NOT EXISTS idx_vectors_service ON incident_vectors(service);
+                -- incident_vectors is the RAG table. Embeddings are stored as JSON
+                -- float arrays; the in-memory VectorStore overlays an HNSW graph
+                -- for fast cosine-similarity search at query time.
+                CREATE TABLE IF NOT EXISTS incident_vectors (
+                        incident_id TEXT PRIMARY KEY,
+                        service TEXT NOT NULL,
+                        root_cause_category TEXT,
+                        fix_type TEXT,
+                        summary TEXT NOT NULL,
+                        root_cause TEXT,
+                        fix_pattern TEXT,
+                        source_files_json TEXT,
+                        git_commit TEXT,
+                        outcome_verified INTEGER DEFAULT 0,
+                        outcome_success INTEGER DEFAULT 0,
+                        embedding_json TEXT NOT NULL,
+                        created_at DATETIME NOT NULL,
+                        FOREIGN KEY (incident_id) REFERENCES incidents(incident_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_vectors_service ON incident_vectors(service);
 
-		-- command_events is the chatops audit log. Indexed on
-		-- (pr_repo, pr_number) so /sentinel command lookup on a PR is O(1).
-		CREATE TABLE IF NOT EXISTS command_events (
-			event_id INTEGER PRIMARY KEY AUTOINCREMENT,
-			incident_id TEXT,
-			pr_number INTEGER NOT NULL,
-			pr_repo TEXT NOT NULL,
-			command TEXT NOT NULL,
-			args TEXT,
-			author TEXT NOT NULL,
-			author_permission TEXT NOT NULL,
-			result TEXT NOT NULL,
-			result_detail TEXT,
-			ts DATETIME NOT NULL
-		);
-		CREATE INDEX IF NOT EXISTS idx_command_events_pr ON command_events(pr_repo, pr_number);
-		CREATE INDEX IF NOT EXISTS idx_command_events_incident ON command_events(incident_id);
-		CREATE INDEX IF NOT EXISTS idx_command_events_ts ON command_events(ts DESC);
-	`)
+                -- command_events is the chatops audit log. Indexed on
+                -- (pr_repo, pr_number) so /sentinel command lookup on a PR is O(1).
+                CREATE TABLE IF NOT EXISTS command_events (
+                        event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        incident_id TEXT,
+                        pr_number INTEGER NOT NULL,
+                        pr_repo TEXT NOT NULL,
+                        command TEXT NOT NULL,
+                        args TEXT,
+                        author TEXT NOT NULL,
+                        author_permission TEXT NOT NULL,
+                        result TEXT NOT NULL,
+                        result_detail TEXT,
+                        ts DATETIME NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_command_events_pr ON command_events(pr_repo, pr_number);
+                CREATE INDEX IF NOT EXISTS idx_command_events_incident ON command_events(incident_id);
+                CREATE INDEX IF NOT EXISTS idx_command_events_ts ON command_events(ts DESC);
+
+                -- tracked_prs survives restarts for the auto-merge merger.
+                -- Each row is one PR pending auto-merge evaluation; the full
+                -- automerge.Input is stored as JSON so Input schema changes
+                -- don't require a table migration. Rows are deleted when the
+                -- PR is merged, closed, or skipped.
+                CREATE TABLE IF NOT EXISTS tracked_prs (
+                        repo TEXT NOT NULL,
+                        pr_number INTEGER NOT NULL,
+                        incident_id TEXT NOT NULL,
+                        branch TEXT NOT NULL DEFAULT '',
+                        base_branch TEXT NOT NULL DEFAULT '',
+                        input_json TEXT NOT NULL,
+                        added_at DATETIME NOT NULL,
+                        PRIMARY KEY (repo, pr_number)
+                );
+        `)
 	if err != nil {
 		return err
 	}

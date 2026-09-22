@@ -30,6 +30,14 @@ type SandboxResult struct {
 	ErrorCount5xx int
 	RequestCount  int
 
+	// LevelsVerified records which sandbox levels actually ran and
+	// passed, e.g. "L1-L5" (full suite incl. regression test +
+	// reproducer) or "L1-L3" (pod ready + health endpoints + error gone,
+	// L4/L5 skipped because no canary image was built). Surfaced on the
+	// PR label (sandbox-verified:L1-L5) and the auto-merge gate so
+	// reviewers can see how strong the verification actually was.
+	LevelsVerified string
+
 	// InfrastructureError marks a failure caused by the sandbox itself
 	// (RBAC denied, image pull failure, namespace creation failed). When
 	// true, the retry loop should NOT feed the error back to the LLM —
@@ -53,6 +61,16 @@ type SandboxRunner struct {
 	probePaths        []string
 	sustainedWindow   time.Duration
 	sentinelNamespace string
+
+	// networkPolicyRequired fails the sandbox run when the default-deny
+	// NetworkPolicy cannot be created. The policy is the last line of the
+	// prompt-injection defense (a compromised fix must not be able to
+	// exfiltrate secrets from the canary pod), so failing closed is the
+	// safe default. Operators with restricted clusters (no
+	// networking.k8s.io write access) can set
+	// SENTINEL_SANDBOX_NETWORK_POLICY_REQUIRED=false to restore the old
+	// fail-open behavior.
+	networkPolicyRequired bool
 
 	// probePathsMu guards probePaths because Run is invoked from multiple
 	// investigation goroutines on a shared instance.
@@ -88,6 +106,15 @@ func (s *SandboxRunner) WithSustainedReady(d time.Duration) *SandboxRunner {
 	return s
 }
 
+// WithNetworkPolicyRequired controls fail-closed behavior when the sandbox
+// NetworkPolicy cannot be created. Default true — the run aborts with an
+// InfrastructureError instead of deploying a canary with unrestricted
+// egress.
+func (s *SandboxRunner) WithNetworkPolicyRequired(required bool) *SandboxRunner {
+	s.networkPolicyRequired = required
+	return s
+}
+
 // WithSentinelNamespace sets the namespace Sentinel itself runs in. Used by
 // the sandbox NetworkPolicy ingress allow-list so probes from the Sentinel
 // namespace reach the canary.
@@ -112,7 +139,20 @@ func (s *SandboxRunner) Run(ctx context.Context, inc *schemas.Incident) SandboxR
 		return SandboxResult{Verified: false, Summary: fmt.Sprintf("create_namespace: %v", err), Namespace: sandboxNS}
 	}
 	if err := s.createSandboxNetworkPolicy(ctx, sandboxNS); err != nil {
-		logging.Error("failed to create sandbox NetworkPolicy (canary will have unrestricted egress)",
+		if s.networkPolicyRequired {
+			// Fail closed: without the default-deny policy a compromised fix
+			// could exfiltrate secrets from the canary. Abort the run rather
+			// than continue with unrestricted egress.
+			logging.Error("failed to create sandbox NetworkPolicy — aborting (fail-closed)",
+				"namespace", sandboxNS, "err", err)
+			return SandboxResult{
+				Verified:            false,
+				Summary:             fmt.Sprintf("networkpolicy_create_failed (fail-closed): %v — the canary must not run with unrestricted egress", err),
+				Namespace:           sandboxNS,
+				InfrastructureError: true,
+			}
+		}
+		logging.Error("failed to create sandbox NetworkPolicy (canary will have unrestricted egress — SENTINEL_SANDBOX_NETWORK_POLICY_REQUIRED=false)",
 			"namespace", sandboxNS, "err", err)
 	}
 	defer s.cleanup(ctx, sandboxNS)
@@ -170,6 +210,7 @@ func (s *SandboxRunner) Run(ctx context.Context, inc *schemas.Incident) SandboxR
 
 	// 6+7. Level 4 (regression test) + Level 5 (reproducer) in parallel.
 	// Both run against the same canary image in the same sandbox namespace.
+	maxLevel := 3 // L1-L3 passed to get here
 	var (
 		testResult  *TestResult
 		reproResult *TestResult
@@ -202,13 +243,17 @@ func (s *SandboxRunner) Run(ctx context.Context, inc *schemas.Incident) SandboxR
 				ProbeResults: []string{testResult.Summary},
 			}
 		}
-		logging.Info("Level 4 PASSED: regression test verified the fix")
+		if !strings.Contains(testResult.Summary, "no test generated") {
+			maxLevel = 4
+			logging.Info("Level 4 PASSED: regression test verified the fix")
+		}
 	}
 
 	// Evaluate L5 (reproducer). Infra errors (log fetch, runner error) are
 	// non-blocking — a broken test runner must not block a correct fix.
 	if reproResult != nil {
 		if reproResult.Overall {
+			maxLevel = 5
 			logging.Info("Level 5 PASSED: reproducer script verified the fix")
 		} else if isReproducerInfraError(reproResult.Summary) {
 			logging.Error("Level 5 SKIPPED: reproducer infrastructure error (non-blocking)",
@@ -239,9 +284,23 @@ func (s *SandboxRunner) Run(ctx context.Context, inc *schemas.Incident) SandboxR
 	}
 
 	return SandboxResult{
-		Verified:  true,
-		Summary:   "all_checks_passed (pod ready + sustained + health endpoints ok + original error gone from logs + regression test passed + reproducer passed)",
-		Namespace: sandboxNS,
+		Verified:       true,
+		Summary:        fmt.Sprintf("all_checks_passed (pod ready + sustained + health endpoints ok + original error gone from logs%s)", levelsSuffix(maxLevel)),
+		Namespace:      sandboxNS,
+		LevelsVerified: fmt.Sprintf("L1-L%d", maxLevel),
+	}
+}
+
+// levelsSuffix renders the L4/L5 portion of the success summary so the PR
+// body reflects exactly how far verification went.
+func levelsSuffix(maxLevel int) string {
+	switch maxLevel {
+	case 5:
+		return " + regression test passed + reproducer passed"
+	case 4:
+		return " + regression test passed (reproducer skipped)"
+	default:
+		return " (L4/L5 skipped — no canary image)"
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 
 	githubapp "github.com/karimzakzouk/sentinel/internal/github"
@@ -33,6 +34,37 @@ func NewGitHubClient(token, apiURL string) *GitHubClientImpl {
 func (g *GitHubClientImpl) WithTokenProvider(tp TokenProvider) *GitHubClientImpl {
 	g.BaseClient.WithTokenProvider(tp)
 	return g
+}
+
+// IsPROpen reports whether the PR exists and is in the "open" state. Used by
+// restart reconciliation and the poll loop to detect PRs that were merged or
+// closed by a human while Sentinel wasn't watching.
+func (g *GitHubClientImpl) IsPROpen(ctx context.Context, repo string, prNumber int) (bool, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET",
+		fmt.Sprintf("%s/repos/%s/pulls/%d", g.APIURL, repo, prNumber), nil)
+	if err != nil {
+		return false, err
+	}
+	g.SetHeaders(req)
+	resp, err := g.HTTP.Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return false, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return false, fmt.Errorf("is_pr_open: %d %s", resp.StatusCode, string(body))
+	}
+	var result struct {
+		State string `json:"state"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return false, err
+	}
+	return result.State == "open", nil
 }
 
 // GetCIStatus aggregates the CI check state for a PR. Combines check_runs
