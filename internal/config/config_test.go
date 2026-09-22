@@ -48,11 +48,24 @@ func TestValidateMissingLLMKey(t *testing.T) {
 		"SENTINEL_LLM_FRONTIER_MODEL": "gpt-4o",
 		"SENTINEL_GITHUB_TOKEN":       "ghp_x",
 		"SENTINEL_LLM_PROVIDERS":      "",
+		"SENTINEL_OBSERVE_ONLY":       "",
 	})
 	c := Load()
-	errs, _ := c.Validate()
-	if len(errs) == 0 {
-		t.Fatal("expected at least one error for missing LLM_API_KEY")
+	errs, warns := c.Validate()
+	if len(errs) != 0 {
+		t.Fatalf("auto-degrade: expected 0 errors for missing LLM_API_KEY, got %v", errs)
+	}
+	found := false
+	for _, w := range warns {
+		if contains(w, "SENTINEL_LLM_API_KEY") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected warning about LLM_API_KEY, got %v", warns)
+	}
+	if c.IsLLMConfigured() {
+		t.Error("IsLLMConfigured() should be false when LLM_API_KEY is empty")
 	}
 }
 
@@ -64,17 +77,89 @@ func TestValidateMissingGitHubToken(t *testing.T) {
 		"SENTINEL_LLM_FRONTIER_MODEL": "gpt-4o",
 		"SENTINEL_GITHUB_TOKEN":       "",
 		"SENTINEL_LLM_PROVIDERS":      "",
+		"SENTINEL_OBSERVE_ONLY":       "",
 	})
 	c := Load()
-	errs, _ := c.Validate()
+	errs, warns := c.Validate()
+	if len(errs) != 0 {
+		t.Fatalf("auto-degrade: expected 0 errors for missing GITHUB_TOKEN, got %v", errs)
+	}
 	found := false
-	for _, e := range errs {
-		if contains(e, "SENTINEL_GITHUB_TOKEN") {
+	for _, w := range warns {
+		if contains(w, "SENTINEL_GITHUB_TOKEN") {
 			found = true
 		}
 	}
 	if !found {
-		t.Errorf("expected error about GITHUB_TOKEN, got %v", errs)
+		t.Errorf("expected warning about GITHUB_TOKEN, got %v", warns)
+	}
+	if c.IsGitHubConfigured() {
+		t.Error("IsGitHubConfigured() should be false when GITHUB_TOKEN is empty")
+	}
+}
+
+func TestObserveOnlyFlag(t *testing.T) {
+	setEnv(t, map[string]string{
+		"SENTINEL_LLM_API_KEY":        "sk-x",
+		"SENTINEL_LLM_PROVIDER":       "openai",
+		"SENTINEL_LLM_FAST_MODEL":     "gpt-4o-mini",
+		"SENTINEL_LLM_FRONTIER_MODEL": "gpt-4o",
+		"SENTINEL_GITHUB_TOKEN":       "ghp_x",
+		"SENTINEL_OBSERVE_ONLY":       "true",
+	})
+	c := Load()
+	if !c.ObserveOnly {
+		t.Fatal("ObserveOnly should be true when SENTINEL_OBSERVE_ONLY=true")
+	}
+	if !c.IsObserveOnly() {
+		t.Error("IsObserveOnly() should return true")
+	}
+	// Even with creds set, observe-only mode disables them.
+	if c.IsLLMConfigured() {
+		t.Error("IsLLMConfigured() should be false in observe-only mode")
+	}
+	if c.IsGitHubConfigured() {
+		t.Error("IsGitHubConfigured() should be false in observe-only mode")
+	}
+	errs, warns := c.Validate()
+	if len(errs) != 0 {
+		t.Errorf("observe-only mode should produce 0 errors, got %v", errs)
+	}
+	found := false
+	for _, w := range warns {
+		if contains(w, "observe-only") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected observe-only warning, got %v", warns)
+	}
+}
+
+func TestAutoDegradeAllEmpty(t *testing.T) {
+	setEnv(t, map[string]string{
+		"SENTINEL_LLM_API_KEY":        "",
+		"SENTINEL_LLM_PROVIDER":       "",
+		"SENTINEL_LLM_FAST_MODEL":     "",
+		"SENTINEL_LLM_FRONTIER_MODEL": "",
+		"SENTINEL_GITHUB_TOKEN":       "",
+		"SENTINEL_LLM_PROVIDERS":      "",
+		"SENTINEL_OBSERVE_ONLY":       "",
+	})
+	c := Load()
+	errs, _ := c.Validate()
+	if len(errs) != 0 {
+		t.Fatalf("auto-degrade with all empty: expected 0 errors, got %v", errs)
+	}
+	// Defaults should have been applied for empty LLM fields.
+	if c.LLMProvider != "zai" {
+		t.Errorf("LLMProvider should default to 'zai', got %q", c.LLMProvider)
+	}
+	if c.LLMFastModel != "glm-4-flash" {
+		t.Errorf("LLMFastModel should default to 'glm-4-flash', got %q", c.LLMFastModel)
+	}
+	if c.LLMFrontierModel != "glm-4.5" {
+		t.Errorf("LLMFrontierModel should default to 'glm-4.5', got %q", c.LLMFrontierModel)
 	}
 }
 

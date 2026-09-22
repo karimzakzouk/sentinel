@@ -120,6 +120,16 @@ func (p *Pipeline) SetPrometheusURL(url string) {
 	p.evidenceGatherer.SetPrometheusURL(url)
 }
 
+// SetLogQuerier propagates a log backend (Loki) to the EvidenceGatherer.
+func (p *Pipeline) SetLogQuerier(q LogQuerier) {
+	p.evidenceGatherer.SetLogQuerier(q)
+}
+
+// SetTraceQuerier propagates a tracing backend (Jaeger/Tempo) to the EvidenceGatherer.
+func (p *Pipeline) SetTraceQuerier(q TraceQuerier) {
+	p.evidenceGatherer.SetTraceQuerier(q)
+}
+
 // SetAllowedRepos propagates the GitHub repo allowlist to the Investigator.
 func (p *Pipeline) SetAllowedRepos(repos []string) {
 	p.investigator.SetAllowedRepos(repos)

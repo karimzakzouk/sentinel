@@ -372,10 +372,11 @@ func renderAlternatives(result map[string]any, author, incidentID string) string
 	return sb.String()
 }
 
-// cmdApply is the placeholder for switching the PR to a chosen alternative.
-// The full implementation requires extending the FixProposer to accept an
-// "approach hint" parameter; for now the chosen approach description is
-// surfaced so the developer can implement it manually.
+// cmdApply switches the PR to a chosen alternative from a previous
+// /sentinel alternatives run. It finds the [SENTINELALTERNATIVES] comment,
+// extracts the chosen approach's description, stores it as a hint for the
+// fix proposer (via state.SandboxFeedback), and re-runs the fix proposer.
+// The new fix is pushed to the existing branch, updating the PR.
 func cmdApply(ctx context.Context, cmd *Command, deps *Deps) error {
 	if len(cmd.ArgList) == 0 {
 		return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
@@ -387,14 +388,91 @@ func cmdApply(ctx context.Context, cmd *Command, deps *Deps) error {
 			fmt.Sprintf("❌ Invalid choice `%s`. Must be A, B, or C. Run `/sentinel alternatives` to see options.", cmd.ArgList[0]))
 	}
 
-	body := fmt.Sprintf("## ⏳ Apply Approach %s\n\n"+
-		"Requested by @%s.\n\n"+
-		"Automatic approach application is not yet implemented. To use approach %s:\n\n"+
-		"1. Manually implement approach %s on this branch (description below)\n"+
-		"2. Run `/sentinel retry-sandbox` to verify it\n"+
-		"3. Merge as usual\n\n"+
-		"The LLM-generated approach description is in the [SENTINELALTERNATIVES] comment above.",
-		choice, cmd.Author, choice, choice)
+	// Find the [SENTINELALTERNATIVES] comment.
+	altBody, err := deps.GitHub.FindCommentByMarker(ctx, cmd.PRRepo, cmd.PRNumber, "[SENTINELALTERNATIVES]")
+	if err != nil {
+		return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
+			fmt.Sprintf("❌ Failed to find alternatives comment: %v. Run `/sentinel alternatives` first.", err))
+	}
+	if altBody == "" {
+		return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
+			"❌ No alternatives comment found. Run `/sentinel alternatives` first to generate options.")
+	}
 
-	return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber, body)
+	// Parse the chosen approach's description from the comment body.
+	desc := parseApproachDescription(altBody, choice)
+	if desc == "" {
+		return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
+			fmt.Sprintf("❌ Could not parse approach %s from the alternatives comment. The comment may be malformed — re-run `/sentinel alternatives`.", choice))
+	}
+
+	// Find the incident.
+	inc, err := deps.Store.FindIncidentByPR(ctx, cmd.PRRepo, cmd.PRNumber)
+	if err != nil {
+		return fmt.Errorf("find incident: %w", err)
+	}
+	if inc == nil {
+		return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
+			"❌ This PR isn't tracked by Sentinel. No incident to apply the alternative to.")
+	}
+
+	// Store the chosen approach as a hint for the fix proposer. The fix
+	// proposer reads state.SandboxFeedback and prepends it to the user
+	// message, so this acts as an "approach hint" without needing a new
+	// field.
+	hint := fmt.Sprintf("## REVIEWER REQUESTED APPROACH %s\n\nThe reviewer has asked for approach %s from the alternatives comment. Use this approach when generating the fix:\n\n%s\n\nGenerate the fix using this approach instead of the original.", choice, choice, desc)
+	if err := deps.Store.SetSandboxFeedback(ctx, inc.ID, hint); err != nil {
+		return fmt.Errorf("set sandbox feedback: %w", err)
+	}
+
+	// Acknowledge + re-run the fix proposer.
+	_ = deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
+		fmt.Sprintf("## ⏳ Applying Approach %s\n\nRequested by @%s.\n\nRe-running the fix proposer with approach %s. The branch will be updated in ~1-2 minutes.", choice, cmd.Author, choice))
+
+	if err := deps.Pipeline.RetryFixProposal(ctx, inc.ID); err != nil {
+		return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
+			fmt.Sprintf("❌ Fix proposer failed: %v", err))
+	}
+
+	return deps.GitHub.PostComment(ctx, cmd.PRRepo, cmd.PRNumber,
+		fmt.Sprintf("## ✅ Approach %s Applied\n\nThe fix has been regenerated using approach %s and pushed to this branch. Run `/sentinel retry-sandbox` to verify it.", choice, choice))
+}
+
+// parseApproachDescription extracts the description of approach X (A, B, or C)
+// from the alternatives comment body. Returns "" if not found.
+func parseApproachDescription(body, approach string) string {
+	// Find "### Approach X" section.
+	marker := "### Approach " + approach
+	idx := strings.Index(body, marker)
+	if idx < 0 {
+		return ""
+	}
+	// Move past the marker.
+	rest := body[idx+len(marker):]
+	// Find the next "### " or "---" or end.
+	end := strings.Index(rest, "\n### ")
+	if end < 0 {
+		end = strings.Index(rest, "\n---")
+	}
+	if end < 0 {
+		end = len(rest)
+	}
+	section := rest[:end]
+
+	// Extract the "**Description:** ..." line.
+	descMarker := "**Description:**"
+	descIdx := strings.Index(section, descMarker)
+	if descIdx < 0 {
+		return ""
+	}
+	descRest := section[descIdx+len(descMarker):]
+	// Description goes until the next "**" (start of Pros) or end of line.
+	descEnd := strings.Index(descRest, "\n\n**")
+	if descEnd < 0 {
+		descEnd = strings.Index(descRest, "\n")
+	}
+	if descEnd < 0 {
+		descEnd = len(descRest)
+	}
+	return strings.TrimSpace(descRest[:descEnd])
 }

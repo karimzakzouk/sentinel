@@ -73,15 +73,27 @@ func main() {
 	}
 	logging.Init(cfg.LogLevel)
 
-	logging.Info("sentinel starting",
-		"version", Version,
-		"llm_provider", cfg.LLMProvider,
-		"llm_frontier_model", cfg.LLMFrontierModel,
-		"llm_embedding_model", cfg.LLMEmbeddingModel,
-		"sqlite_path", cfg.SQLitePath,
-		"api_addr", listenAddr,
-		"log_level", cfg.LogLevel,
-	)
+	if cfg.IsObserveOnly() {
+		logging.Info("sentinel running in OBSERVE-ONLY mode — no autonomous actions will be taken (API + web UI only)")
+	} else {
+		logging.Info("sentinel starting",
+			"version", Version,
+			"llm_provider", cfg.LLMProvider,
+			"llm_frontier_model", cfg.LLMFrontierModel,
+			"llm_embedding_model", cfg.LLMEmbeddingModel,
+			"llm_configured", cfg.IsLLMConfigured(),
+			"github_configured", cfg.IsGitHubConfigured(),
+			"sqlite_path", cfg.SQLitePath,
+			"api_addr", listenAddr,
+			"log_level", cfg.LogLevel,
+		)
+		if !cfg.IsLLMConfigured() {
+			logging.Warn("LLM not configured — investigations will detect but cannot diagnose/fix (noop LLM mode)")
+		}
+		if !cfg.IsGitHubConfigured() {
+			logging.Warn("GitHub not configured — investigations will diagnose but cannot open PRs")
+		}
+	}
 
 	if cfg.LLMEmbeddingModel == "" {
 		logging.Info("embedding model not configured — using hash fallback (similar-incident retrieval disabled). Set SENTINEL_LLM_EMBEDDING_MODEL to enable.",

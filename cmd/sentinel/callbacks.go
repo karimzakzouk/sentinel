@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	admissionv1 "k8s.io/api/admission/v1"
@@ -55,10 +56,24 @@ func (w *wiring) buildChatopsDeps() *chatops.Deps {
 }
 
 // buildAdmissionServer constructs the validating admission webhook HTTP
-// server. *wiring satisfies admission.IncidentMemory; the CVEScanner is
-// nil (image scanning is not yet wired — see issue #181).
+// server. *wiring satisfies admission.IncidentMemory. The CVEScanner is
+// pluggable: "trivy", "grype", or "noop" (default).
 func (w *wiring) buildAdmissionServer() *http.Server {
-	admHandler := admission.NewHandler(w, nil)
+	cfg := w.Config()
+	var scanner admission.CVEScanner
+	switch strings.ToLower(cfg.CVEScannerType) {
+	case "trivy":
+		scanner = admission.NewTrivyScanner(cfg.CVEScannerBinary, time.Duration(cfg.CVEScannerCacheTTL)*time.Second)
+		logging.Info("admission: CVEScanner wired (trivy)", "binary", cfg.CVEScannerBinary, "cache_ttl", cfg.CVEScannerCacheTTL)
+	case "grype":
+		scanner = admission.NewGrypeScanner(cfg.CVEScannerBinary, time.Duration(cfg.CVEScannerCacheTTL)*time.Second)
+		logging.Info("admission: CVEScanner wired (grype)", "binary", cfg.CVEScannerBinary, "cache_ttl", cfg.CVEScannerCacheTTL)
+	default:
+		scanner = nil // noop — BlockKnownBadImagesPolicy returns "scanner not configured" warning
+		logging.Info("admission: CVEScanner disabled (noop) — set SENTINEL_CVE_SCANNER=trivy to enable")
+	}
+
+	admHandler := admission.NewHandler(w, scanner)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/validate", func(rw http.ResponseWriter, r *http.Request) {
 		var review admissionv1.AdmissionReview
@@ -78,7 +93,6 @@ func (w *wiring) buildAdmissionServer() *http.Server {
 		rw.WriteHeader(http.StatusOK)
 		_, _ = rw.Write([]byte("ok"))
 	})
-	cfg := w.Config()
 	return &http.Server{
 		Addr:    cfg.AdmissionWebhookAddr,
 		Handler: mux,

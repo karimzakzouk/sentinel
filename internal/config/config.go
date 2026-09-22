@@ -188,6 +188,13 @@ type Config struct {
 	AdmissionWebhookAddr    string
 	AdmissionWebhookCertDir string
 
+	// CVE scanner for the admission webhook. Values: "trivy", "grype",
+	// "noop" (default). When "trivy" or "grype", the binary must be in
+	// PATH (sidecar or in-process).
+	CVEScannerType     string
+	CVEScannerBinary   string // path to binary (default "trivy" or "grype")
+	CVEScannerCacheTTL int    // seconds (default 1800 = 30min)
+
 	// ─── Tier 2: Ed25519-signed audit trail ──────────────────────────────
 	AttestEnabled bool
 	AttestLogDir  string
@@ -208,6 +215,17 @@ type Config struct {
 
 	// ─── Logging ─────────────────────────────────────────────────────────
 	LogLevel string
+
+	// ─── Observe-only mode ─────────────────────────────────────────────
+	// ObserveOnly forces Sentinel into a read-only mode: it serves the API
+	// and web UI but does NOT call the LLM, clone repos, open PRs, or execute
+	// any fixes. Useful for demos, evaluation, and "dry-run" deployments.
+	// When true, overrides all capability checks (LLM, GitHub, K8s).
+	// When false (default), Sentinel auto-degrades: if LLM_API_KEY is empty
+	// it uses a noop LLM (logs "would have called"); if GITHUB_TOKEN is empty
+	// it skips the PR step; if no K8s cluster is reachable it serves the API
+	// only.
+	ObserveOnly bool
 }
 
 // RuntimeSettings is the runtime-mutable subset of Config. These can be
@@ -346,6 +364,10 @@ func Load() *Config {
 		AdmissionWebhookAddr:    getenv("SENTINEL_ADMISSION_WEBHOOK_ADDR", ":8443"),
 		AdmissionWebhookCertDir: getenv("SENTINEL_ADMISSION_WEBHOOK_CERT_DIR", "/data/admission-tls"),
 
+		CVEScannerType:     getenv("SENTINEL_CVE_SCANNER", "noop"),
+		CVEScannerBinary:   getenv("SENTINEL_CVE_SCANNER_BINARY", ""),
+		CVEScannerCacheTTL: getenvInt("SENTINEL_CVE_SCANNER_CACHE_TTL", 1800),
+
 		AttestEnabled: getenvBool("SENTINEL_ATTEST_ENABLED", false),
 		AttestLogDir:  getenv("SENTINEL_ATTEST_LOG_DIR", "/data/attest"),
 
@@ -362,7 +384,7 @@ func Load() *Config {
 
 		LogLevel: getenv("SENTINEL_LOG_LEVEL", "INFO"),
 
-		LLMProviders: loadLLMProviders(),
+		ObserveOnly: getenvBool("SENTINEL_OBSERVE_ONLY", false),
 
 		AutoMergeEnabled:         getenvBool("SENTINEL_AUTO_MERGE_ENABLED", false),
 		AutoMergeNamespaces:      splitCSV(getenv("SENTINEL_AUTO_MERGE_NAMESPACES", "")),
@@ -432,27 +454,46 @@ func (c *Config) IsRepoAllowed(repo string) bool {
 
 // Validate returns a list of blocking errors and a list of non-blocking
 // warnings. A non-empty errors slice means Sentinel cannot start.
+// Validate returns blocking errors and non-blocking warnings. In observe-only
+// mode (SENTINEL_OBSERVE_ONLY=true) or when capabilities are auto-degraded,
+// missing LLM/GitHub/K8s config produces warnings instead of errors.
+//
+// Sentinel never refuses to start for missing optional config. It starts in
+// the most capable mode the available config allows:
+//
+//	Full autonomous mode: all env vars set.
+//	Observe-only mode: SENTINEL_OBSERVE_ONLY=true, or all creds empty.
+//	Degraded mode: some creds set, some empty (noop LLM, no-PR, etc.).
 func (c *Config) Validate() (errors []string, warnings []string) {
-	if c.LLMAPIKey == "" {
-		errors = append(errors, "SENTINEL_LLM_API_KEY is empty — Sentinel cannot run without an LLM API key")
-	}
-	if c.LLMProvider == "" {
-		errors = append(errors, "SENTINEL_LLM_PROVIDER is empty")
-	} else if !isKnownProvider(c.LLMProvider) {
-		warnings = append(warnings, fmt.Sprintf(
-			"SENTINEL_LLM_PROVIDER=%q is not in the known-providers list — "+
-				"if this is a typo, LLM calls will be sent to the wrong endpoint with your API key attached",
-			c.LLMProvider))
-	}
-	if c.LLMFastModel == "" {
-		errors = append(errors, "SENTINEL_LLM_FAST_MODEL is empty")
-	}
-	if c.LLMFrontierModel == "" {
-		errors = append(errors, "SENTINEL_LLM_FRONTIER_MODEL is empty")
-	}
-
-	if c.GitHubToken == "" {
-		errors = append(errors, "SENTINEL_GITHUB_TOKEN is empty — Sentinel needs a GitHub PAT to clone repos and open PRs")
+	if c.ObserveOnly {
+		warnings = append(warnings, "SENTINEL_OBSERVE_ONLY=true — running in observe-only mode (no LLM, no GitHub, no K8s writes). The API + web UI are served; no autonomous actions will be taken.")
+		// In observe-only mode, everything is optional. Still validate
+		// numeric ranges below.
+	} else {
+		// Auto-degrade: warn instead of error when creds are missing.
+		if c.LLMAPIKey == "" {
+			warnings = append(warnings, "SENTINEL_LLM_API_KEY is empty — LLM calls will be noop (logged, not sent). Investigations will detect incidents but cannot diagnose or fix them.")
+		}
+		if c.LLMProvider == "" {
+			warnings = append(warnings, "SENTINEL_LLM_PROVIDER is empty — defaulting to 'zai'")
+			c.LLMProvider = "zai"
+		} else if !isKnownProvider(c.LLMProvider) {
+			warnings = append(warnings, fmt.Sprintf(
+				"SENTINEL_LLM_PROVIDER=%q is not in the known-providers list — "+
+					"if this is a typo, LLM calls will be sent to the wrong endpoint with your API key attached",
+				c.LLMProvider))
+		}
+		if c.LLMFastModel == "" {
+			warnings = append(warnings, "SENTINEL_LLM_FAST_MODEL is empty — defaulting to 'glm-4-flash'")
+			c.LLMFastModel = "glm-4-flash"
+		}
+		if c.LLMFrontierModel == "" {
+			warnings = append(warnings, "SENTINEL_LLM_FRONTIER_MODEL is empty — defaulting to 'glm-4.5'")
+			c.LLMFrontierModel = "glm-4.5"
+		}
+		if c.GitHubToken == "" {
+			warnings = append(warnings, "SENTINEL_GITHUB_TOKEN is empty — Sentinel cannot clone repos or open PRs. Investigations will diagnose but cannot fix.")
+		}
 	}
 
 	if len(c.WriteNamespaces) == 0 {
@@ -487,6 +528,25 @@ func (c *Config) Validate() (errors []string, warnings []string) {
 	}
 
 	return errors, warnings
+}
+
+// IsLLMConfigured reports whether the LLM is usable. When false, the LLM
+// router will be a noop that logs "would have called LLM" instead of making
+// API calls.
+func (c *Config) IsLLMConfigured() bool {
+	return !c.ObserveOnly && c.LLMAPIKey != "" && c.LLMProvider != ""
+}
+
+// IsGitHubConfigured reports whether GitHub operations are possible. When
+// false, Sentinel detects and diagnoses but cannot open PRs.
+func (c *Config) IsGitHubConfigured() bool {
+	return !c.ObserveOnly && c.GitHubToken != ""
+}
+
+// IsObserveOnly reports whether Sentinel is in observe-only mode (no
+// autonomous actions, API + UI only).
+func (c *Config) IsObserveOnly() bool {
+	return c.ObserveOnly
 }
 
 func clamp01(f float64) float64 {

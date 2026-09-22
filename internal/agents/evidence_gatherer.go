@@ -58,11 +58,27 @@ Set "rewind" ONLY if you discover a brand-new fact that invalidates the entire h
 
 // EvidenceGatherer generates queries, executes them in parallel, and attaches
 // evidence to each hypothesis.
+// LogQuerier is the interface for log backends (Loki, etc.).
+type LogQuerier interface {
+	QueryLogQL(ctx context.Context, logql string) (map[string]any, error)
+}
+
+// TraceQuerier is the interface for tracing backends (Jaeger, Tempo).
+type TraceQuerier interface {
+	QueryTraceAPI(ctx context.Context, service string) (map[string]any, error)
+	QueryJaegerTraces(ctx context.Context, service string) (map[string]any, error)
+}
+
 type EvidenceGatherer struct {
 	router        *llm.Router
 	k8s           *k8s.Client
 	prometheusURL string
 	httpClient    *http.Client
+
+	// Pluggable evidence backends. nil = not configured (queries return
+	// "not configured" error instead of failing).
+	logQuerier   LogQuerier   // Loki
+	traceQuerier TraceQuerier // Jaeger or Tempo
 }
 
 // NewEvidenceGatherer creates an EvidenceGatherer.
@@ -79,6 +95,19 @@ func NewEvidenceGatherer(router *llm.Router, k8sClient *k8s.Client) *EvidenceGat
 // URL. When empty, prometheus queries return a "not configured" error.
 func (a *EvidenceGatherer) SetPrometheusURL(url string) {
 	a.prometheusURL = url
+}
+
+// SetLogQuerier wires a log backend (e.g. observability.LokiClient) for
+// evidence queries of type "loki". nil disables Loki queries.
+func (a *EvidenceGatherer) SetLogQuerier(q LogQuerier) {
+	a.logQuerier = q
+}
+
+// SetTraceQuerier wires a tracing backend (e.g. observability.JaegerClient or
+// observability.TempoClient) for evidence queries of type "jaeger" or "tempo".
+// nil disables trace queries.
+func (a *EvidenceGatherer) SetTraceQuerier(q TraceQuerier) {
+	a.traceQuerier = q
 }
 
 // Run executes the evidence gatherer agent. An LLM failure is non-fatal —
@@ -212,6 +241,8 @@ func (a *EvidenceGatherer) runSingleQuery(ctx context.Context, idx int, q map[st
 }
 
 // executeQuery dispatches to the right backend based on query type.
+// Each backend is pluggable — when not configured, returns a "not configured"
+// error instead of failing the whole evidence-gathering pass.
 func (a *EvidenceGatherer) executeQuery(ctx context.Context, query map[string]any) map[string]any {
 	qtype, _ := query["type"].(string)
 	q, _ := query["query"].(string)
@@ -221,10 +252,35 @@ func (a *EvidenceGatherer) executeQuery(ctx context.Context, query map[string]an
 		return a.queryK8s(ctx, q)
 	case "prometheus":
 		return a.queryPrometheus(ctx, q)
-	case "loki", "jaeger":
-		// Loki uses LogQL, Jaeger has its own trace query API. Both need
-		// client code that hasn't been ported yet.
-		return map[string]any{"error": fmt.Sprintf("%s_url not configured", qtype)}
+	case "loki":
+		if a.logQuerier == nil {
+			return map[string]any{"error": "loki_url not configured"}
+		}
+		result, err := a.logQuerier.QueryLogQL(ctx, q)
+		if err != nil {
+			return map[string]any{"error": fmt.Sprintf("loki query failed: %v", err)}
+		}
+		return result
+	case "jaeger":
+		if a.traceQuerier == nil {
+			return map[string]any{"error": "jaeger_url not configured"}
+		}
+		// For Jaeger, the "query" is the service name.
+		result, err := a.traceQuerier.QueryJaegerTraces(ctx, q)
+		if err != nil {
+			return map[string]any{"error": fmt.Sprintf("jaeger query failed: %v", err)}
+		}
+		return result
+	case "tempo":
+		if a.traceQuerier == nil {
+			return map[string]any{"error": "tempo_url not configured"}
+		}
+		// For Tempo, the "query" is the service name.
+		result, err := a.traceQuerier.QueryTraceAPI(ctx, q)
+		if err != nil {
+			return map[string]any{"error": fmt.Sprintf("tempo query failed: %v", err)}
+		}
+		return result
 	default:
 		return map[string]any{"error": fmt.Sprintf("unknown query type: %s", qtype)}
 	}

@@ -45,6 +45,7 @@ type Client struct {
 	clientset *kubernetes.Clientset
 	dynamic   dynamic.Interface
 	config    *rest.Config
+	noop      bool
 }
 
 // New returns a Client using in-cluster config, with fallback to the local
@@ -73,6 +74,18 @@ func New() (*Client, error) {
 	return &Client{clientset: clientset, dynamic: dyn, config: cfg}, nil
 }
 
+// NewNoop returns a Client that never talks to a Kubernetes cluster. All
+// methods return empty results and nil errors. Used when no K8s cluster is
+// available (auto-degrade) or in observe-only mode.
+func NewNoop() *Client {
+	return &Client{noop: true}
+}
+
+// IsNoop reports whether the client is in noop mode (no real K8s cluster).
+func (c *Client) IsNoop() bool {
+	return c != nil && c.noop
+}
+
 // Clientset returns the underlying kubernetes clientset.
 func (c *Client) Clientset() *kubernetes.Clientset { return c.clientset }
 
@@ -84,6 +97,9 @@ func (c *Client) DynamicClient() dynamic.Interface { return c.dynamic }
 // app.kubernetes.io/name=service → by label app=service → StatefulSet by
 // name → Pod by label. Returns an empty map if nothing is found.
 func (c *Client) LookupWorkloadAnnotations(ctx context.Context, service, namespace string) (map[string]string, error) {
+	if c.IsNoop() {
+		return map[string]string{}, nil
+	}
 	annotations := map[string]string{}
 
 	if dep, err := c.clientset.AppsV1().Deployments(namespace).Get(ctx, service, metav1.GetOptions{}); err == nil {

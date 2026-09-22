@@ -36,6 +36,7 @@ import (
 	"github.com/karimzakzouk/sentinel/internal/chatops"
 	"github.com/karimzakzouk/sentinel/internal/config"
 	"github.com/karimzakzouk/sentinel/internal/correlation"
+	"github.com/karimzakzouk/sentinel/internal/depanalysis"
 	"github.com/karimzakzouk/sentinel/internal/detection"
 	"github.com/karimzakzouk/sentinel/internal/emb"
 	"github.com/karimzakzouk/sentinel/internal/events"
@@ -120,11 +121,12 @@ type wiring struct {
 	apiServer *api.Server
 
 	// Tier 1 (optional, nil when disabled).
-	promQuerier    *observability.PrometheusQuerier
-	postMerge      *postmerge.Watcher
-	sloWatcher     *slo.Watcher
-	causalAnalyzer *causal.Analyzer
-	admissionSrv   *http.Server
+	promQuerier      *observability.PrometheusQuerier
+	postMerge        *postmerge.Watcher
+	sloWatcher       *slo.Watcher
+	causalAnalyzer   *causal.Analyzer
+	admissionSrv     *http.Server
+	depGraphProvider depanalysis.DepGraphProvider
 
 	// Tier 2 (optional, nil when disabled).
 	attestor    *attest.Signer
@@ -233,6 +235,16 @@ func (w *wiring) UpdateOverrides(ctx context.Context, incidentID string, sandbox
 		return fmt.Errorf("parse incident ID: %w", err)
 	}
 	return w.store.UpdateOverrides(ctx, id, sandboxOverride, ciOverride)
+}
+
+// SetSandboxFeedback satisfies chatops.Store. Stores a hint message that
+// the fix proposer reads on its next run. Used by /sentinel apply.
+func (w *wiring) SetSandboxFeedback(ctx context.Context, incidentID, feedback string) error {
+	id, err := uuid.Parse(incidentID)
+	if err != nil {
+		return fmt.Errorf("parse incident ID: %w", err)
+	}
+	return w.store.SetSandboxFeedback(ctx, id, feedback)
 }
 
 // --- automerge.Store ---
@@ -440,12 +452,41 @@ func (w *wiring) SimilarIncidents(ctx context.Context, obj admission.Manifest, t
 
 // --- causal.DepGraphProvider ---
 
-// GraphFor satisfies causal.DepGraphProvider. Sentinel's dependency graph
-// is currently inferred at runtime from observed anomalies; the static
-// graph just carries the anomalous nodes so the analyzer can compute
-// pairwise Granger scores between them.
-func (w *wiring) GraphFor(_ context.Context, nodes []causal.Node) (*causal.Graph, error) {
-	return &causal.Graph{Nodes: nodes}, nil
+// depGraphProvider is the composite provider built in wire(). It may be nil
+// (observe-only mode). When nil, GraphFor returns just the anomalous nodes.
+var _ causal.DepGraphProvider = (*wiring)(nil)
+
+// GraphFor satisfies causal.DepGraphProvider. Delegates to the composite
+// depanalysis provider (Istio → Linkerd → NetworkPolicy → annotation → noop)
+// and converts types from depanalysis.DepGraph to causal.Graph.
+func (w *wiring) GraphFor(ctx context.Context, nodes []causal.Node) (*causal.Graph, error) {
+	if w.depGraphProvider == nil {
+		return &causal.Graph{Nodes: nodes}, nil
+	}
+
+	// Convert causal.Node → depanalysis.DepGraphNode
+	daNodes := make([]depanalysis.DepGraphNode, len(nodes))
+	for i, n := range nodes {
+		daNodes[i] = depanalysis.DepGraphNode{Service: n.Service, Namespace: n.Namespace}
+	}
+
+	daGraph, err := w.depGraphProvider.GraphFor(ctx, daNodes)
+	if err != nil {
+		return nil, err
+	}
+
+	// Convert depanalysis.DepGraph → causal.Graph
+	graph := &causal.Graph{}
+	for _, n := range daGraph.Nodes {
+		graph.Nodes = append(graph.Nodes, causal.Node{Service: n.Service, Namespace: n.Namespace})
+	}
+	for _, e := range daGraph.Edges {
+		graph.Edges = append(graph.Edges, causal.Edge{
+			Source: causal.Node{Service: e.Source.Service, Namespace: e.Source.Namespace},
+			Target: causal.Node{Service: e.Target.Service, Namespace: e.Target.Namespace},
+		})
+	}
+	return graph, nil
 }
 
 // --- chaos.K8sClient ---
