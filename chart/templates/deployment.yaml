@@ -89,6 +89,8 @@ spec:
               value: {{ .Values.sentinel.autoMerge.maxPerHour | quote }}
             - name: SENTINEL_AUTO_MERGE_COOLDOWN_MIN
               value: {{ .Values.sentinel.autoMerge.cooldownMin | quote }}
+            - name: SENTINEL_AUTOMERGE_MIN_SANDBOX_LEVEL
+              value: {{ .Values.sentinel.autoMerge.minSandboxLevel | default 3 | quote }}
             {{- if .Values.sentinel.safeActions.enabled }}
             - name: SENTINEL_SAFE_ACTIONS_ENABLED
               value: "true"
@@ -205,6 +207,8 @@ spec:
               value: {{ .Values.sentinel.sandbox.required | default false | quote }}
             - name: SENTINEL_SANDBOX_MAX_RETRIES
               value: {{ .Values.sentinel.sandbox.maxRetries | default 2 | quote }}
+            - name: SENTINEL_SANDBOX_NETWORK_POLICY_REQUIRED
+              value: {{ .Values.sentinel.sandbox.networkPolicyRequired | default true | quote }}
             {{- if .Values.sentinel.slackWebhook }}
             - name: SENTINEL_SLACK_WEBHOOK
               value: {{ .Values.sentinel.slackWebhook | quote }}

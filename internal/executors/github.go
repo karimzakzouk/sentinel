@@ -149,13 +149,17 @@ type PRResult struct {
 	PRNumber        int
 	PRBranch        string
 	SandboxVerified bool
+	SandboxLevels   string
 	SandboxSummary  string
 	Error           string
 }
 
 // OpenPR opens a Pull Request from the fix branch. Called AFTER the sandbox
-// has verified (or failed to verify) the canary.
-func (e *GitHubExecutor) OpenPR(ctx context.Context, inc *schemas.Incident, branch BranchInfo, sandboxVerified bool, sandboxSummary string) *PRResult {
+// has verified (or failed to verify) the canary. sandboxLevels records how
+// far verification got (e.g. "L1-L5" or "L1-L3", "" when not verified) and
+// is embedded in the sandbox-verified label so reviewers see the strength of
+// verification at a glance.
+func (e *GitHubExecutor) OpenPR(ctx context.Context, inc *schemas.Incident, branch BranchInfo, sandboxVerified bool, sandboxLevels, sandboxSummary string) *PRResult {
 	fp := inc.State.FixProposal
 	if !branch.Success {
 		return &PRResult{Success: false, Error: fmt.Sprintf("branch_preparation_failed: %s", branch.Error)}
@@ -181,7 +185,10 @@ func (e *GitHubExecutor) OpenPR(ctx context.Context, inc *schemas.Incident, bran
 
 	labels := []string{"sentinel", "automated"}
 	if sandboxVerified {
-		labels = append(labels, "sandbox-verified")
+		if sandboxLevels == "" {
+			sandboxLevels = "L1-L3"
+		}
+		labels = append(labels, "sandbox-verified:"+sandboxLevels)
 	} else {
 		labels = append(labels, "needs-review")
 	}
@@ -193,6 +200,7 @@ func (e *GitHubExecutor) OpenPR(ctx context.Context, inc *schemas.Incident, bran
 		PRNumber:        prNumber,
 		PRBranch:        branch.BranchName,
 		SandboxVerified: sandboxVerified,
+		SandboxLevels:   sandboxLevels,
 		SandboxSummary:  sandboxSummary,
 	}
 }

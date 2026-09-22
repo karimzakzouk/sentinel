@@ -19,6 +19,15 @@ type Config struct {
 	CITimeoutSec         int
 	MaxPerHour           int
 	CooldownAfterFailMin int
+
+	// MinSandboxLevel is the weakest sandbox-verification level that may
+	// still auto-merge, expressed as the highest level that must have
+	// passed. 3 = L1-L3 (pod ready + health endpoints + error gone) —
+	// the historical minimum. 5 = require the full suite including
+	// regression test + reproducer. 0 disables the gate (not
+	// recommended — SandboxVerified alone doesn't say how far
+	// verification got).
+	MinSandboxLevel int
 }
 
 // DefaultConfig returns the safe defaults. Auto-merge is OFF by default —
@@ -32,6 +41,7 @@ func DefaultConfig() Config {
 		CITimeoutSec:         900,
 		MaxPerHour:           3,
 		CooldownAfterFailMin: 60,
+		MinSandboxLevel:      3,
 	}
 }
 
@@ -76,14 +86,17 @@ func NewPolicy(cfg Config, safety SafetyChecker) *Policy {
 // refreshed by the merger on every tick; the rest comes from the incident
 // state.
 type Input struct {
-	IncidentID          string
-	Service             string
-	Namespace           string
-	FixType             string
-	HasSchemaMigration  bool
-	IsHighRisk          bool
-	Confidence          float64
-	SandboxVerified     bool
+	IncidentID         string
+	Service            string
+	Namespace          string
+	FixType            string
+	HasSchemaMigration bool
+	IsHighRisk         bool
+	Confidence         float64
+	SandboxVerified    bool
+	// SandboxLevels is how far sandbox verification got ("L1-L5",
+	// "L1-L3", "" when not verified). Gate 3.5 enforces MinSandboxLevel.
+	SandboxLevels       string
 	CIStatus            CIStatus
 	AutoMergeAnnotation bool
 	HoldLabel           bool
@@ -154,6 +167,21 @@ func (p *Policy) Evaluate(in Input) *Decision {
 		d.GatesPassed = append(d.GatesPassed, "sandbox (OVERRIDE)")
 	} else {
 		d.GatesPassed = append(d.GatesPassed, "sandbox")
+	}
+
+	// Gate 3.5: sandbox verification DEPTH. "sandbox-verified" alone
+	// doesn't say how far verification got — L1-L3 (pod up, healthy,
+	// error gone) vs L1-L5 (also regression test + reproducer). Enforce
+	// the operator's minimum.
+	if p.cfg.MinSandboxLevel > 0 && in.SandboxVerified && !in.SandboxOverride {
+		level := parseSandboxLevel(in.SandboxLevels)
+		if level < p.cfg.MinSandboxLevel {
+			d.GatesFailed = append(d.GatesFailed, "sandbox_level")
+			d.Reason = fmt.Sprintf("sandbox verified to %s but auto-merge requires L1-L%d (SENTINEL_AUTOMERGE_MIN_SANDBOX_LEVEL)",
+				in.SandboxLevels, p.cfg.MinSandboxLevel)
+			return d
+		}
+		d.GatesPassed = append(d.GatesPassed, "sandbox_level")
 	}
 
 	// Gate 4: confidence threshold (hard).
@@ -241,6 +269,23 @@ func (p *Policy) Evaluate(in Input) *Decision {
 	d.AutoMerge = true
 	d.Reason = "all gates passed"
 	return d
+}
+
+// parseSandboxLevel extracts the highest verified level from a
+// LevelsVerified string like "L1-L5". Returns 3 for legacy/empty values
+// (L1-L3 was the historical minimum for a verified run).
+func parseSandboxLevel(levels string) int {
+	if levels == "" {
+		return 3
+	}
+	var max int
+	if _, err := fmt.Sscanf(strings.TrimPrefix(levels, "L1-L"), "%d", &max); err != nil {
+		return 3
+	}
+	if max < 1 || max > 5 {
+		return 3
+	}
+	return max
 }
 
 // namespaceAllowed returns true if the namespace is in the allowlist. An

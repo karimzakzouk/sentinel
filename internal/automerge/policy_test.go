@@ -404,10 +404,20 @@ type mockGitHubClient struct {
 	commentCount int
 	labels       []string
 	ciStatus     CIStatus
+	prClosed     bool
 }
 
 func (g *mockGitHubClient) GetCIStatus(ctx context.Context, repo string, prNumber int) (CIStatus, error) {
 	return g.ciStatus, nil
+}
+
+// IsPROpen satisfies the GitHubClient interface. The mock defaults to open
+// (zero value prClosed=false); tests set prClosed=true to simulate a human
+// closing or merging the PR out from under Sentinel.
+func (g *mockGitHubClient) IsPROpen(ctx context.Context, repo string, prNumber int) (bool, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return !g.prClosed, nil
 }
 
 func (g *mockGitHubClient) GetLabels(ctx context.Context, repo string, prNumber int) ([]string, error) {

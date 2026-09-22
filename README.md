@@ -1,34 +1,21 @@
 # Sentinel
 
-**The Autonomous AI SRE.**
-
-Detect. Diagnose. Fix. Verify. — autonomously.
+**The autonomous AI SRE.** Sentinel watches your Kubernetes cluster for production crashes, finds the root cause, writes the fix, verifies it in a sandbox, and opens a Pull Request — without waking you up.
 
 [![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go)](https://go.dev)
 [![Image Size](https://img.shields.io/badge/image-43MB-success)](https://hub.docker.com/r/karimzakzouk/sentinel)
 [![Pods](https://img.shields.io/badge/pods-1-blue)]()
 [![Arch](https://img.shields.io/badge/arch-amd64%20%7C%20arm64-success)]()
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.0.0-cyan)]()
+[![Version](https://img.shields.io/badge/version-1.7.0-cyan)]()
 
-[Install](#install) · [How It Works](#how-it-works) · [Configuration](#configuration) · [Architecture](#architecture) · [CLI](#cli) · [Web UI](#web-ui)
+[Install](#install) · [How It Works](#how-it-works) · [Architecture](#architecture) · [Configuration](#configuration) · [CLI](#cli) · [Web UI](#web-ui)
 
 ---
 
-Sentinel is an autonomous AI SRE that watches your Kubernetes cluster for production crashes, diagnoses the root cause with an LLM, writes the fix, verifies it in a sandbox, and opens a Pull Request — all on its own.
+Most SRE tooling stops at *alerting*. PagerDuty pages you. Datadog graphs it. Copilot suggests a fix. Sentinel **closes the loop**: it detects the crash, investigates the code, proposes and verifies a fix, and opens a PR — in one pipeline, on one pod, with no external dependencies.
 
-**One binary. One pod. 43MB image. ~50MB RAM. Zero external dependencies.**
-
-## Why Sentinel
-
-Every SRE tool on the market either alerts you (PagerDuty, Datadog) or recommends fixes (Copilot, K8sGPT). None of them **fix** the problem. Sentinel does.
-
-| What others do | What Sentinel does |
-|---|---|
-| Alert you at 3am | **Fix it at 3am** |
-| Suggest a fix | **Write the fix + verify it + open a PR** |
-| Need a human to investigate | **Investigate autonomously (clone repo, search code, LLM root-cause)** |
-| Stop at "here's the error" | **Continue through sandbox verification + auto-merge** |
+**One binary. One pod. 43MB image. ~50MB RAM. 9 direct Go dependencies.**
 
 ## Install
 
@@ -36,7 +23,7 @@ Every SRE tool on the market either alerts you (PagerDuty, Datadog) or recommend
 helm repo add sentinel https://karimzakzouk.github.io/sentinel/
 helm repo update
 
-helm install sentinel sentinel/sentinel --version 1.6.0 \
+helm install sentinel sentinel/sentinel --version 1.7.0 \
   --namespace sentinel --create-namespace \
   --set sentinel.githubToken=YOUR_GITHUB_TOKEN \
   --set sentinel.llm.apiKey=YOUR_LLM_API_KEY \
@@ -44,7 +31,7 @@ helm install sentinel sentinel/sentinel --version 1.6.0 \
   --set 'sentinel.rbac.writeNamespaces={sim}'
 ```
 
-That's it. One pod. 43MB image. ~50MB RAM. Ready in <1 second.
+That's it. One pod, ready in under a second:
 
 ```bash
 kubectl -n sentinel get pods
@@ -63,115 +50,135 @@ metadata:
     sentinel.io/git-commit: abc123...         # Exact commit SHA (optional)
 ```
 
-Sentinel then automatically:
-1. Live-streams the pod's logs
-2. Watches the pod's status (CrashLoopBackOff, OOMKilled, ImagePullBackOff)
-3. When an error is detected → runs the full pipeline autonomously
-
-**No manual triggers needed.** Sentinel catches errors the instant they appear.
+Sentinel then live-streams the pod's logs and status. When a crash appears — `CrashLoopBackOff`, `OOMKilled`, `ImagePullBackOff`, or a stack trace in the logs — the full pipeline runs. No manual triggers needed.
 
 ## How It Works
 
-### The 6-Layer Pipeline
-
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│                         Sentinel Pod                              │
-│                                                                   │
-│  ┌─────────────┐  ┌─────────────┐  ┌───────────┐  ┌───────────┐ │
-│  │  Detection  │→ │  Investigate│→ │  Govern   │→ │  Execute  │ │
-│  │             │  │             │  │           │  │           │ │
-│  │ Live logs   │  │ Clone repo  │  │ Embedded  │  │ Kaniko    │ │
-│  │ Pod status  │  │ Search code │  │ safety    │  │ Sandbox   │ │
-│  │ Alertmanager│  │ LLM agents  │  │ policy    │  │ GitHub PR │ │
-│  └─────────────┘  └─────────────┘  └───────────┘  └───────────┘ │
-│       │                                              │           │
-│       ▼                                              ▼           │
-│  ┌─────────────────────────────────────────────────────────────┐ │
-│  │  SQLite (incidents + events + beta priors + vector memory)  │ │
-│  └─────────────────────────────────────────────────────────────┘ │
-└──────────────────────────────────────────────────────────────────┘
+                        ┌─────────────────────────────────────────────────────────┐
+                        │                     Sentinel pod                         │
+                        │                                                         │
+  Kubernetes ──watch──▶ │  ┌───────────┐   ┌────────────┐   ┌───────────┐        │
+  (pod status, logs)    │  │ DETECT    │──▶│ INVESTIGATE│──▶│ ANALYZE   │        │
+  Alertmanager ─hook──▶ │  │           │   │            │   │           │        │
+                        │  │ log stream│   │ clone repo │   │ Bayes +   │        │
+                        │  │ pod status│   │ agentic LLM│   │ falsify   │        │
+                        │  │ webhooks  │   │ search+read│   │ hypotheses│        │
+                        │  └───────────┘   └────────────┘   └─────┬─────┘        │
+                        │                                        │              │
+                        │                        ┌───────────────▼──────────┐   │
+                        │                        │ GOVERN (5 embedded rules)│   │
+                        │                        │ prod ns · blast radius · │   │
+                        │                        │ confidence · migrations  │   │
+                        │                        └───────────────┬──────────┘   │
+                        │                                        │              │
+                        │  ┌───────────────┐   ┌─────────────────▼──────────┐   │
+                        │  │ OPEN PR       │◀──│ EXECUTE: 5-level sandbox   │   │
+                        │  │ sandbox-      │   │ Kaniko canary → verify →   │   │
+                        │  │ verified:L1-L5│   │ retry with LLM feedback    │   │
+                        │  └───────┬───────┘   └────────────────────────────┘   │
+                        │          │                                              │
+                        │          ▼                                              │
+                        │  ┌──────────────────────────────────────────────────┐ │
+                        │  │ SQLite: incidents · events · beta priors ·       │ │
+                        │  │ vector memory · tracked PRs (restart-safe)       │ │
+                        │  └──────────────────────────────────────────────────┘ │
+                        └─────────────────────────────────────────────────────────┘
 ```
 
-**Layer 1 — Detection:** Live log streaming + pod status watching + Alertmanager webhooks. Auto-triggers on any error.
+**Detect** — live log streaming + pod status watching + Alertmanager webhooks.
 
-**Layer 2 — Investigation (agentic, like SWE-agent):**
-1. Clone the repo locally (go-git, ~2 seconds)
-2. Walk the file tree (filtered: no node_modules, vendor, .git)
-3. LLM Round 1: "Given these logs + this file tree, what should I search for?" → emits search queries
-4. Run searches locally (Go regexp) — instant, no API calls
-5. LLM Round 2: "Given these search results, what's the root cause + which files should I read?" → returns hypotheses + file paths
-6. Read those files from disk
-7. Fallback: if LLM returns 0 files, parse the stack trace from the logs and fetch those files
+**Investigate** (agentic) — clones the repo locally (~2s with go-git), then runs an LLM agent loop: the agent emits searches, reads files, forms hypotheses, and can revise when evidence contradicts it (planning, stuck-detection, a critic pass on low confidence, and context condensation on long investigations).
 
-**Layer 3 — Evidence Gathering:** LLM-generated queries run against the K8s API (events, pods, deployments) in parallel with 15s per-query timeout.
+**Analyze** — pure math, no LLM: falsification + Bayes' rule + Beta-distribution priors pick the surviving hypothesis.
 
-**Layer 4 — Analysis:** Pure math — falsification + Bayes' rule + Beta-distribution priors. Picks the survivor hypothesis.
+**Govern** — 5 embedded Go rules: production namespace, high-risk service, blast radius, schema-migration rollback block, confidence thresholds. No OPA sidecar.
 
-**Layer 5 — Governance:** 5 embedded Go rules (production namespace, high-risk service, blast radius, schema-migration rollback block, confidence threshold). No OPA sidecar.
+**Execute** — pushes the fix to a branch, builds a canary image with Kaniko, verifies it in an isolated namespace, opens the PR.
 
-**Layer 6 — Execution (5-level sandbox verification):**
-1. Prepare branch (push fix files to a new Git branch)
-2. Build canary image with Kaniko
-3. Run sandbox verification (5 levels — see below)
-4. Open PR with `sandbox-verified` label
+### The 5-level sandbox
 
-### The 5-Level Sandbox
-
-Sentinel doesn't just open a PR and hope. It verifies the fix in an isolated K8s namespace:
+Sentinel doesn't open a PR and hope. It verifies the fix in a disposable K8s namespace:
 
 | Level | What it checks | Failure feedback to LLM |
 |---|---|---|
-| **L1: Pod Ready** | Canary pod becomes Ready AND stays Ready for 30s | "Startup crash not fixed — app still crashes on boot" |
-| **L2: Health endpoints** | `/`, `/healthz`, `/readyz` return 2xx/3xx | "App starts but health endpoints return 4xx/5xx" |
-| **L3: Error gone** | Original error (TypeError/panic/KeyError) absent from canary logs | "Original error still present — fix only masked the symptom" |
-| **L4: Regression test** | LLM-generated test that reproduces the bug PASSES against the fix | "Fix passed L1-3 but regression test still FAILS — you masked the symptom, didn't fix the bug" |
-| **L5: Reproducer** | LLM-generated reproducer script exits 0 | "Fix passed L1-4 but reproducer still crashes — strongest signal the fix is incomplete" |
+| **L1: Pod Ready** | Canary becomes Ready AND stays Ready | "Startup crash not fixed" |
+| **L2: Health endpoints** | `/`, `/healthz`, `/readyz` return 2xx/3xx | "App starts but health endpoints fail" |
+| **L3: Error gone** | Original error absent from canary logs | "Fix only masked the symptom" |
+| **L4: Regression test** | LLM-generated test that reproduces the bug PASSES | "You masked the symptom, didn't fix the bug" |
+| **L5: Reproducer** | LLM-generated reproducer script exits 0 | "Strongest signal the fix is incomplete" |
 
-When a level fails, Sentinel feeds the failure back to the LLM and retries (up to `SandboxMaxRetries` times). The LLM gets **level-specific feedback** — it knows exactly which level failed and why.
+The PR label tells you exactly how far verification went: `sandbox-verified:L1-L5` (full suite) vs `sandbox-verified:L1-L3` (no canary image — L4/L5 skipped). Auto-merge enforces a configurable minimum (`SENTINEL_AUTOMERGE_MIN_SANDBOX_LEVEL`, default 3). When a level fails, Sentinel feeds the specific failure back to the LLM and retries.
 
-### Defense-in-depth prompt-injection defense
+### Prompt-injection defense (in depth)
 
-Sentinel reads attacker-controlled pod logs. Five layers prevent prompt-injection:
+Sentinel reads attacker-controlled pod logs. Five layers prevent a tampered log from becoming a malicious PR:
 
 1. **Repo allowlist** — only investigates repos in the configured allowlist
-2. **Path-confined ReadFile** — LLM-returned file paths cannot escape the cloned repo
+2. **Path-confined reads** — LLM file paths cannot escape the cloned repo
 3. **19-pattern security scanner** — blocks `os.system`, `eval`, `pickle.loads`, `curl|bash`, hardcoded secrets, Dockerfile tampering, env exfiltration
-4. **Reviewer-agent LLM** — a second LLM call with a different system prompt audits the fix
-5. **Sandbox NetworkPolicy default-deny** — even a compromised fix cannot exfiltrate secrets from the canary pod
+4. **Reviewer agent** — a second LLM with a different prompt audits every fix
+5. **Sandbox NetworkPolicy default-deny** — and since 1.7 the sandbox **fails closed**: if the policy can't be created, the run aborts instead of deploying a canary with unrestricted egress
 
-### Tier 1: closes the autonomous loop
+### Durability
 
-- **Post-merge regression watcher** — Phase 1 (10 min) + Phase 2 (24h) monitoring of every merged PR. Auto-reverts via `git revert` if metrics regress.
-- **Proactive SLO burn-rate watcher** — Google SRE workbook multi-window burn-rate rules (14.4x/6x/3x/1x). Fires synthetic incidents BEFORE the crash.
-- **Causal root-cause attribution** — Granger-causality + topological sort on the dependency DAG. Tells you WHICH service caused a cascade.
-- **Validating admission webhook** — Sentinel as a Kyverno replacement with incident memory. Blocks deploys that look similar to past incidents.
+- **Restart-safe auto-merge** — tracked PRs are persisted to SQLite and re-adopted on boot. A pod restart (or node upgrade) no longer orphans in-flight PRs; PRs merged by a human during downtime are detected and pruned.
+- **Post-merge regression watcher** — every merged PR is monitored (10 min + 24 h) and auto-reverted via `git revert` if metrics regress.
+- **SLO burn-rate watcher** — Google SRE multi-window burn-rate rules fire synthetic incidents *before* the crash.
+- **Causal attribution** — Granger-causality + topological sort on the dependency DAG identifies which service caused a cascade.
+- **Validating admission webhook** — blocks deploys that look like past incidents.
 
 ### Tier 2: the brain
 
-- **Ed25519-signed audit trail** — every autonomous action emits a signed attestation with LLM provenance (model, prompt hash, tokens, cost) + SHA256 hash chain. EU AI Act / SOC 2 compliant.
-- **Cost-aware LLM routing** — task-complexity classifier routes to the appropriate model + cosine-similarity semantic cache. Target: 70% cost reduction per incident.
-- **Self-chaos mode** — scheduled chaos experiments against staging. Sentinel investigates its own injections → eval data for sentinel-bench.
+- **Ed25519-signed audit trail** — every autonomous action emits a signed attestation with LLM provenance (model, prompt hash, tokens, cost) + SHA256 hash chain. EU AI Act / SOC 2 oriented.
+- **Cost-aware LLM routing** — complexity classifier + cosine-similarity semantic cache. Target: ~70% cost reduction per incident.
+- **Self-chaos mode** — scheduled chaos experiments against staging; Sentinel investigates its own injections and feeds sentinel-bench.
+
+## Architecture
+
+```
+sentinel/
+├── cmd/
+│   ├── sentinel/              # Server binary (entrypoint)
+│   ├── sentinelctl/           # CLI binary
+│   └── sentinel-bench/        # Eval harness binary
+├── internal/
+│   ├── agent/                 # Agentic investigation loop (v3: MCTS, critic, condensation)
+│   ├── agents/                # Classic pipeline + security scanner
+│   ├── api/                   # HTTP API + SSE + embedded web UI
+│   ├── attest/                # Ed25519-signed audit trail
+│   ├── automerge/             # 11-gate auto-merger (restart-safe since 1.7)
+│   ├── causal/                # Granger-causality RCA
+│   ├── chaos/                 # Self-chaos mode
+│   ├── chatops/               # 19 /sentinel commands
+│   ├── detection/             # Live log streaming + pod status
+│   ├── executors/             # Sandbox, Kaniko, GitHub PRs, K8s patches
+│   ├── feedback/              # SQLite store + HNSW vector memory
+│   ├── llm/                   # Multi-provider router + circuit breaker
+│   └── ...                    # 38 packages total, all documented + tested
+├── web/                       # Next.js frontend (12 sections)
+├── chart/                     # Helm chart
+├── sentinel-bench/            # Eval harness + scenarios
+└── .github/workflows/         # CI (lint/test/scan) + release + kind e2e
+```
+
+**Numbers that matter:** 43MB image (distroless, nonroot, read-only rootfs) · 1 pod · ~50MB RAM at idle · <1s cold start · 9 direct deps · 20+ LLM providers.
 
 ## Configuration
 
-### LLM Providers
+### LLM providers
 
-Sentinel supports 20+ LLM providers natively via [GoAI](https://github.com/zendev-sh/goai):
-
-| Provider | Env var |
-|---|---|
-| Anthropic, Bedrock, Azure, OpenAI, Google, Vertex | `SENTINEL_LLM_PROVIDER=anthropic\|bedrock\|azure\|openai\|google\|vertex` |
-| OpenRouter, Groq, Mistral, Cohere, xAI, DeepSeek | `SENTINEL_LLM_PROVIDER=openrouter\|groq\|mistral\|cohere\|xAI\|deepseek` |
-| Ollama, vLLM, LiteLLM, ZAI, custom | `SENTINEL_LLM_PROVIDER=ollama\|vllm\|litellm\|zai\|custom` |
-
-**Multi-provider pool** — stack multiple API keys with priority-ordered failover + circuit breaker:
+20+ providers natively via [GoAI](https://github.com/zendev-sh/goai) — Anthropic, OpenAI, Google, Azure, Bedrock, Vertex, OpenRouter, Groq, Mistral, xAI, DeepSeek, Ollama, vLLM, and more:
 
 ```bash
-SENTINEL_LLM_PROVIDERS='[{"provider":"openrouter","api_key":"sk-or-...","fast_model":"nemotron-3-super-120b:free","priority":1},{"provider":"groq","api_key":"gsk_...","fast_model":"llama-3.1-70b","priority":2}]'
+SENTINEL_LLM_PROVIDER=openrouter SENTINEL_LLM_API_KEY=sk-or-...
 ```
 
-Auth errors trip the circuit breaker for 1h, rate limits for 60s, network errors for 15s.
+Stack multiple providers with priority-ordered failover and a circuit breaker (auth errors trip 1h, rate limits 60s, network errors 15s):
+
+```bash
+SENTINEL_LLM_PROVIDERS='[{"provider":"openrouter","api_key":"...","fast_model":"...","priority":1},{"provider":"groq","api_key":"...","fast_model":"...","priority":2}]'
+```
 
 ### Key environment variables
 
@@ -179,22 +186,19 @@ Auth errors trip the circuit breaker for 1h, rate limits for 60s, network errors
 |---|---|---|
 | `SENTINEL_GITHUB_TOKEN` | (required) | GitHub PAT or GitHub App token |
 | `SENTINEL_LLM_API_KEY` | (required) | LLM provider API key |
-| `SENTINEL_LLM_PROVIDER` | `zai` | LLM provider (see above) |
-| `SENTINEL_LLM_FAST_MODEL` | provider default | Fast/cheap model for investigation |
-| `SENTINEL_LLM_FRONTIER_MODEL` | provider default | Frontier model for fix proposal |
+| `SENTINEL_LLM_PROVIDER` | `zai` | LLM provider |
 | `SENTINEL_API_TOKEN` | (empty) | Admin API bearer token — **set in production** |
-| `SENTINEL_ALERTMANAGER_WEBHOOK_SECRET` | (empty) | Shared secret for Alertmanager webhook |
 | `SENTINEL_SANDBOX_ENABLED` | `true` | Run sandbox verification before opening PR |
-| `SENTINEL_SANDBOX_REQUIRED` | `false` | Block PR if sandbox fails (vs. open with needs-review) |
-| `SENTINEL_SANDBOX_MAX_RETRIES` | `2` | Max LLM retries on sandbox failure |
-| `SENTINEL_AUTO_MERGE_ENABLED` | `false` | Enable auto-merge after 11 gates pass |
+| `SENTINEL_SANDBOX_REQUIRED` | `false` | Block PR if sandbox fails |
+| `SENTINEL_SANDBOX_NETWORK_POLICY_REQUIRED` | `true` | Fail closed if the sandbox NetworkPolicy can't be created |
+| `SENTINEL_AUTO_MERGE_ENABLED` | `false` | Enable auto-merge after all 11 gates pass |
+| `SENTINEL_AUTOMERGE_MIN_SANDBOX_LEVEL` | `3` | Minimum sandbox depth for auto-merge (3 or 5) |
 | `SENTINEL_PRODUCTION_NAMESPACES` | `production` | CSV of production namespaces (governance) |
 | `SENTINEL_RBAC_WRITE_NAMESPACES` | `sim` | CSV of namespaces Sentinel can write to |
-| `SENTINEL_PROMETHEUS_URL` | (empty) | Prometheus URL for evidence gathering |
 
-See [chart/values.yaml](chart/values.yaml) for the full list (~50 knobs).
+Full list (~50 knobs): [chart/values.yaml](chart/values.yaml).
 
-### Manual Triggers
+### Manual triggers
 
 ```bash
 cat <<EOF | kubectl apply -f -
@@ -212,173 +216,81 @@ spec:
 EOF
 ```
 
-## Architecture
+## Auto-merge
 
-```
-sentinel/
-├── cmd/
-│   ├── sentinel/              # Server binary (entrypoint)
-│   ├── sentinelctl/           # CLI binary
-│   └── sentinel-bench/        # Eval harness binary
-├── internal/
-│   ├── agents/                # LLM agent pipeline + security scanner
-│   ├── api/                   # HTTP API + SSE + web UI
-│   ├── attest/                # Ed25519-signed audit trail
-│   ├── automerge/             # 11-gate auto-merger
-│   ├── causal/                # Granger-causality RCA
-│   ├── chaos/                 # Self-chaos mode
-│   ├── chatops/               # 19 /sentinel commands
-│   ├── config/                # Env var loading
-│   ├── detection/             # Live log streaming + pod status
-│   ├── emb/                   # Embedding providers (remote + TF-IDF)
-│   ├── events/                # SSE broadcaster
-│   ├── executors/             # Sandbox, Kaniko, GitHub PRs, K8s patches
-│   ├── feedback/              # SQLite store + HNSW vector memory
-│   ├── github/                # GitHub App + BaseClient
-│   ├── k8s/                   # K8s client
-│   ├── llm/                   # Multi-provider router + circuit breaker
-│   ├── llmcost/               # Cost-aware routing + semantic cache
-│   ├── logging/               # Structured logging (slog)
-│   ├── metrics/               # Prometheus metrics + cost tracking
-│   ├── observability/         # Prometheus + Loki + Tempo clients
-│   ├── postmerge/             # Post-merge regression watcher
-│   ├── prreview/              # Predictive PR review
-│   ├── repo/                  # go-git cloner + local search
-│   ├── runtimecfg/            # Hot-reloadable runtime config
-│   ├── safety/                # 5 embedded policy rules
-│   ├── slo/                   # SLO burn-rate watcher
-│   └── watcher/               # CRD watcher
-├── web/                       # Next.js frontend (12 sections)
-├── chart/                     # Helm chart
-├── sentinel-bench/            # Eval harness + 3 scenarios
-└── scripts/                   # sync-version.py
-```
-
-## Numbers
-
-| Metric | Sentinel | Typical AIOps tool |
-|---|---|---|
-| Image size | **43MB** | 1–5GB |
-| Pods | **1** | 5–20 |
-| RAM at idle | **~50MB** | 2–8GB |
-| Disk | **~5GB** | 50–200GB |
-| Cold start | **<1s** | 30–120s |
-| Direct deps | **9** | 50–200 |
-| LLM providers | **20+** | 1–3 |
+Opt-in (global env + namespace allowlist + per-service annotation), then 11 gates: sandbox verified to the required level · confidence ≥ threshold · CI green · no cooldown · rate limit (3/h default) · namespace allowed · `sentinel.io/auto-merge: "true"` annotation · approved · no `hold` label · no `no-merge` label · branch protection passes. Schema migrations and rollbacks are never auto-merged. Tracked PRs survive Sentinel restarts.
 
 ## CLI
 
 ```bash
-# Install
 go install ./cmd/sentinelctl
 
-# Usage
 sentinelctl incidents list [--status X] [--service Y] [--last 7d]
 sentinelctl incidents get <id>
 sentinelctl trigger <service> --namespace sim [--reason "..."]
-sentinelctl pause [--duration 60m] [--reason "..."]
-sentinelctl resume
-sentinelctl stats
-sentinelctl config view
-sentinelctl config set <json-file-or-inline>
-sentinelctl metrics
-sentinelctl app setup          # GitHub App manifest flow
-sentinelctl app status
+sentinelctl pause [--duration 60m] [--reason "..."] / resume
+sentinelctl stats · config view · config set <json> · metrics
+sentinelctl app setup / status     # GitHub App manifest flow
 ```
 
-Flags: `--server URL` (default: http://localhost:8000), `--token T` (admin API token), `--json` (raw JSON output), `--version`.
+Flags: `--server URL` (default `http://localhost:8000`), `--token T`, `--json`, `--version`.
 
 ## Web UI
 
-Sentinel ships with a built-in dark-themed dashboard at `http://sentinel.sentinel.svc:8000`:
+Built-in dark dashboard at `http://sentinel.sentinel.svc:8000`:
 
-- **Dashboard** — KPI cards, success rate gauge, live activity feed
+- **Dashboard** — KPI cards, success-rate gauge, live activity feed
 - **Incidents** — filterable table + detail drawer (hypotheses, root cause, fix, sandbox L1-L5, PR link)
-- **Providers** — LLM pool with circuit-breaker state indicators
-- **Auto-merge** — queue, rate limit gauge, cooldown, stats
+- **Providers** — LLM pool with circuit-breaker states
+- **Auto-merge** — queue, rate-limit gauge, cooldown, stats
 - **Sandbox** — recent runs with expandable pod logs
-- **Metrics** — charts (line, bar, area)
-- **Chatops** — all 19 `/sentinel` commands (fetched from the API, not hardcoded)
-- **Settings** — cards covering every configurable knob
+- **Chatops** — all 19 `/sentinel` commands, fetched from the API
+- **Settings** — every configurable knob
 
 ```bash
 kubectl -n sentinel port-forward svc/sentinel 8000:8000
-# Open http://localhost:8000
 ```
 
-## Chatops (19 `/sentinel` commands)
+## Chatops
 
-Sentinel responds to `/sentinel <command>` comments on its PRs:
-
-| Permission | Commands |
-|---|---|
-| **Read** | `help`, `status`, `explain`, `trace` |
-| **Write** | `retry-sandbox`, `alternatives`, `apply <A\|B\|C>`, `hold`, `approve`, `no-merge`, `merge`, `investigate`, `retest`, `verify` |
-| **Destructive** | `revert`, `rollback`, `pause`, `resume`, `override` |
-
-Every command ACKs with a reaction. State-changing commands take `cancel` to undo. Run `/sentinel help` on any Sentinel PR to see the full list.
-
-## Auto-merge
-
-Sentinel can auto-merge PRs that pass 11 gates:
-
-1. Sandbox verified (L1-L5)
-2. Confidence ≥ threshold
-3. CI green (if `require_ci=true`)
-4. Not in cooldown (1h after regression)
-5. Rate limit not exceeded (3/hour default)
-6. Namespace allowed
-7. PR has `sentinel.io/auto-merge: "true"` annotation
-8. PR approved
-9. No `hold` label
-10. No `no-merge` label
-11. Branch protection checks pass
-
-Three opt-in layers: global (`SENTINEL_AUTO_MERGE_ENABLED=true`) + namespace (`autoMerge.namespaces`) + per-service annotation.
+Sentinel responds to `/sentinel <command>` comments on its PRs. Read: `help`, `status`, `explain`, `trace`. Write: `retry-sandbox`, `alternatives`, `apply <A|B|C>`, `hold`, `approve`, `retest`, `verify`, `investigate`. Destructive (admin): `revert`, `rollback`, `pause`, `resume`, `override`. Every command ACKs with a reaction; state-changing commands take `cancel` to undo. Run `/sentinel help` on any Sentinel PR.
 
 ## sentinel-bench
 
-Sentinel includes a public eval harness at `sentinel-bench/`. Three scenarios (S001: crashloop-image-typo, S002: python-keyerror-env-var, S003: go-nil-pointer-panic) with SHA256-pinned ground truths. Metrics: DBR (Detection-to-Branch Rate), VPR (Verified-Pass Rate), TAR (Truth-Aligned Rate), FMR (Full-Merge Rate).
+Public eval harness with SHA256-pinned ground truths. Current scenarios: S001 crashloop-image-typo, S002 python-keyerror-env-var, S003 go-nil-pointer-panic. Metrics: DBR (Detection-to-Branch Rate), VPR (Verified-Pass Rate), TAR (Truth-Aligned Rate), FMR (Full-Merge Rate).
 
 ```bash
 go install ./cmd/sentinel-bench
-sentinel-bench list
-sentinel-bench validate
-sentinel-bench run
+sentinel-bench list · validate · run
 ```
 
 ## Development
 
 ```bash
-git clone https://github.com/karimzakzouk/sentinel.git
-cd sentinel
-
 make build          # Build (includes web UI)
 make build-no-web   # Build without web UI (faster)
-make test           # Run tests with race detector
-make lint           # Run golangci-lint
-make run            # Run locally (needs kubeconfig)
+make test           # Tests with race detector
+make lint           # golangci-lint
 make helm-lint      # Validate Helm chart
 ```
 
-## Versioning & Releases
+CI runs lint, race tests, helm lint/template, Trivy, govulncheck, gosec, and CodeQL on every PR, plus a weekly **kind-cluster e2e**: install the chart, deploy a deliberately-crashing service, assert the incident fires.
 
-The `VERSION` file is the single source of truth. `scripts/sync-version.py` keeps every other file in sync (Chart.yaml, values.yaml, README, web/package.json).
+## Versioning & releases
+
+The `VERSION` file is canonical; `scripts/sync-version.py` keeps Chart.yaml, values.yaml, README, and web/package.json in sync (CI fails on drift).
 
 ```bash
-make release VERSION=1.1.0    # Bump + commit + tag + push (CI does the rest)
-make bump-version VERSION=1.1.0  # Sync files only (no commit)
-make check-version               # CI mode: fail if drift detected
+make release VERSION=1.8.0    # Bump + commit + tag + push (CI does the rest)
 ```
 
-CI runs `make check-version` on every PR. Releases are signed via cosign (keyless OIDC) with SBOM attached.
+Releases are cosign-signed (keyless OIDC) with SBOM attached.
 
 ## Community
 
-- **Bug reports & feature requests**: [GitHub Issues](https://github.com/karimzakzouk/sentinel/issues)
-- **Security vulnerabilities**: See [SECURITY.md](SECURITY.md) — report privately
-- **Contributing**: See [CONTRIBUTING.md](CONTRIBUTING.md)
-- **Code of Conduct**: See [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
+- **Bugs & features**: [GitHub Issues](https://github.com/karimzakzouk/sentinel/issues)
+- **Security reports**: see [SECURITY.md](SECURITY.md) — reported privately
+- **Contributing**: see [CONTRIBUTING.md](CONTRIBUTING.md)
 
 ## License
 
