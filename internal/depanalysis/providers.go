@@ -491,9 +491,7 @@ func (c *CompositeProvider) GraphFor(ctx context.Context, nodes []DepGraphNode) 
 
 	if lastGraph == nil {
 		lastGraph = &DepGraph{}
-		for _, n := range nodes {
-			lastGraph.Nodes = append(lastGraph.Nodes, n)
-		}
+		lastGraph.Nodes = append(lastGraph.Nodes, nodes...)
 	}
 	if lastErr != nil {
 		return lastGraph, fmt.Errorf("all providers failed or returned empty (last error: %w)", lastErr)

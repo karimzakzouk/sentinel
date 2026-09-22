@@ -395,14 +395,6 @@ func Load() *Config {
 		AutoMergeMinSandboxLevel: getenvInt("SENTINEL_AUTOMERGE_MIN_SANDBOX_LEVEL", 3),
 		AutoMergeCooldownMin:     getenvInt("SENTINEL_AUTO_MERGE_COOLDOWN_MIN", 60),
 
-		AutoMergeEnabled:       getenvBool("SENTINEL_AUTO_MERGE_ENABLED", false),
-		AutoMergeNamespaces:    splitCSV(getenv("SENTINEL_AUTO_MERGE_NAMESPACES", "")),
-		AutoMergeMinConfidence: getenvFloat("SENTINEL_AUTO_MERGE_MIN_CONFIDENCE", 0.85),
-		AutoMergeRequireCI:     getenvBool("SENTINEL_AUTO_MERGE_REQUIRE_CI", true),
-		AutoMergeCITimeoutSec:  getenvInt("SENTINEL_AUTO_MERGE_CI_TIMEOUT_SEC", 900),
-		AutoMergeMaxPerHour:    getenvInt("SENTINEL_AUTO_MERGE_MAX_PER_HOUR", 3),
-		AutoMergeCooldownMin:   getenvInt("SENTINEL_AUTO_MERGE_COOLDOWN_MIN", 60),
-
 		AutoRemediationEnabled: getenvBool("SENTINEL_AUTO_REMEDIATION_ENABLED", false),
 	}
 }

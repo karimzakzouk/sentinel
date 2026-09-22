@@ -91,12 +91,13 @@ func (t *TrivyScanner) ScanImage(ctx context.Context, image string) (CVEScanResu
 	for _, r := range trivyResp.Results {
 		for _, v := range r.Vulnerabilities {
 			sev := strings.ToUpper(v.Severity)
-			if sev == "CRITICAL" {
+			switch sev {
+			case "CRITICAL":
 				result.CriticalCount++
 				if v.FixedVersion == "" {
 					result.UnfixedCritical++
 				}
-			} else if sev == "HIGH" {
+			case "HIGH":
 				result.HighCount++
 			}
 		}

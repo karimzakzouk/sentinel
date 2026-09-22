@@ -78,12 +78,13 @@ func (g *GrypeScanner) ScanImage(ctx context.Context, image string) (CVEScanResu
 	var result CVEScanResult
 	for _, m := range grypeResp.Matches {
 		sev := strings.ToUpper(m.Vulnerability.Severity)
-		if sev == "CRITICAL" {
+		switch sev {
+		case "CRITICAL":
 			result.CriticalCount++
 			if len(m.Vulnerability.Fix.Versions) == 0 {
 				result.UnfixedCritical++
 			}
-		} else if sev == "HIGH" {
+		case "HIGH":
 			result.HighCount++
 		}
 	}
