@@ -114,6 +114,13 @@ type Config struct {
 	SandboxRequired   bool
 	SandboxMaxRetries int
 
+	// SandboxNetworkPolicyRequired fails the sandbox run when the
+	// default-deny NetworkPolicy cannot be created (fail-closed). The
+	// policy is the last line of the prompt-injection defense, so a
+	// canary with unrestricted egress must never run. Operators with
+	// restricted clusters can set it to false to restore fail-open.
+	SandboxNetworkPolicyRequired bool
+
 	// ─── API ─────────────────────────────────────────────────────────────
 	APIToken string
 	APIHost  string
@@ -150,13 +157,14 @@ type Config struct {
 	LLMProviders []schemas.ProviderConfig
 
 	// ─── Auto-merge (11-gate) ────────────────────────────────────────────
-	AutoMergeEnabled       bool
-	AutoMergeNamespaces    []string
-	AutoMergeMinConfidence float64
-	AutoMergeRequireCI     bool
-	AutoMergeCITimeoutSec  int
-	AutoMergeMaxPerHour    int
-	AutoMergeCooldownMin   int
+	AutoMergeEnabled         bool
+	AutoMergeNamespaces      []string
+	AutoMergeMinConfidence   float64
+	AutoMergeRequireCI       bool
+	AutoMergeCITimeoutSec    int
+	AutoMergeMaxPerHour      int
+	AutoMergeMinSandboxLevel int
+	AutoMergeCooldownMin     int
 
 	AutoRemediationEnabled bool
 
@@ -316,10 +324,11 @@ func Load() *Config {
 
 		SandboxProbePaths: splitCSV(getenv("SENTINEL_SANDBOX_PROBE_PATHS", "/,/healthz,/readyz")),
 
-		SkipSandboxNonProd: getenvBool("SENTINEL_SKIP_SANDBOX_NON_PROD", false),
-		SandboxEnabled:     getenvBool("SENTINEL_SANDBOX_ENABLED", true),
-		SandboxRequired:    getenvBool("SENTINEL_SANDBOX_REQUIRED", false),
-		SandboxMaxRetries:  getenvInt("SENTINEL_SANDBOX_MAX_RETRIES", 2),
+		SkipSandboxNonProd:           getenvBool("SENTINEL_SKIP_SANDBOX_NON_PROD", false),
+		SandboxEnabled:               getenvBool("SENTINEL_SANDBOX_ENABLED", true),
+		SandboxRequired:              getenvBool("SENTINEL_SANDBOX_REQUIRED", false),
+		SandboxNetworkPolicyRequired: getenvBool("SENTINEL_SANDBOX_NETWORK_POLICY_REQUIRED", true),
+		SandboxMaxRetries:            getenvInt("SENTINEL_SANDBOX_MAX_RETRIES", 2),
 
 		LLMMaxRetries:       getenvInt("SENTINEL_LLM_MAX_RETRIES", 3),
 		LLMRetryBaseDelayMs: getenvInt("SENTINEL_LLM_RETRY_BASE_DELAY_MS", 500),
@@ -355,13 +364,14 @@ func Load() *Config {
 
 		LLMProviders: loadLLMProviders(),
 
-		AutoMergeEnabled:       getenvBool("SENTINEL_AUTO_MERGE_ENABLED", false),
-		AutoMergeNamespaces:    splitCSV(getenv("SENTINEL_AUTO_MERGE_NAMESPACES", "")),
-		AutoMergeMinConfidence: getenvFloat("SENTINEL_AUTO_MERGE_MIN_CONFIDENCE", 0.85),
-		AutoMergeRequireCI:     getenvBool("SENTINEL_AUTO_MERGE_REQUIRE_CI", true),
-		AutoMergeCITimeoutSec:  getenvInt("SENTINEL_AUTO_MERGE_CI_TIMEOUT_SEC", 900),
-		AutoMergeMaxPerHour:    getenvInt("SENTINEL_AUTO_MERGE_MAX_PER_HOUR", 3),
-		AutoMergeCooldownMin:   getenvInt("SENTINEL_AUTO_MERGE_COOLDOWN_MIN", 60),
+		AutoMergeEnabled:         getenvBool("SENTINEL_AUTO_MERGE_ENABLED", false),
+		AutoMergeNamespaces:      splitCSV(getenv("SENTINEL_AUTO_MERGE_NAMESPACES", "")),
+		AutoMergeMinConfidence:   getenvFloat("SENTINEL_AUTO_MERGE_MIN_CONFIDENCE", 0.85),
+		AutoMergeRequireCI:       getenvBool("SENTINEL_AUTO_MERGE_REQUIRE_CI", true),
+		AutoMergeCITimeoutSec:    getenvInt("SENTINEL_AUTO_MERGE_CI_TIMEOUT_SEC", 900),
+		AutoMergeMaxPerHour:      getenvInt("SENTINEL_AUTO_MERGE_MAX_PER_HOUR", 3),
+		AutoMergeMinSandboxLevel: getenvInt("SENTINEL_AUTOMERGE_MIN_SANDBOX_LEVEL", 3),
+		AutoMergeCooldownMin:     getenvInt("SENTINEL_AUTO_MERGE_COOLDOWN_MIN", 60),
 
 		AutoRemediationEnabled: getenvBool("SENTINEL_AUTO_REMEDIATION_ENABLED", false),
 	}

@@ -255,8 +255,11 @@ func New(addr string, store Store, settings SettingsGetter, investigate Investig
 // SetAPIToken enables bearer-token auth on admin endpoints. Empty = disabled
 // (with a startup warning). When set, every request to /admin/* or
 // POST /settings must carry 'Authorization: Bearer <token>'. Mismatched or
-// missing tokens get 401. Health/readiness/metrics/SSE/web UI remain
-// unauthenticated so dashboards and probes still work.
+// missing tokens get 401. Health/readiness/metrics and the web-UI shell
+// remain unauthenticated so probes and dashboards still work. The SSE
+// /events stream is token-gated too — via the ?token= query param, because
+// EventSource cannot set Authorization headers (the web UI appends it
+// automatically).
 func (s *Server) SetAPIToken(token string) {
 	s.apiToken = token
 	if token == "" {

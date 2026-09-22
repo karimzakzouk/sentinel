@@ -5,6 +5,58 @@ All notable changes to Sentinel are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.0] — 2026-09-23
+
+Durability + honesty-of-signals release. Four production-hardening fixes
+from a full code review, plus a real-cluster e2e test in CI.
+
+### Added
+
+- **Restart-safe auto-merge** — tracked PRs are now persisted to SQLite
+  (`tracked_prs` table) and re-adopted at startup via `Merger.Reconcile`.
+  A pod restart no longer silently orphans in-flight auto-merges; PRs
+  merged/closed by a human during downtime are detected and pruned
+  (`skipped:closed_while_down`), and the poll loop untracks PRs closed
+  mid-flight (`closed_before_merge`).
+- **Sandbox verification levels surfaced everywhere** — `SandboxResult`
+  now records how far verification got (`LevelsVerified`, e.g. "L1-L5"
+  vs "L1-L3" when no canary image was built). The PR label shows it
+  (`sandbox-verified:L1-L5`), the incident records it, and a new
+  auto-merge gate enforces a configurable minimum
+  (`SENTINEL_AUTOMERGE_MIN_SANDBOX_LEVEL`, default 3 = historical
+  behavior; set 5 to require the full suite).
+- **kind-cluster e2e workflow** (`.github/workflows/e2e.yml`) — installs
+  the chart into a fresh kind cluster, deploys a deliberately-crashing
+  service, and asserts the detection layer files an incident. Weekly
+  schedule + manual dispatch.
+- **Helm values** for the new knobs: `sentinel.sandbox.networkPolicyRequired`
+  (default true), `sentinel.autoMerge.minSandboxLevel` (default 3).
+- **Tests**: detection integration tests against the fake clientset
+  (Deployment→ReplicaSet→Pod owner-chain repo discovery, CrashLoopBackOff /
+  OOMKilled classification, cooldown suppression, unannotated-pod
+  negative case); a full auto-merge truth table (24 gate cases incl.
+  overrides, rate limit, cooldown); reconciliation round-trip tests;
+  SQLite tracked-PR persistence tests; sandbox fail-closed/fail-open tests.
+
+### Changed
+
+- **Sandbox NetworkPolicy now fails closed** — if the default-deny policy
+  cannot be created, the run aborts with `networkpolicy_create_failed`
+  (InfrastructureError) instead of deploying a canary with unrestricted
+  egress. Fail-open remains available as an explicit opt-out
+  (`SENTINEL_SANDBOX_NETWORK_POLICY_REQUIRED=false`) for restricted
+  clusters.
+- **README rewritten** — cleaner structure, accurate architecture
+  diagram, level-labeled verification, updated configuration reference.
+
+### Fixed
+
+- CI-timeout PR comment read as if Sentinel were merging the PR itself
+  ("Merging manually") — now reads "Merge the PR manually instead."
+- Doc drift: security scanner comments said 18 patterns; there are 19.
+- Stale `SetAPIToken` doc comment claimed SSE `/events` was unauthenticated;
+  it is token-gated via `?token=` (the comment now matches the code).
+
 ## [1.0.0] — 2026-08-08
 
 Complete refactor from the ground up. New orphan branch, no shared history

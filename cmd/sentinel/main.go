@@ -180,6 +180,11 @@ func run(ctx context.Context, cancel context.CancelFunc, w *wiring) {
 	if w.Config().AutoMergeEnabled {
 		go func() {
 			defer recoverPanic("auto-merge merger")
+			// Re-adopt in-flight auto-merge PRs from the previous run
+			// (persisted in SQLite) before starting the poll loop.
+			reconCtx, reconCancel := context.WithTimeout(ctx, 2*time.Minute)
+			w.autoMergeMerger.Reconcile(reconCtx)
+			reconCancel()
 			w.autoMergeMerger.Run(ctx, 30*time.Second)
 		}()
 		logging.Info("auto-merge merger started", "poll_interval", "30s")

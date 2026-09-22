@@ -234,6 +234,7 @@ func wire(cfg *config.Config, listenAddr string) (*wiring, error) {
 
 	w.sandbox = executors.NewSandbox(k8sClient.Clientset(), cfg.SandboxNamespacePrefix, cfg.EnableTrafficMirroring).
 		WithProbePaths(cfg.SandboxProbePaths).
+		WithNetworkPolicyRequired(cfg.SandboxNetworkPolicyRequired).
 		WithSentinelNamespace(cfg.Namespace)
 
 	w.kaniko = executors.NewKaniko(k8sClient.Clientset(), cfg.Namespace).
@@ -530,9 +531,15 @@ func wire(cfg *config.Config, listenAddr string) (*wiring, error) {
 		CITimeoutSec:         cfg.AutoMergeCITimeoutSec,
 		MaxPerHour:           cfg.AutoMergeMaxPerHour,
 		CooldownAfterFailMin: cfg.AutoMergeCooldownMin,
+		MinSandboxLevel:      cfg.AutoMergeMinSandboxLevel,
 	}
 	w.autoMergePolicy = automerge.NewPolicy(autoMergeCfg, policy)
 	w.autoMergeMerger = automerge.NewMerger(w.autoMergePolicy, w.autoMergeGH, w, w)
+	// Tracked-PR persistence: survive restarts. The merger re-adopts
+	// in-flight PRs at startup via Reconcile (called from main).
+	if w.store != nil {
+		w.autoMergeMerger.SetPersistence(w.store)
+	}
 
 	w.autoMergeMerger.SetOnMerged(func(repo string, prNumber int) {
 		inc := &chatops.Incident{

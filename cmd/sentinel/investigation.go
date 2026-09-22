@@ -398,6 +398,7 @@ func (w *wiring) executeCodeFix(ctx context.Context, incident *schemas.Incident)
 
 	sandboxVerified := false
 	sandboxSummary := "skipped (sandbox disabled)"
+	sandboxLevels := ""
 	sandboxRan := false
 
 	if !shouldRunSandbox {
@@ -505,6 +506,7 @@ func (w *wiring) executeCodeFix(ctx context.Context, incident *schemas.Incident)
 			sb := w.sandbox.Run(ctx, incident)
 			sandboxVerified = sb.Verified
 			sandboxSummary = sb.Summary
+			sandboxLevels = sb.LevelsVerified
 			metrics.RecordSandboxVerification(sandboxVerified, time.Since(sandboxStart))
 			if !sandboxVerified {
 				level := detectSandboxFailureLevel(sb.Summary)
@@ -558,7 +560,7 @@ func (w *wiring) executeCodeFix(ctx context.Context, incident *schemas.Incident)
 	fullPRBody := agents.BuildPRBody(incident, sandboxVerified, sandboxSummary, canaryImg)
 	fp.PRBody = &fullPRBody
 
-	prResult := w.ghExec.OpenPR(ctx, incident, branchInfo, sandboxVerified, sandboxSummary)
+	prResult := w.ghExec.OpenPR(ctx, incident, branchInfo, sandboxVerified, sandboxLevels, sandboxSummary)
 	if !prResult.Success {
 		return fmt.Errorf("pr_open_failed: %s", prResult.Error)
 	}
@@ -573,6 +575,7 @@ func (w *wiring) executeCodeFix(ctx context.Context, incident *schemas.Incident)
 		}
 	}
 	incident.State.ExecutionResult.Success = true
+	incident.State.ExecutionResult.SandboxLevels = sandboxLevels
 	incident.State.ExecutionResult.PRURL = &prResult.PRURL
 	incident.State.ExecutionResult.PRNumber = &prResult.PRNumber
 	incident.State.ExecutionResult.PRBranch = &prResult.PRBranch
@@ -691,6 +694,7 @@ func (w *wiring) executeCodeFix(ctx context.Context, incident *schemas.Incident)
 				IsHighRisk:          isHighRisk,
 				Confidence:          confidence,
 				SandboxVerified:     sandboxVerified,
+				SandboxLevels:       sandboxLevels,
 				PolicyVerdict:       policyVerdict,
 				AutoMergeAnnotation: autoMergeAnnotation,
 				SandboxOverride:     incident.State.ExecutionResult != nil && incident.State.ExecutionResult.SandboxOverride,

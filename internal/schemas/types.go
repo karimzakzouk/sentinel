@@ -214,10 +214,13 @@ type ExecutionResult struct {
 	PRBranch        *string        `json:"pr_branch,omitempty"`
 	K8sResponse     map[string]any `json:"k8s_response,omitempty"`
 	SandboxVerified bool           `json:"sandbox_verified"`
-	SandboxSummary  *string        `json:"sandbox_summary,omitempty"`
-	StartedAt       time.Time      `json:"started_at"`
-	FinishedAt      *time.Time     `json:"finished_at,omitempty"`
-	Error           *string        `json:"error,omitempty"`
+	// SandboxLevels records how far sandbox verification got, e.g.
+	// "L1-L5" (full) or "L1-L3" (no canary image — L4/L5 skipped).
+	SandboxLevels  string     `json:"sandbox_levels,omitempty"`
+	SandboxSummary *string    `json:"sandbox_summary,omitempty"`
+	StartedAt      time.Time  `json:"started_at"`
+	FinishedAt     *time.Time `json:"finished_at,omitempty"`
+	Error          *string    `json:"error,omitempty"`
 
 	// SandboxOverride and CIOverride are admin-set bypass flags
 	// (/sentinel override sandbox|ci). When true, the auto-merge policy
