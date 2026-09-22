@@ -177,7 +177,7 @@ jobs:
           cosign sign --yes ${{ env.GHCR_REGISTRY }}/${{ env.GHCR_OWNER }}/sentinel:latest
 
       - name: Generate SBOM
-        uses: anchore/sbom-action@v0.24.0
+        uses: anchore/sbom-action@v0.24.2
         with:
           image: ${{ env.GHCR_REGISTRY }}/${{ env.GHCR_OWNER }}/sentinel:${{ steps.version.outputs.version }}
           format: spdx-json
