@@ -283,6 +283,10 @@ type Store interface {
 	FindIncidentByPR(ctx context.Context, repo string, prNumber int) (*Incident, error)
 	LogCommandEvent(ctx context.Context, ev *CommandEvent) error
 	UpdateOverrides(ctx context.Context, incidentID string, sandboxOverride, ciOverride bool) error
+	// SetSandboxFeedback stores a hint message that the fix proposer will
+	// read on its next run. Used by /sentinel apply to pass the chosen
+	// approach description to the fix proposer.
+	SetSandboxFeedback(ctx context.Context, incidentID, feedback string) error
 }
 
 // Incident is a minimal incident view for command handlers. chatops keeps

@@ -32,19 +32,19 @@ func (s *Store) UpsertIncident(ctx context.Context, inc *schemas.Incident) error
 	inc.UpdatedAt = now
 
 	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO incidents (incident_id, created_at, updated_at, service, namespace, status, severity, cluster_json, state_json, beta_alpha, beta_beta, git_commit_at_resolution, postmortem)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(incident_id) DO UPDATE SET
-			updated_at = excluded.updated_at,
-			status = excluded.status,
-			severity = excluded.severity,
-			cluster_json = excluded.cluster_json,
-			state_json = excluded.state_json,
-			beta_alpha = excluded.beta_alpha,
-			beta_beta = excluded.beta_beta,
-			git_commit_at_resolution = excluded.git_commit_at_resolution,
-			postmortem = excluded.postmortem
-	`,
+                INSERT INTO incidents (incident_id, created_at, updated_at, service, namespace, status, severity, cluster_json, state_json, beta_alpha, beta_beta, git_commit_at_resolution, postmortem)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(incident_id) DO UPDATE SET
+                        updated_at = excluded.updated_at,
+                        status = excluded.status,
+                        severity = excluded.severity,
+                        cluster_json = excluded.cluster_json,
+                        state_json = excluded.state_json,
+                        beta_alpha = excluded.beta_alpha,
+                        beta_beta = excluded.beta_beta,
+                        git_commit_at_resolution = excluded.git_commit_at_resolution,
+                        postmortem = excluded.postmortem
+        `,
 		inc.IncidentID.String(), inc.CreatedAt, inc.UpdatedAt,
 		inc.Cluster.Service, inc.Cluster.Namespace, string(inc.Status),
 		string(inc.Cluster.Severity), string(clusterJSON), string(stateJSON),
@@ -62,9 +62,9 @@ func (s *Store) GetIncident(ctx context.Context, id uuid.UUID) (*schemas.Inciden
 	defer s.mu.RUnlock()
 
 	row := s.db.QueryRowContext(ctx, `
-		SELECT incident_id, created_at, updated_at, service, namespace, status, severity, cluster_json, state_json, beta_alpha, beta_beta, git_commit_at_resolution, postmortem
-		FROM incidents WHERE incident_id = ?
-	`, id.String())
+                SELECT incident_id, created_at, updated_at, service, namespace, status, severity, cluster_json, state_json, beta_alpha, beta_beta, git_commit_at_resolution, postmortem
+                FROM incidents WHERE incident_id = ?
+        `, id.String())
 
 	inc, _, err := scanIncidentRow(row)
 	if err != nil {
@@ -100,9 +100,9 @@ func (s *Store) FindIncidentByPrefix(ctx context.Context, prefix string) (*schem
 	// matches anyway. 500 is plenty — if you have >500 recent incidents,
 	// use the full UUID.
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT incident_id, created_at, updated_at, service, namespace, status, severity, cluster_json, state_json, beta_alpha, beta_beta, git_commit_at_resolution, postmortem
-		FROM incidents ORDER BY updated_at DESC LIMIT 500
-	`)
+                SELECT incident_id, created_at, updated_at, service, namespace, status, severity, cluster_json, state_json, beta_alpha, beta_beta, git_commit_at_resolution, postmortem
+                FROM incidents ORDER BY updated_at DESC LIMIT 500
+        `)
 	if err != nil {
 		return nil, err
 	}
@@ -189,9 +189,9 @@ func (s *Store) ListRecentIncidents(ctx context.Context, limit int) ([]*schemas.
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT incident_id, created_at, updated_at, service, namespace, status, severity, cluster_json, state_json, beta_alpha, beta_beta, git_commit_at_resolution, postmortem
-		FROM incidents ORDER BY updated_at DESC LIMIT ?
-	`, limit)
+                SELECT incident_id, created_at, updated_at, service, namespace, status, severity, cluster_json, state_json, beta_alpha, beta_beta, git_commit_at_resolution, postmortem
+                FROM incidents ORDER BY updated_at DESC LIMIT ?
+        `, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -217,12 +217,12 @@ func (s *Store) FindIncidentByPR(ctx context.Context, repo string, prNumber int)
 	defer s.mu.RUnlock()
 
 	row := s.db.QueryRowContext(ctx, `
-		SELECT incident_id, created_at, updated_at, service, namespace, status, severity, cluster_json, state_json, beta_alpha, beta_beta, git_commit_at_resolution, postmortem
-		FROM incidents
-		WHERE pr_repo = ? AND pr_number = ?
-		ORDER BY updated_at DESC
-		LIMIT 1
-	`, repo, prNumber)
+                SELECT incident_id, created_at, updated_at, service, namespace, status, severity, cluster_json, state_json, beta_alpha, beta_beta, git_commit_at_resolution, postmortem
+                FROM incidents
+                WHERE pr_repo = ? AND pr_number = ?
+                ORDER BY updated_at DESC
+                LIMIT 1
+        `, repo, prNumber)
 
 	inc, _, err := scanIncidentRow(row)
 	if err == nil && inc != nil {
@@ -236,12 +236,12 @@ func (s *Store) FindIncidentByPR(ctx context.Context, repo string, prNumber int)
 	// from before the pr_repo/pr_number migration that haven't been
 	// re-upserted).
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT incident_id, created_at, updated_at, service, namespace, status, severity, cluster_json, state_json, beta_alpha, beta_beta, git_commit_at_resolution, postmortem
-		FROM incidents
-		WHERE status IN ('verified', 'resolved', 'executing', 'fix_proposed', 'approved')
-		ORDER BY updated_at DESC
-		LIMIT 200
-	`)
+                SELECT incident_id, created_at, updated_at, service, namespace, status, severity, cluster_json, state_json, beta_alpha, beta_beta, git_commit_at_resolution, postmortem
+                FROM incidents
+                WHERE status IN ('verified', 'resolved', 'executing', 'fix_proposed', 'approved')
+                ORDER BY updated_at DESC
+                LIMIT 200
+        `)
 	if err != nil {
 		return nil, err
 	}
@@ -279,9 +279,9 @@ func (s *Store) UpdateIncidentPR(ctx context.Context, incidentID uuid.UUID, repo
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	_, err := s.db.ExecContext(ctx, `
-		UPDATE incidents SET pr_repo = ?, pr_number = ?, pr_branch = ?, pr_url = ?, updated_at = ?
-		WHERE incident_id = ?
-	`, repo, prNumber, nullableString(&prBranch), nullableString(&prURL), time.Now().UTC(), incidentID.String())
+                UPDATE incidents SET pr_repo = ?, pr_number = ?, pr_branch = ?, pr_url = ?, updated_at = ?
+                WHERE incident_id = ?
+        `, repo, prNumber, nullableString(&prBranch), nullableString(&prURL), time.Now().UTC(), incidentID.String())
 	return err
 }
 
@@ -291,9 +291,9 @@ func (s *Store) UpdateAutoMergeStatus(ctx context.Context, incidentID uuid.UUID,
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	_, err := s.db.ExecContext(ctx, `
-		UPDATE incidents SET auto_merge_status = ?, updated_at = ?
-		WHERE incident_id = ?
-	`, status, time.Now().UTC(), incidentID.String())
+                UPDATE incidents SET auto_merge_status = ?, updated_at = ?
+                WHERE incident_id = ?
+        `, status, time.Now().UTC(), incidentID.String())
 	return err
 }
 
@@ -328,6 +328,39 @@ func (s *Store) UpdateOverrides(ctx context.Context, incidentID uuid.UUID, sandb
 	newStateJSON, err := json.Marshal(state)
 	if err != nil {
 		return fmt.Errorf("marshal state for override: %w", err)
+	}
+
+	_, err = s.db.ExecContext(ctx,
+		`UPDATE incidents SET state_json = ?, updated_at = ? WHERE incident_id = ?`,
+		string(newStateJSON), time.Now().UTC(), incidentID.String())
+	return err
+}
+
+// SetSandboxFeedback stores a feedback message in the incident's AgentState
+// that the fix proposer will read on its next run. Used by /sentinel apply
+// to pass the chosen approach description as a hint to the fix proposer.
+func (s *Store) SetSandboxFeedback(ctx context.Context, incidentID uuid.UUID, feedback string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var stateJSON string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT state_json FROM incidents WHERE incident_id = ?`,
+		incidentID.String(),
+	).Scan(&stateJSON)
+	if err != nil {
+		return fmt.Errorf("read state for sandbox feedback: %w", err)
+	}
+
+	var state schemas.AgentState
+	if err := json.Unmarshal([]byte(stateJSON), &state); err != nil {
+		return fmt.Errorf("unmarshal state for sandbox feedback: %w", err)
+	}
+	state.SandboxFeedback = &feedback
+
+	newStateJSON, err := json.Marshal(state)
+	if err != nil {
+		return fmt.Errorf("marshal state for sandbox feedback: %w", err)
 	}
 
 	_, err = s.db.ExecContext(ctx,

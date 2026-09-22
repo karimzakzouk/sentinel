@@ -348,7 +348,12 @@ func (w *wiring) handleInvestigation(ctx context.Context, cluster schemas.Anomal
 // executeFix dispatches the approved fix to the appropriate executor. For
 // CODE_FIX / ROLL_FORWARD this is the 4-phase flow (branch → Kaniko →
 // sandbox → PR) implemented in executeCodeFix; for the K8s action fix
-// types it delegates directly to the K8s executor.
+// types it delegates to either the safeActions controller (when enabled,
+// applying rate limits + blast-radius caps) or the K8s executor directly.
+//
+// Rollback always goes through k8sExec directly (never rate-limited) —
+// rollbacks are urgent incident-response actions and should not be delayed
+// by a rate limiter that may have been tripped by a previous Scale/Restart.
 func (w *wiring) executeFix(ctx context.Context, incident *schemas.Incident) error {
 	fp := incident.State.FixProposal
 
@@ -356,10 +361,25 @@ func (w *wiring) executeFix(ctx context.Context, incident *schemas.Incident) err
 	case schemas.FixCodeFix, schemas.FixRollForward:
 		return w.executeCodeFix(ctx, incident)
 	case schemas.FixRestart:
+		if w.safeActions != nil && w.Config().SafeActionsEnabled {
+			result := w.safeActions.Restart(ctx, fp.TargetNamespace, fp.TargetService)
+			if !result.Success {
+				return fmt.Errorf("safeactions restart failed: %s", result.Detail)
+			}
+			return nil
+		}
 		return w.k8sExec.Restart(ctx, fp)
 	case schemas.FixScale:
+		if w.safeActions != nil && w.Config().SafeActionsEnabled {
+			result := w.safeActions.Scale(ctx, fp.TargetNamespace, fp.TargetService, w.Config().ScaleFixDefaultReplicas)
+			if !result.Success {
+				return fmt.Errorf("safeactions scale failed: %s", result.Detail)
+			}
+			return nil
+		}
 		return w.k8sExec.Scale(ctx, fp, w.Config().ScaleFixDefaultReplicas)
 	case schemas.FixRollback:
+		// Rollback is always urgent — never rate-limited.
 		return w.k8sExec.Rollback(ctx, fp)
 	default:
 		return fmt.Errorf("unknown fix type: %s", fp.FixType)
