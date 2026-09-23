@@ -219,11 +219,31 @@ func (w *wiring) handleInvestigation(ctx context.Context, cluster schemas.Anomal
 	})
 
 	if !w.Config().CanWriteTo(fp.TargetNamespace) {
-		logging.WarnCtx(invCtx, "execution denied — namespace not in allowlist", "namespace", fp.TargetNamespace)
+		// A fix was approved and generated, but the deployment config
+		// forbids writing to the target namespace. This is almost always
+		// a misconfiguration (empty SENTINEL_WRITE_NAMESPACES), so make
+		// it loud and surface the reason on the incident itself — a
+		// silent revert to "escalated" hides the pipeline stoppage.
+		reason := fmt.Sprintf(
+			"fix execution denied: namespace %q is not in SENTINEL_WRITE_NAMESPACES (fix was generated but could not be applied or PR'd)",
+			fp.TargetNamespace)
+		logging.ErrorCtx(invCtx, "execution denied — namespace not in allowlist",
+			"namespace", fp.TargetNamespace,
+			"hint", "set SENTINEL_WRITE_NAMESPACES (chart value sentinel.rbac.writeNamespaces) to allow fix execution in this namespace")
 		incident.Status = schemas.StatusEscalated
+		incident.State.Error = &reason
 		if err := w.store.UpsertIncident(ctx, &incident); err != nil {
 			logging.ErrorCtx(invCtx, "save incident (rbac-deny) failed", "error", err)
 		}
+		_ = w.store.AppendEvent(ctx, incident.IncidentID, "execution", "denied_namespace_allowlist", nil,
+			map[string]any{"namespace": fp.TargetNamespace, "reason": reason})
+		w.broadcaster.BroadcastEvent("pipeline", map[string]any{
+			"incident_id": incident.IncidentID.String(),
+			"phase":       "execution",
+			"status":      "denied",
+			"message":     reason,
+			"timestamp":   time.Now().UTC().Format(time.RFC3339),
+		})
 		if isRealCR(crName) {
 			if err := w.k8sClient.PatchCRStatus(ctx, crName, crNamespace, "escalated"); err != nil {
 				logging.ErrorCtx(invCtx, "patch CR status (escalated) failed", "error", err)
