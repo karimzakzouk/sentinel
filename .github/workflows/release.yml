@@ -20,6 +20,9 @@ permissions:
   packages: write
   pages: write
   id-token: write
+  # sbom-action >= 0.24.2 downloads its uploaded artifacts to attach the
+  # SBOM to the GitHub release — that needs actions:read.
+  actions: read
 
 env:
   DH_REGISTRY: docker.io
