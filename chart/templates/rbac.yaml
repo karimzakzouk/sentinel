@@ -111,14 +111,16 @@ subjects:
     name: {{ .Values.serviceAccount.name | default .Release.Name }}
     namespace: {{ .Release.Namespace }}
 
-{{- range $ns := .Values.sentinel.rbac.writeNamespaces }}
----
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: {{ $ns }}
-  labels:
-    sentinel.io/managed: "true"
+{{- range $ns := $.Values.sentinel.rbac.writeNamespaces }}
+{{- /* NOTE: deliberately NO Namespace object here.
+     1. Write namespaces are pre-existing by definition — you grant
+        Sentinel write access to namespaces you already run apps in.
+        Rendering kind: Namespace makes helm refuse to install whenever
+        the namespace exists without helm ownership labels (the marketly
+        eval hit exactly this), and worse, an uninstall would try to
+        DELETE the namespace and everything in it.
+     2. If the namespace does not exist, the Role below fails with a
+        clear "namespace not found" — create it first. */}}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
