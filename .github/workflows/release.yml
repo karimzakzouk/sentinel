@@ -252,6 +252,19 @@ jobs:
           git config user.name "github-actions[bot]"
           cp /tmp/sentinel-${{ steps.version.outputs.version }}.tgz .
           helm repo index . --url https://karimzakzouk.github.io/sentinel/
+          # Guard: the version being released must be the highest chart version
+          # in the index, so stale archives on gh-pages can never shadow a
+          # release (see the v1.7.0 chart-index incident for context).
+          # NOTE: anchored to exactly 4 spaces so only entry-level "version:"
+          # keys match - dependency versions are indented deeper and must be
+          # ignored (old charts bundled weaviate v17.8.2 as a dependency).
+          LATEST_CHART=$(grep -E '^ {4}version: ' index.yaml \
+            | sed -E 's/^ {4}version: *"?([^"#]+)"?.*/\1/' | sort -V | tail -n1)
+          echo "Chart index latest version: ${LATEST_CHART}"
+          if [ "${LATEST_CHART}" != "${{ steps.version.outputs.version }}" ]; then
+            echo "::error::Chart index latest is ${LATEST_CHART}, but this release is ${{ steps.version.outputs.version }}. Stale chart archives are shadowing the release - remove them from gh-pages (archive branches: chart-archive-*)."
+            exit 1
+          fi
           touch .nojekyll
           git add -A
           git commit -m "Publish chart v${{ steps.version.outputs.version }}" || true
