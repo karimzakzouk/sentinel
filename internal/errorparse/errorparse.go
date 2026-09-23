@@ -32,10 +32,36 @@ var ErrorTypeRegexes = []*regexp.Regexp{
 	regexp.MustCompile(`SIGABRT|SIGSEGV|SIGBUS`),
 	regexp.MustCompile(`FATAL`),
 	regexp.MustCompile(`SEGFAULT`),
+	regexp.MustCompile(`(?i)segmentation fault`),
 	regexp.MustCompile(`OOMKilled`),
 	regexp.MustCompile(`^\[ERROR\]`),
 	regexp.MustCompile(`level=error`),
 	regexp.MustCompile(`level=fatal`),
+	// Celery / Python worker log format:
+	//   [2026-09-23 19:48:43,408: ERROR/ForkPoolWorker-4] task failed
+	//   [2026-09-23 19:48:43,398: ERROR/MainProcess] ...
+	regexp.MustCompile(`\bERROR/(MainProcess|ForkPoolWorker|SpawnPoolWorker|BilliardPool|prefork)`),
+	// Python network / resolver failures logged mid-line (gaierror is
+	// lowercase, so the anchored ^\w+Error: patterns never see it):
+	//   err=gaierror: [Errno -2] Name or service not known
+	regexp.MustCompile(`\bgaierror\b`),
+	regexp.MustCompile(`Name or service not known`),
+	regexp.MustCompile(`\bConnectionRefusedError\b`),
+	regexp.MustCompile(`(?i)connection refused`),
+	// Python structlog console renderer pads the level name:
+	//   2026-09-23 19:48:58 [error    ] checkout failed
+	regexp.MustCompile(`\[(error|critical|fatal)\s+\]`),
+	// Ruby / Sidekiq job failures (Sidekiq logs exceptions at WARN):
+	//   WARN: LockError: could not acquire lock 'OrderLock' within 5000ms
+	regexp.MustCompile(`could not acquire lock`),
+	regexp.MustCompile(`(?i)\bdeadlock\b`),
+	regexp.MustCompile(`\bLockError\b`),
+	// Spring Boot error lines (severity token between timestamp and
+	// logger, e.g. "2026-... ERROR 1 --- [nio-8080-exec-7] ..."):
+	regexp.MustCompile(` ERROR \d+ --- `),
+	// Java exceptions outside java.lang (NoSuchElementException lives
+	// in java.util):
+	regexp.MustCompile(`java\.util\.\w+Exception`),
 }
 
 // ExtractTypePatterns extract the error type name from a log line. When a
@@ -53,6 +79,19 @@ var ExtractTypePatterns = []struct {
 	{regexp.MustCompile(`(\w+Exception)\b`), ""},
 	{regexp.MustCompile(`java\.lang\.(\w+)`), ""},
 	{regexp.MustCompile(`thread '.*' panicked`), "rust_panic"},
+	// Fallbacks for formats the generic patterns cannot see (mid-line,
+	// lowercase, or non-"\w+Error" shapes). Order matters: these run only
+	// when every generic pattern above has missed the line.
+	{regexp.MustCompile(`ERROR/(?:MainProcess|ForkPoolWorker|SpawnPoolWorker|BilliardPool|prefork)`), "celery_task_error"},
+	{regexp.MustCompile(`\bgaierror\b`), "gaierror"},
+	{regexp.MustCompile(`Name or service not known`), "dns_resolution_failed"},
+	{regexp.MustCompile(`\bConnectionRefusedError\b`), "connection_refused"},
+	{regexp.MustCompile(`Connection refused`), "connection_refused"},
+	{regexp.MustCompile(`could not acquire lock`), "lock_acquire_timeout"},
+	{regexp.MustCompile(`(?i)\bdeadlock\b`), "deadlock"},
+	{regexp.MustCompile(`\[(?:error|critical|fatal)\s+\]`), "log_error_level"},
+	{regexp.MustCompile(` ERROR \d+ --- `), "spring_error"},
+	{regexp.MustCompile(`(?i)segmentation fault`), "segfault"},
 }
 
 // IsErrorLine reports whether the line matches any known error pattern. This

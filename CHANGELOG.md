@@ -5,6 +5,45 @@ All notable changes to Sentinel are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.1] — 2026-09-24
+
+Detection-coverage + observability patch, driven by the first full
+marketly eval run (9 services, 9 planted bugs): the investigation
+pipeline solved a Rust panic in 9 seconds, but real-world worker/log
+formats slipped past the error-pattern matcher, and a namespace-allowlist
+misconfiguration silently swallowed a completed fix.
+
+### Added
+
+- **Error patterns for worker/structured log formats** (`internal/errorparse`):
+  - Celery (`ERROR/ForkPoolWorker-N`, `ERROR/MainProcess`)
+  - Python resolver/socket failures logged mid-line (`gaierror`,
+    `Name or service not known`, `ConnectionRefusedError`,
+    `connection refused` case-insensitive)
+  - Python structlog padded levels (`[error    ]`, `[critical  ]`)
+  - Sidekiq/Ruby lock failures (`LockError`, `could not acquire lock`,
+    `deadlock` case-insensitive)
+  - Spring Boot ` ERROR <pid> --- ` severity lines
+  - `java.util.*Exception` (e.g. `NoSuchElementException` — previously
+    only `java.lang.*` matched)
+  - lowercase `Segmentation fault`
+  Each format also got an extraction fallback so incident titles stay
+  meaningful (`celery_task_error`, `deadlock`, `lock_acquire_timeout`,
+  `spring_error`, `segfault`, …). Patterns verified against real log
+  lines captured from the eval; same-format INFO/WARN lines asserted
+  as non-errors.
+
+### Changed
+
+- **Namespace-allowlist denial is now loud and attributed**: when a fix
+  is approved and generated but the target namespace is not in
+  `SENTINEL_WRITE_NAMESPACES`, the incident records the reason in
+  `state.error`, an `execution/denied_namespace_allowlist` event is
+  appended, a `pipeline` SSE event with the reason is broadcast, and
+  the log line moves from WARN to ERROR with the chart-value hint.
+  Previously the incident silently reverted to `escalated` with no
+  explanation — in the eval this masked a complete, correct fix.
+
 ## [1.7.0] — 2026-09-23
 
 Durability + honesty-of-signals release. Four production-hardening fixes
