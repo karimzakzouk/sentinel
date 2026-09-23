@@ -42,18 +42,39 @@ jobs:
         run: docker build -t sentinel:e2e .
 
       - name: Load image into kind
-        run: kind load docker-image sentinel:e2e --name sentinel-e2e
+        run: |
+          # Load under the fully-qualified ref the chart will request
+          # (image.registry=docker.io/library below): containerd on the kind
+          # node normalizes 'sentinel:e2e' to 'docker.io/library/sentinel:e2e',
+          # and pullPolicy=Never requires an exact local match.
+          docker tag sentinel:e2e docker.io/library/sentinel:e2e
+          kind load docker-image docker.io/library/sentinel:e2e --name sentinel-e2e
 
       - name: Install Sentinel
         run: |
           helm install sentinel ./chart \
             --namespace sentinel --create-namespace \
+            --set image.registry=docker.io/library \
             --set image.repository=sentinel \
             --set image.tag=e2e \
             --set image.pullPolicy=Never \
             --set sentinel.llm.apiKey=dummy-key-for-e2e \
             --set sentinel.githubToken=dummy-token-for-e2e \
             --wait --timeout 300s
+
+      - name: Diagnose install failure
+        if: failure()
+        run: |
+          echo "=== pods ==="
+          kubectl -n sentinel get pods -o wide || true
+          echo "=== describe ==="
+          kubectl -n sentinel describe pod -l app.kubernetes.io/name=sentinel || true
+          echo "=== events ==="
+          kubectl -n sentinel get events --sort-by=.lastTimestamp | tail -30 || true
+          for p in $(kubectl -n sentinel get pod -o name 2>/dev/null); do
+            echo "=== logs $p ==="
+            kubectl -n sentinel logs "$p" --tail=80 || true
+          done
 
       - name: Deploy crashing service (the "fake repo" scenario)
         run: |
