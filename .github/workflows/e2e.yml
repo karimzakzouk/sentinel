@@ -130,9 +130,14 @@ jobs:
             SENTINEL_POD=$(kubectl -n sentinel get pod -o name | head -1)
           fi
           echo "Sentinel pod: $SENTINEL_POD"
+          # The runtime image is distroless (no shell/wget/curl), so exec-into-
+          # pod HTTP calls are impossible. Port-forward to the runner instead.
+          kubectl -n sentinel port-forward "$SENTINEL_POD" 18000:8000 &
+          PF_PID=$!
+          trap 'kill $PF_PID 2>/dev/null || true' EXIT
+          sleep 5
           for i in $(seq 1 24); do
-            BODY=$(kubectl -n sentinel exec "$SENTINEL_POD" -- \
-              wget -qO- http://localhost:8000/incidents 2>/dev/null || true)
+            BODY=$(curl -sf http://localhost:18000/incidents || true)
             if echo "$BODY" | grep -q '"service":"crashy"'; then
               echo "=== Incident detected ==="
               echo "$BODY" | head -c 2000
