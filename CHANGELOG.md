@@ -5,6 +5,19 @@ All notable changes to Sentinel are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.2] — 2026-09-24
+
+Chart safety fix, surfaced by the marketly eval the moment the values
+nesting bug was corrected: the write-namespaces loop rendered a
+`kind: Namespace` object for every `sentinel.rbac.writeNamespaces`
+entry. Since write namespaces are pre-existing by definition, this (a)
+made `helm install` fail with an ownership-metadata error whenever the
+namespace existed without Helm labels, and (b) meant `helm uninstall`
+would attempt to **delete the watched namespace and everything running
+in it**. The object is removed; only the write Role + RoleBinding are
+created per namespace. If the namespace does not exist, Role creation
+fails with a clear "namespace not found" — create it first.
+
 ## [1.7.1] — 2026-09-24
 
 Detection-coverage + observability patch, driven by the first full
