@@ -1,0 +1,93 @@
+package agents
+
+// runtime_context.go (v1.7.4): renders the pod's runtime ground truth
+// (env var NAMES, config refs, resource limits) into LLM prompts.
+//
+// Motivation — eval run #11, user-api: the investigation saw a pg-pool
+// timeout, guessed a canonical `DATABASE_URL` was "missing", and the fix
+// renamed the env var the deployment actually sets (USER_DATABASE_URL),
+// which would have pointed the service at localhost. The decisive fact —
+// what the pod's environment really provides — was never in the prompt.
+// This block puts it there, for both hypothesis-forming and fix-writing.
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/karimzakzouk/sentinel/internal/schemas"
+)
+
+// renderRuntimeContext renders the runtime ground truth as a prompt
+// section. Returns "" when rc is nil (pod not inspectable) so callers can
+// append unconditionally. Values are never rendered — names and refs only.
+func renderRuntimeContext(rc *schemas.PodRuntimeContext) string {
+	if rc == nil {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("## Pod Runtime Context (GROUND TRUTH from the live pod — do not contradict)\n")
+	b.WriteString(fmt.Sprintf("- pod: %s", rc.PodName))
+	if rc.ContainerName != "" {
+		b.WriteString(fmt.Sprintf(" (container: %s)", rc.ContainerName))
+	}
+	b.WriteString("\n")
+	if rc.Image != "" {
+		b.WriteString(fmt.Sprintf("- image: %s\n", rc.Image))
+	}
+	if len(rc.EnvVarNames) > 0 {
+		b.WriteString(fmt.Sprintf("- environment variables SET on this container (names only): %s\n",
+			strings.Join(rc.EnvVarNames, ", ")))
+	} else {
+		b.WriteString("- environment variables SET on this container: (none)\n")
+	}
+	if len(rc.ConfigMapRefs) > 0 {
+		b.WriteString(fmt.Sprintf("- configmaps referenced: %s\n", strings.Join(rc.ConfigMapRefs, ", ")))
+	}
+	if len(rc.SecretRefs) > 0 {
+		b.WriteString(fmt.Sprintf("- secrets referenced: %s\n", strings.Join(rc.SecretRefs, ", ")))
+	}
+	if rc.CPULimit != "" || rc.MemoryLimit != "" {
+		b.WriteString(fmt.Sprintf("- resources (requests cpu=%s mem=%s, limits cpu=%s mem=%s)\n",
+			orDash(rc.CPURequest), orDash(rc.MemoryRequest), orDash(rc.CPULimit), orDash(rc.MemoryLimit)))
+	}
+	if len(rc.Command) > 0 {
+		cmd := rc.Command
+		if len(cmd) > 3 {
+			cmd = cmd[:3]
+		}
+		b.WriteString(fmt.Sprintf("- entrypoint: %s\n", strings.Join(cmd, " ")))
+	}
+	b.WriteString("\nUse this when a hypothesis involves configuration, environment variables,\n")
+	b.WriteString("connection strings, or resources. An env var listed here IS set; one that is\n")
+	b.WriteString("NOT listed here is NOT set on the pod. Never assume a canonical variable name\n")
+	b.WriteString("(e.g. DATABASE_URL) — use the exact names above.\n")
+	return b.String()
+}
+
+// runtimeContextGroundingRules returns the extra warning lines appended in
+// the Fix Proposer's prompt, where a wrong env-var assumption turns into a
+// harmful patch.
+func runtimeContextGroundingRules(rc *schemas.PodRuntimeContext) string {
+	if rc == nil || len(rc.EnvVarNames) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("IMPORTANT: The environment variables above are the ACTUAL names the deployment\n")
+	b.WriteString("provides. When your fix reads an env var, it MUST use one of those exact names.\n")
+	b.WriteString("Do NOT rename env var references in code to canonical/conventional names —\n")
+	b.WriteString("that breaks the service against its real deployment configuration.\n")
+	return b.String()
+}
+
+// RenderRuntimeContext is the exported form of renderRuntimeContext, used
+// by the agent-loop package (internal/agent) for its system prompt.
+func RenderRuntimeContext(rc *schemas.PodRuntimeContext) string {
+	return renderRuntimeContext(rc)
+}
+
+func orDash(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
+}

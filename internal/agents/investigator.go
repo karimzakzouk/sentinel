@@ -204,6 +204,21 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
 		logging.Info("K8s API logs unavailable, using detection logs", "bytes", len(podLogs))
 	}
 
+	// Runtime ground truth (v1.7.4): env var names, config refs, resource
+	// limits from the live pod. Best-effort — a nil context just means the
+	// prompts omit the section. Prevents the run-#11 user-api class of
+	// confident-wrong fixes that rename env vars the deployment sets.
+	if a.k8s != nil && state.RuntimeContext == nil {
+		if rc, rerr := a.k8s.FetchPodRuntimeContext(ctx, cluster.Service, cluster.Namespace); rerr != nil {
+			logging.Info("runtime context fetch failed — proceeding without it", "error", rerr)
+		} else if rc != nil {
+			state.RuntimeContext = rc
+			logging.Info("fetched pod runtime context",
+				"pod", rc.PodName, "env_vars", len(rc.EnvVarNames),
+				"configmaps", len(rc.ConfigMapRefs), "secrets", len(rc.SecretRefs))
+		}
+	}
+
 	// Memory loop: query the vector index for similar past incidents.
 	// Hash-embedding fallbacks can produce false high-similarity scores, so
 	// the applyKnownFix fast path is gated on UsingHashFallback() == false.
@@ -578,6 +593,9 @@ func (a *Investigator) buildRound1Message(state *schemas.AgentState, podLogs str
 	if crashLoc := extractCrashLocation(podLogs); crashLoc != "" {
 		parts = append(parts, crashLoc)
 	}
+	if rcBlock := renderRuntimeContext(state.RuntimeContext); rcBlock != "" {
+		parts = append(parts, rcBlock)
+	}
 	parts = append(parts, "## Pod Logs")
 	if podLogs != "" {
 		if len(podLogs) > MaxPodLogsBytes {
@@ -611,6 +629,9 @@ func (a *Investigator) buildRound2Message(state *schemas.AgentState, podLogs str
 	}
 	if crashLoc := extractCrashLocation(podLogs); crashLoc != "" {
 		parts = append(parts, crashLoc)
+	}
+	if rcBlock := renderRuntimeContext(state.RuntimeContext); rcBlock != "" {
+		parts = append(parts, rcBlock)
 	}
 	parts = append(parts, "## Pod Logs")
 	if podLogs != "" {

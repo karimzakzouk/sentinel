@@ -149,6 +149,17 @@ func (a *PipelineAdapter) Run(ctx context.Context, state *schemas.AgentState) er
 		logging.Info("agent: K8s API logs unavailable, using detection logs", "bytes", len(podLogs))
 	}
 
+	// Runtime ground truth (v1.7.4): same rationale as the legacy
+	// investigator — the loop's read_file tool can explore the repo, but
+	// the live pod's env var names are cluster state, not repo state.
+	if a.k8s != nil && state.RuntimeContext == nil {
+		if rc, rerr := a.k8s.FetchPodRuntimeContext(ctx, cluster.Service, cluster.Namespace); rerr == nil && rc != nil {
+			state.RuntimeContext = rc
+			logging.Info("agent: fetched pod runtime context",
+				"pod", rc.PodName, "env_vars", len(rc.EnvVarNames))
+		}
+	}
+
 	// Memory loop: query the vector index for similar past incidents. Same
 	// gating as the legacy investigator: only apply a known fix directly
 	// when the embedding pipeline is semantic (not the hash fallback).
