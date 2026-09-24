@@ -35,27 +35,27 @@ func renderRuntimeContext(rc *schemas.PodRuntimeContext) string {
 		fmt.Fprintf(&b, "- image: %s\n", rc.Image)
 	}
 	if len(rc.EnvVarNames) > 0 {
-		b.WriteString(fmt.Sprintf("- environment variables SET on this container (names only): %s\n",
-			strings.Join(rc.EnvVarNames, ", ")))
+		fmt.Fprintf(&b, "- environment variables SET on this container (names only): %s\n",
+			strings.Join(rc.EnvVarNames, ", "))
 	} else {
 		b.WriteString("- environment variables SET on this container: (none)\n")
 	}
 	if len(rc.ConfigMapRefs) > 0 {
-		b.WriteString(fmt.Sprintf("- configmaps referenced: %s\n", strings.Join(rc.ConfigMapRefs, ", ")))
+		fmt.Fprintf(&b, "- configmaps referenced: %s\n", strings.Join(rc.ConfigMapRefs, ", "))
 	}
 	if len(rc.SecretRefs) > 0 {
-		b.WriteString(fmt.Sprintf("- secrets referenced: %s\n", strings.Join(rc.SecretRefs, ", ")))
+		fmt.Fprintf(&b, "- secrets referenced: %s\n", strings.Join(rc.SecretRefs, ", "))
 	}
 	if rc.CPULimit != "" || rc.MemoryLimit != "" {
-		b.WriteString(fmt.Sprintf("- resources (requests cpu=%s mem=%s, limits cpu=%s mem=%s)\n",
-			orDash(rc.CPURequest), orDash(rc.MemoryRequest), orDash(rc.CPULimit), orDash(rc.MemoryLimit)))
+		fmt.Fprintf(&b, "- resources (requests cpu=%s mem=%s, limits cpu=%s mem=%s)\n",
+			orDash(rc.CPURequest), orDash(rc.MemoryRequest), orDash(rc.CPULimit), orDash(rc.MemoryLimit))
 	}
 	if len(rc.Command) > 0 {
 		cmd := rc.Command
 		if len(cmd) > 3 {
 			cmd = cmd[:3]
 		}
-		b.WriteString(fmt.Sprintf("- entrypoint: %s\n", strings.Join(cmd, " ")))
+		fmt.Fprintf(&b, "- entrypoint: %s\n", strings.Join(cmd, " "))
 	}
 	b.WriteString("\nUse this when a hypothesis involves configuration, environment variables,\n")
 	b.WriteString("connection strings, or resources. An env var listed here IS set; one that is\n")
