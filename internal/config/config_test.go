@@ -304,6 +304,37 @@ func TestLoadLLMProviders(t *testing.T) {
 	}
 }
 
+// TestLoadWiresLLMProviders guards the Load() wiring itself, not just the
+// parser. v1.7.4 shipped loadLLMProviders() fully unit-tested yet never
+// called it from Load() - SENTINEL_LLM_PROVIDERS was silently ignored and
+// every deployment booted in single-provider mode regardless of the env
+// var being present with a valid payload (eval runs #15 and #16).
+func TestLoadWiresLLMProviders(t *testing.T) {
+	t.Setenv("SENTINEL_LLM_PROVIDERS", `[
+		{"id":"primary","provider":"groq","apiKey":"gsk-x","fastModel":"openai/gpt-oss-20b","frontierModel":"openai/gpt-oss-120b","priority":1},
+		{"id":"overflow","provider":"gemini","apiKey":"AIza-x","fastModel":"gemini-2.5-flash","frontierModel":"gemini-2.5-flash","priority":2}
+	]`)
+	t.Setenv("SENTINEL_LLM_API_KEY", "k")
+	t.Setenv("SENTINEL_LLM_PROVIDER", "groq")
+	cfg := Load()
+	if len(cfg.LLMProviders) != 2 {
+		t.Fatalf("Load() must wire SENTINEL_LLM_PROVIDERS into cfg.LLMProviders, got %d entries: %+v", len(cfg.LLMProviders), cfg.LLMProviders)
+	}
+	if cfg.LLMProviders[0].ID != "primary" || cfg.LLMProviders[0].ProviderType != "groq" || cfg.LLMProviders[0].APIKey != "gsk-x" {
+		t.Errorf("primary entry mismatch: %+v", cfg.LLMProviders[0])
+	}
+	if cfg.LLMProviders[1].ID != "overflow" || cfg.LLMProviders[1].ProviderType != "gemini" || cfg.LLMProviders[1].Priority != 2 {
+		t.Errorf("overflow entry mismatch: %+v", cfg.LLMProviders[1])
+	}
+
+	// Unset/empty env keeps single-provider mode (backward compatible).
+	t.Setenv("SENTINEL_LLM_PROVIDERS", "")
+	cfg = Load()
+	if len(cfg.LLMProviders) != 0 {
+		t.Errorf("empty env should keep single-provider mode, got %d entries", len(cfg.LLMProviders))
+	}
+}
+
 func TestSplitCSV(t *testing.T) {
 	cases := []struct {
 		in   string
