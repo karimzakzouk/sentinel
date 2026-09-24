@@ -148,12 +148,19 @@ func (c *Client) LookupWorkloadAnnotations(ctx context.Context, service, namespa
 	return annotations, nil
 }
 
-// FetchCrashingPodLogs returns up to 8KB of logs from the worst-crashing pod
+// FetchCrashingPodLogs returns recent logs from the worst-crashing pod
 // matching service in namespace. "Worst" means CrashLoopBackOff first,
 // otherwise the pod with the most restarts. Tries previous-container logs
-// (the crash output) first, then current logs. Retries up to 3 times with
-// 2-second delays because K8s sometimes returns "unable to retrieve
-// container logs for containerd://..." immediately after a restart.
+// (the crash output) first, then current logs. The fetch is TAIL-based
+// (last ~300 lines, capped to the final 64KB): crash signatures — Rust
+// panics, Node "FATAL ERROR: Ineffective mark-compacts", Go panics — sit
+// at the END of the previous container's output, so a head-limited
+// fetch (LimitBytes from the start) misses them on chatty pods (seen in
+// the marketly eval run #10: an 8KB-from-the-start window swallowed
+// Node's heap-exhaustion line and the investigation misdiagnosed).
+// Retries up to 3 times with 2-second delays because K8s sometimes
+// returns "unable to retrieve container logs for containerd://..."
+// immediately after a restart.
 //
 // Returns ("", nil) if no matching pod is found or no valid log content
 // could be retrieved.
@@ -196,19 +203,16 @@ func (c *Client) FetchCrashingPodLogs(ctx context.Context, service, namespace st
 		return "", nil
 	}
 
-	limitBytes := int64(8192)
+	limitBytes := int64(64 * 1024)
+	tailLines := int64(300)
 	for attempt := range 3 {
-		opts := &corev1.PodLogOptions{Previous: true, LimitBytes: &limitBytes}
-		if logs, err := c.clientset.CoreV1().Pods(namespace).GetLogs(worstPod.Name, opts).Do(ctx).Raw(); err == nil {
-			if isValidLogContent(string(logs)) {
-				return string(logs), nil
-			}
+		opts := &corev1.PodLogOptions{Previous: true, TailLines: &tailLines, LimitBytes: &limitBytes}
+		if logs, err := c.clientset.CoreV1().Pods(namespace).GetLogs(worstPod.Name, opts).Do(ctx).Raw(); err == nil && isValidLogContent(string(logs)) {
+			return keepLogTail(string(logs), int(limitBytes)), nil
 		}
 		opts.Previous = false
-		if logs, err := c.clientset.CoreV1().Pods(namespace).GetLogs(worstPod.Name, opts).Do(ctx).Raw(); err == nil {
-			if isValidLogContent(string(logs)) {
-				return string(logs), nil
-			}
+		if logs, err := c.clientset.CoreV1().Pods(namespace).GetLogs(worstPod.Name, opts).Do(ctx).Raw(); err == nil && isValidLogContent(string(logs)) {
+			return keepLogTail(string(logs), int(limitBytes)), nil
 		}
 		if attempt < 2 {
 			select {
@@ -219,6 +223,17 @@ func (c *Client) FetchCrashingPodLogs(ctx context.Context, service, namespace st
 		}
 	}
 	return "", nil
+}
+
+// keepLogTail returns the final limit bytes of s. The K8s API applies
+// LimitBytes from the START of the (tailed) line set, so on pods whose
+// last 300 lines exceed the budget the signature lines at the very end
+// would be cut; trim in-process instead so the END always survives.
+func keepLogTail(s string, limit int) string {
+	if len(s) <= limit {
+		return s
+	}
+	return s[len(s)-limit:]
 }
 
 // isValidLogContent reports whether s is non-empty and not just the K8s

@@ -635,11 +635,14 @@ func (d *Detector) getServiceFromPod(pod *corev1.Pod) string {
 	return name
 }
 
-// fetchPodLogs returns up to 8KB of previous-container logs (the crash
-// output) for the pod; if that's empty or contains the K8s placeholder, it
-// falls back to current logs.
+// fetchPodLogs returns the last ~300 lines (final 64KB) of
+// previous-container logs (the crash output) for the pod; if that's
+// empty or contains the K8s placeholder, it falls back to current
+// logs. Tail-based because crash signatures sit at the END of the
+// output — a head-limited fetch misses them on chatty pods.
 func (d *Detector) fetchPodLogs(ctx context.Context, pod *corev1.Pod) string {
-	limitBytes := int64(8192)
+	limitBytes := int64(64 * 1024)
+	tailLines := int64(300)
 	containerName := ""
 	if len(pod.Spec.Containers) > 0 {
 		containerName = pod.Spec.Containers[0].Name
@@ -647,22 +650,33 @@ func (d *Detector) fetchPodLogs(ctx context.Context, pod *corev1.Pod) string {
 
 	opts := &corev1.PodLogOptions{
 		Previous:   true,
+		TailLines:  &tailLines,
 		LimitBytes: &limitBytes,
 		Container:  containerName,
 	}
 	if logs, err := d.clientset.CoreV1().Pods(pod.Namespace).GetLogs(pod.Name, opts).Do(ctx).Raw(); err == nil {
 		s := string(logs)
 		if strings.TrimSpace(s) != "" && !strings.Contains(s, "unable to retrieve container logs") {
-			return s
+			return keepLogTailString(s, int(limitBytes))
 		}
 	}
 
 	opts.Previous = false
 	if logs, err := d.clientset.CoreV1().Pods(pod.Namespace).GetLogs(pod.Name, opts).Do(ctx).Raw(); err == nil {
-		return string(logs)
+		return keepLogTailString(string(logs), int(limitBytes))
 	}
 
 	return ""
+}
+
+// keepLogTailString returns the final limit bytes of s (see
+// internal/k8s.keepLogTail for why the tail, not the head, must
+// survive byte-budget truncation).
+func keepLogTailString(s string, limit int) string {
+	if len(s) <= limit {
+		return s
+	}
+	return s[len(s)-limit:]
 }
 
 // cleanupLoop drops recentSeen entries older than 10 minutes and

@@ -6,7 +6,10 @@ import (
 )
 
 // TestCorrelator_DetectsCascade verifies that 3+ services failing within
-// the window triggers a correlation event.
+// the window triggers a correlation event — and that WITHOUT an
+// attributable deployment cause the caller is NOT told to suppress
+// individual investigations (several services erroring under shared
+// load is not evidence that any of them is a mere victim).
 func TestCorrelator_DetectsCascade(t *testing.T) {
 	var event CorrelationEvent
 	c := New(func(e CorrelationEvent) { event = e })
@@ -19,11 +22,31 @@ func TestCorrelator_DetectsCascade(t *testing.T) {
 	if c.RegisterIncident("web", "prod", now.Add(10*time.Second)) {
 		t.Error("should not emit event for 2 incidents")
 	}
-	if !c.RegisterIncident("worker", "prod", now.Add(20*time.Second)) {
-		t.Error("should emit event for 3 incidents")
+	if c.RegisterIncident("worker", "prod", now.Add(20*time.Second)) {
+		t.Error("cascade without attributable cause must not suppress individual investigations")
 	}
 	if event.IncidentCount != 3 {
-		t.Errorf("IncidentCount = %d, want 3", event.IncidentCount)
+		t.Errorf("IncidentCount = %d, want 3 (event is still emitted)", event.IncidentCount)
+	}
+}
+
+// TestCorrelator_CascadeWithCauseSuppresses verifies that a cascade
+// WITH an attributable deployment cause DOES tell the caller to
+// suppress individual investigations in favor of cascade handling.
+func TestCorrelator_CascadeWithCauseSuppresses(t *testing.T) {
+	var event CorrelationEvent
+	c := New(func(e CorrelationEvent) { event = e })
+	c.SetConfig(60*time.Second, 3, 5*time.Minute)
+
+	now := time.Now()
+	c.RegisterDeployment("payment-api", "prod", now.Add(-30*time.Second))
+	c.RegisterIncident("api", "prod", now)
+	c.RegisterIncident("web", "prod", now.Add(5*time.Second))
+	if !c.RegisterIncident("worker", "prod", now.Add(10*time.Second)) {
+		t.Error("cascade with attributable cause should suppress individual investigations")
+	}
+	if event.LikelyCause != "payment-api/prod" {
+		t.Errorf("LikelyCause = %q, want payment-api/prod", event.LikelyCause)
 	}
 }
 

@@ -5,6 +5,38 @@ All notable changes to Sentinel are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.3] — 2026-09-24
+
+Investigation-fidelity fixes, all surfaced by the marketly eval run #10
+(4 incidents → 4 PRs, 1 correct root cause, 3 misdiagnoses).
+
+### Fixed
+
+- **Tail-based pod-log fetch** — crash signatures (Node
+  `FATAL ERROR: Ineffective mark-compacts`, Rust panics, Go panics) sit
+  at the END of the previous container's output. Both fetchers
+  (`internal/k8s.FetchCrashingPodLogs`, detection-layer
+  `fetchPodLogs`) previously read the FIRST 8KB (`LimitBytes` from the
+  start), which on a chatty pod cuts off the very line that names the
+  failure — run #10's user-api heap-exhaustion was misdiagnosed as a
+  Postgres-pool issue for exactly this reason. Both now request the
+  last ~300 lines and keep the final 64KB (`keepLogTail`), so the
+  signature always survives truncation.
+- **Empty-cause cascades no longer suppress investigations** — the
+  correlator returned "suppress" for ANY 3-service cascade, including
+  ones with no attributable deployment cause. Under shared load,
+  several services erroring in the same minute is not evidence that
+  any of them is a victim; run #10's empty-cause cascade silently
+  swallowed a fully-detected Rust panic. `RegisterIncident` now
+  suppresses only when the emitted event carries a `LikelyCause`; the
+  cascade alert + causal analysis still fire either way.
+- **Ruby exception-class patterns** (`NoMethodError`, `NameError`,
+  `ArgumentError`, `RuntimeError`, `ThreadError`, `LockError`, …) —
+  Sidekiq logs job exceptions at WARN with a timestamp prefix, which
+  the anchored patterns never matched. Verified against the
+  analytics-worker `RedisClient` API-mismatch failure from run #10;
+  backtrace-only lines asserted as non-errors.
+
 ## [1.7.2] — 2026-09-24
 
 Chart safety fix, surfaced by the marketly eval the moment the values

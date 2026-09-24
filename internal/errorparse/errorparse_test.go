@@ -25,6 +25,11 @@ func TestIsErrorLine(t *testing.T) {
 		{"[2026-09-23 19:48:43,398: ERROR/MainProcess] Task app.tasks.send_email received", true},
 		// Sidekiq lock timeout (logged at WARN by Sidekiq).
 		{"2026-09-23T19:48:59.227Z pid=1 tid=2x1 WARN: LockError: could not acquire lock 'OrderLock' within 5000ms", true},
+		// Ruby exception class names mid-line (analytics-worker
+		// lock library API mismatch from eval run #10).
+		{"2026-09-23T23:58:44.754Z pid=1 tid=16uut WARN: NoMethodError: undefined method `set' for an instance of RedisClient", true},
+		// Backtrace context lines alone are not error lines.
+		{"2026-09-23T23:58:44.754Z pid=1 tid=16uut WARN: app/workers/payment_worker.rb:17:in `perform'", false},
 		// Ruby / Postgres deadlock wording.
 		{"2026-09-23T19:48:59.227Z pid=1 tid=2x1 WARN: Job failed: deadlock detected", true},
 		// Python structlog padded level name.
