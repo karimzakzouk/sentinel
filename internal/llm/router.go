@@ -14,6 +14,7 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"regexp"
@@ -208,7 +209,25 @@ func (r *Router) FrontierText(ctx context.Context, system, user string, maxToken
 }
 
 // complete is the core LLM call. Checks the cache, then routes through
-// the pool (if set) or the single-provider path.
+// the pool (if set) or the single-provider path. Wraps the call with two
+// resilience loops (v1.7.4):
+//
+//   - too-large: the request itself exceeds the model/provider token
+//     budget (e.g. Groq "Request too large ... (TPM): Limit 8000,
+//     Requested 13271"). Retrying the same payload can NEVER succeed,
+//     so the user prompt is progressively shrunk (middle-dropped) and
+//     retried immediately, up to maxTooLargeShrinks times.
+//   - rate-limit: the request fits but the provider window is exhausted
+//     (429 / TPM per-minute). Waited retry with the same payload, up to
+//     maxRateLimitRetries times, with window-aware delays.
+//
+// Everything else propagates immediately (auth errors, context
+// cancellation, non-transient failures).
+const (
+	maxTooLargeShrinks  = 3
+	maxRateLimitRetries = 2
+)
+
 func (r *Router) complete(ctx context.Context, model, system, user string, maxTokens int) (string, error) {
 	_, _, _, _, _, maxRetries, _, _ := r.snapshot()
 
@@ -230,18 +249,65 @@ func (r *Router) complete(ctx context.Context, model, system, user string, maxTo
 	}
 	callStart := time.Now()
 
-	var result string
-	var err error
-	if pool != nil && pool.HasProviders() {
-		result, err = r.completeWithPool(ctx, pool, model, system, user, maxTokens, maxRetries, callStart)
-	} else {
-		result, err = r.completeSingle(ctx, model, system, user, maxTokens, maxRetries, callStart, "")
-	}
+	current := user
+	tooLargeShrinks := 0
+	rateLimitRetries := 0
+	for {
+		var result string
+		var err error
+		if pool != nil && pool.HasProviders() {
+			result, err = r.completeWithPool(ctx, pool, model, system, current, maxTokens, maxRetries, callStart)
+		} else {
+			result, err = r.completeSingle(ctx, model, system, current, maxTokens, maxRetries, callStart, "")
+		}
+		if err == nil {
+			if cache != nil && cache.Enabled() {
+				cache.Put(ctx, promptKey, result)
+			}
+			return result, nil
+		}
 
-	if err == nil && cache != nil && cache.Enabled() {
-		cache.Put(ctx, promptKey, result)
+		// Too-large: shrink and retry immediately (waiting cannot help —
+		// the payload exceeds the whole budget).
+		if isRequestTooLargeError(err) {
+			if tooLargeShrinks >= maxTooLargeShrinks {
+				logging.Error("llm: request too large — shrink budget exhausted",
+					"model", model, "prompt_bytes", len(current), "shrinks", tooLargeShrinks)
+				return "", err
+			}
+			shrunk := shrinkUserPrompt(current)
+			if shrunk == current {
+				// Already at the shrink floor; nothing more to shed.
+				return "", err
+			}
+			tooLargeShrinks++
+			logging.Warn("llm: request too large — shrinking context and retrying",
+				"model", model, "shrink", tooLargeShrinks,
+				"was_bytes", len(current), "now_bytes", len(shrunk))
+			current = shrunk
+			continue
+		}
+
+		// Rate-limit: the request fits but the window is exhausted. Wait
+		// for the window to reset and retry the SAME payload.
+		if isRateLimitWindowError(err) && rateLimitRetries < maxRateLimitRetries {
+			if ctx.Err() != nil {
+				return "", err
+			}
+			rateLimitRetries++
+			delay := rateLimitRetryDelay(err, rateLimitRetries)
+			logging.Warn("llm: rate limit hit — waiting for window and retrying",
+				"model", model, "retry", rateLimitRetries, "wait", delay)
+			select {
+			case <-ctx.Done():
+				return "", err
+			case <-time.After(delay):
+			}
+			continue
+		}
+
+		return "", err
 	}
-	return result, err
 }
 
 // completeWithPool tries each provider in the pool in priority order.
@@ -416,6 +482,138 @@ func (r *Router) parseRetryAfter(value string) time.Duration {
 		}
 	}
 	return 0
+}
+
+// isRequestTooLargeError reports whether err indicates the request itself
+// exceeds the model's or provider's token budget. Retrying the SAME payload
+// can never succeed in this case — the payload must shrink.
+//
+// Detection combines three signals, because providers phrase this
+// differently (all real strings seen in production):
+//   - goai's typed ContextOverflowError / IsOverflow patterns
+//   - Groq's TPM phrasing: "Request too large for model ... on tokens per
+//     minute (TPM): Limit 8000, Requested 13271, please reduce your
+//     message size and try again" (413/400 — NOT caught by goai's patterns,
+//     which expect "reduce the length of the messages")
+//   - generic context-window phrasings (OpenAI, Anthropic, Bedrock, ...)
+func isRequestTooLargeError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var overflow *goai.ContextOverflowError
+	if errors.As(err, &overflow) {
+		return true
+	}
+	return isRequestTooLargeMessage(err.Error())
+}
+
+func isRequestTooLargeMessage(msg string) bool {
+	if msg == "" {
+		return false
+	}
+	if goai.IsOverflow(msg) {
+		return true
+	}
+	m := strings.ToLower(msg)
+	patterns := []string{
+		"request too large",        // Groq TPM (run #11: killed shipping-api)
+		"too large for model",      // Groq TPM variant
+		"reduce your message size", // Groq TPM variant
+		"message size too large",
+		"context length", // OpenAI context_length_exceeded
+		"context window", // generic
+		"token limit",
+		"exceeds the model",
+		"exceeds the maximum",
+		"prompt is too long", // Anthropic
+	}
+	for _, p := range patterns {
+		if strings.Contains(m, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// isRateLimitWindowError reports whether err looks like a rate limit where
+// the request FITS the budget but the provider's time window is exhausted
+// (429 / "try again in Xs"). Distinct from too-large: waiting helps here.
+func isRateLimitWindowError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if isRequestTooLargeError(err) {
+		return false // too-large first: waiting never helps there
+	}
+	var apiErr *goai.APIError
+	if errors.As(err, &apiErr) && apiErr.StatusCode == 429 {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "rate limit") ||
+		strings.Contains(msg, "rate_limit") ||
+		strings.Contains(msg, "too many requests") ||
+		strings.Contains(msg, "try again in")
+}
+
+// rateLimitRetryDelay picks the wait before a rate-limit retry.
+// Per-minute token windows (TPM/RPM) reset on a ~60s cadence, so the waits
+// must be tens of seconds, not the sub-second backoff used for transient
+// capacity errors. "try again in Xs" hints are honored when parseable.
+func rateLimitRetryDelay(err error, attempt int) time.Duration {
+	// Honor explicit "try again in 34s"-style hints when present.
+	if m := regexp.MustCompile(`try again in (\d+(?:\.\d+)?)s`).FindStringSubmatch(err.Error()); len(m) == 2 {
+		var secs float64
+		if _, perr := fmt.Sscanf(m[1], "%f", &secs); perr == nil && secs > 0 {
+			d := time.Duration(secs * float64(time.Second))
+			if d > 90*time.Second {
+				d = 90 * time.Second
+			}
+			if d < time.Second {
+				d = time.Second
+			}
+			return d + 2*time.Second // small buffer past the window edge
+		}
+	}
+	// TPM/RPM windows: attempt 1 waits ~25s, attempt 2 waits ~55s.
+	switch attempt {
+	case 1:
+		return 25 * time.Second
+	default:
+		return 55 * time.Second
+	}
+}
+
+// shrinkUserPrompt reduces a too-large prompt while preserving the head
+// (service identity, anomaly summary, detected language, crash location)
+// and the tail (task instructions and output-format requirements). The
+// bulk — pod logs, file trees, search results — lives in the middle and is
+// what gets dropped. Each call keeps roughly 60% of the previous length,
+// so three iterations bring a 13k-token request under an 8k-token budget.
+// Returns the input unchanged once it is too small to shed further.
+func shrinkUserPrompt(s string) string {
+	const minShrinkable = 2048 // below this there is nothing meaningful to shed
+	if len(s) <= minShrinkable {
+		return s
+	}
+	headLen := len(s) * 20 / 100
+	tailLen := len(s) * 40 / 100
+
+	head := s[:headLen]
+	if i := strings.LastIndexByte(head, '\n'); i > 0 {
+		head = head[:i] // snap to a line boundary — never cut mid-line
+	}
+	tail := s[len(s)-tailLen:]
+	if i := strings.IndexByte(tail, '\n'); i >= 0 && i+1 < len(tail) {
+		tail = tail[i+1:] // snap to a line boundary
+	}
+
+	const marker = "\n[... Sentinel: middle context truncated to fit the model token limit ...]\n"
+	out := head + marker + tail
+	if len(out) >= len(s) {
+		return s
+	}
+	return out
 }
 
 // isTransientCapacityError reports whether msg looks like a transient

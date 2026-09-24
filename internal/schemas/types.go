@@ -230,6 +230,36 @@ type ExecutionResult struct {
 	CIOverride      bool `json:"ci_override,omitempty"`
 }
 
+// PodRuntimeContext is ground truth about the crashing workload's
+// runtime configuration, read from the live pod spec (v1.7.4). It exists
+// so the investigation and fix-proposal stages never have to GUESS what
+// the environment provides — the user-api incident of eval run #11
+// produced a harmful fix because the LLM assumed a canonical
+// `DATABASE_URL` env var while the deployment actually sets a
+// service-prefixed variant. Env var VALUES are deliberately excluded:
+// only names and references cross the LLM boundary.
+type PodRuntimeContext struct {
+	PodName       string `json:"pod_name"`
+	ContainerName string `json:"container_name,omitempty"`
+	Image         string `json:"image,omitempty"`
+	// EnvVarNames are the NAMES of directly-set environment variables
+	// (values never collected).
+	EnvVarNames []string `json:"env_var_names,omitempty"`
+	// ConfigMapRefs / SecretRefs are the names of configmaps/secrets the
+	// container sources env vars or volume mounts from.
+	ConfigMapRefs []string `json:"config_map_refs,omitempty"`
+	SecretRefs    []string `json:"secret_refs,omitempty"`
+	// Resources are the container's requests/limits as formatted strings.
+	CPURequest    string `json:"cpu_request,omitempty"`
+	MemoryRequest string `json:"memory_request,omitempty"`
+	CPULimit      string `json:"cpu_limit,omitempty"`
+	MemoryLimit   string `json:"memory_limit,omitempty"`
+	// Command/Args expose the container entrypoint (first token only) —
+	// relevant for diagnosing OOM and crash-loop shapes without leaking
+	// argument secrets.
+	Command []string `json:"command,omitempty"`
+}
+
 // AgentState is the structured object passed between agents in the pipeline.
 type AgentState struct {
 	IncidentID         uuid.UUID           `json:"incident_id"`
@@ -254,6 +284,12 @@ type AgentState struct {
 	// SandboxFeedback carries the failure details from a failed sandbox
 	// verification back to the fix proposer on the next retry.
 	SandboxFeedback *string `json:"sandbox_feedback,omitempty"`
+
+	// RuntimeContext is the live pod's configuration ground truth (env var
+	// names, config refs, resource limits), fetched by the investigator so
+	// hypothesis-forming and fix-writing never reason blind about the
+	// environment (v1.7.4). Nil when the pod could not be inspected.
+	RuntimeContext *PodRuntimeContext `json:"runtime_context,omitempty"`
 }
 
 // Incident is the end-to-end incident record. One Incident == one Sentinel run.

@@ -485,6 +485,12 @@ func (a *FixProposer) buildUserMessage(state *schemas.AgentState) string {
 		parts = append(parts, fmt.Sprintf("## Detected Language: %s", lang))
 		parts = append(parts, "")
 	}
+	// Runtime ground truth (v1.7.4): the env var names the deployment
+	// actually sets, so fixes never rename env vars to canonical names the
+	// environment doesn't provide (run-#11 user-api harmful-fix class).
+	if rcBlock := renderRuntimeContext(state.RuntimeContext); rcBlock != "" {
+		parts = append(parts, rcBlock)
+	}
 	parts = append(parts, "## Confirmed Root Cause")
 	if state.RootCause == nil {
 		return ""
@@ -529,6 +535,9 @@ func (a *FixProposer) buildUserMessage(state *schemas.AgentState) string {
 	parts = append(parts, "Propose ONE fix. Be specific. If code_fix, output the exact new file contents.")
 	parts = append(parts, "IMPORTANT: Use the EXACT file path from '### <path>' above in your files_to_change.")
 	parts = append(parts, "Do NOT use container paths (like /app/app/main.py) — use the repo path (like app/main.py).")
+	if rules := runtimeContextGroundingRules(state.RuntimeContext); rules != "" {
+		parts = append(parts, rules)
+	}
 	return strings.Join(parts, "\n")
 }
 
