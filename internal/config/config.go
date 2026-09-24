@@ -256,6 +256,7 @@ func Load() *Config {
 		LLMAPIKey:        getenv("SENTINEL_LLM_API_KEY", ""),
 		LLMFastModel:     getenv("SENTINEL_LLM_FAST_MODEL", "glm-4-flash"),
 		LLMFrontierModel: getenv("SENTINEL_LLM_FRONTIER_MODEL", "glm-4.5"),
+		LLMProviders:     loadLLMProviders(),
 
 		LLMEmbeddingModel: getenv("SENTINEL_LLM_EMBEDDING_MODEL", ""),
 		EmbeddingProvider: getenv("SENTINEL_EMBEDDING_PROVIDER", ""),

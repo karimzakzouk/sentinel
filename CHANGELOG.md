@@ -5,6 +5,21 @@ All notable changes to Sentinel are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.5] — 2026-09-24
+
+### Fixed
+
+- **LLM failover pool never activated — `SENTINEL_LLM_PROVIDERS` was
+  silently ignored.** `loadLLMProviders()` existed and was fully
+  unit-tested, but nothing called it: `config.Load()` never assigned
+  the `LLMProviders` field, so every deployment booted in
+  single-provider mode no matter what the chart delivered (the env var
+  itself was rendered and delivered correctly all along). One-line
+  wiring fix plus `TestLoadWiresLLMProviders`, a regression test that
+  calls `Load()` end-to-end and fails if the env var does not reach
+  `cfg.LLMProviders` — unit-testing the parser alone is exactly how
+  this shipped broken.
+
 ## [1.7.3] — 2026-09-24
 
 Investigation-fidelity fixes, all surfaced by the marketly eval run #10
