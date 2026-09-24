@@ -119,6 +119,13 @@ func buildSystemPrompt(podLogs string, state *schemas.AgentState, idx *codeintel
 	fmt.Fprintf(&b, "Namespace: %s\n", state.Cluster.Namespace)
 	fmt.Fprintf(&b, "\n## Crash Logs\n\n%s\n", truncate(podLogs, 4000))
 
+	// Runtime ground truth (v1.7.4) — env var names the deployment
+	// actually sets, so agent hypotheses about "missing config" are
+	// checked against reality instead of training-data priors.
+	if rcBlock := agents.RenderRuntimeContext(state.RuntimeContext); rcBlock != "" {
+		fmt.Fprintf(&b, "\n%s\n", rcBlock)
+	}
+
 	if idx != nil && len(idx.Symbols) > 0 {
 		symbolList := idx.FormatSymbolList()
 		if len(symbolList) > 4000 {

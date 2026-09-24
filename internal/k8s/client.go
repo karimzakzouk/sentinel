@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/karimzakzouk/sentinel/internal/schemas"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -40,9 +41,11 @@ var sentinelAnnotationKeys = map[string]bool{
 	"sentinel.io/sandbox-strict": true,
 }
 
-// Client wraps the Kubernetes clientset + dynamic client.
+// Client wraps the Kubernetes clientset + dynamic client. The clientset
+// field is the kubernetes.Interface so tests can inject the fake
+// clientset (same pattern as the detection package).
 type Client struct {
-	clientset *kubernetes.Clientset
+	clientset kubernetes.Interface
 	dynamic   dynamic.Interface
 	config    *rest.Config
 	noop      bool
@@ -87,7 +90,7 @@ func (c *Client) IsNoop() bool {
 }
 
 // Clientset returns the underlying kubernetes clientset.
-func (c *Client) Clientset() *kubernetes.Clientset { return c.clientset }
+func (c *Client) Clientset() kubernetes.Interface { return c.clientset }
 
 // DynamicClient returns the dynamic interface (for CRD operations).
 func (c *Client) DynamicClient() dynamic.Interface { return c.dynamic }
@@ -234,6 +237,104 @@ func keepLogTail(s string, limit int) string {
 		return s
 	}
 	return s[len(s)-limit:]
+}
+
+// FetchPodRuntimeContext reads configuration ground truth from the first
+// matching pod's primary container (v1.7.4): env var NAMES (never values),
+// configmap/secret references, resource requests/limits, image, and the
+// entrypoint. This exists so the LLM stages never have to guess what the
+// environment provides — the run-#11 user-api incident produced a harmful
+// "fix" (renaming USER_DATABASE_URL to a canonical DATABASE_URL the
+// deployment never sets) precisely because the pod's env was invisible to
+// the investigation.
+//
+// Best-effort: returns (nil, nil) when no pod matches. Selector logic
+// mirrors FetchCrashingPodLogs (app.kubernetes.io/name, then app=).
+func (c *Client) FetchPodRuntimeContext(ctx context.Context, service, namespace string) (*schemas.PodRuntimeContext, error) {
+	pods, err := c.clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: fmt.Sprintf("app.kubernetes.io/name=%s", service),
+	})
+	if err != nil || len(pods.Items) == 0 {
+		pods, err = c.clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
+			LabelSelector: fmt.Sprintf("app=%s", service),
+		})
+		if err != nil || len(pods.Items) == 0 {
+			return nil, nil
+		}
+	}
+
+	pod := &pods.Items[0]
+	rc := &schemas.PodRuntimeContext{
+		PodName: pod.Name,
+	}
+
+	// Prefer the first container that isn't a sandbox/sidecar pattern;
+	// fall back to containers[0] (consistent with log fetching).
+	var ctr *corev1.Container
+	for i := range pod.Spec.Containers {
+		ci := &pod.Spec.Containers[i]
+		n := strings.ToLower(ci.Name)
+		if strings.Contains(n, "istio-proxy") || strings.Contains(n, "vault-agent") || strings.Contains(n, "sentinel-sandbox") {
+			continue
+		}
+		ctr = ci
+		break
+	}
+	if ctr == nil && len(pod.Spec.Containers) > 0 {
+		ctr = &pod.Spec.Containers[0]
+	}
+	if ctr == nil {
+		return rc, nil
+	}
+
+	rc.ContainerName = ctr.Name
+	rc.Image = ctr.Image
+	rc.Command = ctr.Command
+
+	for _, env := range ctr.Env {
+		rc.EnvVarNames = append(rc.EnvVarNames, env.Name)
+		if env.ValueFrom == nil {
+			continue
+		}
+		if ref := env.ValueFrom.ConfigMapKeyRef; ref != nil && ref.Name != "" {
+			rc.ConfigMapRefs = appendUnique(rc.ConfigMapRefs, ref.Name)
+		}
+		if ref := env.ValueFrom.SecretKeyRef; ref != nil && ref.Name != "" {
+			rc.SecretRefs = appendUnique(rc.SecretRefs, ref.Name)
+		}
+	}
+	for _, vol := range pod.Spec.Volumes {
+		if vol.ConfigMap != nil && vol.ConfigMap.Name != "" {
+			rc.ConfigMapRefs = appendUnique(rc.ConfigMapRefs, vol.ConfigMap.Name)
+		}
+		if vol.Secret != nil && vol.Secret.SecretName != "" {
+			rc.SecretRefs = appendUnique(rc.SecretRefs, vol.Secret.SecretName)
+		}
+	}
+
+	if rq := ctr.Resources.Requests; rq != nil {
+		rc.CPURequest = rq.Cpu().String()
+		rc.MemoryRequest = rq.Memory().String()
+	}
+	if lm := ctr.Resources.Limits; lm != nil {
+		rc.CPULimit = lm.Cpu().String()
+		rc.MemoryLimit = lm.Memory().String()
+	}
+
+	sort.Strings(rc.EnvVarNames)
+	sort.Strings(rc.ConfigMapRefs)
+	sort.Strings(rc.SecretRefs)
+	return rc, nil
+}
+
+// appendUnique appends s to slice if not already present (dedup refs).
+func appendUnique(slice []string, s string) []string {
+	for _, v := range slice {
+		if v == s {
+			return slice
+		}
+	}
+	return append(slice, s)
 }
 
 // isValidLogContent reports whether s is non-empty and not just the K8s

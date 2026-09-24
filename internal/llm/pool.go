@@ -161,6 +161,11 @@ func (p *Pool) MarkSuccess(providerID string) {
 //   - rate limit (429): 60s, after 2 consecutive failures
 //   - timeout / network: 15s, after 2 consecutive failures
 //   - other: 30s, after 2 consecutive failures
+//
+// "too_large" failures (the request itself exceeds the model/provider
+// token budget) do NOT trip the breaker or count toward consecutive
+// failures: the provider is healthy, the request shape is wrong, and the
+// router retries with a shrunk prompt (see router.go v1.7.4).
 func (p *Pool) MarkFailed(providerID string, err error) {
 	p.mu.RLock()
 	h := p.health[providerID]
@@ -169,6 +174,11 @@ func (p *Pool) MarkFailed(providerID string, err error) {
 		return
 	}
 	reason := categorizeError(err)
+	if reason == "too_large" {
+		logging.Info("llm pool: request too large (request-shape issue, provider healthy — not counting toward breaker)",
+			"provider", providerID)
+		return
+	}
 	count := h.recordFailure(reason)
 
 	var tripDuration time.Duration
@@ -196,6 +206,13 @@ func (p *Pool) MarkFailed(providerID string, err error) {
 func categorizeError(err error) string {
 	if err == nil {
 		return ""
+	}
+	// too_large must be checked first: these messages sometimes also
+	// contain "try again"-style phrasing that would otherwise bucket them
+	// as transient capacity errors (Groq's TPM error is the real-world
+	// example — see run #11 post-mortem).
+	if isRequestTooLargeError(err) {
+		return "too_large"
 	}
 	msg := strings.ToLower(err.Error())
 	switch {
