@@ -86,11 +86,17 @@ func (c *Correlator) RegisterDeployment(service, namespace string, ts time.Time)
 	c.cleanupDeploymentsLocked(ts)
 }
 
-// RegisterIncident records a new incident and checks for a cascade. Returns
-// true if a CorrelationEvent was emitted; in that case the caller may want
-// to suppress the individual investigation and let the cascade handler
-// drive the rollback. The handler, if set, is invoked synchronously after
-// the lock is released — slow handlers should be run in a goroutine by the
+// RegisterIncident records a new incident and checks for a cascade.
+// Returns true when the caller should suppress the individual
+// investigation in favor of cascade handling — which is only the case
+// when the emitted event carries a non-empty LikelyCause (a recent
+// deployment the cascade is attributed to). A cascade with no
+// attributable cause is indistinguishable from "several services error
+// in the same minute under shared load": suppressing investigations
+// then silently drops real incidents (observed in the marketly eval run
+// #10, where an empty-cause cascade swallowed a fully-detected Rust
+// panic). The handler, if set, is invoked synchronously after the lock
+// is released — slow handlers should be run in a goroutine by the
 // caller.
 func (c *Correlator) RegisterIncident(service, namespace string, ts time.Time) bool {
 	event, emitted := c.checkAndBuildEvent(service, namespace, ts)
@@ -99,6 +105,11 @@ func (c *Correlator) RegisterIncident(service, namespace string, ts time.Time) b
 	}
 	if c.handler != nil {
 		c.handler(event)
+	}
+	if event.LikelyCause == "" {
+		logging.Info("correlation: cascade emitted without attributable cause — individual investigations continue",
+			"services", len(event.Services))
+		return false
 	}
 	return true
 }

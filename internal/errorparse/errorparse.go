@@ -28,6 +28,14 @@ var ErrorTypeRegexes = []*regexp.Regexp{
 	regexp.MustCompile(`panic!`),
 	// Ruby
 	regexp.MustCompile(`\.rb:\d+:.*Error`),
+	// Ruby exception class names mid-line (Sidekiq logs job
+	// failures at WARN with the exception on its own line, prefixed
+	// by a timestamp):
+	//   2026-... pid=1 tid=2x1 WARN: NoMethodError: undefined method `set' ...
+	// Deliberately Ruby-specific names; Python/JS exceptions are
+	// covered by the anchored patterns above and by Spring WARN
+	// noise staying non-matching.
+	regexp.MustCompile(`\b(NoMethodError|NameError|ArgumentError|RuntimeError|ThreadError|LockError|IOError|RangeError|ZeroDivisionError|FrozenError|NotImplementedError|SystemStackError)\b`),
 	// Generic / log-format
 	regexp.MustCompile(`SIGABRT|SIGSEGV|SIGBUS`),
 	regexp.MustCompile(`FATAL`),
@@ -82,6 +90,8 @@ var ExtractTypePatterns = []struct {
 	// Fallbacks for formats the generic patterns cannot see (mid-line,
 	// lowercase, or non-"\w+Error" shapes). Order matters: these run only
 	// when every generic pattern above has missed the line.
+	// Ruby exception class names (fingerprint + dedup).
+	{regexp.MustCompile(`\b(NoMethodError|NameError|ArgumentError|RuntimeError|ThreadError|LockError|IOError|RangeError|ZeroDivisionError|FrozenError|NotImplementedError|SystemStackError)\b`), ""},
 	{regexp.MustCompile(`ERROR/(?:MainProcess|ForkPoolWorker|SpawnPoolWorker|BilliardPool|prefork)`), "celery_task_error"},
 	{regexp.MustCompile(`\bgaierror\b`), "gaierror"},
 	{regexp.MustCompile(`Name or service not known`), "dns_resolution_failed"},
