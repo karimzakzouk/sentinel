@@ -15,6 +15,8 @@ v1.8+. Nothing here is merged into the product; this branch is a reference.
 | [02-fault-localization.md](02-fault-localization.md) | Can we pinpoint the exact file/line without an LLM? (symbolication, SBFL, core dumps, crash clustering) |
 | [03-llm-context.md](03-llm-context.md) | What exactly does Sentinel send to the LLM today, and why? Is all of it needed? |
 | [04-proposals.md](04-proposals.md) | Concrete improvement proposals + open questions for later discussion |
+| [05-attack-list.md](05-attack-list.md) | Full adversarial review of the shipped workflow + user-api harmful-fix autopsy + fix bucketing |
+| [06-generalization.md](06-generalization.md) | Research consensus (scaffolding>model, minimal loops, verification scaling) + generalization recipe + decisions log |
 
 ## Context for future readers
 
