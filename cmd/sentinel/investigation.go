@@ -10,6 +10,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -466,6 +467,9 @@ func (w *wiring) executeCodeFix(ctx context.Context, incident *schemas.Incident)
 	sandboxSummary := "skipped (sandbox disabled)"
 	sandboxLevels := ""
 	sandboxRan := false
+	// repoBundle carries the LAST repo-checks run (may be nil when the
+	// gate is disabled or could not run).
+	var repoBundle *repoChecksBundle
 
 	if !shouldRunSandbox {
 		sandboxSummary = "skipped (sandbox disabled — fast mode)"
@@ -490,15 +494,29 @@ func (w *wiring) executeCodeFix(ctx context.Context, incident *schemas.Incident)
 			maxRetries = 0
 		}
 
+		// Repo CI checks (v1.7.13): the repository's own formatter + test
+		// suite, run against the fix branch before the PR. Failures feed
+		// the same retry loop as sandbox failures.
+		repoChecksOn := cfg.RepoChecksEnabled && w.repoChecks != nil && w.repoci != nil
+		repoGateBlocked := false
+		preexistingTried := false
+		// pendingFeedback carries the failure explanation from one
+		// iteration to the next one's fix-proposer retry.
+		var pendingFeedback string
+
 		for sandboxAttempt := 0; sandboxAttempt <= maxRetries; sandboxAttempt++ {
 			if sandboxAttempt > 0 {
-				// Only sandbox Level 1-5 failures trigger retries (not Kaniko
-				// failures — the LLM cannot fix a permissions error).
-				logging.Info("sandbox retry: feeding level-specific failure back to fix proposer",
+				// Only sandbox Level 1-6 failures and repo-test failures
+				// trigger retries (not infra Kaniko failures — the LLM
+				// cannot fix a permissions error).
+				logging.Info("fix retry: feeding failure feedback to fix proposer",
 					"fix_id", fp.FixID, "attempt", sandboxAttempt+1, "max", maxRetries+1,
 					"level", detectSandboxFailureLevel(sandboxSummary))
 
-				fb := levelSpecificFeedback(sandboxSummary, sandboxSummary)
+				fb := pendingFeedback
+				if fb == "" {
+					fb = levelSpecificFeedback(sandboxSummary, sandboxSummary)
+				}
 				incident.State.SandboxFeedback = &fb
 
 				// Fetch the CURRENT file content from the branch so the fix
@@ -524,6 +542,24 @@ func (w *wiring) executeCodeFix(ctx context.Context, incident *schemas.Incident)
 					logging.Error("branch re-preparation failed", "error", branchInfo.Error)
 					break
 				}
+			}
+			pendingFeedback = ""
+
+			// Phase 1.5: repo CI checks on the fix branch — the repo's own
+			// formatter (rewrites pushed to the branch) + test suite. The
+			// RESULTS are evaluated after sandbox verification (Phase 3.5)
+			// so one retry can address sandbox + repo-test feedback together.
+			repoBundle = nil
+			if repoChecksOn {
+				repoName := ""
+				if fp.Repo != nil {
+					repoName = *fp.Repo
+				}
+				baseBranch := "main"
+				if fp.BaseBranch != nil && *fp.BaseBranch != "" {
+					baseBranch = *fp.BaseBranch
+				}
+				repoBundle = w.runRepoChecks(ctx, incident, repoName, branchInfo.BranchName, baseBranch, fixPathsFromProposal(fp))
 			}
 
 			// Phase 2: Build canary image (+ post-fix artifacts in parallel on first attempt).
@@ -556,6 +592,20 @@ func (w *wiring) executeCodeFix(ctx context.Context, incident *schemas.Incident)
 			}
 
 			if kanikoErr != nil {
+				var buildErr *executors.BuildError
+				if errors.As(kanikoErr, &buildErr) && buildErr.Kind == "build" {
+					// A BUILD failure (compile error, dependency resolution,
+					// toolchain incompatibility) can often be fixed by the
+					// proposer (Dockerfile, manifests). Feed it back.
+					sandboxSummary = "kaniko_build_error: " + buildErr.Error()
+					logging.Error("kaniko build failed (build error) — feeding back to fix proposer",
+						"fix_id", fp.FixID, "error", buildErr.Error(), "attempt", sandboxAttempt+1)
+					if sandboxAttempt < maxRetries {
+						pendingFeedback = fmt.Sprintf("CANARY IMAGE BUILD FAILED (build error, not infrastructure).\n\nThe Docker image for your fix could not be built from the repository's Dockerfile.\n\nBuild output:\n%s\n\nYou may fix build files (Dockerfile, dependency manifests like Cargo.toml / package.json / requirements.txt, lockfiles) as part of the corrected fix — e.g. pinning dependencies, copying lockfiles into the build, or adjusting the toolchain version — as long as the original incident fix stays intact.\n\nPlease generate a corrected fix that both fixes the incident AND builds successfully.", tailN(buildErr.Logs, 6000))
+						continue
+					}
+					break
+				}
 				sandboxSummary = fmt.Sprintf("kaniko_error: %v", kanikoErr)
 				logging.Error("kaniko build failed — not retrying (infrastructure error)",
 					"fix_id", fp.FixID, "error", kanikoErr, "attempt", sandboxAttempt+1)
@@ -590,25 +640,80 @@ func (w *wiring) executeCodeFix(ctx context.Context, incident *schemas.Incident)
 				"attempt", sandboxAttempt+1,
 			)
 
-			if sandboxVerified {
+			if !sandboxVerified {
+				// Infrastructure errors (RBAC, image pull, namespace creation)
+				// cannot be fixed by the LLM — stop the retry loop.
+				if sb.InfrastructureError {
+					logging.Info("sandbox failed with infrastructure error — not retrying",
+						"fix_id", fp.FixID, "summary", sandboxSummary)
+					break
+				}
+
+				if sandboxAttempt < maxRetries {
+					logging.Info("sandbox verification failed — will retry with feedback",
+						"fix_id", fp.FixID, "attempt", sandboxAttempt+1, "summary", sandboxSummary)
+					pendingFeedback = levelSpecificFeedback(sandboxSummary, sandboxSummary)
+					continue
+				}
 				break
 			}
 
-			// Infrastructure errors (RBAC, image pull, namespace creation)
-			// cannot be fixed by the LLM — stop the retry loop.
-			if sb.InfrastructureError {
-				logging.Info("sandbox failed with infrastructure error — not retrying",
-					"fix_id", fp.FixID, "summary", sandboxSummary)
-				break
+			// Phase 3.5: evaluate the repo's own test results (run in
+			// Phase 1.5). The canary is verified; now the repo's CI oracle
+			// decides whether the fix is PR-ready.
+			gate, bundle := evaluateRepoChecks(repoBundle)
+			switch gate {
+			case repoCheckRegression:
+				logging.Error("repo-checks: fix introduces NEW test failures",
+					"fix_id", fp.FixID, "new_failures", strings.Join(bundle.newFails, ", "))
+				if sandboxAttempt < maxRetries {
+					repoName := ""
+					if fp.Repo != nil {
+						repoName = *fp.Repo
+					}
+					baseBranch := "main"
+					if fp.BaseBranch != nil && *fp.BaseBranch != "" {
+						baseBranch = *fp.BaseBranch
+					}
+					pendingFeedback = w.buildRepoTestsFeedback(ctx, repoName, baseBranch, bundle, true)
+					sandboxSummary = "repo_tests_regression: " + strings.Join(bundle.newFails, ", ")
+					continue
+				}
+				if cfg.RepoChecksRequired {
+					repoGateBlocked = true
+					sandboxSummary = "repo_tests_regression: " + strings.Join(bundle.newFails, ", ")
+				}
+				// Required=false: fall through, open the PR with the
+				// regression visible in the summary.
+			case repoCheckPreexisting:
+				logging.Info("repo-checks: pre-existing failures remain (also fail on base)",
+					"fix_id", fp.FixID, "failures", strings.Join(bundle.preexist, ", "))
+				if !preexistingTried && sandboxAttempt < maxRetries {
+					// One extra attempt to fix pre-existing failures when
+					// they look incident-related; never burns the whole
+					// budget on them.
+					preexistingTried = true
+					repoName := ""
+					if fp.Repo != nil {
+						repoName = *fp.Repo
+					}
+					baseBranch := "main"
+					if fp.BaseBranch != nil && *fp.BaseBranch != "" {
+						baseBranch = *fp.BaseBranch
+					}
+					pendingFeedback = w.buildRepoTestsFeedback(ctx, repoName, baseBranch, bundle, false)
+					continue
+				}
 			}
+			break
+		}
 
-			if sandboxAttempt < maxRetries {
-				logging.Info("sandbox verification failed — will retry with feedback",
-					"fix_id", fp.FixID, "attempt", sandboxAttempt+1, "summary", sandboxSummary)
-			}
+		if repoGateBlocked {
+			logging.Error("repo-checks: fix introduces test regressions and the gate is required — not opening PR",
+				"fix_id", fp.FixID, "summary", sandboxSummary)
+			return fmt.Errorf("repo_tests_regression_and_required: %s", sandboxSummary)
 		}
 	}
-
 	cfg = w.Config()
 	if sandboxRan && !sandboxVerified && cfg.SandboxRequired {
 		logging.Error("sandbox verification failed and sandbox is required — not opening PR",
@@ -623,6 +728,17 @@ func (w *wiring) executeCodeFix(ctx context.Context, incident *schemas.Incident)
 		canaryImg = *fp.CanaryImage
 	}
 	incident.UpdatedAt = time.Now().UTC()
+	// Surface the repo's own CI results in the PR body so reviewers see
+	// the oracle verdict next to the sandbox verdict.
+	if repoBundle != nil && repoBundle.fixRun != nil && repoBundle.fixRun.TestsRan {
+		sandboxSummary += fmt.Sprintf("\n\nRepository's own test suite (pre-PR): %s", repoBundle.fixRun.Summary())
+		if len(repoBundle.newFails) > 0 {
+			sandboxSummary += fmt.Sprintf("\n⚠️ NEW failures vs base branch: %s", strings.Join(repoBundle.newFails, ", "))
+		}
+		if len(repoBundle.preexist) > 0 {
+			sandboxSummary += fmt.Sprintf("\nℹ️ Pre-existing failures (also on base): %s", strings.Join(repoBundle.preexist, ", "))
+		}
+	}
 	fullPRBody := agents.BuildPRBody(incident, sandboxVerified, sandboxSummary, canaryImg)
 	fp.PRBody = &fullPRBody
 
@@ -788,6 +904,7 @@ func (w *wiring) executeCodeFix(ctx context.Context, incident *schemas.Incident)
 //	3 = original error still present in canary logs (PRIMARY ORACLE)
 //	4 = regression test failed
 //	5 = reproducer script crashed (strongest signal)
+//	6 = canary image BUILD failed (repo code/toolchain — retryable)
 //	0 = infrastructure error (RBAC, image pull, namespace creation)
 func detectSandboxFailureLevel(summary string) int {
 	switch {
@@ -801,6 +918,8 @@ func detectSandboxFailureLevel(summary string) int {
 		return 4
 	case strings.Contains(summary, "reproducer_failed"):
 		return 5
+	case strings.Contains(summary, "kaniko_build_error"):
+		return 6
 	case strings.Contains(summary, "deploy_failed"), strings.Contains(summary, "create_namespace"), strings.Contains(summary, "kaniko_error"):
 		return 0
 	}
@@ -824,6 +943,8 @@ func levelSpecificFeedback(summary, fullSummary string) string {
 		return fmt.Sprintf("Sandbox Level 4 FAILED: the regression test did not pass.\n\nIMPORTANT: Your fix passed Levels 1-3 (pod is Ready, health endpoints OK, original error gone from logs). But the LLM-generated regression test — which reproduces the original bug — still FAILS against your fixed code. This means your fix did not actually fix the underlying bug; it only masked the symptom.\n\nFull failure detail:\n%s\n\nPlease generate a corrected fix that makes the regression test PASS.", fullSummary)
 	case 5:
 		return fmt.Sprintf("Sandbox Level 5 FAILED: the reproducer script crashed (exit code != 0).\n\nIMPORTANT: Your fix passed Levels 1-4. But the LLM-generated reproducer script — which exercises the buggy code path — still crashes against your fixed code. This is the strongest signal that the fix is incomplete.\n\nFull failure detail:\n%s\n\nPlease generate a corrected fix that makes the reproducer script exit 0.", fullSummary)
+	case 6:
+		return fmt.Sprintf("CANARY IMAGE BUILD FAILED (build error, not infrastructure).\n\nThe Docker image for your fix could not be built from the repository's Dockerfile with your changes applied. The build output below shows why (compile error, dependency resolution failure, unsupported toolchain feature, ...).\n\nYou may fix build files too (Dockerfile, dependency manifests like Cargo.toml/package.json/requirements.txt) as part of the corrected fix — e.g. pinning dependencies, copying lockfiles, or adjusting the toolchain — as long as the original incident fix stays intact.\n\nBuild output:\n%s\n\nPlease generate a corrected fix that both fixes the incident AND builds successfully.", fullSummary)
 	default:
 		return fmt.Sprintf("Sandbox verification failed (infrastructure or unknown error — the LLM may not be able to fix this):\n%s\n\nPlease generate a corrected fix if you can; otherwise the PR will be opened with needs-review.", fullSummary)
 	}

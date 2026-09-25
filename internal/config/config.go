@@ -198,6 +198,20 @@ type Config struct {
 	PostDeployRegressionCooldown bool // trigger the global auto-merge cooldown on regression
 	PostDeployRevertAutoMerge    bool // merge the revert PR immediately after opening it
 
+	// ─── Repo CI checks (pre-PR oracle, v1.7.13) ─────────────────────
+	// Run the repository's OWN test suite + formatter (parsed from its
+	// GitHub Actions workflows) against the fix branch BEFORE opening
+	// the PR. The sandbox's LLM-generated tests are circular; the repo's
+	// own suite is the same oracle CI enforces after the PR.
+	// RepoChecksEnabled: run them at all.
+	// RepoChecksRequired: block the PR when the fix introduces NEW test
+	//   failures (tests that pass on base). Pre-existing failures never
+	//   block — fixing them may be out of scope for the incident.
+	// RepoChecksTimeoutSec: overall pod timeout (deps + tests).
+	RepoChecksEnabled    bool
+	RepoChecksRequired   bool
+	RepoChecksTimeoutSec int
+
 	AutoRemediationEnabled bool
 
 	// ─── Observability backends ──────────────────────────────────────────
@@ -444,10 +458,18 @@ func Load() *Config {
 		// Post-deploy health check: after a successful merge + deploy,
 		// watch the service's pods (restart counts, OOMKills, readiness)
 		// and auto-revert the merge if the deployed fix regresses.
+		// Default 900s: slow leaks (user-api: ~8.5min leak-to-crash)
+		// escape shorter windows — run #27 missed the first crash by
+		// 80 seconds with a 420s window.
 		PostDeployCheckEnabled:       getenvBool("SENTINEL_POSTDEPLOY_CHECK_ENABLED", false),
-		PostDeployCheckDurationSec:   getenvInt("SENTINEL_POSTDEPLOY_CHECK_DURATION_SEC", 480),
+		PostDeployCheckDurationSec:   getenvInt("SENTINEL_POSTDEPLOY_CHECK_DURATION_SEC", 900),
 		PostDeployRegressionCooldown: getenvBool("SENTINEL_POSTDEPLOY_REGRESSION_COOLDOWN", true),
 		PostDeployRevertAutoMerge:    getenvBool("SENTINEL_POSTDEPLOY_REVERT_AUTO_MERGE", true),
+
+		// Repo CI checks (pre-PR oracle).
+		RepoChecksEnabled:    getenvBool("SENTINEL_REPO_CHECKS_ENABLED", true),
+		RepoChecksRequired:   getenvBool("SENTINEL_REPO_CHECKS_REQUIRED", true),
+		RepoChecksTimeoutSec: getenvInt("SENTINEL_REPO_CHECKS_TIMEOUT_SEC", 900),
 
 		AutoRemediationEnabled: getenvBool("SENTINEL_AUTO_REMEDIATION_ENABLED", false),
 	}

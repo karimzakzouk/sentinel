@@ -635,11 +635,13 @@ func (d *Detector) getServiceFromPod(pod *corev1.Pod) string {
 	return name
 }
 
-// fetchPodLogs returns the last ~300 lines (final 64KB) of
-// previous-container logs (the crash output) for the pod; if that's
-// empty or contains the K8s placeholder, it falls back to current
-// logs. Tail-based because crash signatures sit at the END of the
-// output — a head-limited fetch misses them on chatty pods.
+// fetchPodLogs collects evidence for a crash trigger: the previous
+// container instance's logs (the actual crash output) AND the current
+// instance's logs (post-restart state), each labeled. v1.7.13: the old
+// version returned current logs whenever previous logs weren't ready
+// yet — a fresh 27-byte startup line shadowed the crash stack and the
+// LLM hallucinated (run #27 user-api). Now previous logs get a short
+// retry window and current logs are never a silent substitute.
 func (d *Detector) fetchPodLogs(ctx context.Context, pod *corev1.Pod) string {
 	limitBytes := int64(64 * 1024)
 	tailLines := int64(300)
@@ -648,25 +650,51 @@ func (d *Detector) fetchPodLogs(ctx context.Context, pod *corev1.Pod) string {
 		containerName = pod.Spec.Containers[0].Name
 	}
 
-	opts := &corev1.PodLogOptions{
-		Previous:   true,
-		TailLines:  &tailLines,
-		LimitBytes: &limitBytes,
-		Container:  containerName,
-	}
-	if logs, err := d.clientset.CoreV1().Pods(pod.Namespace).GetLogs(pod.Name, opts).Do(ctx).Raw(); err == nil {
+	fetch := func(previous bool) string {
+		opts := &corev1.PodLogOptions{
+			Previous:   previous,
+			TailLines:  &tailLines,
+			LimitBytes: &limitBytes,
+			Container:  containerName,
+		}
+		logs, err := d.clientset.CoreV1().Pods(pod.Namespace).GetLogs(pod.Name, opts).Do(ctx).Raw()
+		if err != nil {
+			return ""
+		}
 		s := string(logs)
-		if strings.TrimSpace(s) != "" && !strings.Contains(s, "unable to retrieve container logs") {
-			return keepLogTailString(s, int(limitBytes))
+		if strings.TrimSpace(s) == "" || strings.Contains(s, "unable to retrieve container logs") {
+			return ""
+		}
+		return keepLogTailString(s, int(limitBytes))
+	}
+
+	// Previous (crashed) instance — retry briefly: kubelet can take a
+	// few seconds after a restart to serve the dead container's logs.
+	var prevLogs string
+	for range 3 {
+		if s := fetch(true); s != "" {
+			prevLogs = s
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return ""
+		case <-time.After(2 * time.Second):
 		}
 	}
+	curLogs := fetch(false)
 
-	opts.Previous = false
-	if logs, err := d.clientset.CoreV1().Pods(pod.Namespace).GetLogs(pod.Name, opts).Do(ctx).Raw(); err == nil {
-		return keepLogTailString(string(logs), int(limitBytes))
+	switch {
+	case prevLogs != "" && curLogs != "":
+		return "Crashed container logs (previous instance — THIS is the actual crash output):\n" + prevLogs +
+			"\n\nCurrent container logs (after restart — startup state, NOT the crash):\n" + curLogs
+	case prevLogs != "":
+		return "Crashed container logs (previous instance — THIS is the actual crash output):\n" + prevLogs
+	case curLogs != "":
+		return "Current container logs (crashed instance's logs unavailable — infer the crash cause from the code and restart behavior):\n" + curLogs
+	default:
+		return ""
 	}
-
-	return ""
 }
 
 // keepLogTailString returns the final limit bytes of s (see
