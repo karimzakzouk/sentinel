@@ -5,18 +5,26 @@ import (
 	"time"
 )
 
-// TestSandboxProbePathsDefaults verifies the default probe paths and the
-// WithProbePaths override.
-func TestSandboxProbePathsDefaults(t *testing.T) {
+// TestSandboxProbePathsAutoDefault verifies the default is auto mode
+// (no pinned paths): spec-derived paths when the workload declares them,
+// otherwise the convention candidate set with any-of semantics.
+func TestSandboxProbePathsAutoDefault(t *testing.T) {
 	s := NewSandbox(nil, "sentinel-sandbox", false)
-	if len(s.probePaths) != 3 {
-		t.Fatalf("expected 3 default probe paths, got %d (%v)", len(s.probePaths), s.probePaths)
+	if len(s.probePaths) != 0 {
+		t.Fatalf("expected auto mode (no pinned probe paths), got %v", s.probePaths)
 	}
-	want := []string{"/", "/healthz", "/readyz"}
-	for i, p := range want {
-		if s.probePaths[i] != p {
-			t.Errorf("probePaths[%d] = %q, want %q", i, s.probePaths[i], p)
-		}
+	// No spec paths available → convention candidates, any-of.
+	paths, anyOf, source := s.resolveProbePaths(nil)
+	if source != "convention" || !anyOf {
+		t.Fatalf("auto mode without spec paths: want convention/any-of, got source=%q anyOf=%v", source, anyOf)
+	}
+	if len(paths) == 0 {
+		t.Fatal("convention candidate set must not be empty")
+	}
+	// Spec paths available → they win, all-must-pass.
+	paths, anyOf, source = s.resolveProbePaths([]string{"/health", "/ready"})
+	if source != "spec" || anyOf || len(paths) != 2 {
+		t.Fatalf("auto mode with spec paths: want spec/all-must-pass, got source=%q anyOf=%v paths=%v", source, anyOf, paths)
 	}
 }
 
@@ -29,19 +37,22 @@ func TestSandboxProbePathsWithCustom(t *testing.T) {
 	if s.probePaths[4] != "/pay?amount=0" {
 		t.Errorf("probePaths[4] = %q, want /pay?amount=0", s.probePaths[4])
 	}
+	// Explicit config outranks spec-derived paths.
+	paths, anyOf, source := s.resolveProbePaths([]string{"/spec-health"})
+	if source != "config" || anyOf || len(paths) != 5 || paths[0] != "/" {
+		t.Fatalf("explicit config must win over spec: got source=%q anyOf=%v paths=%v", source, anyOf, paths)
+	}
 }
 
 func TestSandboxProbePathsEmptyIgnored(t *testing.T) {
-	defaults := []string{"/", "/healthz", "/readyz"}
 	s := NewSandbox(nil, "sentinel-sandbox", false)
-	original := s.probePaths
 	s.WithProbePaths(nil)
-	if len(s.probePaths) != len(original) {
-		t.Errorf("nil paths should not change probePaths, got %v (was %v)", s.probePaths, original)
+	if len(s.probePaths) != 0 {
+		t.Errorf("nil paths must keep auto mode, got %v", s.probePaths)
 	}
 	s.WithProbePaths([]string{})
-	if len(s.probePaths) != len(defaults) {
-		t.Errorf("empty paths should not change probePaths, got %v", s.probePaths)
+	if len(s.probePaths) != 0 {
+		t.Errorf("empty paths must keep auto mode, got %v", s.probePaths)
 	}
 }
 

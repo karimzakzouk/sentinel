@@ -817,7 +817,7 @@ func levelSpecificFeedback(summary, fullSummary string) string {
 	case 1:
 		return fmt.Sprintf("Sandbox Level 1 FAILED: the canary pod did not become Ready (or did not stay Ready for the sustained window).\n\nThis means the startup crash was NOT fixed — the app still crashes on boot.\n\nFull failure detail:\n%s\n\nPlease generate a corrected fix that addresses the startup crash.", fullSummary)
 	case 2:
-		return fmt.Sprintf("Sandbox Level 2 FAILED: the canary pod is Ready, but health endpoints (/, /healthz, /readyz) returned 4xx/5xx.\n\nThis means the app starts but is broken at the HTTP layer.\n\nFull failure detail:\n%s\n\nPlease generate a corrected fix that makes the health endpoints return 2xx.", fullSummary)
+		return fmt.Sprintf("Sandbox Level 2 FAILED: the canary pod is Ready, but its health endpoints returned 4xx/5xx (the probed paths are listed in the failure detail).\n\nThis means the app starts but is broken at the HTTP layer.\n\nFull failure detail:\n%s\n\nPlease generate a corrected fix that makes the health endpoints return 2xx.", fullSummary)
 	case 3:
 		return fmt.Sprintf("Sandbox Level 3 FAILED: the original error is still present in the canary pod's logs.\n\nThis means the fix did NOT eliminate the original error.\n\nFull failure detail:\n%s\n\nPlease generate a corrected fix that actually eliminates the original error.", fullSummary)
 	case 4:

@@ -18,8 +18,11 @@
 //
 //  1. Canary pod reaches Ready AND stays Ready for sustainedWindow (15s
 //     default). Catches pods that go Ready then crash on first request.
-//  2. Health endpoints (/, /healthz, /readyz) return 2xx/3xx. 4xx/5xx
-//     fails — a broken health endpoint means the app is broken.
+//  2. Health endpoints return 2xx/3xx. Paths come from the prod
+//     Deployment's own readiness/liveness probes (spec), the operator's
+//     configured list, or a convention candidate set (any-of) — in that
+//     precedence. 4xx/5xx fails — a broken health endpoint means the app
+//     is broken.
 //  3. Original error type is GONE from canary logs (PRIMARY ORACLE). Uses
 //     agents.ParseError (multi-language) to identify the original error
 //     type from incident anomalies, then scans canary logs for it.
