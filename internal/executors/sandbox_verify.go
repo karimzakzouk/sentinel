@@ -340,10 +340,43 @@ func parsePathMethod(entry string) (method, path string) {
 	return
 }
 
-// verifyEndpointsWithPaths probes each path on the canary Service and
-// requires every probe to return 2xx/3xx. Requires 2 consecutive successes
-// per path so a flaky startup doesn't false-pass.
-func (s *SandboxRunner) verifyEndpointsWithPaths(ctx context.Context, ns, service string, paths []string) bool {
+// probeTarget is one fully-resolved Level 2 probe: method + absolute URL
+// against the canary Service (plus the port/path it came from, for logs).
+type probeTarget struct {
+	method string
+	url    string
+	port   int32
+	path   string
+}
+
+// buildProbeTargets expands Service ports × paths into concrete probe
+// URLs against the canary Service's cluster DNS name.
+func buildProbeTargets(svcName, ns string, ports []corev1.ServicePort, paths []string) []probeTarget {
+	targets := make([]probeTarget, 0, len(ports)*len(paths))
+	for _, portSpec := range ports {
+		for _, p := range paths {
+			method, path := parsePathMethod(p)
+			targets = append(targets, probeTarget{
+				method: method,
+				url:    fmt.Sprintf("http://%s.%s.svc.cluster.local:%d%s", svcName, ns, portSpec.Port, path),
+				port:   portSpec.Port,
+				path:   path,
+			})
+		}
+	}
+	return targets
+}
+
+// verifyEndpointsWithPaths probes the canary Service's health endpoints:
+//   - all-must-pass (anyOf=false): every port × path combination must
+//     return 2 consecutive 2xx/3xx within 3 attempts. Used for
+//     operator-pinned paths and spec-derived paths — both are explicit
+//     contracts.
+//   - any-of (anyOf=true): the first port × path that returns 2
+//     consecutive 2xx/3xx passes the level. Used for the convention
+//     candidate set, where requiring every candidate would be
+//     unsatisfiable (services implement a subset of the conventions).
+func (s *SandboxRunner) verifyEndpointsWithPaths(ctx context.Context, ns, service string, paths []string, anyOf bool) bool {
 	svc, err := s.clientset.CoreV1().Services(ns).Get(ctx, service, metav1.GetOptions{})
 	if err != nil {
 		logging.Error("Level 2 FAILED: Service not found (deployCanary should have created it)",
@@ -359,59 +392,76 @@ func (s *SandboxRunner) verifyEndpointsWithPaths(ctx context.Context, ns, servic
 	svcName := svc.Name
 
 	if len(paths) == 0 {
-		paths = []string{"/", "/healthz", "/readyz"}
+		paths = conventionProbePaths
+		anyOf = true
 	}
 
-	client := sandboxHTTPClient
+	targets := buildProbeTargets(svcName, ns, svc.Spec.Ports, paths)
+	return evaluateProbes(ctx, sandboxHTTPClient, targets, anyOf)
+}
+
+// evaluateProbes runs the probe targets under all-of or any-of semantics.
+// Each target gets 3 attempts and needs 2 consecutive 2xx/3xx successes
+// so a flaky startup neither false-passes nor false-fails on one sample.
+func evaluateProbes(ctx context.Context, client *http.Client, targets []probeTarget, anyOf bool) bool {
 	const requiredSuccesses = 2
+	for _, t := range targets {
+		consecutiveFailures := 0
+		consecutiveSuccesses := 0
 
-	for _, portSpec := range svc.Spec.Ports {
-		port := portSpec.Port
-		for _, p := range paths {
-			method, path := parsePathMethod(p)
-			url := fmt.Sprintf("http://%s.%s.svc.cluster.local:%d%s", svcName, ns, port, path)
-			consecutiveFailures := 0
-			consecutiveSuccesses := 0
-
-			for attempt := 0; attempt < 3; attempt++ {
-				req, err := http.NewRequestWithContext(ctx, method, url, nil)
-				if err != nil {
-					consecutiveFailures++
-					continue
-				}
-				resp, err := client.Do(req)
-				if err != nil {
-					consecutiveFailures++
-					consecutiveSuccesses = 0
-					logging.Error("Level 2: probe failed",
-						"method", method, "url", url,
-						"attempt", attempt+1, "err", err)
-					continue
-				}
-				resp.Body.Close()
-
-				if resp.StatusCode >= 400 {
-					consecutiveFailures++
-					consecutiveSuccesses = 0
-					logging.Error("Level 2: probe returned 4xx/5xx",
-						"method", method, "url", url,
-						"attempt", attempt+1, "status", resp.StatusCode)
-					continue
-				}
-				consecutiveSuccesses++
-				if consecutiveSuccesses >= requiredSuccesses {
-					break
-				}
+		for attempt := 0; attempt < 3; attempt++ {
+			req, err := http.NewRequestWithContext(ctx, t.method, t.url, nil)
+			if err != nil {
+				consecutiveFailures++
+				continue
 			}
-			if consecutiveSuccesses < requiredSuccesses {
-				logging.Error("Level 2 FAILED: probe never returned 2xx/3xx in 3 attempts",
-					"method", method, "url", url, "port", port,
-					"successes", consecutiveSuccesses, "failures", consecutiveFailures)
-				return false
+			resp, err := client.Do(req)
+			if err != nil {
+				consecutiveFailures++
+				consecutiveSuccesses = 0
+				logging.Error("Level 2: probe failed",
+					"method", t.method, "url", t.url,
+					"attempt", attempt+1, "err", err)
+				continue
+			}
+			resp.Body.Close()
+
+			if resp.StatusCode >= 400 {
+				consecutiveFailures++
+				consecutiveSuccesses = 0
+				logging.Error("Level 2: probe returned 4xx/5xx",
+					"method", t.method, "url", t.url,
+					"attempt", attempt+1, "status", resp.StatusCode)
+				continue
+			}
+			consecutiveSuccesses++
+			if consecutiveSuccesses >= requiredSuccesses {
+				break
 			}
 		}
+
+		if consecutiveSuccesses >= requiredSuccesses {
+			if anyOf {
+				logging.Info("Level 2: candidate endpoint healthy — any-of satisfied",
+					"method", t.method, "url", t.url, "port", t.port)
+				return true
+			}
+			continue // all-of: this target passed, on to the next
+		}
+		if anyOf {
+			logging.Error("Level 2: candidate endpoint not healthy (any-of — trying next candidate)",
+				"method", t.method, "url", t.url, "port", t.port,
+				"successes", consecutiveSuccesses, "failures", consecutiveFailures)
+			continue
+		}
+		logging.Error("Level 2 FAILED: probe never returned 2xx/3xx in 3 attempts",
+			"method", t.method, "url", t.url, "port", t.port,
+			"successes", consecutiveSuccesses, "failures", consecutiveFailures)
+		return false
 	}
-	return true
+	// All targets examined: all-of reaches here only when every target
+	// passed; any-of reaches here only when none did.
+	return !anyOf
 }
 
 // extractOriginalErrorType parses the incident's pod logs to find the
