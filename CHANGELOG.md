@@ -5,6 +5,27 @@ All notable changes to Sentinel are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.6] — 2026-09-25
+
+### Fixed
+
+- **Pool failover sent the primary provider's model name to every
+  provider — the overflow was never callable.** The tier methods
+  (FastJSON/FrontierText/...) pass the ROUTER's model name into
+  `completeWithPool`, which handed the same string to every pool entry,
+  ignoring each entry's own `fastModel`/`frontierModel`. With groq
+  primary + gemini overflow, every failover called Google with
+  `openai/gpt-oss-120b` and died with
+  `GenerateContentRequest.model: unexpected model name format` (run #19:
+  pool "active", all 6 incidents failed, 0/9 fixes — groq's free-tier
+  TPM 8k/TPD 200k exhausts within minutes, so the run lives or dies on
+  the overflow). New `poolModelForRouterModel()` remaps the router-level
+  tier name to each entry's own model for that tier;
+  `TestRouter_PoolRemapsModelPerProvider` proves end-to-end (httptest
+  servers capture the wire-level model per provider) that a failed-over
+  frontier call arrives at the overflow as the overflow's frontier
+  model, not the primary's.
+
 ## [1.7.5] — 2026-09-24
 
 ### Fixed
