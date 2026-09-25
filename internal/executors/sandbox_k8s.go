@@ -87,6 +87,42 @@ type deployResult struct {
 	success bool
 	err     string
 	image   string
+	// specProbePaths are the HTTP paths declared by the prod Deployment's
+	// readiness/liveness probes. Level 2 prefers them over any guessed
+	// list — they are the service's own definition of health.
+	specProbePaths []string
+}
+
+// httpProbePaths extracts the HTTP GET paths from a Deployment's
+// readiness/liveness probes (all containers, deduplicated, order
+// preserved). Probes that are not httpGet (tcpSocket/exec/grpc) carry no
+// path and are ignored. Probing paths other than these can 404 on a
+// perfectly healthy app — the spec is the source of truth, the same
+// health model as Argo Rollouts (a canary is healthy when the workload's
+// own probes pass).
+func httpProbePaths(dep *appsv1.Deployment) []string {
+	if dep == nil {
+		return nil
+	}
+	var paths []string
+	seen := map[string]bool{}
+	for i := range dep.Spec.Template.Spec.Containers {
+		c := &dep.Spec.Template.Spec.Containers[i]
+		for _, probe := range []*corev1.Probe{c.ReadinessProbe, c.LivenessProbe} {
+			if probe == nil || probe.HTTPGet == nil {
+				continue
+			}
+			path := probe.HTTPGet.Path
+			if path == "" {
+				path = "/"
+			}
+			if !seen[path] {
+				seen[path] = true
+				paths = append(paths, path)
+			}
+		}
+	}
+	return paths
 }
 
 // deployCanary creates a sandbox Deployment mirroring the prod Deployment
@@ -185,7 +221,12 @@ func (s *SandboxRunner) deployCanary(ctx context.Context, inc *schemas.Incident,
 	}
 	_, _ = s.clientset.CoreV1().Services(ns).Create(ctx, sandboxSvc, metav1.CreateOptions{})
 
-	return deployResult{success: true, image: canaryImage}
+	specPaths := httpProbePaths(prodDeploy)
+	if len(specPaths) > 0 {
+		logging.Info("canary: derived Level 2 probe paths from prod Deployment probes",
+			"service", fp.TargetService, "paths", specPaths)
+	}
+	return deployResult{success: true, image: canaryImage, specProbePaths: specPaths}
 }
 
 // getProbePaths returns a copy of probePaths under the read lock.
