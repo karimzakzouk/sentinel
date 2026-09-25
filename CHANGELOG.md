@@ -5,6 +5,26 @@ All notable changes to Sentinel are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.8] — 2026-09-25
+
+### Fixed
+
+- **Kaniko canary builds fail with EBUSY on kind nodes** — Kaniko
+  builds an image by deleting its own root filesystem, and paths that
+  are bind-mounted into the pod cannot be unlinked. On kind (node =
+  Docker container), every pod inherits the host's `/product_uuid`
+  bind mount, so every canary build died *after* pushing the cache
+  layer with `error building image: deleting file system after stage
+  0: unlinkat //product_uuid: device or resource busy`. Eval run #21
+  lost all three canary builds this way: no canary image → sandbox
+  never verified → auto-merge gate 3 (`sandbox`) closed → PRs closed
+  unmerged at harness cleanup. With zero merged PRs, the
+  deploy→Argo→recovery chain never fires at all. Fix: pass
+  `--ignore-path=/product_uuid` (and, defense-in-depth,
+  `--ignore-path=/var/run/secrets/kubernetes.io/serviceaccount` —
+  runtime mounts must never leak into image layers or the layer cache
+  anyway) to the Kaniko executor.
+
 ## [1.7.7] — 2026-09-25
 
 ### Added
