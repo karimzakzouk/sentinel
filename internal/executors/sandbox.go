@@ -77,25 +77,69 @@ type SandboxRunner struct {
 	probePathsMu sync.RWMutex
 }
 
-// NewSandbox creates a SandboxRunner with default probe paths
-// (/, /healthz, /readyz) and a 15-second sustained-ready window.
+// NewSandbox creates a SandboxRunner in probe-path auto mode and a
+// 15-second sustained-ready window. In auto mode Level 2 derives probe
+// paths from the workload's own readiness/liveness probes and falls back
+// to the convention candidate set (any-of) — see resolveProbePaths.
 func NewSandbox(clientset kubernetes.Interface, sandboxPrefix string, enableMirroring bool) *SandboxRunner {
 	return &SandboxRunner{
 		clientset:         clientset,
 		sandboxPrefix:     sandboxPrefix,
 		enableMirroring:   enableMirroring,
-		probePaths:        []string{"/", "/healthz", "/readyz"},
+		probePaths:        nil, // nil = auto mode (spec-derived → convention any-of)
 		sustainedWindow:   15 * time.Second,
 		sentinelNamespace: "sentinel",
 	}
 }
 
-// WithProbePaths overrides the default Level 2 probe paths.
+// WithProbePaths pins explicit Level 2 probe paths (ALL must pass). An
+// empty or nil list keeps auto mode: paths are derived per-canary from
+// the prod Deployment's readiness/liveness httpGet probes, falling back
+// to the convention candidate set with any-of semantics.
 func (s *SandboxRunner) WithProbePaths(paths []string) *SandboxRunner {
 	if len(paths) > 0 {
 		s.probePaths = paths
 	}
 	return s
+}
+
+// conventionProbePaths is the candidate set probed when neither the
+// operator nor the workload spec declares health paths. Evaluated with
+// any-of semantics: ONE candidate answering 2xx/3xx is enough — demanding
+// all of them would make the gate unsatisfiable for services that only
+// implement a subset of the conventions.
+var conventionProbePaths = []string{
+	"/health", "/healthz", "/ready", "/readyz", "/livez", "/live", "/status", "/ping", "/",
+}
+
+// resolveProbePaths picks the Level 2 probe paths for one canary.
+// Precedence:
+//  1. operator-configured paths (SENTINEL_SANDBOX_PROBE_PATHS / chart
+//     sandboxProbePaths) — an explicit contract, ALL must pass;
+//  2. paths declared by the prod Deployment's own readiness/liveness
+//     httpGet probes — the service's own definition of health (the
+//     kubelet already proves these paths work when the pod is Ready),
+//     ALL must pass;
+//  3. the convention candidate set — ANY must pass.
+//
+// Returns (paths, anyOf, source) where source is "config", "spec" or
+// "convention" — used in logs and failure summaries.
+func (s *SandboxRunner) resolveProbePaths(specPaths []string) ([]string, bool, string) {
+	if explicit := s.getProbePaths(); len(explicit) > 0 {
+		return explicit, false, "config"
+	}
+	if len(specPaths) > 0 {
+		return specPaths, false, "spec"
+	}
+	return conventionProbePaths, true, "convention"
+}
+
+// probeModeStr renders the Level 2 pass semantics for logs.
+func probeModeStr(anyOf bool) string {
+	if anyOf {
+		return "any-of"
+	}
+	return "all-must-pass"
 }
 
 // WithSustainedReady overrides the default 15s sustained-ready window.
@@ -168,7 +212,8 @@ func (s *SandboxRunner) Run(ctx context.Context, inc *schemas.Incident) SandboxR
 		}
 	}
 
-	healthProbePaths := s.getProbePaths()
+	// Level 2 probe paths: operator config > workload spec > convention.
+	healthProbePaths, anyOfProbes, probeSource := s.resolveProbePaths(deployResult.specProbePaths)
 
 	// 3. Level 1 — wait for canary Ready AND stay Ready for sustainedWindow.
 	// During the sustained window we also stream canary logs for Level 3.
@@ -186,14 +231,23 @@ func (s *SandboxRunner) Run(ctx context.Context, inc *schemas.Incident) SandboxR
 		"sustainedWindow", s.sustainedWindow)
 
 	// 4. Level 2 — health endpoints only. 4xx/5xx = fail.
-	if !s.verifyEndpointsWithPaths(ctx, sandboxNS, fp.TargetService, healthProbePaths) {
+	logging.Info("Level 2: probing health endpoints",
+		"paths", healthProbePaths, "source", probeSource, "mode", probeModeStr(anyOfProbes))
+	if !s.verifyEndpointsWithPaths(ctx, sandboxNS, fp.TargetService, healthProbePaths, anyOfProbes) {
+		summary := fmt.Sprintf("health_endpoints_failing (%s returned 4xx/5xx — app is broken)",
+			strings.Join(healthProbePaths, ", "))
+		if anyOfProbes {
+			summary = fmt.Sprintf("health_endpoints_failing (none of the candidate endpoints [%s] returned 2xx/3xx — app is broken or it exposes no health endpoint)",
+				strings.Join(healthProbePaths, ", "))
+		}
 		return SandboxResult{
 			Verified:  false,
-			Summary:   "health_endpoints_failing (/, /healthz, /readyz returned 4xx/5xx — app is broken)",
+			Summary:   summary,
 			Namespace: sandboxNS,
 		}
 	}
-	logging.Info("Level 2 PASSED: health endpoints returned 2xx/3xx")
+	logging.Info("Level 2 PASSED: health endpoints returned 2xx/3xx",
+		"source", probeSource, "mode", probeModeStr(anyOfProbes))
 
 	// 5. Level 3 (PRIMARY ORACLE) — original error type gone from canary logs.
 	level3Result := s.verifyErrorGoneFromLogs(ctx, inc, canaryLogs)

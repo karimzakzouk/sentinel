@@ -354,7 +354,7 @@ func Load() *Config {
 		ScaleFixDefaultReplicas: int32(getenvInt("SENTINEL_SCALE_FIX_REPLICAS", 2)),
 		LLMPriorWeight:          getenvFloat("SENTINEL_LLM_PRIOR_WEIGHT", 0.4),
 
-		SandboxProbePaths: splitCSV(getenv("SENTINEL_SANDBOX_PROBE_PATHS", "/,/healthz,/readyz")),
+		SandboxProbePaths: probePathsFromEnv(),
 
 		SkipSandboxNonProd:           getenvBool("SENTINEL_SKIP_SANDBOX_NON_PROD", false),
 		SandboxEnabled:               getenvBool("SENTINEL_SANDBOX_ENABLED", true),
@@ -657,6 +657,23 @@ func splitCSV(s string) []string {
 		}
 	}
 	return out
+}
+
+// probePathsFromEnv reads SENTINEL_SANDBOX_PROBE_PATHS. "auto" (the
+// default, also used when the variable is set but empty) keeps the
+// sandbox in auto mode: Level 2 derives paths from the workload's own
+// readiness/liveness probes and falls back to a convention candidate set
+// with any-of semantics. Any other value is an explicit list — every
+// path must pass.
+func probePathsFromEnv() []string {
+	v := os.Getenv("SENTINEL_SANDBOX_PROBE_PATHS")
+	if v == "" {
+		v = "auto"
+	}
+	if v == "auto" {
+		return nil
+	}
+	return splitCSV(v)
 }
 
 // loadLLMProviders parses SENTINEL_LLM_PROVIDERS as a JSON array of
