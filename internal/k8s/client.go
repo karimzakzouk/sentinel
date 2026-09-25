@@ -167,6 +167,18 @@ func (c *Client) LookupWorkloadAnnotations(ctx context.Context, service, namespa
 //
 // Returns ("", nil) if no matching pod is found or no valid log content
 // could be retrieved.
+//
+// v1.7.13: the crash output lives in the PREVIOUS container instance's
+// logs; the current instance usually shows only a fresh startup line. The
+// old version fell back to current-container logs inside the first retry
+// attempt, so a 27-byte "server starting" line shadowed the entire crash
+// stack (run #27 user-api: "JavaScript heap out of memory" never reached
+// the LLM, and it hallucinated a DB-connection fix). Now:
+//   - previous-container logs are retried across the full window (5x3s);
+//   - current-container logs are collected separately, never as a
+//     substitute, and labeled for what they are;
+//   - up to 3 pods are consulted, so a single pod's rotated-away logs
+//     don't zero out the evidence.
 func (c *Client) FetchCrashingPodLogs(ctx context.Context, service, namespace string) (string, error) {
 	pods, err := c.clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: fmt.Sprintf("app.kubernetes.io/name=%s", service),
@@ -180,50 +192,74 @@ func (c *Client) FetchCrashingPodLogs(ctx context.Context, service, namespace st
 		}
 	}
 
-	var worstPod *corev1.Pod
-	worstRestarts := -1
+	// Rank pods: CrashLoopBackOff first, then by restart count.
+	type podCandidate struct {
+		pod      *corev1.Pod
+		restarts int
+		crashing bool
+	}
+	var candidates []podCandidate
 	for i := range pods.Items {
 		pod := &pods.Items[i]
+		cand := podCandidate{pod: pod}
 		for _, cs := range pod.Status.ContainerStatuses {
+			cand.restarts += int(cs.RestartCount)
 			if cs.State.Waiting != nil && cs.State.Waiting.Reason == "CrashLoopBackOff" {
-				worstPod = pod
-				break
+				cand.crashing = true
 			}
 		}
-		if worstPod != nil {
-			break
-		}
-		restarts := 0
-		for _, cs := range pod.Status.ContainerStatuses {
-			restarts += int(cs.RestartCount)
-		}
-		if restarts > worstRestarts {
-			worstRestarts = restarts
-			worstPod = pod
+		if cand.crashing || cand.restarts > 0 {
+			candidates = append(candidates, cand)
 		}
 	}
-	if worstPod == nil {
+	// CrashLoopBackOff pods first, then highest restarts; stable order.
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].crashing != candidates[j].crashing {
+			return candidates[i].crashing
+		}
+		return candidates[i].restarts > candidates[j].restarts
+	})
+	if len(candidates) > 3 {
+		candidates = candidates[:3]
+	}
+	if len(candidates) == 0 {
 		return "", nil
 	}
 
 	limitBytes := int64(64 * 1024)
 	tailLines := int64(300)
-	for attempt := range 3 {
-		opts := &corev1.PodLogOptions{Previous: true, TailLines: &tailLines, LimitBytes: &limitBytes}
-		if logs, err := c.clientset.CoreV1().Pods(namespace).GetLogs(worstPod.Name, opts).Do(ctx).Raw(); err == nil && isValidLogContent(string(logs)) {
-			return keepLogTail(string(logs), int(limitBytes)), nil
-		}
-		opts.Previous = false
-		if logs, err := c.clientset.CoreV1().Pods(namespace).GetLogs(worstPod.Name, opts).Do(ctx).Raw(); err == nil && isValidLogContent(string(logs)) {
-			return keepLogTail(string(logs), int(limitBytes)), nil
-		}
-		if attempt < 2 {
+
+	// Phase 1: try previous-container logs on each candidate with the
+	// full retry window — the crash stack is HERE when it is anywhere.
+	for _, cand := range candidates {
+		for range 5 {
+			opts := &corev1.PodLogOptions{Previous: true, TailLines: &tailLines, LimitBytes: &limitBytes}
+			if logs, err := c.clientset.CoreV1().Pods(namespace).GetLogs(cand.pod.Name, opts).Do(ctx).Raw(); err == nil && isValidLogContent(string(logs)) {
+				out := fmt.Sprintf("## Crashed container logs (previous instance of pod %s — THIS is the actual crash output)\n%s",
+					cand.pod.Name, keepLogTail(string(logs), int(limitBytes)))
+				// Also grab the current instance's logs for context
+				// (post-restart behavior) when available.
+				opts.Previous = false
+				if cur, err := c.clientset.CoreV1().Pods(namespace).GetLogs(cand.pod.Name, opts).Do(ctx).Raw(); err == nil && isValidLogContent(string(cur)) {
+					out += fmt.Sprintf("\n\n## Current container logs (pod %s after restart — startup state, NOT the crash)\n%s",
+						cand.pod.Name, keepLogTail(string(cur), 16*1024))
+				}
+				return out, nil
+			}
 			select {
 			case <-ctx.Done():
 				return "", ctx.Err()
-			case <-time.After(2 * time.Second):
+			case <-time.After(3 * time.Second):
 			}
 		}
+	}
+
+	// Phase 2: no previous logs anywhere (rotated away / GC'd). Return
+	// the current logs of the worst candidate, honestly labeled.
+	opts := &corev1.PodLogOptions{TailLines: &tailLines, LimitBytes: &limitBytes}
+	if logs, err := c.clientset.CoreV1().Pods(namespace).GetLogs(candidates[0].pod.Name, opts).Do(ctx).Raw(); err == nil && isValidLogContent(string(logs)) {
+		return fmt.Sprintf("## Container logs (pod %s, CURRENT instance only — the crashed instance's logs are unavailable; the crash reason must be inferred from restart behavior and the code)\n%s",
+			candidates[0].pod.Name, keepLogTail(string(logs), int(limitBytes))), nil
 	}
 	return "", nil
 }

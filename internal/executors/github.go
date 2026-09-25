@@ -205,6 +205,15 @@ func (e *GitHubExecutor) OpenPR(ctx context.Context, inc *schemas.Incident, bran
 	}
 }
 
+// UpsertFileToBranch creates or updates one file on a branch via the
+// Contents API. Exported for the repo-checks flow: after the formatter
+// rewrites the fix files in the checks pod, the formatted content is
+// pushed to the same branch so the canary image, the PR, and CI all see
+// identical (formatted) code.
+func (e *GitHubExecutor) UpsertFileToBranch(ctx context.Context, repo, branch, path, content string) error {
+	return e.upsertFile(ctx, repo, branch, path, content)
+}
+
 // getBranchSHA fetches the SHA of the latest commit on branch.
 func (e *GitHubExecutor) getBranchSHA(ctx context.Context, repo, branch string) (string, error) {
 	url := fmt.Sprintf("%s/repos/%s/branches/%s", e.APIURL, repo, branch)

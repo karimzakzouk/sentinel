@@ -48,6 +48,7 @@ import (
 	"github.com/karimzakzouk/sentinel/internal/observability"
 	"github.com/karimzakzouk/sentinel/internal/postmerge"
 	"github.com/karimzakzouk/sentinel/internal/prreview"
+	"github.com/karimzakzouk/sentinel/internal/repoci"
 	"github.com/karimzakzouk/sentinel/internal/runtimecfg"
 	"github.com/karimzakzouk/sentinel/internal/safeactions"
 	"github.com/karimzakzouk/sentinel/internal/safety"
@@ -97,6 +98,14 @@ type wiring struct {
 	sandbox     *executors.SandboxRunner
 	kaniko      *executors.KanikoBuilder
 	remediation *executors.RemediationController
+
+	// Repo CI checks (pre-PR oracle, v1.7.13): the repository's own test
+	// + format commands, run against the fix branch before the PR.
+	repoChecks *executors.RepoTestRunner
+	repoci     *repoci.Client
+
+	baseChecksMu    sync.Mutex
+	baseChecksCache map[string]*executors.RunResult
 
 	// Detection + correlation.
 	tracker        *detection.ActiveTracker

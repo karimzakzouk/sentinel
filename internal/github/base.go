@@ -3,6 +3,7 @@ package github
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -377,4 +378,16 @@ func (b *BaseClient) RevertMergeCommit(ctx context.Context, repo, mergeCommitSHA
 		return 0, fmt.Errorf("decode PR response: %w", err)
 	}
 	return pr.Number, nil
+}
+
+// Base64Decode decodes a base64-encoded string returned by the GitHub
+// Contents API. GitHub base64-encodes with newlines every 76 chars —
+// strip them before decoding.
+func Base64Decode(s string) (string, error) {
+	s = strings.ReplaceAll(s, "\n", "")
+	decoded, err := base64.StdEncoding.DecodeString(s)
+	if err != nil {
+		return "", err
+	}
+	return string(decoded), nil
 }

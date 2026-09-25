@@ -69,7 +69,8 @@ func (w *wiring) watchDeploymentHealth(ctx context.Context, pr *automerge.Tracke
 	// Phase A: wait for the rollout of the merged commit to complete. Only
 	// after updatedReplicas == replicas are restart deltas attributable to
 	// the NEW code (pre-rollout pods still run the old, broken image).
-	rolloutDeadline := time.Now().Add(deployRolloutTimeout)
+	rolloutDoneAt := time.Now()
+	rolloutDeadline := rolloutDoneAt.Add(deployRolloutTimeout)
 	rolledOut := false
 	for time.Now().Before(rolloutDeadline) {
 		select {
@@ -87,6 +88,7 @@ func (w *wiring) watchDeploymentHealth(ctx context.Context, pr *automerge.Tracke
 			deploy.Status.UpdatedReplicas == *deploy.Spec.Replicas &&
 			deploy.Status.ReadyReplicas >= 1 {
 			rolledOut = true
+			rolloutDoneAt = time.Now()
 			logging.Info("deployhealth: rollout complete — starting restart/OOM watch",
 				"service", service, "namespace", namespace,
 				"updated_replicas", deploy.Status.UpdatedReplicas)
@@ -106,6 +108,11 @@ func (w *wiring) watchDeploymentHealth(ctx context.Context, pr *automerge.Tracke
 	pods := map[string]*deployPodSample{}
 	notReadyStreak := 0
 	deadline := time.Now().Add(time.Duration(cfg.PostDeployCheckDurationSec) * time.Second)
+	// Pods of the NEW ReplicaSet are created between merge and now; a
+	// restart on one of them happened under the merged code even if it
+	// predates our first 20s sample. The slack covers pods created while
+	// the rollout was still converging.
+	newPodCutoff := rolloutDoneAt.Add(-2 * time.Minute)
 
 	for time.Now().Before(deadline) {
 		select {
@@ -153,6 +160,22 @@ func (w *wiring) watchDeploymentHealth(ctx context.Context, pr *automerge.Tracke
 			prev, seen := pods[pod.Name]
 			if !seen {
 				pods[pod.Name] = &deployPodSample{restarts: restarts, oomKilled: oom, ready: ready, seenReady: ready}
+				// A pod that already restarted before our
+				// first sample: if it belongs to the new
+				// rollout (created after the merge), the
+				// merged code crash-looped within the
+				// rollout window — run #27's user-api
+				// escaped through exactly this sampling gap.
+				if restarts > 0 && oom {
+					w.revertMergedPR(ctx, pr,
+						fmt.Sprintf("deployed pod %s was OOMKilled before monitoring began (restarts=%d) — the fix does not resolve the memory problem", pod.Name, restarts))
+					return
+				}
+				if restarts > 0 && pod.Status.StartTime != nil && pod.Status.StartTime.After(newPodCutoff) {
+					w.revertMergedPR(ctx, pr,
+						fmt.Sprintf("deployed pod %s (created %s, after the merge rolled out) already restarted %d time(s) before monitoring began — the fix does not hold under real traffic", pod.Name, pod.Status.StartTime.UTC().Format(time.RFC3339), restarts))
+					return
+				}
 				continue
 			}
 			prev.ready = ready
