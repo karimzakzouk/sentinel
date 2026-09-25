@@ -136,6 +136,12 @@ type wiring struct {
 	ready  *atomic.Bool
 	invSem chan struct{}
 	invWG  sync.WaitGroup
+
+	// Fix-service budget (SENTINEL_MAX_FIX_SERVICES): which distinct
+	// services have already consumed their one pipeline attempt this
+	// process. Guarded by fixBudgetMu; nil = budget disabled.
+	fixBudgetMu  sync.Mutex
+	fixAttempted map[string]struct{}
 }
 
 // Config returns the current config under a read lock. Callers must not
