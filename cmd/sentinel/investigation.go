@@ -543,8 +543,6 @@ func (w *wiring) executeCodeFix(ctx context.Context, incident *schemas.Incident)
 					break
 				}
 			}
-			pendingFeedback = ""
-
 			// Phase 1.5: repo CI checks on the fix branch — the repo's own
 			// formatter (rewrites pushed to the branch) + test suite. The
 			// RESULTS are evaluated after sandbox verification (Phase 3.5)

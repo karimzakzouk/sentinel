@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -461,7 +462,9 @@ func parseRunOutput(output string, ci *repoci.Discovered) *RunResult {
 		case strings.HasPrefix(line, "===SENTINEL_CMD_END"):
 			exit := 0
 			if v := markerField(line, "exit"); v != "" {
-				fmt.Sscanf(v, "%d", &exit)
+				if n, err := strconv.Atoi(v); err == nil {
+					exit = n
+				}
 			}
 			flush(exit)
 		case strings.HasPrefix(line, "===SENTINEL_READBACK_START"):
