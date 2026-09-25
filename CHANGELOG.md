@@ -5,6 +5,60 @@ All notable changes to Sentinel are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.13] — 2026-09-26
+
+### Added
+
+- **Repo CI checks — the pre-PR oracle.** Sentinel now parses the
+  repository's own GitHub Actions workflows (`.github/workflows/*.yml`)
+  and runs the repo's formatter + test suite against the fix branch
+  BEFORE opening the PR (new `internal/repoci` + `RepoTestRunner`
+  executor; stock per-language toolchain pods that clone the branch,
+  install dependencies, run the commands, and read back formatted
+  files). The sandbox's LLM-generated regression test is circular
+  validation; the repo's own suite is the same oracle CI enforces after
+  the PR. Eval run #27: three ground-truth-correct fixes died in CI on
+  things the sandbox never checked (cargo fmt, surefire/rspec
+  contracts) — those failures now land in the fix-proposer retry loop
+  where the LLM can still act on them. Failure attribution is
+  base-branch-relative: tests that PASS on base but FAIL on the fix
+  branch are NEW regressions (block + feedback when
+  `SENTINEL_REPO_CHECKS_REQUIRED`, default true); failures that also
+  fail on base are pre-existing and never block the PR (fixing them may
+  be out of scope for the incident). Failing-test feedback includes the
+  test SOURCE when locatable — run #27's shipping-api revision loop saw
+  assertion diffs but never the test code, and never converged.
+- **Formatter pass.** The repo's own format command (cargo fmt, gofmt,
+  spotless, prettier, black — transformed from --check to apply mode)
+  runs on the fix branch and the formatted fix files are pushed to the
+  branch, so the canary image, the PR, and CI all see identical code.
+  Never imposes a formatter the repo doesn't itself use.
+
+### Changed
+
+- **Kaniko failures are classified by log content.** Build errors
+  (compile failures, dependency-resolution drift, toolchain
+  incompatibilities) are now retryable via the fix-proposer feedback
+  loop instead of being misclassified as infrastructure errors and
+  dropped. Run #27: search-api's canary builds failed because the
+  repo's Dockerfile never copies Cargo.lock (dependency resolution
+  drifted to edition2024-only crates on rust:1.78) — a deterministic
+  build failure the LLM was never told about.
+- **Crash evidence: previous-container logs, honestly labeled.**
+  `FetchCrashingPodLogs` no longer falls back to current-container logs
+  inside the first retry attempt — a fresh 27-byte startup line used to
+  shadow the entire crash stack (run #27 user-api: "JavaScript heap out
+  of memory" never reached the LLM, which then hallucinated a
+  DB-connection fix that got merged). Previous logs are retried across
+  the full window (5x3s), current logs are collected separately and
+  labeled for what they are, and up to 3 pods are consulted.
+- **Post-deploy health check hardened.** Default watch window 480s ->
+  900s (slow leaks: user-api's ~8.5min leak-to-crash escaped the 420s
+  eval window by 80 seconds in run #27). A pod of the new rollout that
+  already restarted before the first 20s sample now counts as a
+  regression (the sampling gap let user-api's merged bad fix slip
+  through).
+
 ## [1.7.12] — 2026-09-26
 
 ### Changed

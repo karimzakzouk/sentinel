@@ -53,6 +53,7 @@ import (
 	"github.com/karimzakzouk/sentinel/internal/observability"
 	"github.com/karimzakzouk/sentinel/internal/postmerge"
 	"github.com/karimzakzouk/sentinel/internal/prreview"
+	"github.com/karimzakzouk/sentinel/internal/repoci"
 	"github.com/karimzakzouk/sentinel/internal/runtimecfg"
 	"github.com/karimzakzouk/sentinel/internal/safeactions"
 	"github.com/karimzakzouk/sentinel/internal/safety"
@@ -266,6 +267,13 @@ func wire(cfg *config.Config, listenAddr string) (*wiring, error) {
 		WithExecutorImage(cfg.KanikoExecutorImage).
 		WithGitHost(cfg.GitHost).
 		WithGitHubToken(cfg.GitHubToken)
+
+	// Repo CI checks (pre-PR oracle): the repo's own fmt + test commands.
+	w.repoChecks = executors.NewRepoTestRunner(k8sClient.Clientset(), cfg.Namespace).
+		WithInitImage(cfg.KanikoInitImage).
+		WithGitHost(cfg.GitHost)
+	w.repoci = repoci.NewClient(ghExec.BaseClient)
+	w.baseChecksCache = map[string]*executors.RunResult{}
 
 	if cfg.AutoRemediationEnabled {
 		w.remediation = executors.NewRemediationController(k8sClient.Clientset(), cfg.SkipNamespaces)

@@ -178,9 +178,10 @@ func (k *KanikoBuilder) Build(ctx context.Context, repo, branch string, fixedFil
 	success := k.waitForCompletion(ctx, podName, 10*time.Minute)
 	if !success {
 		logs, _ := k.getPodLogs(ctx, podName)
-		logging.Error("kaniko build failed", "image", fullImage, "logs", lastN(logs, 500))
+		kind := ClassifyBuildFailure(logs)
+		logging.Error("kaniko build failed", "image", fullImage, "kind", kind, "logs", lastN(logs, 500))
 		k.cleanup(ctx, configmapName, podName)
-		return "", fmt.Errorf("kaniko build failed for %s", fullImage)
+		return "", &BuildError{Image: fullImage, Logs: logs, Kind: kind}
 	}
 
 	logging.Info("kaniko build succeeded", "image", fullImage)
@@ -386,6 +387,72 @@ ls -la /workspace/repo/`
 			},
 		},
 	}
+}
+
+// BuildError is a Kaniko build failure with its logs and a classified
+// kind: "build" (the repo's code/toolchain failed to compile — the fix
+// proposer may be able to fix it, e.g. a Dockerfile or dependency
+// problem) or "infra" (registry auth, rate limits, node issues — retrying
+// with a different fix cannot help).
+//
+// Run #27: search-api's canary builds failed because the repo's
+// Dockerfile never copies Cargo.lock, so dependency resolution drifted to
+// crates requiring edition2024 on rust:1.78 — a deterministic BUILD
+// failure misclassified as infrastructure, never fed back to the LLM.
+type BuildError struct {
+	Image string
+	Logs  string
+	Kind  string // "build" or "infra"
+}
+
+func (e *BuildError) Error() string {
+	tail := lastN(strings.TrimSpace(e.Logs), 300)
+	if tail != "" {
+		return fmt.Sprintf("kaniko build failed for %s (%s): %s", e.Image, e.Kind, tail)
+	}
+	return fmt.Sprintf("kaniko build failed for %s (%s)", e.Image, e.Kind)
+}
+
+// infraFailurePatterns mark build failures that are NOT the fix's fault.
+var infraFailurePatterns = []string{
+	"unauthorized", "authentication required", "denied", "requested access",
+	"manifest unknown", "manifest_unknown", "toomanyrequests", "rate limit",
+	"no space left", "device or resource busy", "context deadline exceeded",
+	"dial tcp", "connection refused", "connection reset", "eof",
+	"image pull", "pull access", "name unknown", "failed to resolve",
+	"temporary failure", "network",
+}
+
+// buildFailurePatterns mark failures in the repo's own build chain —
+// compile errors, toolchain errors, Dockerfile RUN failures.
+var buildFailurePatterns = []string{
+	"error building stage", "exit status ", "exit code: ", "exit code 1",
+	"compile", "compilation failed", "error:", "error ", "error ts",
+	"build failure", "[error]", "cargo ", "warning: unused",
+	"edition2024", "edition2021", "not stabilized in this version",
+	"could not resolve dependencies", "non-resolvable", "mod tidy",
+	"syntax error", "unresolved", "undefined", "failed to solve",
+}
+
+// ClassifyBuildFailure inspects Kaniko pod logs and returns "build" or
+// "infra". Build failures are retryable via the fix-proposer feedback
+// loop; infra failures are not. Unknown failures default to "infra"
+// (preserve the pre-1.7.13 no-retry behavior).
+func ClassifyBuildFailure(logs string) string {
+	lower := strings.ToLower(logs)
+	// Infra patterns win: a compile error after a network hiccup is still
+	// dominated by the infra signal at the tail (where the failure landed).
+	for _, p := range infraFailurePatterns {
+		if strings.Contains(lower, p) {
+			return "infra"
+		}
+	}
+	for _, p := range buildFailurePatterns {
+		if strings.Contains(lower, p) {
+			return "build"
+		}
+	}
+	return "infra"
 }
 
 // newBool returns a pointer to b. Helper for *bool fields in corev1.

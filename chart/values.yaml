@@ -3,14 +3,14 @@
 # Sentinel is a single Go binary in a single pod. 43MB image, ~50MB RAM at idle.
 #
 # Install:
-#   helm install sentinel sentinel/sentinel --version 1.7.12 -n sentinel --create-namespace \
+#   helm install sentinel sentinel/sentinel --version 1.7.13 -n sentinel --create-namespace \
 #     --set sentinel.githubToken=YOUR_GITHUB_TOKEN \
 #     --set sentinel.llm.apiKey=YOUR_LLM_API_KEY
 
 image:
   registry: "docker.io/karimzakzouk"
   repository: "sentinel"
-  tag: "1.7.12"
+  tag: "1.7.13"
   pullPolicy: Always
 
 sentinel:
@@ -83,7 +83,9 @@ sentinel:
   # under real load (memory leaks, traffic-dependent crashes).
   postDeployCheck:
     enabled: false
-    durationSec: 480
+    # 900s: slow leaks (user-api class, ~8.5min leak-to-crash) escape
+    # shorter windows — run #27 missed the first crash by 80 seconds.
+    durationSec: 900
     # Trigger the global auto-merge cooldown when a regression reverts.
     # Safe default for production; disable for eval runs where one bad
     # fix must not block the other services' merges for an hour.
@@ -91,6 +93,18 @@ sentinel:
     # Merge the revert PR immediately after opening it (the PR stays as
     # an audit artifact). false = leave the revert PR for human review.
     revertAutoMerge: true
+
+  # Repo CI checks (1.7.13) — pre-PR oracle. Parse the repository's own
+  # GitHub Actions workflows and run its formatter + test suite against
+  # the fix branch BEFORE opening the PR. New test failures (vs the base
+  # branch) block the PR and feed the fix-proposer retry loop; formatter
+  # output is pushed to the branch so canary/PR/CI all see the same code.
+  repoChecks:
+    enabled: true
+    # Block the PR when the fix introduces NEW test failures.
+    required: true
+    # Overall pod timeout (dependency install + tests), seconds.
+    timeoutSec: 900
 
   # L2 safe-actions — immediate remediation (restart, rollback, scale)
   safeActions:

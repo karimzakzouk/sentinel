@@ -22,6 +22,7 @@ import (
 	"github.com/karimzakzouk/sentinel/internal/automerge"
 	"github.com/karimzakzouk/sentinel/internal/executors"
 	"github.com/karimzakzouk/sentinel/internal/logging"
+	"github.com/karimzakzouk/sentinel/internal/repoci"
 )
 
 // handleCIFailureRevision is the onCIFailure callback. Runs in its own
@@ -51,7 +52,7 @@ func (w *wiring) handleCIFailureRevision(ctx context.Context, pr *automerge.Trac
 
 	// 2. Fetch WHAT failed in CI (failing checks + failing test output).
 	details, err := w.autoMergeGH.GetCIFailureDetails(revCtx, pr.Repo, pr.PRNumber)
-	feedbackText := buildCIFeedbackText(pr, details, err)
+	feedbackText := w.buildCIFeedbackTextWithSources(revCtx, pr, details, err)
 	logging.Info("ci-feedback: fetched CI failure details",
 		"repo", pr.Repo, "pr", pr.PRNumber,
 		"failed_checks", strings.Join(failedCheckNames(details), ", "),
@@ -122,6 +123,32 @@ func (w *wiring) handleCIFailureRevision(ctx context.Context, pr *automerge.Trac
 		return
 	}
 
+	// Repo CI checks on the revised branch (v1.7.13): push the formatter's
+	// output and gate on NEW test regressions before declaring the revision
+	// done — otherwise CI rejects the same commit and burns another
+	// retry round-trip.
+	if w.repoChecks != nil && w.repoci != nil {
+		repoName := ""
+		if fp.Repo != nil {
+			repoName = *fp.Repo
+		}
+		baseBranch := pr.BaseBranch
+		if baseBranch == "" {
+			baseBranch = "main"
+		}
+		if bundle := w.runRepoChecks(revCtx, inc, repoName, pushed.BranchName, baseBranch, fixPathsFromProposal(fp)); bundle != nil {
+			gate, b := evaluateRepoChecks(bundle)
+			if gate == repoCheckRegression {
+				fail(fmt.Sprintf("revised fix introduces NEW test regressions (passed on base, fail now): %s",
+					strings.Join(b.newFails, ", ")))
+				return
+			}
+			if b != nil && b.fixRun != nil && b.fixRun.TestsRan {
+				logging.Info("ci-feedback: repo checks on revised branch", "summary", b.fixRun.Summary())
+			}
+		}
+	}
+
 	// 8. Persist the updated incident state + notify. CI re-runs on the new
 	// commit; the merger keeps tracking with a fresh CI timeout window.
 	if err := w.store.UpsertIncident(revCtx, inc); err != nil {
@@ -133,6 +160,36 @@ func (w *wiring) handleCIFailureRevision(ctx context.Context, pr *automerge.Trac
 			pr.CIRetries, sb.LevelsVerified))
 	logging.Info("ci-feedback: revision complete — CI re-running on new commit",
 		"repo", pr.Repo, "pr", pr.PRNumber, "levels", sb.LevelsVerified)
+}
+
+// buildCIFeedbackTextWithSources renders the CI feedback the fix proposer
+// sees, enriched with the failing tests' SOURCE when locatable. Run #27:
+// shipping-api's revision loop saw assertion diffs but never the test
+// code, and never converged.
+func (w *wiring) buildCIFeedbackTextWithSources(ctx context.Context, pr *automerge.TrackedPR, details *automerge.CIFailureDetails, fetchErr error) string {
+	base := buildCIFeedbackText(pr, details, fetchErr)
+	if w.repoci == nil || details == nil || details.Details == "" {
+		return base
+	}
+	ci := w.repoci.Discover(ctx, pr.Repo, pr.BaseBranch)
+	if ci == nil || len(ci.TreePaths) == 0 {
+		return base
+	}
+	paths := repoci.TestSourcePaths(repoci.ExtractFailedTests(details.Details), ci.TreePaths)
+	if len(paths) == 0 {
+		return base
+	}
+	var sb strings.Builder
+	sb.WriteString(base)
+	sb.WriteString("\n## Failing test sources (read them before revising)\n\n")
+	for _, p := range paths {
+		content, err := w.repoci.GetFile(ctx, pr.Repo, p, pr.BaseBranch)
+		if err != nil || content == "" {
+			continue
+		}
+		fmt.Fprintf(&sb, "### %s\n```%s\n%s\n```\n\n", p, langComment(p), tailN(content, 12000))
+	}
+	return sb.String()
 }
 
 // buildCIFeedbackText renders the feedback message the fix proposer sees.
