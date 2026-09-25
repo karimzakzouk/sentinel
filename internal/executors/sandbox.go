@@ -215,19 +215,30 @@ func (s *SandboxRunner) Run(ctx context.Context, inc *schemas.Incident) SandboxR
 	// Level 2 probe paths: operator config > workload spec > convention.
 	healthProbePaths, anyOfProbes, probeSource := s.resolveProbePaths(deployResult.specProbePaths)
 
-	// 3. Level 1 — wait for canary Ready AND stay Ready for sustainedWindow.
-	// During the sustained window we also stream canary logs for Level 3.
-	logging.Info("Level 1: waiting for canary pod Ready + sustained window",
+	// 3. Level 1 — wait for canary Ready AND stay Ready for sustainedWindow
+	// without restarting, and never OOMKilled. During the sustained window
+	// we also stream canary logs (incl. previous-container crash logs).
+	logging.Info("Level 1: waiting for canary pod Ready + sustained window (restart-stable, OOM-checked)",
 		"sustainedWindow", s.sustainedWindow)
-	ready, canaryLogs := s.waitForReadyWithLogs(ctx, sandboxNS, fp.TargetService, 240*time.Second)
+	ready, canaryLogs, failReason := s.waitForReadyWithLogs(ctx, sandboxNS, fp.TargetService, 240*time.Second)
 	if !ready {
 		summary := "canary_pods_not_ready_or_unstable (startup crash not fixed, or pod crashes after going Ready)"
+		switch failReason {
+		case "canary_oomkilled":
+			summary = "canary_pod_oomkilled — the FIXED image was OOMKilled (exit 137) in the sandbox. " +
+				"The fix does NOT resolve the memory problem: the fixed code still exceeds its memory limit. " +
+				"Look for an unbounded growing structure (map/cache/slice that is only ever appended to) or raise the memory limit in the deployment if the workload legitimately needs more."
+		case "canary_not_ready_or_unstable":
+			if canaryLogs != "" {
+				summary = "canary_pods_not_ready_or_unstable (pod never sustained a Ready window without crashing — the startup crash or crash-after-ready is NOT fixed)"
+			}
+		}
 		if canaryLogs != "" {
-			summary += "\n\n--- CANARY POD LOGS (last 2KB) ---\n" + lastN(canaryLogs, 2048)
+			summary += "\n\n--- CANARY POD LOGS (last 2KB, incl. previous container if restarted) ---\n" + lastN(canaryLogs, 2048)
 		}
 		return SandboxResult{Verified: false, Summary: summary, Namespace: sandboxNS, PodLogs: canaryLogs}
 	}
-	logging.Info("Level 1 PASSED: canary pod stayed Ready for sustained window",
+	logging.Info("Level 1 PASSED: canary pod stayed Ready for sustained window (no restarts, no OOM kills)",
 		"sustainedWindow", s.sustainedWindow)
 
 	// 4. Level 2 — health endpoints only. 4xx/5xx = fail.

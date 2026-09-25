@@ -16,16 +16,17 @@ func (s *Store) SaveTrackedPR(ctx context.Context, rec automerge.TrackedPRRecord
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO tracked_prs (repo, pr_number, incident_id, branch, base_branch, input_json, added_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(repo, pr_number) DO UPDATE SET
-			incident_id = excluded.incident_id,
-			branch = excluded.branch,
-			base_branch = excluded.base_branch,
-			input_json = excluded.input_json,
-			added_at = excluded.added_at`,
+                INSERT INTO tracked_prs (repo, pr_number, incident_id, branch, base_branch, input_json, added_at, ci_retries)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(repo, pr_number) DO UPDATE SET
+                        incident_id = excluded.incident_id,
+                        branch = excluded.branch,
+                        base_branch = excluded.base_branch,
+                        input_json = excluded.input_json,
+                        added_at = excluded.added_at,
+                        ci_retries = excluded.ci_retries`,
 		rec.Repo, rec.PRNumber, rec.IncidentID, rec.Branch, rec.BaseBranch,
-		string(rec.InputJSON), rec.AddedAt.UTC())
+		string(rec.InputJSON), rec.AddedAt.UTC(), rec.CIRetries)
 	return err
 }
 
@@ -43,8 +44,8 @@ func (s *Store) ListTrackedPRs(ctx context.Context) ([]automerge.TrackedPRRecord
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT repo, pr_number, incident_id, branch, base_branch, input_json, added_at
-		FROM tracked_prs ORDER BY added_at ASC`)
+                SELECT repo, pr_number, incident_id, branch, base_branch, input_json, added_at, ci_retries
+                FROM tracked_prs ORDER BY added_at ASC`)
 	if err != nil {
 		return nil, err
 	}
@@ -56,7 +57,7 @@ func (s *Store) ListTrackedPRs(ctx context.Context) ([]automerge.TrackedPRRecord
 		var inputJSON string
 		var addedAt time.Time
 		if err := rows.Scan(&rec.Repo, &rec.PRNumber, &rec.IncidentID,
-			&rec.Branch, &rec.BaseBranch, &inputJSON, &addedAt); err != nil {
+			&rec.Branch, &rec.BaseBranch, &inputJSON, &addedAt, &rec.CIRetries); err != nil {
 			return nil, err
 		}
 		rec.InputJSON = []byte(inputJSON)

@@ -91,6 +91,20 @@ spec:
               value: {{ .Values.sentinel.autoMerge.cooldownMin | quote }}
             - name: SENTINEL_AUTOMERGE_MIN_SANDBOX_LEVEL
               value: {{ .Values.sentinel.autoMerge.minSandboxLevel | default 3 | quote }}
+            {{- if hasKey .Values.sentinel.autoMerge "ciRetries" }}
+            - name: SENTINEL_AUTOMERGE_CI_RETRIES
+              value: {{ .Values.sentinel.autoMerge.ciRetries | quote }}
+            {{- end }}
+            {{- if .Values.sentinel.postDeployCheck }}
+            - name: SENTINEL_POSTDEPLOY_CHECK_ENABLED
+              value: {{ .Values.sentinel.postDeployCheck.enabled | quote }}
+            - name: SENTINEL_POSTDEPLOY_CHECK_DURATION_SEC
+              value: {{ .Values.sentinel.postDeployCheck.durationSec | default 480 | quote }}
+            - name: SENTINEL_POSTDEPLOY_REGRESSION_COOLDOWN
+              value: {{ .Values.sentinel.postDeployCheck.regressionCooldown | default true | quote }}
+            - name: SENTINEL_POSTDEPLOY_REVERT_AUTO_MERGE
+              value: {{ .Values.sentinel.postDeployCheck.revertAutoMerge | default true | quote }}
+            {{- end }}
             {{- if .Values.sentinel.safeActions.enabled }}
             - name: SENTINEL_SAFE_ACTIONS_ENABLED
               value: "true"

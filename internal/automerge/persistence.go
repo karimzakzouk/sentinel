@@ -15,6 +15,10 @@ type TrackedPRRecord struct {
 	BaseBranch string
 	InputJSON  []byte
 	AddedAt    time.Time
+
+	// CIRetries counts how many times a CI failure on this PR triggered
+	// the fix-proposer feedback revision. Survives restarts.
+	CIRetries int
 }
 
 // TrackedPRStore persists tracked PRs across restarts. Implemented by

@@ -34,7 +34,10 @@ const (
 	// MaxHypothesesPerRound is the max hypotheses the investigator generates.
 	MaxHypothesesPerRound = 5
 
-	// ConfidenceFastPath: above this, evidence gathering is skipped.
+	// ConfidenceFastPath: above this, evidence gathering is skipped — but
+	// ONLY when the fast path is explicitly re-enabled via
+	// Pipeline.SetEvidenceFastPath (SENTINEL_EVIDENCE_FAST_PATH=true).
+	// Default off: self-reported confidence must never gate verification.
 	ConfidenceFastPath = 0.7
 
 	// ConfidenceHighMatch: above this, a known fix from vector memory is applied.

@@ -5,6 +5,82 @@ All notable changes to Sentinel are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.12] — 2026-09-26
+
+### Changed
+
+- **Evidence gathering is no longer skippable by self-reported confidence**
+  — the "confidence fast path" (top hypothesis >= 0.7 skips the evidence
+  gatherer) is now OFF by default; `SENTINEL_EVIDENCE_FAST_PATH=true`
+  restores it. Eval run #26: user-api's top hypothesis (a hallucinated
+  config story, 0.78) skipped verification entirely, patched the wrong
+  file (db.ts instead of the leaking tokenStore.ts), and the wrong fix
+  was auto-merged. LLM self-reported confidence must never gate
+  verification — it is not calibrated.
+- **Sandbox Level 1 now checks restart stability and OOMKills** — a
+  canary that OOM-loops flips Ready between kills and passes any
+  duration-only Ready window. Level 1 now (a) fails immediately if the
+  canary container was ever OOMKilled (exit 137), (b) resets the
+  sustained window whenever the restart count increases (crash-looping
+  while Ready = not stable), and (c) fetches the PREVIOUS container's
+  logs (`kubectl logs --previous`) when the container restarted, so the
+  Level 3 oracle and the fix-retry feedback see the actual crash
+  evidence instead of the fresh container's clean logs.
+
+### Added
+
+- **CI-failure feedback loop** (`SENTINEL_AUTOMERGE_CI_RETRIES`, default
+  1) — when CI fails on a tracked auto-merge PR, the merger fetches the
+  failing test output (failed Actions jobs' logs: test names, assertion
+  messages, build errors; check-run annotations as fallback), feeds it
+  to the fix proposer as structured feedback, pushes the corrected fix
+  to the SAME branch (the open PR updates and CI re-runs automatically),
+  and re-verifies in the sandbox before letting the merge gates run
+  again. Bounded by the retry count; the in-flight guard prevents the
+  30s poll loop from double-triggering; the counter survives restarts
+  (new `ci_retries` column in `tracked_prs`). Run #26: shipping-api's
+  fix stopped the crash but broke the `calculateQuote_rejectsBlank-
+  DestinationZip` contract test — the PR sat unmerged until the harness
+  closed it. With the loop, the fix proposer gets the failing test name
+  and revises.
+- **Post-deploy health check + auto-revert**
+  (`SENTINEL_POSTDEPLOY_CHECK_ENABLED`, default false) — after a
+  successful merge, watches the deployed service's pods for up to
+  `SENTINEL_POSTDEPLOY_CHECK_DURATION_SEC` (default 480s): waits for the
+  new ReplicaSet to roll out, then fails the merge on (a) any OOMKill
+  on a rolled-out pod, (b) any restart of a pod that had been Ready,
+  or (c) ~2 minutes of zero Ready replicas. On regression: opens a
+  revert PR (optionally auto-merged, `SENTINEL_POSTDEPLOY_REVERT_AUTO_
+  MERGE`), comments on the original PR, and records
+  `reverted:postdeploy_regression`. Optionally triggers the global
+  auto-merge cooldown (`SENTINEL_POSTDEPLOY_REGRESSION_COOLDOWN`,
+  default true). Closes the run #26 user-api blind spot: the sandbox
+  canary has no traffic, so a memory leak that only manifests under
+  load passes L1-L5 — but the DEPLOYED pods OOM-loop under real
+  traffic, and a pod that flips Ready between OOM kills is NOT
+  recovered.
+
+## [1.7.11] — 2026-09-25
+
+### Fixed
+
+- **Auto-merge untracks PRs before CI has started** — a PR evaluated
+  seconds after opening reports "neutral" CI state with zero check
+  runs, which the gate treated as a hard failure (run #24: every PR
+  untracked before the first check even registered). Neutral + 0 check
+  runs now counts as pending and keeps waiting, bounded by the CI
+  timeout.
+
+## [1.7.10] — 2026-09-25
+
+### Fixed
+
+- **Sandbox Level 2 probes hardcoded /healthz-style paths** — the
+  canary probed a fixed candidate set that 404'd on services whose
+  real health endpoints differ. Probe paths are now derived from the
+  workload's own readiness/liveness httpGet probes (all must pass),
+  falling back to the convention candidate set (any-of).
+
 ## [1.7.9] — 2026-09-25
 
 ### Fixed
