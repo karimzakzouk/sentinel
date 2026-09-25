@@ -304,6 +304,18 @@ func TestBuildPodSpec(t *testing.T) {
 	if !strings.Contains(joinedArgs, "--context=/workspace/repo") {
 		t.Errorf("kaniko args missing --context: %v", kaniko.Args)
 	}
+	// Bind-mounted paths must be ignored or the delete-filesystem
+	// phase dies with EBUSY on kind nodes (run #21: all canary
+	// builds lost to "unlinkat //product_uuid: device or resource
+	// busy" — sandbox never verified, auto-merge gate 3 shut).
+	for _, want := range []string{
+		"--ignore-path=/product_uuid",
+		"--ignore-path=/var/run/secrets/kubernetes.io/serviceaccount",
+	} {
+		if !strings.Contains(joinedArgs, want) {
+			t.Errorf("kaniko args missing %s (bind mounts must be ignored or the build dies EBUSY): %v", want, kaniko.Args)
+		}
+	}
 
 	// Volumes: workspace, fixed-files, docker-config.
 	volNames := []string{}

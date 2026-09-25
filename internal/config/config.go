@@ -91,6 +91,18 @@ type Config struct {
 	// ─── Concurrency ─────────────────────────────────────────────────────
 	MaxConcurrentInvestigations int
 
+	// ─── Fix budget ───────────────────────────────────────────────────────
+	// MaxFixServices caps how many DISTINCT services this process will run
+	// the LLM investigation→fix pipeline for (0 = unlimited). Bounded-cost
+	// knob for eval runs and free-tier API keys: each incident pipeline
+	// costs 30-60k tokens across investigation rounds + fix proposals, and
+	// N concurrent pipelines share a per-org daily quota (Groq TPD 200k —
+	// run #20: four runs in one day drained it before the fifth started,
+	// every fix proposal 429'd, 0/9). Over-cap and already-attempted
+	// services are recorded as StatusSkipped. Manual/Slack/CR/chaos
+	// triggers bypass the cap (operator intent).
+	MaxFixServices int
+
 	// ─── Confidence thresholds ───────────────────────────────────────────
 	ConfidenceAutonomous        float64
 	ConfidenceHumanReview       float64
@@ -256,6 +268,7 @@ func Load() *Config {
 		LLMAPIKey:        getenv("SENTINEL_LLM_API_KEY", ""),
 		LLMFastModel:     getenv("SENTINEL_LLM_FAST_MODEL", "glm-4-flash"),
 		LLMFrontierModel: getenv("SENTINEL_LLM_FRONTIER_MODEL", "glm-4.5"),
+		LLMProviders:     loadLLMProviders(),
 
 		LLMEmbeddingModel: getenv("SENTINEL_LLM_EMBEDDING_MODEL", ""),
 		EmbeddingProvider: getenv("SENTINEL_EMBEDDING_PROVIDER", ""),
@@ -305,6 +318,7 @@ func Load() *Config {
 		KanikoExecutorImage: getenv("SENTINEL_KANIKO_EXECUTOR_IMAGE", "gcr.io/kaniko-project/executor:v1.24.0"),
 
 		MaxConcurrentInvestigations: getenvInt("SENTINEL_MAX_CONCURRENT_INVESTIGATIONS", 3),
+		MaxFixServices:              getenvInt("SENTINEL_MAX_FIX_SERVICES", 0),
 
 		ProductionNamespaces: splitCSV(getenv("SENTINEL_PRODUCTION_NAMESPACES", "prod,production")),
 		WriteNamespaces:      splitCSV(getenv("SENTINEL_WRITE_NAMESPACES", "")),

@@ -5,6 +5,101 @@ All notable changes to Sentinel are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.9] — 2026-09-25
+
+### Fixed
+
+- **Chart RBAC: sandbox cannot copy secrets into sandbox namespaces**
+  — `CopyConfigMapsAndSecrets` reads the prod Deployment's secretRefs
+  and re-creates those Secrets next to the canary, but the sandbox
+  ruleset granted create only on pods/services/configmaps. With
+  `sentinel.rbac.readSecrets=true` the reads succeeded while the
+  creates returned `secrets is forbidden`, so every canary pod sat in
+  CreateContainerConfigError and Level 1 never went Ready — eval run
+  #22 lost 10/10 sandbox attempts this way (with the v1.7.8 Kaniko
+  fix confirmed working: 8/9 canary builds succeeded). Adds `secrets`
+  to the sandbox create ruleset (gated on `sentinel.sandbox.enabled`,
+  same trust level as the existing cluster-wide create-deployments:
+  a Deployment can already envFrom-project any secret without read
+  RBAC, so this grant does not widen the threat model).
+
+## [1.7.8] — 2026-09-25
+
+### Fixed
+
+- **Kaniko canary builds fail with EBUSY on kind nodes** — Kaniko
+  builds an image by deleting its own root filesystem, and paths that
+  are bind-mounted into the pod cannot be unlinked. On kind (node =
+  Docker container), every pod inherits the host's `/product_uuid`
+  bind mount, so every canary build died *after* pushing the cache
+  layer with `error building image: deleting file system after stage
+  0: unlinkat //product_uuid: device or resource busy`. Eval run #21
+  lost all three canary builds this way: no canary image → sandbox
+  never verified → auto-merge gate 3 (`sandbox`) closed → PRs closed
+  unmerged at harness cleanup. With zero merged PRs, the
+  deploy→Argo→recovery chain never fires at all. Fix: pass
+  `--ignore-path=/product_uuid` (and, defense-in-depth,
+  `--ignore-path=/var/run/secrets/kubernetes.io/serviceaccount` —
+  runtime mounts must never leak into image layers or the layer cache
+  anyway) to the Kaniko executor.
+
+## [1.7.7] — 2026-09-25
+
+### Added
+
+- **Fix-service budget (`SENTINEL_MAX_FIX_SERVICES`, chart value
+  `sentinel.maxFixServices`)** — caps how many distinct services the
+  process will run the LLM investigation→fix pipeline for (0 =
+  unlimited, the default). Each incident pipeline costs 30-60k tokens
+  across investigation rounds and fix proposals, and concurrent
+  pipelines share the provider's per-org daily quota: Groq's TPD is
+  200k, so four eval runs in one day drained it before the fifth
+  started — run #20 opened zero PRs with every fix proposal 429ing
+  against an exhausted pool. Over-cap and repeat detections are
+  recorded as new `skipped` incidents (visible in the API and eval
+  scoreboard, zero LLM cost); manual, Slack, chaos and CR triggers
+  bypass the cap so operator intent is never refused. The budget is
+  claimed atomically before any semaphore slot or LLM call is
+  consumed, and re-detection waves of an already-attempted service
+  (the soak-end token burn seen since run #14) no longer re-enter the
+  pipeline.
+
+## [1.7.6] — 2026-09-25
+
+### Fixed
+
+- **Pool failover sent the primary provider's model name to every
+  provider — the overflow was never callable.** The tier methods
+  (FastJSON/FrontierText/...) pass the ROUTER's model name into
+  `completeWithPool`, which handed the same string to every pool entry,
+  ignoring each entry's own `fastModel`/`frontierModel`. With groq
+  primary + gemini overflow, every failover called Google with
+  `openai/gpt-oss-120b` and died with
+  `GenerateContentRequest.model: unexpected model name format` (run #19:
+  pool "active", all 6 incidents failed, 0/9 fixes — groq's free-tier
+  TPM 8k/TPD 200k exhausts within minutes, so the run lives or dies on
+  the overflow). New `poolModelForRouterModel()` remaps the router-level
+  tier name to each entry's own model for that tier;
+  `TestRouter_PoolRemapsModelPerProvider` proves end-to-end (httptest
+  servers capture the wire-level model per provider) that a failed-over
+  frontier call arrives at the overflow as the overflow's frontier
+  model, not the primary's.
+
+## [1.7.5] — 2026-09-24
+
+### Fixed
+
+- **LLM failover pool never activated — `SENTINEL_LLM_PROVIDERS` was
+  silently ignored.** `loadLLMProviders()` existed and was fully
+  unit-tested, but nothing called it: `config.Load()` never assigned
+  the `LLMProviders` field, so every deployment booted in
+  single-provider mode no matter what the chart delivered (the env var
+  itself was rendered and delivered correctly all along). One-line
+  wiring fix plus `TestLoadWiresLLMProviders`, a regression test that
+  calls `Load()` end-to-end and fails if the env var does not reach
+  `cfg.LLMProviders` — unit-testing the parser alone is exactly how
+  this shipped broken.
+
 ## [1.7.3] — 2026-09-24
 
 Investigation-fidelity fixes, all surfaced by the marketly eval run #10
