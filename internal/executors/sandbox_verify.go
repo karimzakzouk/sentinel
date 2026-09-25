@@ -17,42 +17,101 @@ import (
 	"github.com/karimzakzouk/sentinel/internal/schemas"
 )
 
+// canaryPodStability samples the canary pod's crash health: total
+// container restarts and whether any container was last terminated by an
+// OOM kill (LastTerminationState.Reason == "OOMKilled" or exit code 137).
+// This is the signal the Ready-only check cannot see: a pod that OOM-loops
+// flips Ready between kills and passes any duration-only window.
+func (s *SandboxRunner) canaryPodStability(ctx context.Context, ns, service string) (restarts int32, oomKilled bool, found bool) {
+	pods, err := s.clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: fmt.Sprintf("app=%s", service),
+		Limit:         1,
+	})
+	if err != nil || len(pods.Items) == 0 {
+		return 0, false, false
+	}
+	for _, cs := range pods.Items[0].Status.ContainerStatuses {
+		restarts += cs.RestartCount
+		if t := cs.LastTerminationState.Terminated; t != nil {
+			if t.Reason == "OOMKilled" || t.ExitCode == 137 {
+				oomKilled = true
+			}
+		}
+	}
+	return restarts, oomKilled, true
+}
+
 // waitForReadyWithLogs waits for the canary Deployment to have
-// ReadyReplicas >= 1 AND to stay at ReadyReplicas >= 1 for sustainedWindow.
-// The sustained check is critical: a pod that goes Ready then immediately
-// crashes (a common failure mode when config errors only manifest on the
-// first request) passes a one-shot Ready check. During the sustained
-// window we capture canary logs for the Level 3 oracle. Returns (ready,
-// canaryLogs); on failure canaryLogs holds whatever was captured.
-func (s *SandboxRunner) waitForReadyWithLogs(ctx context.Context, ns, name string, timeout time.Duration) (bool, string) {
+// ReadyReplicas >= 1 AND to stay at ReadyReplicas >= 1 for sustainedWindow
+// WITHOUT any container restart in between. The sustained check is
+// critical: a pod that goes Ready then immediately crashes (a common
+// failure mode when config errors only manifest on the first request)
+// passes a one-shot Ready check. The restart check is equally critical: a
+// pod that OOM-loops goes Ready between kills and passes a duration-only
+// window (run #26: a wrong fix was merged because of exactly this). If the
+// canary container was OOMKilled at any point, the run fails immediately —
+// a fixed image that still exceeds its memory limit is not a fix.
+// During the sustained window we capture canary logs (including previous
+// container logs when the container restarted) for the Level 3 oracle.
+// Returns (ready, canaryLogs, failReason); failReason is "" on success.
+func (s *SandboxRunner) waitForReadyWithLogs(ctx context.Context, ns, name string, timeout time.Duration) (bool, string, string) {
 	deadline := time.Now().Add(timeout)
 	readySince := time.Time{}
 	var canaryLogsBuf strings.Builder
 
+	// Restart baseline, captured the first time the pod goes Ready. Restarts
+	// that happen before that (early startup crash) don't count against the
+	// window — but an OOMKill does, whenever it happened.
+	baselineRestarts := int32(-1)
+
 	for time.Now().Before(deadline) {
 		select {
 		case <-ctx.Done():
-			return false, canaryLogsBuf.String()
+			return false, canaryLogsBuf.String(), "context_cancelled"
 		default:
 		}
+
+		// OOM check first: any OOMKill on the canary = the fixed image still
+		// exceeds its memory limit. Not retryable within the window — the fix
+		// itself is wrong (or the limit is, which the fix must also address).
+		if _, oom, found := s.canaryPodStability(ctx, ns, name); found && oom {
+			logs := s.fetchCanaryPodLogs(ctx, ns, name)
+			logging.Error("Level 1 FAILED: canary pod was OOMKilled — fixed image still exceeds its memory limit",
+				"namespace", ns, "service", name)
+			return false, logs, "canary_oomkilled"
+		}
+
 		deploy, err := s.clientset.AppsV1().Deployments(ns).Get(ctx, name, metav1.GetOptions{})
 		if err == nil && deploy.Status.ReadyReplicas >= 1 {
+			restarts, _, found := s.canaryPodStability(ctx, ns, name)
+			if found {
+				if baselineRestarts < 0 {
+					baselineRestarts = restarts
+				} else if restarts > baselineRestarts {
+					logging.Info("Level 1: canary pod RESTARTED during sustained window — crash-looping while flipping Ready; resetting timer",
+						"restarts_before", baselineRestarts, "restarts_now", restarts)
+					baselineRestarts = restarts
+					readySince = time.Time{}
+				}
+			}
+			if !readySince.IsZero() {
+				if logs := s.fetchCanaryPodLogs(ctx, ns, name); logs != "" {
+					canaryLogsBuf.Reset()
+					canaryLogsBuf.WriteString(logs)
+				}
+				if time.Since(readySince) >= s.sustainedWindow {
+					if logs := s.fetchCanaryPodLogs(ctx, ns, name); logs != "" {
+						canaryLogsBuf.Reset()
+						canaryLogsBuf.WriteString(logs)
+					}
+					return true, canaryLogsBuf.String(), ""
+				}
+			}
 			if readySince.IsZero() {
 				readySince = time.Now()
 				logging.Info("Level 1: canary pod went Ready — sustaining",
 					"since", readySince.Format(time.RFC3339),
 					"sustainedWindow", s.sustainedWindow)
-			}
-			if logs := s.fetchCanaryPodLogs(ctx, ns, name); logs != "" {
-				canaryLogsBuf.Reset()
-				canaryLogsBuf.WriteString(logs)
-			}
-			if time.Since(readySince) >= s.sustainedWindow {
-				if logs := s.fetchCanaryPodLogs(ctx, ns, name); logs != "" {
-					canaryLogsBuf.Reset()
-					canaryLogsBuf.WriteString(logs)
-				}
-				return true, canaryLogsBuf.String()
 			}
 		} else {
 			if !readySince.IsZero() {
@@ -63,11 +122,11 @@ func (s *SandboxRunner) waitForReadyWithLogs(ctx context.Context, ns, name strin
 		}
 		select {
 		case <-ctx.Done():
-			return false, canaryLogsBuf.String()
+			return false, canaryLogsBuf.String(), "context_cancelled"
 		case <-time.After(3 * time.Second):
 		}
 	}
-	return false, canaryLogsBuf.String()
+	return false, canaryLogsBuf.String(), "canary_not_ready_or_unstable"
 }
 
 // level3Result is the outcome of the Level 3 error-gone oracle.
@@ -292,6 +351,10 @@ func (s *SandboxRunner) runReproducer(ctx context.Context, sandboxNS string, inc
 // fetchCanaryPodLogs retrieves the canary pod's logs for inclusion in
 // SandboxResult.PodLogs. Returning the actual error gives the LLM the
 // real context instead of a generic "canary_pods_not_ready" summary.
+// When the container has restarted, ALSO fetches the previous container's
+// logs (kubectl logs --previous): the crash evidence — the very lines the
+// Level 3 oracle needs to scan — lives there, not in the fresh container's
+// clean logs.
 func (s *SandboxRunner) fetchCanaryPodLogs(ctx context.Context, ns, service string) string {
 	pods, err := s.clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
 		LabelSelector: fmt.Sprintf("app=%s", service),
@@ -305,9 +368,31 @@ func (s *SandboxRunner) fetchCanaryPodLogs(ctx context.Context, ns, service stri
 		return ""
 	}
 	containerName := pod.Spec.Containers[0].Name
-	req := s.clientset.CoreV1().Pods(ns).GetLogs(pod.Name, &corev1.PodLogOptions{
-		Container: containerName,
+
+	current := s.streamContainerLogs(ctx, ns, pod.Name, containerName, false)
+
+	restarted := false
+	for _, cs := range pod.Status.ContainerStatuses {
+		if cs.RestartCount > 0 {
+			restarted = true
+			break
+		}
+	}
+	if restarted {
+		if prev := s.streamContainerLogs(ctx, ns, pod.Name, containerName, true); prev != "" {
+			return current + "\n\n--- PREVIOUS CONTAINER LOGS (before last restart — crash evidence) ---\n" + prev
+		}
+	}
+	return current
+}
+
+// streamContainerLogs reads up to 8KB of a container's logs, current or
+// previous instance.
+func (s *SandboxRunner) streamContainerLogs(ctx context.Context, ns, podName, container string, previous bool) string {
+	req := s.clientset.CoreV1().Pods(ns).GetLogs(podName, &corev1.PodLogOptions{
+		Container: container,
 		TailLines: newInt64(100),
+		Previous:  previous,
 	})
 	stream, err := req.Stream(ctx)
 	if err != nil {

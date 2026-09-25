@@ -60,6 +60,13 @@ type Pipeline struct {
 	fixProposerTimeoutSec       int
 	confidenceLoopBackThreshold float64
 
+	// evidenceFastPath re-enables the confidence fast path (skip evidence
+	// gathering when the top hypothesis is above ConfidenceFastPath).
+	// Default FALSE: run #26 showed a 0.78-confidence hallucinated config
+	// story skip verification entirely and merge a wrong fix. LLM
+	// self-reported confidence must never gate evidence gathering.
+	evidenceFastPath bool
+
 	generateTests      bool
 	generateReproducer bool
 	maxIterations      int
@@ -113,6 +120,14 @@ func (p *Pipeline) SetConfig(invTimeout, evTimeout, anTimeout, fpTimeout int, co
 	if confLoopBack > 0 {
 		p.confidenceLoopBackThreshold = confLoopBack
 	}
+}
+
+// SetEvidenceFastPath re-enables the confidence fast path (skip evidence
+// gathering when the top hypothesis confidence >= ConfidenceFastPath).
+// Disabled by default — see the field comment. Operators who prefer speed
+// over rigor can set SENTINEL_EVIDENCE_FAST_PATH=true.
+func (p *Pipeline) SetEvidenceFastPath(enabled bool) {
+	p.evidenceFastPath = enabled
 }
 
 // SetPrometheusURL wires the Prometheus backend into the evidence gatherer.
@@ -234,14 +249,16 @@ func (p *Pipeline) Run(ctx context.Context, state *schemas.AgentState) error {
 		}
 
 		// Confidence fast path: skip evidence gathering if the top
-		// hypothesis is already confident enough.
+		// hypothesis is already confident enough. DISABLED by default
+		// (see evidenceFastPath field comment) — the analyst must
+		// always see gathered evidence before confirming a root cause.
 		topConfidence := float64(0)
 		for _, h := range state.Hypotheses {
 			if h.Confidence > topConfidence {
 				topConfidence = h.Confidence
 			}
 		}
-		if topConfidence >= ConfidenceFastPath {
+		if p.evidenceFastPath && topConfidence >= ConfidenceFastPath {
 			logging.Info("top hypothesis confidence above fast-path threshold — skipping evidence gathering",
 				"top_confidence", topConfidence, "threshold", ConfidenceFastPath)
 		} else {

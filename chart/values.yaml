@@ -3,14 +3,14 @@
 # Sentinel is a single Go binary in a single pod. 43MB image, ~50MB RAM at idle.
 #
 # Install:
-#   helm install sentinel sentinel/sentinel --version 1.7.11 -n sentinel --create-namespace \
+#   helm install sentinel sentinel/sentinel --version 1.7.12 -n sentinel --create-namespace \
 #     --set sentinel.githubToken=YOUR_GITHUB_TOKEN \
 #     --set sentinel.llm.apiKey=YOUR_LLM_API_KEY
 
 image:
   registry: "docker.io/karimzakzouk"
   repository: "sentinel"
-  tag: "1.7.11"
+  tag: "1.7.12"
   pullPolicy: Always
 
 sentinel:
@@ -71,6 +71,26 @@ sentinel:
     # 3 = L1-L3 (default, historical behavior), 5 = require the full
     # suite incl. regression test + reproducer.
     minSandboxLevel: 3
+    # CI-failure feedback loop (1.7.12): when CI fails on a tracked PR,
+    # feed the failing test output back to the fix proposer and push a
+    # corrected commit to the same branch, up to N times. 0 = off.
+    ciRetries: 1
+
+  # Post-deploy health check (1.7.12) — honest merge verification.
+  # After a successful merge, watch the deployed service's pods for
+  # restarts / OOMKills / readiness and auto-revert the merge on
+  # regression. Catches fixes that pass the no-traffic sandbox but fail
+  # under real load (memory leaks, traffic-dependent crashes).
+  postDeployCheck:
+    enabled: false
+    durationSec: 480
+    # Trigger the global auto-merge cooldown when a regression reverts.
+    # Safe default for production; disable for eval runs where one bad
+    # fix must not block the other services' merges for an hour.
+    regressionCooldown: true
+    # Merge the revert PR immediately after opening it (the PR stays as
+    # an audit artifact). false = leave the revert PR for human review.
+    revertAutoMerge: true
 
   # L2 safe-actions — immediate remediation (restart, rollback, scale)
   safeActions:
