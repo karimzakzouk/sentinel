@@ -5,6 +5,24 @@ All notable changes to Sentinel are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.9] — 2026-09-25
+
+### Fixed
+
+- **Chart RBAC: sandbox cannot copy secrets into sandbox namespaces**
+  — `CopyConfigMapsAndSecrets` reads the prod Deployment's secretRefs
+  and re-creates those Secrets next to the canary, but the sandbox
+  ruleset granted create only on pods/services/configmaps. With
+  `sentinel.rbac.readSecrets=true` the reads succeeded while the
+  creates returned `secrets is forbidden`, so every canary pod sat in
+  CreateContainerConfigError and Level 1 never went Ready — eval run
+  #22 lost 10/10 sandbox attempts this way (with the v1.7.8 Kaniko
+  fix confirmed working: 8/9 canary builds succeeded). Adds `secrets`
+  to the sandbox create ruleset (gated on `sentinel.sandbox.enabled`,
+  same trust level as the existing cluster-wide create-deployments:
+  a Deployment can already envFrom-project any secret without read
+  RBAC, so this grant does not widen the threat model).
+
 ## [1.7.8] — 2026-09-25
 
 ### Fixed
