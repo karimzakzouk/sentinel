@@ -112,6 +112,11 @@ sentinel:
   # Max concurrent investigations
   maxConcurrentInvestigations: 3
 
+  # Cap how many DISTINCT services get the LLM investigation→fix pipeline
+  # per process (0 = unlimited). Over-cap and repeat services are recorded
+  # as skipped incidents; manual/slack/CR/chaos triggers bypass.
+  maxFixServices: 0
+
   # RBAC
   rbac:
     writeNamespaces: []

@@ -36,6 +36,32 @@ import (
 // The orchestrator never panics: a deferred recover logs the panic and
 // returns, so a buggy agent cannot kill the Sentinel process.
 func (w *wiring) handleInvestigation(ctx context.Context, cluster schemas.AnomalyCluster, crName, crNamespace string) {
+	// Fix-service budget gate. MUST run before invWG/invSem so skipped
+	// clusters don't queue behind (or consume) investigation slots, and
+	// before any LLM work so a capped run costs zero tokens beyond
+	// detection. The incident is still recorded (StatusSkipped) — the
+	// scoreboard stays honest about what fired vs what was worked.
+	if !w.claimFixBudget(cluster.Service, crName) {
+		incident := schemas.NewIncident(cluster)
+		incident.Status = schemas.StatusSkipped
+		if err := w.store.UpsertIncident(ctx, &incident); err != nil {
+			logging.Error("save skipped incident failed", "error", err, "service", cluster.Service)
+		}
+		w.broadcaster.BroadcastEvent("incident", map[string]any{
+			"incident_id": incident.IncidentID.String(),
+			"service":     cluster.Service,
+			"namespace":   cluster.Namespace,
+			"status":      string(schemas.StatusSkipped),
+			"reason":      "fix-service budget cap",
+		})
+		logging.Info("investigation skipped — fix-service budget",
+			"service", cluster.Service,
+			"cr_name", crName,
+			"max_fix_services", w.Config().MaxFixServices,
+		)
+		return
+	}
+
 	w.invWG.Add(1)
 	defer w.invWG.Done()
 
@@ -869,5 +895,51 @@ func isRealCR(crName string) bool {
 	case "", "auto-detected", "manual", "slack", "alertmanager", "slo", "chaos":
 		return false
 	}
+	return true
+}
+
+// claimFixBudget reports whether this cluster's service may consume an
+// investigation slot under the per-process fix-service budget
+// (SENTINEL_MAX_FIX_SERVICES, see config.MaxFixServices).
+//
+// Semantics:
+//   - budget disabled (0, the default): always allowed
+//   - operator-intent triggers (manual, slack, chaos, real CRs): always
+//     allowed — a human or an experiment explicitly asked for this fix,
+//     and refusing it would be surprising in exactly the situations the
+//     budget exists to make safe
+//   - automated triggers (auto-detected, slo, alertmanager): at most
+//     MaxFixServices DISTINCT services per process, one attempt each.
+//     Repeat fires of an already-attempted service are denied too — the
+//     first attempt already produced (or failed to produce) its PR, and
+//     re-detection waves near soak end only burned quota in every run
+//     since #14.
+//
+// claim is idempotent per (service, process): the first claim for a
+// service sticks for the process lifetime, success or failure.
+func (w *wiring) claimFixBudget(service, crName string) bool {
+	if w.Config().MaxFixServices <= 0 {
+		return true
+	}
+	switch crName {
+	case "manual", "slack", "chaos":
+		return true
+	}
+	if isRealCR(crName) {
+		return true
+	}
+
+	w.fixBudgetMu.Lock()
+	defer w.fixBudgetMu.Unlock()
+	if w.fixAttempted == nil {
+		w.fixAttempted = make(map[string]struct{})
+	}
+	if _, attempted := w.fixAttempted[service]; attempted {
+		return false
+	}
+	if len(w.fixAttempted) >= w.Config().MaxFixServices {
+		return false
+	}
+	w.fixAttempted[service] = struct{}{}
 	return true
 }

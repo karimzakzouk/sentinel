@@ -5,6 +5,27 @@ All notable changes to Sentinel are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.7] — 2026-09-25
+
+### Added
+
+- **Fix-service budget (`SENTINEL_MAX_FIX_SERVICES`, chart value
+  `sentinel.maxFixServices`)** — caps how many distinct services the
+  process will run the LLM investigation→fix pipeline for (0 =
+  unlimited, the default). Each incident pipeline costs 30-60k tokens
+  across investigation rounds and fix proposals, and concurrent
+  pipelines share the provider's per-org daily quota: Groq's TPD is
+  200k, so four eval runs in one day drained it before the fifth
+  started — run #20 opened zero PRs with every fix proposal 429ing
+  against an exhausted pool. Over-cap and repeat detections are
+  recorded as new `skipped` incidents (visible in the API and eval
+  scoreboard, zero LLM cost); manual, Slack, chaos and CR triggers
+  bypass the cap so operator intent is never refused. The budget is
+  claimed atomically before any semaphore slot or LLM call is
+  consumed, and re-detection waves of an already-attempted service
+  (the soak-end token burn seen since run #14) no longer re-enter the
+  pipeline.
+
 ## [1.7.6] — 2026-09-25
 
 ### Fixed

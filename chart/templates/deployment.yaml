@@ -138,6 +138,8 @@ spec:
               value: {{ .Values.sentinel.kanikoExecutorImage | default "gcr.io/kaniko-project/executor:v1.24.0" | quote }}
             - name: SENTINEL_MAX_CONCURRENT_INVESTIGATIONS
               value: {{ .Values.sentinel.maxConcurrentInvestigations | default 3 | quote }}
+            - name: SENTINEL_MAX_FIX_SERVICES
+              value: {{ .Values.sentinel.maxFixServices | default 0 | quote }}
             - name: SENTINEL_PRODUCTION_NAMESPACES
               value: {{ .Values.sentinel.productionNamespaces | quote }}
             - name: SENTINEL_WRITE_NAMESPACES
