@@ -363,7 +363,17 @@ func (m *Merger) evaluateAndMerge(ctx context.Context, pr *TrackedPR) {
 	pr.Input.ApprovedLabel = containsLabel(labels, "sentinel/approved")
 	pr.LastEval = time.Now()
 
-	if ciStatus.State == "pending" && !pr.CIWaitStart.IsZero() {
+	// ciPending covers both an explicit "pending" state and a "neutral"
+	// state with zero check runs. A PR opened seconds ago has no check
+	// runs yet, which is indistinguishable from pending — hard-failing it
+	// untracks the PR before CI even starts (observed in the kind eval:
+	// PR evaluated 2s after opening, "CI status unknown", untracked, and
+	// the green CI six minutes later had nobody watching). The wait is
+	// bounded by CITimeoutSec below either way.
+	ciPending := ciStatus.State == "pending" ||
+		(ciStatus.State == "neutral" && ciStatus.Checks == 0)
+
+	if ciPending && !pr.CIWaitStart.IsZero() {
 		timeout := time.Duration(m.policy.cfg.CITimeoutSec) * time.Second
 		if time.Since(pr.CIWaitStart) > timeout {
 			logging.Info("automerge: CI timeout — untracking",
@@ -375,7 +385,7 @@ func (m *Merger) evaluateAndMerge(ctx context.Context, pr *TrackedPR) {
 			return
 		}
 	}
-	if ciStatus.State == "pending" && pr.CIWaitStart.IsZero() {
+	if ciPending && pr.CIWaitStart.IsZero() {
 		pr.CIWaitStart = time.Now()
 	}
 
@@ -387,8 +397,8 @@ func (m *Merger) evaluateAndMerge(ctx context.Context, pr *TrackedPR) {
 			"gates_passed", decision.GatesPassed,
 			"gates_failed", decision.GatesFailed)
 
-		// Pending CI is not a failure — keep waiting.
-		if ciStatus.State == "pending" {
+		// Pending (or not-yet-started) CI is not a failure — keep waiting.
+		if ciPending {
 			return
 		}
 
