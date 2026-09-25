@@ -184,6 +184,13 @@ func wire(cfg *config.Config, listenAddr string) (*wiring, error) {
 		cfg.FixProposerTimeoutSec,
 		cfg.ConfidenceLoopBackThreshold,
 	)
+	// Evidence fast path is OFF by default (always verify hypotheses —
+	// run #26 lesson). SENTINEL_EVIDENCE_FAST_PATH=true restores the old
+	// skip-when-confident behavior for operators who prefer speed.
+	if cfg.EvidenceFastPathEnabled {
+		pipeline.SetEvidenceFastPath(true)
+		logging.Info("evidence fast path ENABLED — evidence gathering may be skipped for confident hypotheses (SENTINEL_EVIDENCE_FAST_PATH=true)")
+	}
 	if cfg.PrometheusURL != "" {
 		pipeline.SetPrometheusURL(cfg.PrometheusURL)
 	}
@@ -559,6 +566,7 @@ func wire(cfg *config.Config, listenAddr string) (*wiring, error) {
 		MaxPerHour:           cfg.AutoMergeMaxPerHour,
 		CooldownAfterFailMin: cfg.AutoMergeCooldownMin,
 		MinSandboxLevel:      cfg.AutoMergeMinSandboxLevel,
+		MaxCIRetries:         cfg.AutoMergeCIRetries,
 	}
 	w.autoMergePolicy = automerge.NewPolicy(autoMergeCfg, policy)
 	w.autoMergeMerger = automerge.NewMerger(w.autoMergePolicy, w.autoMergeGH, w, w)
@@ -588,6 +596,28 @@ func wire(cfg *config.Config, listenAddr string) (*wiring, error) {
 		defer statusCancel()
 		_ = w.chatopsStatus.Update(statusCtx, repo, prNumber, inc, "")
 	})
+
+	// CI-failure feedback loop (v1.7.12): when CI fails on a tracked
+	// PR, feed the failing test output back to the fix proposer, push a
+	// corrected commit to the same branch, and re-verify in the sandbox.
+	// Bounded by SENTINEL_AUTOMERGE_CI_RETRIES (default 1).
+	if cfg.AutoMergeCIRetries > 0 {
+		w.autoMergeMerger.SetOnCIFailure(w.handleCIFailureRevision)
+		logging.Info("automerge: CI-failure feedback loop enabled",
+			"max_retries", cfg.AutoMergeCIRetries)
+	}
+
+	// Post-deploy health check (v1.7.12): after a successful merge,
+	// watch the deployed pods (restarts / OOMKills / readiness) and
+	// auto-revert on regression. Catches fixes that pass the no-traffic
+	// sandbox but fail under real load (run #26 user-api).
+	if cfg.PostDeployCheckEnabled {
+		w.autoMergeMerger.SetOnDeployWatch(w.watchDeploymentHealth)
+		logging.Info("automerge: post-deploy health check enabled",
+			"duration", time.Duration(cfg.PostDeployCheckDurationSec)*time.Second,
+			"regression_cooldown", cfg.PostDeployRegressionCooldown,
+			"revert_auto_merge", cfg.PostDeployRevertAutoMerge)
+	}
 
 	// Post-merge regression watcher — constructed after autoMergeGH so it
 	// can use the same GitHub client as the reverter.

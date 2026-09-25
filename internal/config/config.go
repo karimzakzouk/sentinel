@@ -149,6 +149,11 @@ type Config struct {
 	OutcomeCheckIntervalSec    int
 	DetectionCooldownSec       int
 
+	// EvidenceFastPathEnabled re-enables the confidence fast path
+	// (skip evidence gathering when top hypothesis >= 0.7). Default
+	// false — see the env comment in Load().
+	EvidenceFastPathEnabled bool
+
 	// ─── Agent loop (Phase 11) ───────────────────────────────────────────
 	// UseAgentLoop, when true, swaps the pipeline's hypothesis/root-cause
 	// phase from the legacy 2-round investigator to the N-turn agent loop
@@ -177,6 +182,21 @@ type Config struct {
 	AutoMergeMaxPerHour      int
 	AutoMergeMinSandboxLevel int
 	AutoMergeCooldownMin     int
+
+	// AutoMergeCIRetries bounds how many times a CI failure on a tracked
+	// PR triggers a fix-proposer revision (feedback loop) before the PR
+	// is untracked for human review.
+	AutoMergeCIRetries int
+
+	// ─── Post-deploy health check (honest merge verification) ───────────
+	// After a successful auto-merge, watch the deployed service's pods
+	// for restarts / OOMKills / readiness. A regression auto-reverts the
+	// merge. Restarts-while-Ready (the user-api blind spot: pods OOM-loop
+	// but look Ready between kills) count as NOT recovered.
+	PostDeployCheckEnabled       bool
+	PostDeployCheckDurationSec   int
+	PostDeployRegressionCooldown bool // trigger the global auto-merge cooldown on regression
+	PostDeployRevertAutoMerge    bool // merge the revert PR immediately after opening it
 
 	AutoRemediationEnabled bool
 
@@ -343,6 +363,12 @@ func Load() *Config {
 		FixProposerTimeoutSec:      getenvInt("SENTINEL_FIX_PROPOSER_TIMEOUT", 300),
 		MaxPipelineIterations:      getenvInt("SENTINEL_MAX_PIPELINE_ITERATIONS", 5),
 
+		// EvidenceFastPathEnabled re-enables skipping evidence gathering
+		// when the top hypothesis is confident (>= 0.7). Default FALSE —
+		// run #26 merged a wrong fix because a 0.78-confidence hallucinated
+		// root cause bypassed verification.
+		EvidenceFastPathEnabled: getenvBool("SENTINEL_EVIDENCE_FAST_PATH", false),
+
 		UseAgentLoop: getenvBool("SENTINEL_USE_AGENT_LOOP", false),
 
 		OutcomeWatchDurationMin: getenvInt("SENTINEL_OUTCOME_WATCH_DURATION_MIN", 10),
@@ -408,6 +434,20 @@ func Load() *Config {
 		AutoMergeMaxPerHour:      getenvInt("SENTINEL_AUTO_MERGE_MAX_PER_HOUR", 3),
 		AutoMergeMinSandboxLevel: getenvInt("SENTINEL_AUTOMERGE_MIN_SANDBOX_LEVEL", 3),
 		AutoMergeCooldownMin:     getenvInt("SENTINEL_AUTO_MERGE_COOLDOWN_MIN", 60),
+
+		// AutoMergeCIRetries: when CI fails on a tracked PR, feed the
+		// failing test output back to the fix proposer and push a
+		// corrected commit to the same branch (up to N times) before
+		// giving up and untracking.
+		AutoMergeCIRetries: getenvInt("SENTINEL_AUTOMERGE_CI_RETRIES", 1),
+
+		// Post-deploy health check: after a successful merge + deploy,
+		// watch the service's pods (restart counts, OOMKills, readiness)
+		// and auto-revert the merge if the deployed fix regresses.
+		PostDeployCheckEnabled:       getenvBool("SENTINEL_POSTDEPLOY_CHECK_ENABLED", false),
+		PostDeployCheckDurationSec:   getenvInt("SENTINEL_POSTDEPLOY_CHECK_DURATION_SEC", 480),
+		PostDeployRegressionCooldown: getenvBool("SENTINEL_POSTDEPLOY_REGRESSION_COOLDOWN", true),
+		PostDeployRevertAutoMerge:    getenvBool("SENTINEL_POSTDEPLOY_REVERT_AUTO_MERGE", true),
 
 		AutoRemediationEnabled: getenvBool("SENTINEL_AUTO_REMEDIATION_ENABLED", false),
 	}

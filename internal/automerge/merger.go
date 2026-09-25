@@ -32,8 +32,10 @@ type Merger struct {
 	// (pre-1.7 behavior, used by tests).
 	persist TrackedPRStore
 
-	onMerged  func(repo string, prNumber int)
-	onSkipped func(repo string, prNumber int, reason string)
+	onMerged      func(repo string, prNumber int)
+	onSkipped     func(repo string, prNumber int, reason string)
+	onCIFailure   func(ctx context.Context, pr *TrackedPR)
+	onDeployWatch func(ctx context.Context, pr *TrackedPR)
 }
 
 // TrackedPR is a PR pending auto-merge evaluation.
@@ -47,6 +49,12 @@ type TrackedPR struct {
 	CIWaitStart time.Time
 	LastEval    time.Time
 	Input       Input
+
+	// CIRetries counts CI-failure feedback revisions performed on this PR.
+	// CIRetryInFlight guards against the 30s poll loop re-triggering the
+	// revision while one is already running (memory only, not persisted).
+	CIRetries       int
+	CIRetryInFlight bool
 }
 
 // GitHubClient is the GitHub API surface the merger needs.
@@ -103,6 +111,58 @@ func (m *Merger) SetOnMerged(fn func(repo string, prNumber int)) {
 // SetOnSkipped sets a callback invoked when a PR is skipped from auto-merge.
 func (m *Merger) SetOnSkipped(fn func(repo string, prNumber int, reason string)) {
 	m.onSkipped = fn
+}
+
+// SetOnCIFailure wires the CI-feedback loop. When CI fails on a tracked PR
+// and retries remain, the merger invokes fn asynchronously with the tracked
+// PR. fn should fetch the failing test output, feed it to the fix proposer,
+// push a corrected commit to the same branch, and re-verify in the sandbox.
+// When fn finishes successfully it MUST call FinishCIRetry so the merger
+// resets the CI-wait timer for the new commit; on failure it should call
+// GiveUpCIRetry (or Untrack directly).
+func (m *Merger) SetOnCIFailure(fn func(ctx context.Context, pr *TrackedPR)) {
+	m.onCIFailure = fn
+}
+
+// SetOnDeployWatch wires the post-merge deployment health check. After a
+// successful merge the merger invokes fn asynchronously with the merged
+// PR's full context (repo, PR number, branches, service, namespace). fn
+// should watch the deployed service's pods and auto-revert on regression.
+func (m *Merger) SetOnDeployWatch(fn func(ctx context.Context, pr *TrackedPR)) {
+	m.onDeployWatch = fn
+}
+
+// FinishCIRetry clears the in-flight guard and resets the CI-wait timer so
+// the (freshly pushed) commit gets a full CI timeout window. Called by the
+// onCIFailure callback after a successful revision.
+func (m *Merger) FinishCIRetry(repo string, prNumber int, sandboxVerified bool, sandboxLevels string) {
+	m.mu.Lock()
+	pr := m.tracked[prKey(repo, prNumber)]
+	if pr != nil {
+		pr.CIRetryInFlight = false
+		pr.CIWaitStart = time.Time{}
+		pr.Input.SandboxVerified = sandboxVerified
+		pr.Input.SandboxLevels = sandboxLevels
+	}
+	m.mu.Unlock()
+	if pr != nil {
+		m.persistSave(pr)
+	}
+}
+
+// GiveUpCIRetry clears the in-flight guard and untracks the PR (CI-feedback
+// revision failed — the PR stays open for human review).
+func (m *Merger) GiveUpCIRetry(ctx context.Context, repo string, prNumber int, reason string) {
+	m.mu.Lock()
+	pr := m.tracked[prKey(repo, prNumber)]
+	if pr != nil {
+		pr.CIRetryInFlight = false
+	}
+	m.mu.Unlock()
+	if pr != nil {
+		_ = m.store.UpdateAutoMergeStatus(ctx, pr.IncidentID, "skipped:ci_retry_failed")
+		m.Untrack(repo, prNumber)
+	}
 }
 
 // persistSave writes a tracked PR to the persistence layer (best effort —
@@ -389,6 +449,39 @@ func (m *Merger) evaluateAndMerge(ctx context.Context, pr *TrackedPR) {
 		pr.CIWaitStart = time.Now()
 	}
 
+	// CI-failure feedback loop: a RED CI run on a tracked PR means the
+	// repository's own test suite rejected the fix. Instead of abandoning
+	// the PR, feed the failing test output back to the fix proposer and
+	// push a corrected commit to the same branch (CI re-runs on the new
+	// commit automatically). Bounded by cfg.MaxCIRetries.
+	if ciStatus.State == "failure" && pr.CIRetryInFlight {
+		// A revision is already running for this PR - do nothing.
+		return
+	}
+	if ciStatus.State == "failure" && m.onCIFailure != nil &&
+		pr.CIRetries < m.policy.cfg.MaxCIRetries {
+		pr.CIRetries++
+		pr.CIRetryInFlight = true
+		m.persistSave(pr)
+		logging.Info("automerge: CI failed - feeding failure back to fix proposer for revision",
+			"repo", pr.Repo, "pr", pr.PRNumber,
+			"revision", pr.CIRetries, "max", m.policy.cfg.MaxCIRetries,
+			"failing_checks", ciStatus.Failing, "total_checks", ciStatus.Checks)
+		_ = m.gh.PostComment(ctx, pr.Repo, pr.PRNumber,
+			fmt.Sprintf("❌ CI failed (%d/%d checks). Sentinel is revising the fix with the failing test output - attempt %d/%d.",
+				ciStatus.Failing, ciStatus.Checks, pr.CIRetries, m.policy.cfg.MaxCIRetries))
+		prCopy := *pr
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					logging.Error("automerge: CI-feedback revision panicked", "repo", prCopy.Repo, "pr", prCopy.PRNumber, "panic", r)
+				}
+			}()
+			m.onCIFailure(ctx, &prCopy)
+		}()
+		return
+	}
+
 	decision := m.policy.Evaluate(pr.Input)
 	if !decision.AutoMerge {
 		logging.Info("automerge: not merging",
@@ -455,6 +548,21 @@ func (m *Merger) evaluateAndMerge(ctx context.Context, pr *TrackedPR) {
 		m.outcome.WatchPostMerge(ctx, pr.IncidentID, pr.Input.Service, pr.Input.Namespace)
 	}
 
+	// Post-merge deployment health check (honest merge verification):
+	// watch the deployed pods for restarts / OOMKills; auto-revert on
+	// regression. Runs asynchronously - the tick loop must not block.
+	if m.onDeployWatch != nil {
+		prCopy := *pr
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					logging.Error("automerge: deployment watch panicked", "repo", prCopy.Repo, "pr", prCopy.PRNumber, "panic", r)
+				}
+			}()
+			m.onDeployWatch(ctx, &prCopy)
+		}()
+	}
+
 	logging.Info("automerge: merged PR", "repo", pr.Repo, "pr", pr.PRNumber)
 }
 
@@ -487,6 +595,7 @@ func (pr *TrackedPR) toRecord() (TrackedPRRecord, error) {
 		BaseBranch: pr.BaseBranch,
 		InputJSON:  inputJSON,
 		AddedAt:    pr.AddedAt,
+		CIRetries:  pr.CIRetries,
 	}, nil
 }
 
@@ -503,6 +612,7 @@ func (r TrackedPRRecord) toTrackedPR() (*TrackedPR, error) {
 		Branch:     r.Branch,
 		BaseBranch: r.BaseBranch,
 		AddedAt:    r.AddedAt,
+		CIRetries:  r.CIRetries,
 		Input:      input,
 	}, nil
 }

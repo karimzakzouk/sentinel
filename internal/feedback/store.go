@@ -147,6 +147,7 @@ func (s *Store) initSchema() error {
                         base_branch TEXT NOT NULL DEFAULT '',
                         input_json TEXT NOT NULL,
                         added_at DATETIME NOT NULL,
+                        ci_retries INTEGER NOT NULL DEFAULT 0,
                         PRIMARY KEY (repo, pr_number)
                 );
         `)
@@ -200,6 +201,34 @@ func (s *Store) migrateSchema() error {
 			return fmt.Errorf("alter table add %s: %w", a.name, err)
 		}
 		logging.Info("feedback: migration added column to incidents table", "name", a.name)
+	}
+
+	// tracked_prs: ci_retries (CI-feedback revision counter, 1.7.12).
+	tpRows, err := s.db.Query(`PRAGMA table_info(tracked_prs)`)
+	if err != nil {
+		return fmt.Errorf("pragma table_info(tracked_prs): %w", err)
+	}
+	tpExisting := map[string]bool{}
+	for tpRows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := tpRows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			tpRows.Close()
+			return fmt.Errorf("scan pragma row (tracked_prs): %w", err)
+		}
+		tpExisting[name] = true
+	}
+	tpRows.Close()
+	if err := tpRows.Err(); err != nil {
+		return err
+	}
+	if !tpExisting["ci_retries"] {
+		if _, err := s.db.Exec(`ALTER TABLE tracked_prs ADD COLUMN ci_retries INTEGER NOT NULL DEFAULT 0`); err != nil {
+			return fmt.Errorf("alter table tracked_prs add ci_retries: %w", err)
+		}
+		logging.Info("feedback: migration added ci_retries column to tracked_prs table")
 	}
 
 	if _, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_incidents_pr ON incidents(pr_repo, pr_number) WHERE pr_number IS NOT NULL`); err != nil {

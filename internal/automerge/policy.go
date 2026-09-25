@@ -28,6 +28,13 @@ type Config struct {
 	// recommended — SandboxVerified alone doesn't say how far
 	// verification got).
 	MinSandboxLevel int
+
+	// MaxCIRetries bounds the CI-failure feedback loop: when CI fails on a
+	// tracked PR, the merger feeds the failing test output back to the fix
+	// proposer, which pushes a corrected commit to the same branch (CI then
+	// re-runs automatically). After MaxCIRetries revisions the PR is
+	// untracked for human review. 0 disables the loop (old behavior).
+	MaxCIRetries int
 }
 
 // DefaultConfig returns the safe defaults. Auto-merge is OFF by default —
@@ -42,6 +49,7 @@ func DefaultConfig() Config {
 		MaxPerHour:           3,
 		CooldownAfterFailMin: 60,
 		MinSandboxLevel:      3,
+		MaxCIRetries:         1,
 	}
 }
 
