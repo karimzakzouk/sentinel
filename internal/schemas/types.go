@@ -47,6 +47,13 @@ const (
 	StatusFailed           IncidentStatus = "failed"
 	StatusEscalated        IncidentStatus = "escalated"
 	StatusResolved         IncidentStatus = "resolved"
+	// StatusSkipped is terminal: the incident was observed and recorded but
+	// deliberately not investigated. Currently set when the per-process
+	// fix-service budget (SENTINEL_MAX_FIX_SERVICES) is exhausted or the
+	// service already had its one attempt — detection still fires, the
+	// incident stays visible in the API/scoreboard, but no LLM pipeline
+	// runs. Keeps skipped faults distinguishable from "never detected".
+	StatusSkipped IncidentStatus = "skipped"
 )
 
 // FixType categorizes the kind of remediation Sentinel proposes.

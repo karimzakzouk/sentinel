@@ -293,6 +293,24 @@ ls -la /workspace/repo/`
 	}
 	kanikoArgs = append(kanikoArgs, "--snapshotMode=redo")
 
+	// Kaniko extracts the base image by DELETING its own root
+	// filesystem first. Paths that are bind-mounted into the pod
+	// cannot be unlinked — the build dies late (after the cache
+	// push) with "unlinkat //product_uuid: device or resource
+	// busy". Seen on kind nodes, where the node container carries
+	// the runner host's /product_uuid mount into every pod: eval
+	// run #21 lost ALL THREE sandbox canary builds this way, so
+	// sandbox_verified stayed false and auto-merge gate 3 never
+	// opened. --ignore-path excludes a path from both the delete
+	// phase and the layer snapshot. The projected serviceaccount
+	// token is included as defense-in-depth: ignoring it is also
+	// the security-correct behavior — a runtime mount must never
+	// leak into an image layer or the layer cache.
+	kanikoArgs = append(kanikoArgs,
+		"--ignore-path=/product_uuid",
+		"--ignore-path=/var/run/secrets/kubernetes.io/serviceaccount",
+	)
+
 	allowPrivilegeEscalation := false
 	seccompProfile := &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}
 

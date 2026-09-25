@@ -7,6 +7,15 @@ Least-privilege design:
   - Secrets read is opt-in via sentinel.rbac.readSecrets (default false).
     The sandbox runner needs to read prod secrets to copy them into the
     sandbox namespace — operators who want this must explicitly enable it.
+  - Secrets CREATE (sandbox block, gated on sandbox.enabled): the copy
+    itself lands as a new Secret in the sandbox namespace. Without the
+    create verb the canary pod's secretRefs dangle →
+    CreateContainerConfigError → Level 1 never goes Ready (run #22:
+    10/10 sandbox attempts died this way while Kaniko builds succeeded).
+    Threat-model note: create-secrets adds nothing an attacker doesn't
+    already have via create-deployments — a Deployment in any namespace
+    can envFrom-mount any existing secret there; the kubelet projects
+    the values without the caller needing read RBAC.
   - Per-namespace Role + RoleBinding for each namespace in
     sentinel.rbac.writeNamespaces: create/update/patch/delete on
     deployments, statefulsets, pods, configmaps, services.
@@ -38,7 +47,7 @@ rules:
     resources: ["deployments", "statefulsets"]
     verbs: ["create", "update", "patch", "delete"]
   - apiGroups: [""]
-    resources: ["pods", "services", "configmaps"]
+    resources: ["pods", "services", "configmaps", "secrets"]
     verbs: ["create", "update", "patch", "delete"]
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: ["roles", "rolebindings"]

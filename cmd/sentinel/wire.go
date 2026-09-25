@@ -297,6 +297,18 @@ func wire(cfg *config.Config, listenAddr string) (*wiring, error) {
 	}
 	w.invSem = make(chan struct{}, maxConcurrent)
 
+	// Fix-service budget: bounding how many distinct services get the
+	// (expensive) LLM pipeline keeps free-tier daily quotas viable —
+	// see the config field docs for the run-#20 arithmetic. Logged at
+	// startup so the harness can gate on it (a capped run without this
+	// line means the env never reached the pod).
+	if cfg.MaxFixServices > 0 {
+		w.fixAttempted = make(map[string]struct{})
+		logging.Info("fix-service budget enabled",
+			"max_fix_services", cfg.MaxFixServices,
+			"note", "over-cap and repeat services are recorded as skipped; manual/slack/CR/chaos triggers bypass")
+	}
+
 	// Correlator must be constructed before the clusterer handler because
 	// the handler captures it. pkgCausalAnalyzer is set later in Phase 4
 	// (Tier 1); early cascades just skip causal attribution.

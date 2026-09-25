@@ -310,6 +310,42 @@ func (r *Router) complete(ctx context.Context, model, system, user string, maxTo
 	}
 }
 
+// poolModelForRouterModel maps the router-level model name (the primary
+// provider's name for the fast/frontier tier) to cfg's own model name for
+// the same tier. The tier methods (FastJSON/FrontierText/...) pass the
+// ROUTER's model into the pool, but every other pool entry must serve the
+// call with ITS OWN name — e.g. groq's frontier "openai/gpt-oss-120b" has
+// to become "gemini-2.5-flash" on a gemini overflow entry, or Google
+// rejects the request ("GenerateContentRequest.model: unexpected model
+// name format"). Run #19: every failover died this way — the pool was
+// "active" but the overflow was never callable; all 6 incidents failed,
+// 0/9 fixes.
+func poolModelForRouterModel(cfg *ProviderConfig, routerFast, routerFrontier, model string) string {
+	// Explicit (non-tier) model names from direct callers: verbatim.
+	if model != routerFast && model != routerFrontier {
+		return model
+	}
+	// Entry configured without per-tier models: keep the router-level name.
+	if cfg.FastModel == "" && cfg.FrontierModel == "" {
+		return model
+	}
+	// Unambiguous tier: this entry's model for that tier when set.
+	if routerFast != routerFrontier {
+		if model == routerFast && cfg.FastModel != "" {
+			return cfg.FastModel
+		}
+		if model == routerFrontier && cfg.FrontierModel != "" {
+			return cfg.FrontierModel
+		}
+	}
+	// Ambiguous tier, or the entry lacks this tier's model: prefer the
+	// entry's fast model, then its frontier model.
+	if cfg.FastModel != "" {
+		return cfg.FastModel
+	}
+	return cfg.FrontierModel
+}
+
 // completeWithPool tries each provider in the pool in priority order.
 //
 // Race fix: each call constructs its own providerCfg from the acquired
@@ -319,6 +355,7 @@ func (r *Router) complete(ctx context.Context, model, system, user string, maxTo
 func (r *Router) completeWithPool(ctx context.Context, pool *Pool, model, system, user string,
 	maxTokens, maxRetries int, callStart time.Time) (string, error) {
 
+	_, _, _, routerFast, routerFrontier, _, _, _ := r.snapshot()
 	var resultText string
 	var lastErr error
 	err := pool.Call(ctx, func(cfg *ProviderConfig) error {
@@ -328,7 +365,8 @@ func (r *Router) completeWithPool(ctx context.Context, pool *Pool, model, system
 			apiKey:        cfg.APIKey,
 			bedrockRegion: cfg.BedrockRegion,
 		}
-		text, err := r.completeSingleWithCfg(ctx, pc, model, system, user, maxTokens, maxRetries, callStart, cfg.ID)
+		callModel := poolModelForRouterModel(cfg, routerFast, routerFrontier, model)
+		text, err := r.completeSingleWithCfg(ctx, pc, callModel, system, user, maxTokens, maxRetries, callStart, cfg.ID)
 		if err != nil {
 			lastErr = err
 			return err
