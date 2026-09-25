@@ -213,3 +213,101 @@ func TestReconcileCorruptRecordPruned(t *testing.T) {
 		t.Error("corrupt record must not be adopted")
 	}
 }
+
+// TestEvaluateWaitsForCIThatHasNotStarted reproduces the run #24 kind-eval
+// bug: a PR evaluated seconds after creation has zero check runs, so
+// GetCIStatus returns State="neutral", Checks=0. That must be treated like
+// pending — keep tracking and wait — not hard-failed with "CI status
+// unknown". The PR merges once CI reports success.
+func enabledMergerForTest(t *testing.T, gh *mockGitHubClient) (*Merger, *fakeTrackedPRStore, *fakeStatusStore) {
+	t.Helper()
+	cfg := DefaultConfig()
+	cfg.Enabled = true
+	cfg.Namespaces = []string{"sim"}
+	status := &fakeStatusStore{}
+	persist := newFakeTrackedPRStore()
+	m := NewMerger(NewPolicy(cfg, &mockSafetyChecker{allowed: true}), gh, status, nil)
+	m.SetPersistence(persist)
+	return m, persist, status
+}
+
+func TestEvaluateWaitsForCIThatHasNotStarted(t *testing.T) {
+	gh := &mockGitHubClient{}
+	m, persist, status := enabledMergerForTest(t, gh)
+	m.Track(validTrackedPR("org/repo", 51))
+
+	// Fresh PR: no check runs yet.
+	gh.mu.Lock()
+	gh.ciStatus = CIStatus{State: "neutral", Checks: 0}
+	gh.mu.Unlock()
+
+	m.EvaluateNow(context.Background(), "org/repo", 51)
+
+	if !m.IsTracked("org/repo", 51) {
+		t.Fatal("PR with not-yet-started CI must stay tracked (was untracked as 'CI status unknown')")
+	}
+	if status.lastStatus != "" {
+		t.Errorf("no terminal status should be written while waiting, got %q", status.lastStatus)
+	}
+	if gh.commentCount != 0 {
+		t.Errorf("no skip comment should be posted while waiting, got %d", gh.commentCount)
+	}
+
+	// CI completes green → PR merges on the next evaluation.
+	gh.mu.Lock()
+	gh.ciStatus = CIStatus{State: "success", Checks: 3, Passing: 3}
+	gh.mu.Unlock()
+
+	m.EvaluateNow(context.Background(), "org/repo", 51)
+
+	if gh.mergeCount != 1 {
+		t.Errorf("mergeCount = %d, want 1 after CI goes green", gh.mergeCount)
+	}
+	if m.IsTracked("org/repo", 51) {
+		t.Error("PR should be untracked after merging")
+	}
+	if persist.len() != 0 {
+		t.Errorf("persistence should be cleaned after merge, %d records left", persist.len())
+	}
+	if status.lastStatus != "merged" {
+		t.Errorf("status = %q, want merged", status.lastStatus)
+	}
+}
+
+// TestEvaluateCITimeoutStillBoundedWhenNeutral verifies the grace period is
+// bounded: a PR whose CI never produces check runs is untracked after
+// CITimeoutSec, with a comment, instead of being watched forever.
+func TestEvaluateCITimeoutStillBoundedWhenNeutral(t *testing.T) {
+	gh := &mockGitHubClient{}
+	m, _, status := enabledMergerForTest(t, gh)
+	pr := validTrackedPR("org/repo", 52)
+	m.Track(pr)
+
+	gh.mu.Lock()
+	gh.ciStatus = CIStatus{State: "neutral", Checks: 0}
+	gh.mu.Unlock()
+
+	// First eval starts the CI wait clock.
+	m.EvaluateNow(context.Background(), "org/repo", 52)
+	if !m.IsTracked("org/repo", 52) {
+		t.Fatal("PR must stay tracked on first neutral eval")
+	}
+
+	// Simulate the timeout elapsing.
+	m.mu.Lock()
+	tracked := m.tracked[prKey("org/repo", 52)]
+	m.mu.Unlock()
+	tracked.CIWaitStart = time.Now().Add(-time.Duration(m.policy.cfg.CITimeoutSec+1) * time.Second)
+
+	m.EvaluateNow(context.Background(), "org/repo", 52)
+
+	if m.IsTracked("org/repo", 52) {
+		t.Error("PR with CI stuck neutral past CITimeoutSec must be untracked")
+	}
+	if status.lastStatus != "skipped:ci_timeout" {
+		t.Errorf("status = %q, want skipped:ci_timeout", status.lastStatus)
+	}
+	if gh.commentCount != 1 {
+		t.Errorf("commentCount = %d, want 1 (timeout notice)", gh.commentCount)
+	}
+}
