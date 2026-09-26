@@ -53,7 +53,13 @@ func (w *wiring) runRepoChecks(ctx context.Context, inc *schemas.Incident, repo,
 	}
 
 	ci := w.repoci.Discover(ctx, repo, baseBranch)
-	if ci == nil || ci.Source == "none" || (len(ci.TestCmds) == 0 && len(ci.FmtCmds) == 0) {
+	// Run #30 post-mortem: BuildCmds must count. user-api's CI is a bare
+	// `npx tsc --noEmit` typecheck (its `npm test` step is
+	// continue-on-error "no tests yet") — the old condition skipped the
+	// gate whenever a repo had no test commands, so the typecheck gate has
+	// NEVER actually run despite being shipped in v1.7.14.
+	if ci == nil || ci.Source == "none" ||
+		(len(ci.TestCmds) == 0 && len(ci.FmtCmds) == 0 && len(ci.BuildCmds) == 0) {
 		logging.Info("repo-checks: no CI commands discovered — gate skipped", "repo", repo)
 		return nil
 	}

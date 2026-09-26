@@ -1,8 +1,11 @@
 package executors
 
 import (
+	"context"
 	"testing"
 	"time"
+
+	"github.com/karimzakzouk/sentinel/internal/schemas"
 )
 
 // TestSandboxProbePathsAutoDefault verifies the default is auto mode
@@ -244,5 +247,46 @@ func TestOriginalErrorStillInReproducer(t *testing.T) {
 				t.Errorf("originalErrorStillInReproducer = %v, want %v", got, tc.wantStillPresent)
 			}
 		})
+	}
+}
+
+// Run #30 post-mortem: transient_infra fixes (retry with backoff) do not
+// eliminate the original error — the upstream dependency stays down. L3
+// must accept observed retry behavior as verification for that fault
+// class, while still failing a do-nothing fix (error present, no retries)
+// and for other fault classes.
+func TestVerifyErrorGoneFromLogs_RetryAwareForTransientInfra(t *testing.T) {
+	s := &SandboxRunner{}
+	baseInc := &schemas.Incident{
+		Cluster: schemas.AnomalyCluster{
+			Anomalies: []schemas.Anomaly{{Explanation: "socket.gaierror: [Errno -2] Name or service not known"}},
+		},
+	}
+	// Celery-style canary output: error present + explicit retry lines.
+	retryLogs := `[2026-09-26 09:00:01: ERROR/ForkPoolWorker-2] Task send_email failed with gaierror: [Errno -2] Name or service not known
+[2026-09-26 09:00:01: INFO/MainProcess] Task send_email[e2f1] retry: Retry in 20s: gaierror: Name or service not known`
+	// A canary with the error but no retry behavior at all.
+	noRetryLogs := `[2026-09-26 09:00:01: ERROR/ForkPoolWorker-2] Task send_email failed with gaierror: [Errno -2] Name or service not known`
+
+	// 1) transient_infra + retry evidence -> verified.
+	incT := *baseInc
+	incT.State = schemas.AgentState{RootCause: &schemas.RootCause{FaultClass: "transient_infra"}}
+	if r := s.verifyErrorGoneFromLogs(context.Background(), &incT, retryLogs); !r.passed {
+		t.Errorf("transient_infra + retry evidence should verify, got: %s", r.detail)
+	}
+	// 2) transient_infra but no retry evidence -> still failing.
+	if r := s.verifyErrorGoneFromLogs(context.Background(), &incT, noRetryLogs); r.passed {
+		t.Error("transient_infra without retry evidence must NOT verify (do-nothing fix)")
+	}
+	// 3) other fault class + retry evidence -> NOT verified by the retry path
+	//    (the error must actually disappear).
+	incL := *baseInc
+	incL.State = schemas.AgentState{RootCause: &schemas.RootCause{FaultClass: "logic_data"}}
+	if r := s.verifyErrorGoneFromLogs(context.Background(), &incL, retryLogs); r.passed {
+		t.Error("logic_data + error present must NOT verify, even with stray retry lines")
+	}
+	// 4) error gone -> verified regardless of fault class.
+	if r := s.verifyErrorGoneFromLogs(context.Background(), &incT, "all healthy"); !r.passed {
+		t.Errorf("error gone should verify, got: %s", r.detail)
 	}
 }
