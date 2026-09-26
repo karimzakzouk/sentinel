@@ -107,6 +107,12 @@ type wiring struct {
 	baseChecksMu    sync.Mutex
 	baseChecksCache map[string]*executors.RunResult
 
+	// Base-build probe (v1.7.14): one kaniko build of the BASE branch
+	// per repo per process, to tell "fix broke the build" from "base
+	// build is rotten" when a canary build fails (run #28 search-api).
+	baseProbeMu    sync.Mutex
+	baseProbeCache map[string]bool
+
 	// Detection + correlation.
 	tracker        *detection.ActiveTracker
 	clusterer      *detection.Clusterer

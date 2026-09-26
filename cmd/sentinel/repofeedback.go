@@ -126,7 +126,7 @@ func (w *wiring) baseRepoChecks(ctx context.Context, repo, baseBranch string, ci
 
 // evaluateRepoChecks maps a bundle to a gate verdict.
 func evaluateRepoChecks(b *repoChecksBundle) (repoCheckGate, *repoChecksBundle) {
-	if b == nil || b.fixRun == nil || !b.fixRun.TestsRan {
+	if b == nil || b.fixRun == nil || (!b.fixRun.TestsRan && !b.fixRun.BuildsRan) {
 		return repoCheckUnavailable, b
 	}
 	if len(b.newFails) > 0 {

