@@ -208,14 +208,26 @@ func (c *Client) FetchCrashingPodLogs(ctx context.Context, service, namespace st
 
 	limitBytes := int64(64 * 1024)
 	tailLines := int64(300)
+
+	// v1.7.13: a restarting pod's crash evidence lives in the PREVIOUS
+	// container. Only fall back to current logs when the pod never
+	// restarted, or after previous stayed unavailable across retries — a
+	// fresh startup line is not crash evidence (run #27: the incident
+	// carried 28 bytes of "server starting" and the investigator guessed).
+	restarts := 0
+	for _, cs := range worstPod.Status.ContainerStatuses {
+		restarts += int(cs.RestartCount)
+	}
 	for attempt := range 3 {
 		opts := &corev1.PodLogOptions{Previous: true, TailLines: &tailLines, LimitBytes: &limitBytes}
 		if logs, err := c.clientset.CoreV1().Pods(namespace).GetLogs(worstPod.Name, opts).Do(ctx).Raw(); err == nil && isValidLogContent(string(logs)) {
 			return keepLogTail(string(logs), int(limitBytes)), nil
 		}
-		opts.Previous = false
-		if logs, err := c.clientset.CoreV1().Pods(namespace).GetLogs(worstPod.Name, opts).Do(ctx).Raw(); err == nil && isValidLogContent(string(logs)) {
-			return keepLogTail(string(logs), int(limitBytes)), nil
+		if restarts == 0 || attempt == 2 {
+			opts.Previous = false
+			if logs, err := c.clientset.CoreV1().Pods(namespace).GetLogs(worstPod.Name, opts).Do(ctx).Raw(); err == nil && isValidLogContent(string(logs)) {
+				return keepLogTail(string(logs), int(limitBytes)), nil
+			}
 		}
 		if attempt < 2 {
 			select {

@@ -267,6 +267,16 @@ func wire(cfg *config.Config, listenAddr string) (*wiring, error) {
 		WithGitHost(cfg.GitHost).
 		WithGitHubToken(cfg.GitHubToken)
 
+	// v1.7.13: the repo's own CI tests as a pre-PR gate + pre-push
+	// formatting with the repo's own rules.
+	w.repoTests = executors.NewRepoTestRunner(k8sClient.Clientset(), cfg.Namespace).
+		WithGitHost(cfg.GitHost).
+		WithTimeout(time.Duration(cfg.RepoTestsTimeoutSec) * time.Second)
+
+	w.formatter = executors.NewBranchFormatter(k8sClient.Clientset(), cfg.Namespace).
+		WithGitHost(cfg.GitHost).
+		WithTimeout(time.Duration(cfg.FormatTimeoutSec) * time.Second)
+
 	if cfg.AutoRemediationEnabled {
 		w.remediation = executors.NewRemediationController(k8sClient.Clientset(), cfg.SkipNamespaces)
 	}
@@ -431,7 +441,7 @@ func wire(cfg *config.Config, listenAddr string) (*wiring, error) {
 
 	w.clusterer = detection.NewClusterer(clustererHandler, w.tracker)
 
-	detectionHandler := func(service, namespace, reason, _ string) {
+	detectionHandler := func(service, namespace, reason, podLogs string) {
 		logging.Info("detection signal",
 			"namespace", namespace,
 			"service", service,
@@ -448,6 +458,11 @@ func wire(cfg *config.Config, listenAddr string) (*wiring, error) {
 			Namespace: namespace,
 			Reason:    reason,
 			Repo:      repo,
+			// v1.7.13: the detector already captured the CRASHING
+			// container's logs (--previous) at trigger time — keep them
+			// attached to the incident instead of dropping them here and
+			// hoping a later re-fetch finds the crash output again.
+			PodLogs:   podLogs,
 			Timestamp: time.Now(),
 		})
 	}

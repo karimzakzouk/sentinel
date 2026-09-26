@@ -518,12 +518,37 @@ func (w *wiring) executeCodeFix(ctx context.Context, incident *schemas.Incident)
 				if fp == nil {
 					break
 				}
+				// v1.7.13: reset the branch to base BEFORE re-pushing. Retry attempts
+				// historically accumulated stale files: attempt 1's Cargo.toml stayed
+				// on the branch while attempt 2 verified different files — the sandbox
+				// verified code that was not the PR content, and the stale manifest
+				// broke the Kaniko build (run #27 search-api). After the reset,
+				// branch == base + exactly this proposal's files.
+				if fp.Repo != nil && *fp.Repo != "" {
+					w.ghExec.ResetBranchToBase(ctx, *fp.Repo, branchInfo.BranchName, branchInfo.BaseBranch)
+				}
 				logging.Info("re-preparing fix branch with corrected code", "fix_id", fp.FixID, "attempt", sandboxAttempt+1)
 				branchInfo = w.ghExec.PrepareBranch(ctx, incident)
 				if !branchInfo.Success {
 					logging.Error("branch re-preparation failed", "error", branchInfo.Error)
 					break
 				}
+			}
+
+			// v1.7.13: format the changed files with the repo's own rules BEFORE
+			// anything reads the branch (canary build, repo tests, eventual PR).
+			// Non-blocking by design — a formatter failure never kills a fix.
+			if cfg.FormatOnPushEnabled {
+				w.formatFixBranch(ctx, incident, branchInfo)
+			}
+
+			// v1.7.13 Level 6: start the repo's OWN CI test suite against the
+			// branch now — it only needs the branch (not the canary image), so it
+			// runs in parallel with the Kaniko build + sandbox verification. The
+			// outcome is consumed after the sandbox passes.
+			var repoTestCh chan *executors.RepoTestOutcome
+			if cfg.RepoTestsEnabled {
+				repoTestCh = w.startRepoTests(ctx, incident, branchInfo)
 			}
 
 			// Phase 2: Build canary image (+ post-fix artifacts in parallel on first attempt).
@@ -556,6 +581,20 @@ func (w *wiring) executeCodeFix(ctx context.Context, incident *schemas.Incident)
 			}
 
 			if kanikoErr != nil {
+				// v1.7.13: classify the failure by log content. A build that broke
+				// on the FIX'S OWN CODE (compile error, bad manifest edit) is
+				// actionable for the LLM — retry with the build logs as feedback
+				// instead of misclassifying it as an infrastructure error (run
+				// #27: search-api's build died on a stale Cargo.toml and the PR
+				// shipped unverified).
+				if buildErr, ok := kanikoErr.(*executors.BuildError); ok && !buildErr.Infra {
+					sandboxSummary = fmt.Sprintf(
+						"build_compile_failed: the canary image build failed while compiling the fix's own code.\n\n--- BUILD LOGS (last 8KB) ---\n%s",
+						tailStr(buildErr.Logs, 8*1024))
+					logging.Error("kaniko build failed on the fix's code — retrying with build feedback",
+						"fix_id", fp.FixID, "attempt", sandboxAttempt+1)
+					continue
+				}
 				sandboxSummary = fmt.Sprintf("kaniko_error: %v", kanikoErr)
 				logging.Error("kaniko build failed — not retrying (infrastructure error)",
 					"fix_id", fp.FixID, "error", kanikoErr, "attempt", sandboxAttempt+1)
@@ -591,6 +630,31 @@ func (w *wiring) executeCodeFix(ctx context.Context, incident *schemas.Incident)
 			)
 
 			if sandboxVerified {
+				// v1.7.13 Level 6 — the repository's OWN test suite (commands
+				// parsed from its CI config, NOT LLM-generated). The sandbox's
+				// LLM-generated tests are circular validation — the same LLM wrote
+				// the fix and the test; the repo's tests were written by the repo's
+				// owners and are the same tests GitHub Actions runs on the PR.
+				if repoTestCh != nil {
+					outcome := <-repoTestCh
+					repoTestCh = nil
+					if !outcome.Skipped && !outcome.Passed {
+						sandboxVerified = false
+						sandboxLevels = ""
+						sandboxSummary = repoTestFailureSummary(outcome)
+						logging.Error("Level 6 FAILED: repository's own test suite failed",
+							"commands", strings.Join(outcome.Commands, "; "), "source", outcome.Source)
+						metrics.RecordSandboxLevelFailure(6)
+						continue // retry with the real test output as feedback
+					}
+					if !outcome.Skipped {
+						sandboxLevels = "L1-L6"
+						sandboxSummary += fmt.Sprintf(" + repo CI tests passed (%d command(s), source=%s)",
+							len(outcome.Commands), outcome.Source)
+						logging.Info("Level 6 PASSED: repository's own test suite passed",
+							"source", outcome.Source, "commands", len(outcome.Commands))
+					}
+				}
 				break
 			}
 
@@ -801,6 +865,10 @@ func detectSandboxFailureLevel(summary string) int {
 		return 4
 	case strings.Contains(summary, "reproducer_failed"):
 		return 5
+	case strings.Contains(summary, "repo_tests_failed"):
+		return 6
+	case strings.Contains(summary, "build_compile_failed"):
+		return 7
 	case strings.Contains(summary, "deploy_failed"), strings.Contains(summary, "create_namespace"), strings.Contains(summary, "kaniko_error"):
 		return 0
 	}
@@ -824,9 +892,77 @@ func levelSpecificFeedback(summary, fullSummary string) string {
 		return fmt.Sprintf("Sandbox Level 4 FAILED: the regression test did not pass.\n\nIMPORTANT: Your fix passed Levels 1-3 (pod is Ready, health endpoints OK, original error gone from logs). But the LLM-generated regression test — which reproduces the original bug — still FAILS against your fixed code. This means your fix did not actually fix the underlying bug; it only masked the symptom.\n\nFull failure detail:\n%s\n\nPlease generate a corrected fix that makes the regression test PASS.", fullSummary)
 	case 5:
 		return fmt.Sprintf("Sandbox Level 5 FAILED: the reproducer script crashed (exit code != 0).\n\nIMPORTANT: Your fix passed Levels 1-4. But the LLM-generated reproducer script — which exercises the buggy code path — still crashes against your fixed code. This is the strongest signal that the fix is incomplete.\n\nFull failure detail:\n%s\n\nPlease generate a corrected fix that makes the reproducer script exit 0.", fullSummary)
+	case 6:
+		return fmt.Sprintf("Sandbox Level 6 FAILED: the repository's OWN test suite failed against your fix.\n\nThese are NOT LLM-generated tests — they were extracted from the repository's CI configuration and are the same tests GitHub Actions runs on the PR. Your fix may have fixed the incident but BROKE a contract the repo's tests protect, or the tests exercise the buggy path and your fix does not satisfy them.\n\nDo NOT delete or weaken tests. Fix the code so the repo's tests pass.\n\nFull test output:\n%s\n\nPlease generate a corrected fix that BOTH fixes the original incident AND makes the repository's own tests pass.", fullSummary)
+	case 7:
+		return fmt.Sprintf("BUILD FAILURE: the canary image build failed while compiling the fix's own code.\n\nYour changed files (or manifest edits like a Cargo.toml / package.json / go.mod change) broke compilation. Common causes: a dependency or edition the base toolchain does not support, a syntax error, a missing import. REVERT manifest edits you do not strictly need — do not change Cargo.toml edition, bump dependencies, or alter build files unless the bug itself is in them.\n\nBuild logs:\n%s\n\nPlease generate a corrected fix that compiles.", fullSummary)
 	default:
 		return fmt.Sprintf("Sandbox verification failed (infrastructure or unknown error — the LLM may not be able to fix this):\n%s\n\nPlease generate a corrected fix if you can; otherwise the PR will be opened with needs-review.", fullSummary)
 	}
+}
+
+// formatFixBranch formats the fix's changed files with the repo's own
+// formatter rules and pushes a formatting commit when needed. Non-blocking:
+// a formatter failure never kills a fix (CI will surface it).
+func (w *wiring) formatFixBranch(ctx context.Context, incident *schemas.Incident, branchInfo executors.BranchInfo) {
+	if w.formatter == nil || !branchInfo.Success {
+		return
+	}
+	fp := incident.State.FixProposal
+	if fp == nil || fp.Repo == nil || *fp.Repo == "" {
+		return
+	}
+	var paths []string
+	for _, fc := range fp.FilesToChange {
+		if fc.Path != "" {
+			paths = append(paths, fc.Path)
+		}
+	}
+	if len(paths) == 0 {
+		return
+	}
+	res := w.formatter.FormatChangedFiles(ctx, w.ghExec, *fp.Repo, branchInfo.BranchName, branchInfo.BaseBranch, paths)
+	if res.Committed {
+		logging.Info("formatted fix branch with repo rules", "detail", res.Reason)
+	} else if !res.Skipped {
+		logging.Info("fix branch already formatted", "detail", res.Reason)
+	}
+}
+
+// startRepoTests launches the repo's own test suite against the branch in
+// the background. Returns a buffered channel carrying the outcome (nil when
+// the runner is unavailable). The goroutine always completes and sends, so
+// an abandoned attempt (sandbox failed first) cannot leak a goroutine.
+func (w *wiring) startRepoTests(ctx context.Context, incident *schemas.Incident, branchInfo executors.BranchInfo) chan *executors.RepoTestOutcome {
+	fp := incident.State.FixProposal
+	if w.repoTests == nil || fp == nil || !branchInfo.Success || branchInfo.Repo == "" {
+		return nil
+	}
+	ch := make(chan *executors.RepoTestOutcome, 1)
+	repo, branch, base := branchInfo.Repo, branchInfo.BranchName, branchInfo.BaseBranch
+	go func() {
+		defer recoverPanic("repo-tests")
+		ch <- w.repoTests.Run(ctx, w.ghExec, repo, branch, base)
+	}()
+	return ch
+}
+
+// repoTestFailureSummary renders the Level 6 failure the fix proposer sees.
+func repoTestFailureSummary(outcome *executors.RepoTestOutcome) string {
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("repo_tests_failed: the repository's OWN test suite (extracted from its CI configuration, source=%s) failed against the fix.\n", outcome.Source))
+	b.WriteString(fmt.Sprintf("Commands run: %s\n\n", strings.Join(outcome.Commands, " && ")))
+	b.WriteString("--- REPO TEST OUTPUT (last 8KB) ---\n")
+	b.WriteString(tailStr(outcome.Output, 8*1024))
+	return b.String()
+}
+
+// tailStr returns the last n bytes of s.
+func tailStr(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[len(s)-n:]
 }
 
 // recordBetaOutcome updates the Beta prior for the fix pattern and returns

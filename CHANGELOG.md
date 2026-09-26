@@ -5,6 +5,81 @@ All notable changes to Sentinel are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.13] — 2026-09-26
+
+Run #27 (4/9 matched, 3 merged — same score as #26 but entirely new failure
+modes) surfaced three systematic defects this release fixes: circular
+validation, build-context pollution, and missing crash evidence. Design
+principle: **machines for gates, LLM for judgment** — every new gate is
+deterministic (YAML parsing, formatter exit codes, restart counts); the LLM
+keeps diagnosis, fix authoring, and revision from real failure output.
+
+### Added
+
+- **Level 6: the repository's own CI test suite runs against the fix branch
+  before the PR is opened.** Test commands are extracted from
+  `.github/workflows/*.yml` on the BASE branch by pure YAML parsing (no
+  LLM), with marker inference when no CI files exist (pom.xml -> `mvn -B
+  test`, Cargo.toml -> `cargo test`, go.mod -> `go test ./...`,
+  package.json -> `npm ci && npm test` when a test script exists, Gemfile +
+  spec/ -> rspec, pyproject/requirements + tests/ -> pytest). The suite
+  runs in a restricted one-shot pod (language-appropriate builder image,
+  token confined to the clone init container) in parallel with the Kaniko
+  build + sandbox; a failure feeds the real test output back to the fix
+  proposer and retries within the sandbox budget. This kills the circular
+  validation failure mode: run #27's shipping-api fix passed the
+  LLM-generated tests while failing the repo's own suite three times. A
+  pass upgrades the verification label to `sandbox-verified:L1-L6`.
+- **Pre-push formatting with the repo's own rules** — `gofmt` for changed
+  `.go` files, `cargo fmt` for `.rs`; black / ruff / prettier ONLY when the
+  repo configures them (no config, no formatting). The formatter runs
+  before the canary build and repo tests, so everything downstream
+  verifies the exact PR content. Run #27 lost a correct one-line Rust fix
+  to `cargo fmt --check` in CI.
+- **Kaniko build failures are now classified by log content.** A build
+  that broke on the fix's own code (compile error, manifest edit) returns
+  an actionable `*BuildError` and triggers a retry with the build logs as
+  fix-proposer feedback; only environmental failures (registry auth,
+  network, node mounts) remain non-retryable infra errors. Run #27
+  misread a broken build as infra and shipped an unverified PR.
+- **Branch reset to base before every retry/revision** — retry attempts
+  historically accumulated stale files (attempt 1's Cargo.toml edition
+  change stayed on the branch while attempt 2 verified different files:
+  the sandbox verified code that was not the PR content). Using the public
+  compare API, every file that differs from base is restored or deleted
+  before the corrected proposal is pushed, so branch == base + exactly the
+  current proposal's files.
+
+### Changed
+
+- **Detection-time crash logs now reach the incident.** The detector
+  already fetched `kubectl logs --previous` at trigger time, but the
+  handler dropped them (`_ string`) and the investigator re-fetched later
+  — sometimes catching only a 28-byte current-container startup line (run
+  #27 user-api: the investigator hallucinated a root cause from it). The
+  logs now flow Signal -> clusterer -> incident, and the investigator
+  merges them with the fresh fetch (substantive fresh output wins, both
+  are kept when they differ). `FetchCrashingPodLogs` also retries the
+  previous-container fetch before accepting thin current logs when the pod
+  has restarted.
+- **Post-deploy health check: ANY restart during the window is a
+  regression** (previously only restarts of pods seen Ready). Node's
+  "JavaScript heap out of memory" exits 134 — not 137/OOMKilled — so the
+  restart count is the only signal that catches every exit path; the
+  revert comment now includes the last termination reason/exit code. The
+  default window is 900s (was 480s): the run #27 leak cycle was ~8.5
+  minutes — 80 seconds longer than the old window.
+
+### Configuration
+
+- New: `SENTINEL_REPO_TESTS_ENABLED` (default true),
+  `SENTINEL_REPO_TESTS_TIMEOUT_SEC` (900),
+  `SENTINEL_FORMAT_ON_PUSH_ENABLED` (default true),
+  `SENTINEL_FORMAT_TIMEOUT_SEC` (300); chart values
+  `sentinel.repoTests.{enabled,timeoutSec}` and
+  `sentinel.formatOnPush.{enabled,timeoutSec}`;
+  `sentinel.postDeployCheck.durationSec` default 480 -> 900.
+
 ## [1.7.12] — 2026-09-26
 
 ### Changed

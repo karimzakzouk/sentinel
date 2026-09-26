@@ -290,7 +290,8 @@ func parseSandboxLevel(levels string) int {
 	if _, err := fmt.Sscanf(strings.TrimPrefix(levels, "L1-L"), "%d", &max); err != nil {
 		return 3
 	}
-	if max < 1 || max > 5 {
+	// L6 = the repository's own CI test suite also passed (v1.7.13).
+	if max < 1 || max > 6 {
 		return 3
 	}
 	return max

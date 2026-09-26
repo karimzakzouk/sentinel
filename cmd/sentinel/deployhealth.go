@@ -135,12 +135,14 @@ func (w *wiring) watchDeploymentHealth(ctx context.Context, pr *automerge.Tracke
 			var restarts int32
 			oom := false
 			ready := false
+			lastExit := ""
 			for _, cs := range pod.Status.ContainerStatuses {
 				restarts += cs.RestartCount
 				if cs.Ready {
 					ready = true
 				}
 				if t := cs.LastTerminationState.Terminated; t != nil {
+					lastExit = fmt.Sprintf("reason=%s exit=%d", t.Reason, t.ExitCode)
 					if t.Reason == "OOMKilled" || t.ExitCode == 137 {
 						oom = true
 					}
@@ -167,11 +169,14 @@ func (w *wiring) watchDeploymentHealth(ctx context.Context, pr *automerge.Tracke
 					fmt.Sprintf("deployed pod %s was OOMKilled after the merge (pod had been Ready) — the fix does not resolve the memory problem", pod.Name))
 				return
 			}
-			// A pod that was Ready at least once and then restarted = the
-			// deployed code crash-loops under real traffic.
-			if prev.seenReady && restarts > prev.restarts {
+			// v1.7.13: ANY restart during the window is a regression. The
+			// old seenReady condition missed crash-loops whose pods flap
+			// Ready between kills (user-api) and heap-OOM exits that are not
+			// 137 (Node's "JavaScript heap out of memory" exits 134 — only
+			// the restart count sees it).
+			if restarts > prev.restarts {
 				w.revertMergedPR(ctx, pr,
-					fmt.Sprintf("deployed pod %s restarted while supposed to be healthy (restarts %d -> %d) — the fix does not hold under real traffic", pod.Name, prev.restarts, restarts))
+					fmt.Sprintf("deployed pod %s restarted after rollout completed (restarts %d -> %d, last termination: %s) — the fix does not hold under real traffic", pod.Name, prev.restarts, restarts, lastExit))
 				return
 			}
 			prev.restarts = restarts

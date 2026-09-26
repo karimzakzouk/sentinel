@@ -186,22 +186,37 @@ func NewInvestigator(router *llm.Router, k8sClient *k8s.Client, gitHubToken stri
 func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error {
 	cluster := state.Cluster
 
-	// Always fetch fresh pod logs via the K8s API (up to 8KB, retry 3x).
-	// Falls back to whatever the detection layer already captured.
+	// Evidence merge (v1.7.13): the detection layer captured the CRASHING
+	// container's output (--previous) at trigger time. A fresh fetch may
+	// return only a thin current-container startup line when the timing is
+	// unlucky (run #27: a 28-byte incident sent the investigation into
+	// hallucination). Extract the detection capture BEFORE it can be
+	// overwritten, then merge: fresh logs first, detection capture appended
+	// when both exist and differ; whichever is substantive wins.
+	detectionLogs := a.extractPodLogs(cluster)
 	var podLogs string
 	if a.k8s != nil {
 		podLogs, _ = a.k8s.FetchCrashingPodLogs(ctx, cluster.Service, cluster.Namespace)
 	}
-	if podLogs != "" {
+	if podLogs != "" && len(podLogs) >= 200 {
 		logging.Info("fetched pod logs via K8s API", "bytes", len(podLogs))
+		if detectionLogs != "" && detectionLogs != podLogs {
+			podLogs = podLogs + "\n\n## Pod Logs (captured at detection time — previous container)\n" + detectionLogs
+		}
 		fullExplanation := cluster.Summary + "\n\n## Pod Logs (full, from K8s API)\n" + podLogs
 		if len(cluster.Anomalies) > 0 {
 			cluster.Anomalies[0].Explanation = fullExplanation
 		}
 		state.Cluster = cluster
+	} else if detectionLogs != "" {
+		podLogs = detectionLogs
+		logging.Info("K8s API logs unavailable or thin — using detection-time capture", "bytes", len(podLogs))
+		if len(cluster.Anomalies) > 0 {
+			cluster.Anomalies[0].Explanation = cluster.Summary + "\n\n## Pod Logs (captured at detection time — previous container)\n" + podLogs
+		}
+		state.Cluster = cluster
 	} else {
 		podLogs = a.extractPodLogs(cluster)
-		logging.Info("K8s API logs unavailable, using detection logs", "bytes", len(podLogs))
 	}
 
 	// Runtime ground truth (v1.7.4): env var names, config refs, resource

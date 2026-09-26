@@ -141,8 +141,91 @@ func validateRepoBranch(repo, branch string) error {
 	return nil
 }
 
+// BuildError is a typed Kaniko build failure. Infra=true means the failure
+// is environmental (registry auth, base-image pull, node mounts, network)
+// and the LLM cannot fix it. Infra=false means the build broke on the fix's
+// own code (compile error, bad manifest edit, missing file) — the failure
+// output is actionable feedback for the fix proposer.
+type BuildError struct {
+	Image string
+	Infra bool
+	Logs  string
+}
+
+func (e *BuildError) Error() string {
+	kind := "compile"
+	if e.Infra {
+		kind = "infrastructure"
+	}
+	return fmt.Sprintf("kaniko build failed (%s) for %s", kind, e.Image)
+}
+
+// compileErrorMarkers match build-stage failures caused by the fix's code:
+// compiler diagnostics, dependency resolution on the fix's manifest edits,
+// missing files, syntax errors. These belong to the LLM's sphere.
+var compileErrorMarkers = []string{
+	"error[e",             // rustc: error[E0308]
+	"error:",              // rustc/go/javac/npm/mvn general
+	"error]",              // maven: [ERROR]
+	"undefined:",          // go: ./src/db.go:12:5: undefined: x
+	"cannot find package", // go
+	"build failure",       // maven
+	"npm err",             // npm
+	"modulenotfound",      // python/js
+	"module not found",
+	"cannot find module",
+	"syntaxerror",
+	"traceback (most recent call last)", // python in RUN steps
+	"compilation terminated",            // gcc
+	"no such file or directory",
+	"manifest unknown",              // bad base image reference edited by a fix
+	"failed to resolve",             // dockerfile FROM resolution against edited files
+	"did not complete successfully", // buildkit-style step failure summary
+	"exit code: 1", "exit status 1", "exit code 1",
+	"unresolved dependency",
+	"edition", // Cargo.toml edition problems (run #27: edition 2024 vs old toolchain)
+}
+
+// infraErrorMarkers match environmental failures the LLM cannot fix.
+var infraErrorMarkers = []string{
+	"unauthorized", "authentication required", "pull access denied",
+	"dial tcp", "i/o timeout", "context deadline exceeded",
+	"too many requests", "rate limit",
+	"no space left on device",
+	"unlinkat", // kind node mount quirk (run #21)
+	"failed to authorize",
+	"connection refused", "connection reset",
+	"eof",
+	"imagepullbackoff",
+}
+
+// ClassifyBuildLogs decides whether a failed Kaniko build broke on the
+// fix's code (Infra=false) or on infrastructure (Infra=true). Compile
+// markers win over infra markers when both appear — a compile error inside
+// a layer build is still the fix's fault even if the tail also mentions a
+// registry retry. Unknown logs default to infra (the safe, non-retrying
+// historical behavior).
+func ClassifyBuildLogs(logs string) bool {
+	lower := strings.ToLower(logs)
+	if lower == "" {
+		return true
+	}
+	for _, m := range compileErrorMarkers {
+		if strings.Contains(lower, m) {
+			return false
+		}
+	}
+	for _, m := range infraErrorMarkers {
+		if strings.Contains(lower, m) {
+			return true
+		}
+	}
+	return true
+}
+
 // Build builds a Docker image with the fixed files applied. Returns the
 // full image reference (e.g. "docker.io/karimzakzouk/sentinel-sim:sentinel-abc12345").
+// A failed build returns a *BuildError carrying the classification + logs.
 func (k *KanikoBuilder) Build(ctx context.Context, repo, branch string, fixedFiles map[string]string, imageName, imageTag, dockerfilePath string) (string, error) {
 	if err := validateRepoBranch(repo, branch); err != nil {
 		return "", err
@@ -178,9 +261,17 @@ func (k *KanikoBuilder) Build(ctx context.Context, repo, branch string, fixedFil
 	success := k.waitForCompletion(ctx, podName, 10*time.Minute)
 	if !success {
 		logs, _ := k.getPodLogs(ctx, podName)
-		logging.Error("kaniko build failed", "image", fullImage, "logs", lastN(logs, 500))
+		// Also fetch the clone-and-patch init container logs — a failed clone
+		// is infra, a successful clone followed by compile errors is not.
+		cloneLogs := k.getInitContainerLogs(ctx, podName)
+		fullLogs := logs
+		if cloneLogs != "" {
+			fullLogs = cloneLogs + "\n--- kaniko executor logs ---\n" + logs
+		}
+		logging.Error("kaniko build failed",
+			"image", fullImage, "infra", ClassifyBuildLogs(fullLogs), "logs", lastN(fullLogs, 500))
 		k.cleanup(ctx, configmapName, podName)
-		return "", fmt.Errorf("kaniko build failed for %s", fullImage)
+		return "", &BuildError{Image: fullImage, Infra: ClassifyBuildLogs(fullLogs), Logs: lastN(fullLogs, 16*1024)}
 	}
 
 	logging.Info("kaniko build succeeded", "image", fullImage)
@@ -432,6 +523,20 @@ func (k *KanikoBuilder) getPodLogs(ctx context.Context, podName string) (string,
 		return "", err
 	}
 	return buf.String(), nil
+}
+
+// getInitContainerLogs fetches the clone-and-patch init container's logs
+// (best effort — used to classify build failures).
+func (k *KanikoBuilder) getInitContainerLogs(ctx context.Context, podName string) string {
+	req := k.clientset.CoreV1().Pods(k.namespace).GetLogs(podName, &corev1.PodLogOptions{Container: "clone-and-patch"})
+	stream, err := req.Stream(ctx)
+	if err != nil {
+		return ""
+	}
+	defer stream.Close()
+	buf := new(bytes.Buffer)
+	_, _ = buf.ReadFrom(stream)
+	return buf.String()
 }
 
 // cleanup deletes the build ConfigMap and Pod. Uses a fresh context so

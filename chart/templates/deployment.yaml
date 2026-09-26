@@ -99,11 +99,23 @@ spec:
             - name: SENTINEL_POSTDEPLOY_CHECK_ENABLED
               value: {{ .Values.sentinel.postDeployCheck.enabled | quote }}
             - name: SENTINEL_POSTDEPLOY_CHECK_DURATION_SEC
-              value: {{ .Values.sentinel.postDeployCheck.durationSec | default 480 | quote }}
+              value: {{ .Values.sentinel.postDeployCheck.durationSec | default 900 | quote }}
             - name: SENTINEL_POSTDEPLOY_REGRESSION_COOLDOWN
               value: {{ .Values.sentinel.postDeployCheck.regressionCooldown | default true | quote }}
             - name: SENTINEL_POSTDEPLOY_REVERT_AUTO_MERGE
               value: {{ .Values.sentinel.postDeployCheck.revertAutoMerge | default true | quote }}
+            {{- end }}
+            {{- if hasKey .Values.sentinel "repoTests" }}
+            - name: SENTINEL_REPO_TESTS_ENABLED
+              value: {{ .Values.sentinel.repoTests.enabled | default true | quote }}
+            - name: SENTINEL_REPO_TESTS_TIMEOUT_SEC
+              value: {{ .Values.sentinel.repoTests.timeoutSec | default 900 | quote }}
+            {{- end }}
+            {{- if hasKey .Values.sentinel "formatOnPush" }}
+            - name: SENTINEL_FORMAT_ON_PUSH_ENABLED
+              value: {{ .Values.sentinel.formatOnPush.enabled | default true | quote }}
+            - name: SENTINEL_FORMAT_TIMEOUT_SEC
+              value: {{ .Values.sentinel.formatOnPush.timeoutSec | default 300 | quote }}
             {{- end }}
             {{- if .Values.sentinel.safeActions.enabled }}
             - name: SENTINEL_SAFE_ACTIONS_ENABLED

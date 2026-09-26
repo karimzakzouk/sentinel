@@ -96,6 +96,8 @@ type wiring struct {
 	k8sExec     *executors.K8sExecutor
 	sandbox     *executors.SandboxRunner
 	kaniko      *executors.KanikoBuilder
+	repoTests   *executors.RepoTestRunner
+	formatter   *executors.BranchFormatter
 	remediation *executors.RemediationController
 
 	// Detection + correlation.

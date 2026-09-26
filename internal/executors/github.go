@@ -286,6 +286,95 @@ func (e *GitHubExecutor) GetFileContent(ctx context.Context, repo, path, ref str
 	return resp.Content, nil
 }
 
+// GetFileContentAt satisfies the RepoFileFetcher interface (repotests.go).
+// Identical to GetFileContent — the interface method exists so test doubles
+// can stub file fetching without a full GitHubExecutor.
+func (e *GitHubExecutor) GetFileContentAt(ctx context.Context, repo, path, ref string) (string, error) {
+	return e.GetFileContent(ctx, repo, path, ref)
+}
+
+// ListDirEntries lists the entries of a directory path at a ref via the
+// Contents API. Returns (nil, err) on API errors; a non-existent path is
+// an API error too (404) — callers treat any error as "absent".
+func (e *GitHubExecutor) ListDirEntries(ctx context.Context, repo, path, ref string) ([]DirEntry, error) {
+	url := fmt.Sprintf("%s/repos/%s/contents/%s?ref=%s", e.APIURL, repo, path, ref)
+	var entries []DirEntry
+	if err := e.Do(ctx, "GET", url, nil, &entries); err != nil {
+		return nil, err
+	}
+	return entries, nil
+}
+
+// ResetBranchToBase reverts every file that differs between branch and
+// baseBranch back to its base content (deleting files that only exist on
+// the branch). This makes the branch content == base + exactly the files
+// the CURRENT fix proposal writes — killing the run-#27 "stale junk"
+// failure mode where attempt 1's Cargo.toml edition change stayed on the
+// branch, broke the Kaniko build, and was misread as an infra error while
+// the sandbox had verified attempt 2's (different, clean) files.
+//
+// Uses the public compare API: GET /repos/{repo}/compare/{base}...{branch}.
+// Returns the number of files reverted/deleted.
+func (e *GitHubExecutor) ResetBranchToBase(ctx context.Context, repo, branch, baseBranch string) int {
+	url := fmt.Sprintf("%s/repos/%s/compare/%s...%s", e.APIURL, repo, baseBranch, branch)
+	var cmp struct {
+		Files []struct {
+			Filename string `json:"filename"`
+			Status   string `json:"status"` // added|removed|modified
+		} `json:"files"`
+	}
+	if err := e.Do(ctx, "GET", url, nil, &cmp); err != nil {
+		logging.Info("branch reset: compare failed (branch may equal base)", "err", err)
+		return 0
+	}
+
+	reverted := 0
+	for _, f := range cmp.Files {
+		if f.Filename == "" {
+			continue
+		}
+		if f.Status == "removed" {
+			continue // already absent on the branch
+		}
+		baseContent, baseErr := e.GetFileContent(ctx, repo, f.Filename, baseBranch)
+		if baseErr == nil && baseContent != "" {
+			// File exists on base — restore the base content on the branch.
+			if err := e.upsertFile(ctx, repo, branch, f.Filename, baseContent); err != nil {
+				logging.Error("branch reset: restore failed", "file", f.Filename, "err", err)
+				continue
+			}
+			reverted++
+			continue
+		}
+		// File only exists on the branch (added) — delete it.
+		if err := e.deleteFile(ctx, repo, branch, f.Filename, "revert file absent on base"); err != nil {
+			logging.Error("branch reset: delete failed", "file", f.Filename, "err", err)
+			continue
+		}
+		reverted++
+	}
+	if reverted > 0 {
+		logging.Info("branch reset: reverted stale files to base state",
+			"repo", repo, "branch", branch, "files", reverted)
+	}
+	return reverted
+}
+
+// deleteFile removes a file from a branch via the Contents API.
+func (e *GitHubExecutor) deleteFile(ctx context.Context, repo, branch, path, msg string) error {
+	sha, err := e.getFileSHA(ctx, repo, path, branch)
+	if err != nil {
+		return fmt.Errorf("get file sha: %w", err)
+	}
+	url := fmt.Sprintf("%s/repos/%s/contents/%s", e.APIURL, repo, path)
+	body := map[string]any{
+		"message": fmt.Sprintf("[Sentinel] %s: %s", msg, path),
+		"sha":     sha,
+		"branch":  branch,
+	}
+	return e.Do(ctx, "DELETE", url, body, nil)
+}
+
 // createPR opens a Pull Request. Returns (number, html_url, error).
 func (e *GitHubExecutor) createPR(ctx context.Context, repo, title, body, head, base string) (int, string, error) {
 	url := fmt.Sprintf("%s/repos/%s/pulls", e.APIURL, repo)

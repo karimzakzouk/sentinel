@@ -198,6 +198,25 @@ type Config struct {
 	PostDeployRegressionCooldown bool // trigger the global auto-merge cooldown on regression
 	PostDeployRevertAutoMerge    bool // merge the revert PR immediately after opening it
 
+	// ─── Repo's own CI tests as a pre-PR gate (v1.7.13) ────────────────
+	// Run the repository's own test suite against the fix branch BEFORE
+	// the PR is opened. Commands are extracted from .github/workflows on
+	// the BASE branch by pure YAML parsing (no LLM), with marker
+	// inference (pom.xml -> mvn test, Cargo.toml -> cargo test, ...)
+	// when no CI files exist. A failure feeds the real test output back
+	// to the fix proposer and retries within the sandbox retry budget.
+	// Kills the circular-validation failure mode: LLM-generated tests
+	// always passing while the repo's own CI fails the PR.
+	RepoTestsEnabled    bool
+	RepoTestsTimeoutSec int
+
+	// ─── Pre-push formatting with the repo's own rules (v1.7.13) ────────
+	// Format the fix's changed files with the repo's own formatter config
+	// before pushing (gofmt / cargo fmt / black-when-configured /
+	// prettier-when-configured). No config, no formatting.
+	FormatOnPushEnabled bool
+	FormatTimeoutSec    int
+
 	AutoRemediationEnabled bool
 
 	// ─── Observability backends ──────────────────────────────────────────
@@ -445,9 +464,16 @@ func Load() *Config {
 		// watch the service's pods (restart counts, OOMKills, readiness)
 		// and auto-revert the merge if the deployed fix regresses.
 		PostDeployCheckEnabled:       getenvBool("SENTINEL_POSTDEPLOY_CHECK_ENABLED", false),
-		PostDeployCheckDurationSec:   getenvInt("SENTINEL_POSTDEPLOY_CHECK_DURATION_SEC", 480),
+		PostDeployCheckDurationSec:   getenvInt("SENTINEL_POSTDEPLOY_CHECK_DURATION_SEC", 900),
 		PostDeployRegressionCooldown: getenvBool("SENTINEL_POSTDEPLOY_REGRESSION_COOLDOWN", true),
 		PostDeployRevertAutoMerge:    getenvBool("SENTINEL_POSTDEPLOY_REVERT_AUTO_MERGE", true),
+
+		// Repo CI tests gate (v1.7.13) + pre-push formatting.
+		RepoTestsEnabled:    getenvBool("SENTINEL_REPO_TESTS_ENABLED", true),
+		RepoTestsTimeoutSec: getenvInt("SENTINEL_REPO_TESTS_TIMEOUT_SEC", 900),
+
+		FormatOnPushEnabled: getenvBool("SENTINEL_FORMAT_ON_PUSH_ENABLED", true),
+		FormatTimeoutSec:    getenvInt("SENTINEL_FORMAT_TIMEOUT_SEC", 300),
 
 		AutoRemediationEnabled: getenvBool("SENTINEL_AUTO_REMEDIATION_ENABLED", false),
 	}

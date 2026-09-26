@@ -87,6 +87,13 @@ func (w *wiring) handleCIFailureRevision(ctx context.Context, pr *automerge.Trac
 		return
 	}
 
+	// v1.7.13: reset the branch to base first — the previous revision's
+	// stale files must not survive into this revision (run #27: a leftover
+	// Cargo.toml edition change broke the build three revisions in a row).
+	if fp.Repo != nil && *fp.Repo != "" {
+		w.ghExec.ResetBranchToBase(revCtx, *fp.Repo, pr.Branch, pr.BaseBranch)
+	}
+
 	// 6. Push the corrected files to the SAME branch — the open PR updates
 	// and CI re-runs automatically on the new head commit.
 	pushed := w.ghExec.PrepareBranch(revCtx, inc)
@@ -100,6 +107,12 @@ func (w *wiring) handleCIFailureRevision(ctx context.Context, pr *automerge.Trac
 	}
 	logging.Info("ci-feedback: revised fix pushed to branch",
 		"repo", pr.Repo, "pr", pr.PRNumber, "branch", pushed.BranchName, "files", pushed.FilesChanged)
+
+	// v1.7.13: format the revised files with the repo's own rules before
+	// CI sees them (cargo fmt --check / prettier / black classes of failure).
+	if w.Config().FormatOnPushEnabled {
+		w.formatFixBranch(revCtx, inc, pushed)
+	}
 
 	// 7. Re-verify in the sandbox (build canary from the revised branch, run
 	// the 5-level suite). The merge gates require sandbox verification —
@@ -120,6 +133,15 @@ func (w *wiring) handleCIFailureRevision(ctx context.Context, pr *automerge.Trac
 	if !sb.Verified {
 		fail(fmt.Sprintf("revised fix failed sandbox verification: %s", firstLine(sb.Summary)))
 		return
+	}
+
+	// v1.7.13: run the repo's own tests BEFORE CI does — converge the
+	// revision here instead of burning another CI round trip.
+	if w.repoTests != nil && w.Config().RepoTestsEnabled {
+		if outcome := w.repoTests.Run(revCtx, w.ghExec, pushed.Repo, pushed.BranchName, pushed.BaseBranch); outcome != nil && !outcome.Skipped && !outcome.Passed {
+			fail(fmt.Sprintf("revised fix fails the repository's own test suite: %s", firstLine(repoTestFailureSummary(outcome))))
+			return
+		}
 	}
 
 	// 8. Persist the updated incident state + notify. CI re-runs on the new

@@ -19,19 +19,25 @@ const (
 )
 
 // Signal is the alarm bell sent to the clusterer. The clusterer does not
-// fetch logs — that's the investigator's job; the Signal carries only the
-// dedup-relevant fields.
+// fetch logs — that's the investigator's job; the Signal carries the
+// dedup-relevant fields plus whatever crash logs the detector already
+// captured (--previous container output at trigger time).
 type Signal struct {
 	Type      SignalType
 	Service   string
 	Namespace string
 	Reason    string
 	Repo      string
+	// PodLogs is the detection-time crash evidence (previous container).
+	// Often the only copy of the crash signature — the investigator merges
+	// it with a fresh fetch.
+	PodLogs   string
 	Timestamp time.Time
 }
 
-// IncidentHandler is invoked when a cluster fires. The podLogs argument is
-// empty — the investigator fetches full logs via the K8s API.
+// IncidentHandler is invoked when a cluster fires. The podLogs argument
+// carries the detection-time crash logs (may be empty when the detector had
+// none — e.g. ImagePullBackOff).
 type IncidentHandler func(service, namespace, reason, podLogs string)
 
 // PauseChecker reports whether autonomous mode is paused (e.g. via a Slack
@@ -108,6 +114,10 @@ func (c *Clusterer) Send(ctx context.Context, sig Signal) {
 		pending.signals = append(pending.signals, sig)
 		if len(sig.Reason) > len(pending.signals[0].Reason) {
 			pending.signals[0].Reason = sig.Reason
+		}
+		// Keep the longest crash-log capture (most complete evidence).
+		if len(sig.PodLogs) > len(pending.signals[0].PodLogs) {
+			pending.signals[0].PodLogs = sig.PodLogs
 		}
 		return
 	}
@@ -189,7 +199,7 @@ func (c *Clusterer) emit(key string) {
 					logging.Info("clusterer.handler recovered", "r", r)
 				}
 			}()
-			c.handler(sig.Service, sig.Namespace, sig.Reason, "")
+			c.handler(sig.Service, sig.Namespace, sig.Reason, sig.PodLogs)
 		}()
 	}
 }

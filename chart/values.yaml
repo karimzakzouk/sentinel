@@ -3,14 +3,14 @@
 # Sentinel is a single Go binary in a single pod. 43MB image, ~50MB RAM at idle.
 #
 # Install:
-#   helm install sentinel sentinel/sentinel --version 1.7.12 -n sentinel --create-namespace \
+#   helm install sentinel sentinel/sentinel --version 1.7.13 -n sentinel --create-namespace \
 #     --set sentinel.githubToken=YOUR_GITHUB_TOKEN \
 #     --set sentinel.llm.apiKey=YOUR_LLM_API_KEY
 
 image:
   registry: "docker.io/karimzakzouk"
   repository: "sentinel"
-  tag: "1.7.12"
+  tag: "1.7.13"
   pullPolicy: Always
 
 sentinel:
@@ -83,7 +83,9 @@ sentinel:
   # under real load (memory leaks, traffic-dependent crashes).
   postDeployCheck:
     enabled: false
-    durationSec: 480
+    # Default 900s (15min): leak-driven crash loops can cycle ~8.5min —
+    # the old 480s window was 80s too short to ever observe a restart.
+    durationSec: 900
     # Trigger the global auto-merge cooldown when a regression reverts.
     # Safe default for production; disable for eval runs where one bad
     # fix must not block the other services' merges for an hour.
@@ -91,6 +93,23 @@ sentinel:
     # Merge the revert PR immediately after opening it (the PR stays as
     # an audit artifact). false = leave the revert PR for human review.
     revertAutoMerge: true
+
+  # Repo's own CI tests as a pre-PR gate (1.7.13). Test commands are
+  # extracted from .github/workflows on the BASE branch by pure YAML
+  # parsing (no LLM), with marker inference (pom.xml -> mvn test,
+  # Cargo.toml -> cargo test, package.json -> npm test, spec/ -> rspec,
+  # tests/ -> pytest) when no CI files exist. Failures feed the real test
+  # output back to the fix proposer and retry within the sandbox budget.
+  repoTests:
+    enabled: true
+    timeoutSec: 900
+
+  # Pre-push formatting with the repo's own rules (1.7.13): gofmt for .go,
+  # cargo fmt for .rs, black/ruff/prettier ONLY when the repo configures
+  # them. No config, no formatting — nothing is imposed.
+  formatOnPush:
+    enabled: true
+    timeoutSec: 300
 
   # L2 safe-actions — immediate remediation (restart, rollback, scale)
   safeActions:
