@@ -41,7 +41,7 @@
     "@types/react-dom": "^19.0.0",
     "eslint": "^10.8.1",
     "eslint-plugin-react-hooks": "^5.2.0",
-    "globals": "^15.15.0",
+    "globals": "^17.12.0",
     "postcss": "^8.5.16",
     "tailwindcss": "^4.2.5",
     "tw-animate-css": "^1.2.0",
