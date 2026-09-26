@@ -287,16 +287,16 @@ func (b *BaseClient) RevertMergeCommit(ctx context.Context, repo, mergeCommitSHA
 	}
 	branchName := fmt.Sprintf("sentinel/revert/%s", shortSHA)
 
+	// Run #29 post-mortem: the commits API returns parents as
+	// [{"sha": "..."}] — there is NO tree field inside a parent entry.
+	// The old struct read commit.Parents[0].Tree.SHA, which is always ""
+	// (run #28's parents-encoding bug had masked this: GitHub validated
+	// the malformed parents first and rejected the request before ever
+	// looking at the tree). Fetch the parent commit separately and read
+	// ITS top-level tree — the pre-merge code state we want to restore.
 	var commit struct {
-		SHA  string `json:"sha"`
-		Tree struct {
-			SHA string `json:"sha"`
-		} `json:"tree"`
 		Parents []struct {
-			SHA  string `json:"sha"`
-			Tree struct {
-				SHA string `json:"sha"`
-			} `json:"tree"`
+			SHA string `json:"sha"`
 		} `json:"parents"`
 	}
 	if err := b.Do(ctx, "GET",
@@ -306,7 +306,21 @@ func (b *BaseClient) RevertMergeCommit(ctx context.Context, repo, mergeCommitSHA
 	if len(commit.Parents) == 0 {
 		return 0, fmt.Errorf("commit %s has no parent — cannot revert", mergeCommitSHA)
 	}
-	parentTreeSHA := commit.Parents[0].Tree.SHA
+	parentSHA := commit.Parents[0].SHA
+
+	var parentCommit struct {
+		Tree struct {
+			SHA string `json:"sha"`
+		} `json:"tree"`
+	}
+	if err := b.Do(ctx, "GET",
+		fmt.Sprintf("%s/repos/%s/commits/%s", b.APIURL, repo, parentSHA), nil, &parentCommit); err != nil {
+		return 0, fmt.Errorf("get parent commit %s: %w", parentSHA, err)
+	}
+	parentTreeSHA := parentCommit.Tree.SHA
+	if len(parentTreeSHA) != 40 {
+		return 0, fmt.Errorf("parent commit %s has invalid tree sha %q (want 40 hex chars)", parentSHA, parentTreeSHA)
+	}
 
 	var baseRef struct {
 		Object struct {
