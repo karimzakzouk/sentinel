@@ -143,7 +143,7 @@ func (w *wiring) handleCIFailureRevision(ctx context.Context, pr *automerge.Trac
 					strings.Join(b.newFails, ", ")))
 				return
 			}
-			if b != nil && b.fixRun != nil && b.fixRun.TestsRan {
+			if b != nil && b.fixRun != nil && (b.fixRun.TestsRan || b.fixRun.BuildsRan) {
 				logging.Info("ci-feedback: repo checks on revised branch", "summary", b.fixRun.Summary())
 			}
 		}

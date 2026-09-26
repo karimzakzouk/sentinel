@@ -61,6 +61,12 @@ type Discovered struct {
 	// TestCmds are the repo's own test commands (from its CI files, or
 	// language defaults when the repo has no CI).
 	TestCmds []string
+	// BuildCmds are the repo's own build/typecheck commands (from its CI
+	// files — "npm run build", "npx tsc --noEmit", "cargo build", ...).
+	// Run #28 post-mortem: user-api's fix passed the test gate but broke
+	// `npx tsc --noEmit` (double-applied patch, TS2451) — CI caught it,
+	// the pre-PR gate could not, because build steps were never parsed.
+	BuildCmds []string
 	// FmtCmds are format commands transformed to APPLY mode (they modify
 	// files in place). Empty when the repo has no format check.
 	FmtCmds []string
@@ -119,32 +125,37 @@ func (c *Client) Discover(ctx context.Context, repo, ref string) *Discovered {
 
 	// 2. Parse CI workflows for commands.
 	wfPaths := listWorkflows(paths)
-	var tests, fmts []string
+	var tests, builds, fmts []string
 	for _, wf := range wfPaths {
 		content, err := c.getFile(ctx, repo, wf, ref)
 		if err != nil {
 			continue
 		}
-		t, f := extractCommands(content)
+		t, b, f := extractCommands(content)
 		tests = append(tests, t...)
+		builds = append(builds, b...)
 		fmts = append(fmts, f...)
 	}
 	tests = dedupe(tests)
+	builds = dedupe(builds)
 	fmts = dedupe(fmts)
 
-	if len(tests) > 0 || len(fmts) > 0 {
+	if len(tests) > 0 || len(builds) > 0 || len(fmts) > 0 {
 		d.Source = "workflows"
 	} else {
 		d.Source = "defaults"
 		tests = defaultTestCmds(d.Language)
 		fmts = nil // never impose a formatter the repo doesn't use
+		// No default build commands — only run builds the repo's
+		// own CI actually runs.
 	}
 	d.TestCmds = tests
+	d.BuildCmds = builds
 	d.FmtCmds = fmts
 
 	logging.Info("repoci: discovered repo CI commands",
 		"repo", repo, "ref", ref, "language", d.Language, "source", d.Source,
-		"test_cmds", len(d.TestCmds), "fmt_cmds", len(d.FmtCmds))
+		"test_cmds", len(d.TestCmds), "build_cmds", len(d.BuildCmds), "fmt_cmds", len(d.FmtCmds))
 
 	c.cacheDisco(key, d)
 	return d
@@ -240,6 +251,19 @@ var testPatterns = []string{
 	"dotnet test",
 }
 
+// buildPatterns: a run-step line containing any of these is a BUILD or
+// TYPECHECK step. CI runs these before/alongside the tests; a fix that
+// breaks them turns the PR red even when every test passes (run #28:
+// user-api's double-applied patch broke `npx tsc --noEmit` with TS2451 —
+// the test-only pre-PR gate was blind to it). Checked after testPatterns
+// so a line matching both is classified as a test.
+var buildPatterns = []string{
+	"tsc", "npm run build", "yarn build", "pnpm build", "npm run compile",
+	"cargo build", "cargo check",
+	"mvn package", "mvn compile", "gradle build", "gradlew build",
+	"go build", "dotnet build", "swift build", "make build",
+}
+
 // fmtPatterns: a run-step line containing any of these is a FORMAT check.
 // These get transformed to apply-mode and run on the fix files only.
 var fmtPatterns = []string{
@@ -275,12 +299,14 @@ func lineMatches(line string, patterns []string) bool {
 }
 
 // extractCommands parses one workflow file's YAML and returns
-// (testCommands, formatCommands). Format commands are transformed to
-// apply-mode.
-func extractCommands(content string) (tests, fmts []string) {
+// (testCommands, buildCommands, formatCommands). Format commands are
+// transformed to apply-mode. Build/typecheck commands (run #28) cover the
+// steps CI runs before tests — a fix that breaks them reds the PR even
+// with a green suite.
+func extractCommands(content string) (tests, builds, fmts []string) {
 	var wf workflowFile
 	if err := yaml.Unmarshal([]byte(content), &wf); err != nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	// Deterministic job order.
 	jobNames := make([]string, 0, len(wf.Jobs))
@@ -288,6 +314,30 @@ func extractCommands(content string) (tests, fmts []string) {
 		jobNames = append(jobNames, name)
 	}
 	sort.Strings(jobNames)
+
+	classify := func(line string) {
+		if line == "" || strings.HasPrefix(line, "#") {
+			return
+		}
+		// Strip common shell prefixes that would defeat pattern matching.
+		line = strings.TrimPrefix(line, "- ")
+		if lineIsDangerous(line) {
+			return
+		}
+		if lineMatches(line, fmtPatterns) {
+			if apply := FmtToApply(line); apply != "" {
+				fmts = append(fmts, apply)
+			}
+			return
+		}
+		if lineMatches(line, testPatterns) {
+			tests = append(tests, line)
+			return
+		}
+		if lineMatches(line, buildPatterns) {
+			builds = append(builds, line)
+		}
+	}
 
 	for _, name := range jobNames {
 		job := wf.Jobs[name]
@@ -297,44 +347,22 @@ func extractCommands(content string) (tests, fmts []string) {
 			}
 			for _, raw := range strings.Split(step.Run, "\n") {
 				line := strings.TrimSpace(raw)
-				if line == "" || strings.HasPrefix(line, "#") {
+				if line == "" {
 					continue
 				}
-				// Strip common shell prefixes that would defeat
-				// pattern matching.
-				line = strings.TrimPrefix(line, "- ")
 				if strings.Contains(line, "&&") {
-					// Take the segment around the matched pattern.
-					line = bestSegment(line)
-				}
-				if lineIsDangerous(line) {
-					continue
-				}
-				if lineMatches(line, fmtPatterns) {
-					if apply := FmtToApply(line); apply != "" {
-						fmts = append(fmts, apply)
+					// Each &&-segment is classified independently so
+					// "npm run build && npm test" yields BOTH commands.
+					for _, seg := range strings.Split(line, "&&") {
+						classify(strings.TrimSpace(seg))
 					}
 					continue
 				}
-				if lineMatches(line, testPatterns) {
-					tests = append(tests, line)
-				}
+				classify(line)
 			}
 		}
 	}
-	return dedupe(tests), dedupe(fmts)
-}
-
-// bestSegment picks the &&-segment that matches a known pattern, so
-// "npm ci && npm test" yields "npm test".
-func bestSegment(line string) string {
-	for _, seg := range strings.Split(line, "&&") {
-		seg = strings.TrimSpace(seg)
-		if lineMatches(seg, testPatterns) || lineMatches(seg, fmtPatterns) {
-			return seg
-		}
-	}
-	return line
+	return dedupe(tests), dedupe(builds), dedupe(fmts)
 }
 
 // FmtToApply transforms a format-check command into its apply form.

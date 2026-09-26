@@ -467,6 +467,12 @@ func (w *wiring) executeCodeFix(ctx context.Context, incident *schemas.Incident)
 	sandboxSummary := "skipped (sandbox disabled)"
 	sandboxLevels := ""
 	sandboxRan := false
+	// staleVerdict marks a PR whose branch head was never verified:
+	// an earlier attempt passed the sandbox, then a LATER attempt's
+	// content failed to build. Run #28: user-api opened a PR with
+	// sandbox_verified=true two seconds after the branch's final
+	// kaniko build failed — the verdict belonged to different code.
+	staleVerdict := false
 	// repoBundle carries the LAST repo-checks run (may be nil when the
 	// gate is disabled or could not run).
 	var repoBundle *repoChecksBundle
@@ -590,6 +596,15 @@ func (w *wiring) executeCodeFix(ctx context.Context, incident *schemas.Incident)
 			}
 
 			if kanikoErr != nil {
+				// The branch head now holds content that was never verified —
+				// any earlier sandbox verdict is stale. Clear it so the PR
+				// (if one opens) is labeled honestly.
+				sandboxVerified = false
+				sandboxLevels = ""
+				staleVerdict = true
+				if fp.CanaryImage != nil {
+					fp.CanaryImage = nil
+				}
 				var buildErr *executors.BuildError
 				if errors.As(kanikoErr, &buildErr) && buildErr.Kind == "build" {
 					// A BUILD failure (compile error, dependency resolution,
@@ -599,7 +614,42 @@ func (w *wiring) executeCodeFix(ctx context.Context, incident *schemas.Incident)
 					logging.Error("kaniko build failed (build error) — feeding back to fix proposer",
 						"fix_id", fp.FixID, "error", buildErr.Error(), "attempt", sandboxAttempt+1)
 					if sandboxAttempt < maxRetries {
-						pendingFeedback = fmt.Sprintf("CANARY IMAGE BUILD FAILED (build error, not infrastructure).\n\nThe Docker image for your fix could not be built from the repository's Dockerfile.\n\nBuild output:\n%s\n\nYou may fix build files (Dockerfile, dependency manifests like Cargo.toml / package.json / requirements.txt, lockfiles) as part of the corrected fix — e.g. pinning dependencies, copying lockfiles into the build, or adjusting the toolchain version — as long as the original incident fix stays intact.\n\nPlease generate a corrected fix that both fixes the incident AND builds successfully.", tailN(buildErr.Logs, 6000))
+						repoName := ""
+						if fp.Repo != nil {
+							repoName = *fp.Repo
+						}
+						baseBranch := "main"
+						if fp.BaseBranch != nil && *fp.BaseBranch != "" {
+							baseBranch = *fp.BaseBranch
+						}
+
+						// Reset the branch to base BEFORE the retry: the next
+						// attempt must patch a CLEAN base, not layer SEARCH/REPLACE
+						// blocks on the previous attempt's possibly-broken output
+						// (run #28: user-api retry double-applied a db.ts patch,
+						// TS2451 Cannot redeclare, precisely because the poisoned
+						// branch was the new baseline).
+						if repoName != "" {
+							if n := w.ghExec.ResetBranchToBase(ctx, repoName, branchInfo.BranchName, baseBranch); n > 0 {
+								logging.Info("branch reset to base before build-failure retry",
+									"repo", repoName, "branch", branchInfo.BranchName, "files", n)
+							}
+						}
+
+						// Base-build probe: is the repo's Docker build rotten
+						// on base too? (run #28: search-api's lockfile-less
+						// Dockerfile fails EVERY branch — the fix must repair
+						// the build as well, and the feedback must say so.)
+						baseBroken := w.baseBuildBroken(ctx, fp, prodImage)
+
+						feedback := fmt.Sprintf("CANARY IMAGE BUILD FAILED (build error, not infrastructure).\n\nThe Docker image for your fix could not be built from the repository's Dockerfile.\n\nBuild output:\n%s\n\n", tailN(buildErr.Logs, 6000))
+						if baseBroken {
+							feedback += "IMPORTANT: Sentinel probed the BASE branch (without any fix) and it ALSO fails to build with the same class of error. The repository's Docker build is broken independently of your change — most commonly because the Dockerfile does not copy a lockfile (Cargo.lock / package-lock.json) into the build stage, or pins a builder image too old for the current dependency ecosystem.\n\nYour corrected fix must BOTH fix the original incident AND repair the build — e.g. add `COPY <lockfile> ./` next to the manifest copy in the Dockerfile, or bump the builder image version — otherwise no fix can ever be deployed.\n\n"
+						} else {
+							feedback += "You may fix build files (Dockerfile, dependency manifests like Cargo.toml / package.json / requirements.txt, lockfiles) as part of the corrected fix — e.g. pinning dependencies, copying lockfiles into the build, or adjusting the toolchain version — as long as the original incident fix stays intact.\n\n"
+						}
+						feedback += "Please generate a corrected fix that both fixes the incident AND builds successfully."
+						pendingFeedback = feedback
 						continue
 					}
 					break
@@ -713,10 +763,14 @@ func (w *wiring) executeCodeFix(ctx context.Context, incident *schemas.Incident)
 		}
 	}
 	cfg = w.Config()
-	if sandboxRan && !sandboxVerified && cfg.SandboxRequired {
+	if sandboxRan && !sandboxVerified && !staleVerdict && cfg.SandboxRequired {
 		logging.Error("sandbox verification failed and sandbox is required — not opening PR",
 			"fix_id", fp.FixID, "summary", sandboxSummary)
 		return fmt.Errorf("sandbox_required_and_failed: %s", sandboxSummary)
+	}
+	if staleVerdict {
+		logging.Error("PR opens with an INVALIDATED sandbox verdict — the branch head was never verified",
+			"fix_id", fp.FixID, "summary", sandboxSummary)
 	}
 
 	// Phase 4: Open PR.
@@ -728,7 +782,7 @@ func (w *wiring) executeCodeFix(ctx context.Context, incident *schemas.Incident)
 	incident.UpdatedAt = time.Now().UTC()
 	// Surface the repo's own CI results in the PR body so reviewers see
 	// the oracle verdict next to the sandbox verdict.
-	if repoBundle != nil && repoBundle.fixRun != nil && repoBundle.fixRun.TestsRan {
+	if repoBundle != nil && repoBundle.fixRun != nil && (repoBundle.fixRun.TestsRan || repoBundle.fixRun.BuildsRan) {
 		sandboxSummary += fmt.Sprintf("\n\nRepository's own test suite (pre-PR): %s", repoBundle.fixRun.Summary())
 		if len(repoBundle.newFails) > 0 {
 			sandboxSummary += fmt.Sprintf("\n⚠️ NEW failures vs base branch: %s", strings.Join(repoBundle.newFails, ", "))

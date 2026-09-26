@@ -268,6 +268,15 @@ func (b *BaseClient) Merge(ctx context.Context, repo string, prNumber int, commi
 	return nil
 }
 
+// revertCommitPayload is the git-commits API body for creating a revert
+// commit. Parents MUST marshal as a JSON array of SHAs — the API rejects
+// string-encoded arrays with 422 (run #28 post-mortem).
+type revertCommitPayload struct {
+	Message string   `json:"message"`
+	Tree    string   `json:"tree"`
+	Parents []string `json:"parents"`
+}
+
 // RevertMergeCommit opens a revert PR for mergeCommitSHA. It creates a new
 // commit on a revert branch that has the current HEAD as parent but the merge
 // commit's parent tree — effectively undoing only the merge commit's changes.
@@ -310,10 +319,16 @@ func (b *BaseClient) RevertMergeCommit(ctx context.Context, repo, mergeCommitSHA
 	}
 	headSHA := baseRef.Object.SHA
 
-	newCommitPayload, _ := json.Marshal(map[string]string{
-		"message": fmt.Sprintf("revert: %s\n\nSentinel auto-revert of merge commit %s.\nReason: %s", shortSHA, mergeCommitSHA, reason),
-		"tree":    parentTreeSHA,
-		"parents": fmt.Sprintf("[%q]", headSHA),
+	// Run #28 post-mortem: the revert payload was built with
+	// map[string]string, which forced "parents" to marshal as a JSON
+	// STRING ("[\"sha\"]") instead of a JSON ARRAY (["sha"]) — GitHub
+	// rejected it with 422 and the auto-revert of a regressed merge
+	// silently never happened (checkout-api kept its bad fix on main).
+	// A typed struct keeps the encoding correct.
+	newCommitPayload, _ := json.Marshal(revertCommitPayload{
+		Message: fmt.Sprintf("revert: %s\n\nSentinel auto-revert of merge commit %s.\nReason: %s", shortSHA, mergeCommitSHA, reason),
+		Tree:    parentTreeSHA,
+		Parents: []string{headSHA},
 	})
 	var newCommit struct {
 		SHA string `json:"sha"`

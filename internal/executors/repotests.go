@@ -75,7 +75,7 @@ func (r *RepoTestRunner) WithTimeout(d time.Duration) *RepoTestRunner {
 
 // CmdResult is the outcome of one command the pod ran.
 type CmdResult struct {
-	Phase  string // "fmt" or "test"
+	Phase  string // "fmt", "build", or "test"
 	Cmd    string
 	Exit   int
 	Output string
@@ -87,12 +87,15 @@ type RunResult struct {
 	Readback    map[string]string // path -> formatted content (fmt phase)
 	FailedTests []string          // failing test ids extracted from outputs
 	TestsRan    bool
+	BuildsRan   bool // at least one build/typecheck command executed
 }
 
-// HasTestFailures reports whether any test command exited non-zero.
+// HasTestFailures reports whether any test or build command exited
+// non-zero. Build failures count (run #28): a fix that breaks the type
+// check reds CI exactly like a test regression.
 func (rr *RunResult) HasTestFailures() bool {
 	for _, c := range rr.Commands {
-		if c.Phase == "test" && c.Exit != 0 {
+		if (c.Phase == "test" || c.Phase == "build") && c.Exit != 0 {
 			return true
 		}
 	}
@@ -115,10 +118,25 @@ func (rr *RunResult) Summary() string {
 			fail++
 		}
 	}
-	if !rr.TestsRan {
-		return "no test commands"
+	out := "no test commands"
+	if rr.TestsRan {
+		out = fmt.Sprintf("%d passed / %d failed", pass, fail)
 	}
-	return fmt.Sprintf("%d passed / %d failed", pass, fail)
+	if rr.BuildsRan {
+		bp, bf := 0, 0
+		for _, c := range rr.Commands {
+			if c.Phase != "build" {
+				continue
+			}
+			if c.Exit == 0 {
+				bp++
+			} else {
+				bf++
+			}
+		}
+		out += fmt.Sprintf(" (build: %d passed / %d failed)", bp, bf)
+	}
+	return out
 }
 
 // RunOpts controls one run.
@@ -164,6 +182,10 @@ func (r *RepoTestRunner) Run(ctx context.Context, repo, branch string, ci *repoc
 			fmtKeys = append(fmtKeys, addCmd("fmt", i, cmd))
 		}
 	}
+	buildKeys := []string{}
+	for i, cmd := range ci.BuildCmds {
+		buildKeys = append(buildKeys, addCmd("build", i, cmd))
+	}
 	testKeys := []string{}
 	for i, cmd := range ci.TestCmds {
 		testKeys = append(testKeys, addCmd("test", i, cmd))
@@ -191,7 +213,7 @@ func (r *RepoTestRunner) Run(ctx context.Context, repo, branch string, ci *repoc
 		_ = r.clientset.CoreV1().ConfigMaps(r.namespace).Delete(context.Background(), cmName, metav1.DeleteOptions{})
 	}()
 
-	pod := r.buildPodSpec(podName, repo, branch, cmName, ci, fmtKeys, testKeys, readback)
+	pod := r.buildPodSpec(podName, repo, branch, cmName, ci, fmtKeys, buildKeys, testKeys, readback)
 	if _, err := r.clientset.CoreV1().Pods(r.namespace).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
 		return nil, fmt.Errorf("create repo-checks pod: %w", err)
 	}
@@ -201,7 +223,7 @@ func (r *RepoTestRunner) Run(ctx context.Context, repo, branch string, ci *repoc
 
 	logging.Info("repotests: running repo CI commands",
 		"repo", repo, "branch", branch, "language", ci.Language,
-		"fmt_cmds", len(fmtKeys), "test_cmds", len(testKeys),
+		"fmt_cmds", len(fmtKeys), "build_cmds", len(buildKeys), "test_cmds", len(testKeys),
 		"timeout", r.testTimeout)
 
 	output, err := r.waitForCompletion(ctx, podName, r.testTimeout)
@@ -221,8 +243,8 @@ func (r *RepoTestRunner) Run(ctx context.Context, repo, branch string, ci *repoc
 
 // buildPodSpec builds the repo-checks pod: init container clones the
 // branch, main container (toolchain image) installs deps, runs fmt
-// commands, reads back files, runs test commands.
-func (r *RepoTestRunner) buildPodSpec(podName, repo, branch, cmName string, ci *repoci.Discovered, fmtKeys, testKeys, readback []string) *corev1.Pod {
+// commands, reads back files, runs build commands, then test commands.
+func (r *RepoTestRunner) buildPodSpec(podName, repo, branch, cmName string, ci *repoci.Discovered, fmtKeys, buildKeys, testKeys, readback []string) *corev1.Pod {
 	initScript := `set -e
 if [ -n "$SENTINEL_GITHUB_TOKEN" ]; then
   git config --global credential.helper store
@@ -272,6 +294,15 @@ fi
 			fmt.Fprintf(&b, "if [ -f '%s' ]; then echo \"===SENTINEL_FILE_START path=%s===\"; base64 -w0 '%s'; echo; echo '===SENTINEL_FILE_END==='; fi\n", p, p, p)
 		}
 		b.WriteString("echo '===SENTINEL_READBACK_END==='\n")
+	}
+
+	// Build phase (run #28): the repo's own build/typecheck steps —
+	// a fix that compiles for tests but breaks `tsc`/`cargo build`
+	// reds CI just the same.
+	for _, key := range buildKeys {
+		fmt.Fprintf(&b, "echo '===SENTINEL_CMD_START key=%s phase=build==='\n", key)
+		fmt.Fprintf(&b, "timeout 540 sh /cmds/%s 2>&1\n", key)
+		fmt.Fprintf(&b, "echo \"===SENTINEL_CMD_END key=%s exit=$?===\"\n", key)
 	}
 
 	// Test phase.
@@ -402,6 +433,9 @@ func parseRunOutput(output string, ci *repoci.Discovered) *RunResult {
 	for i, c := range ci.FmtCmds {
 		cmdByKey[fmt.Sprintf("fmt-%d", i)] = c
 	}
+	for i, c := range ci.BuildCmds {
+		cmdByKey[fmt.Sprintf("build-%d", i)] = c
+	}
 	for i, c := range ci.TestCmds {
 		cmdByKey[fmt.Sprintf("test-%d", i)] = c
 	}
@@ -442,6 +476,9 @@ func parseRunOutput(output string, ci *repoci.Discovered) *RunResult {
 				res.FailedTests = append(res.FailedTests, repoci.ExtractFailedTests(out)...)
 			}
 		}
+		if curPhase == "build" {
+			res.BuildsRan = true
+		}
 		curKey, curPhase, curOutput = "", "", nil
 	}
 
@@ -455,6 +492,8 @@ func parseRunOutput(output string, ci *repoci.Discovered) *RunResult {
 			curKey = markerField(line, "key")
 			if strings.Contains(line, "phase=fmt") {
 				curPhase = "fmt"
+			} else if strings.Contains(line, "phase=build") {
+				curPhase = "build"
 			} else {
 				curPhase = "test"
 			}
@@ -531,14 +570,14 @@ func CompareRepoTests(fix, base *RunResult) (newFailures, preexisting []string) 
 	}
 	baseCmdPassed := map[string]bool{}
 	for _, c := range base.Commands {
-		if c.Phase == "test" {
+		if c.Phase == "test" || c.Phase == "build" {
 			baseCmdPassed[c.Cmd] = c.Exit == 0
 		}
 	}
 
 	var namedNew, namedPre []string
 	for _, c := range fix.Commands {
-		if c.Phase != "test" || c.Exit == 0 {
+		if (c.Phase != "test" && c.Phase != "build") || c.Exit == 0 {
 			continue
 		}
 		tests := repoci.ExtractFailedTests(c.Output)
@@ -566,7 +605,7 @@ func CompareRepoTests(fix, base *RunResult) (newFailures, preexisting []string) 
 func extractFailureIDs(r *RunResult) []string {
 	var out []string
 	for _, c := range r.Commands {
-		if c.Phase == "test" && c.Exit != 0 {
+		if (c.Phase == "test" || c.Phase == "build") && c.Exit != 0 {
 			tests := repoci.ExtractFailedTests(c.Output)
 			if len(tests) == 0 {
 				out = append(out, "command: "+c.Cmd)
