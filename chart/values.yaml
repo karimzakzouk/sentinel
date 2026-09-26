@@ -3,14 +3,14 @@
 # Sentinel is a single Go binary in a single pod. 43MB image, ~50MB RAM at idle.
 #
 # Install:
-#   helm install sentinel sentinel/sentinel --version 1.7.15 -n sentinel --create-namespace \
+#   helm install sentinel sentinel/sentinel --version 1.7.16 -n sentinel --create-namespace \
 #     --set sentinel.githubToken=YOUR_GITHUB_TOKEN \
 #     --set sentinel.llm.apiKey=YOUR_LLM_API_KEY
 
 image:
   registry: "docker.io/karimzakzouk"
   repository: "sentinel"
-  tag: "1.7.15"
+  tag: "1.7.16"
   pullPolicy: Always
 
 sentinel:

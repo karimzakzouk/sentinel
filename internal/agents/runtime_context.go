@@ -50,6 +50,26 @@ func renderRuntimeContext(rc *schemas.PodRuntimeContext) string {
 		fmt.Fprintf(&b, "- resources (requests cpu=%s mem=%s, limits cpu=%s mem=%s)\n",
 			orDash(rc.CPURequest), orDash(rc.MemoryRequest), orDash(rc.CPULimit), orDash(rc.MemoryLimit))
 	}
+	// Crash vitals (v1.7.16): the failure's physical signature. Restart
+	// counts prove recurrence; the last termination reason is the single
+	// most decisive localization fact the investigator can get (run #29:
+	// five symptom patches, none informed by the OOMKilled signal).
+	if rc.RestartCount > 0 || rc.LastTerminationReason != "" || rc.WaitingReason != "" {
+		fmt.Fprintf(&b, "- restarts: %d\n", rc.RestartCount)
+		if rc.RestartCount > 1 {
+			b.WriteString("  (the failure is RECURRING — deterministic, not a one-off blip)\n")
+		}
+		if rc.LastTerminationReason != "" {
+			exit := ""
+			if rc.LastTerminationExitCode != 0 {
+				exit = fmt.Sprintf(" exit_code=%d", rc.LastTerminationExitCode)
+			}
+			fmt.Fprintf(&b, "- last termination: reason=%s%s\n", rc.LastTerminationReason, exit)
+		}
+		if rc.WaitingReason != "" {
+			fmt.Fprintf(&b, "- current state: %s\n", rc.WaitingReason)
+		}
+	}
 	if len(rc.Command) > 0 {
 		cmd := rc.Command
 		if len(cmd) > 3 {
@@ -61,6 +81,14 @@ func renderRuntimeContext(rc *schemas.PodRuntimeContext) string {
 	b.WriteString("connection strings, or resources. An env var listed here IS set; one that is\n")
 	b.WriteString("NOT listed here is NOT set on the pod. Never assume a canonical variable name\n")
 	b.WriteString("(e.g. DATABASE_URL) — use the exact names above.\n")
+	if rc.OOMKilled {
+		b.WriteString("\nOOM EVIDENCE: the kernel killed this container for exceeding its memory\n")
+		b.WriteString("limit. Memory grew until the cap — the traceback line is where allocation\n")
+		b.WriteString("finally failed (a VICTIM, not the cause). The root cause is data that only\n")
+		b.WriteString("grows: a module-level Map/Set/dict/list, a cache without TTL/eviction, tokens\n")
+		b.WriteString("or sessions that are never removed. Adding validation or guards at the\n")
+		b.WriteString("crash line will NOT stop an OOM; bounding the growth will.\n")
+	}
 	return b.String()
 }
 

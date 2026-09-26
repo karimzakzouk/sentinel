@@ -5,6 +5,47 @@ All notable changes to Sentinel are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.16] — 2026-09-26
+
+### Changed
+
+- **Investigation quality: mechanism over symptom.** Run #29's postmortem
+  (1/9, 5/9 merged) showed the machinery is now sound end-to-end — every
+  gate, retry, and revert path fired as designed — while five of six fixes
+  were symptom-level patches at crash sites that were merely VICTIMS of the
+  real mechanism (SMTP validation for a transient gaierror; a db.ts guard
+  for an OOM caused by an unbounded token store — the fifth consecutive
+  wrong-layer user-api fix). This release redirects the LLM's judgment
+  toward the fault mechanism instead of the crash line:
+
+  - **Crash vitals in every prompt** (schemas + k8s + agents): restart
+    count, last termination reason and exit code (OOMKilled / 137), and
+    waiting reason are now fetched from the worst-crashing pod and
+    rendered into the investigator and fix-proposer prompts. An OOM kill
+    renders explicit guidance: the traceback line is where allocation
+    failed — a victim; the root cause is data that only grows.
+  - **Fault-mechanism classification step** in the investigator's round-2
+    prompt: transient_infra / resource_leak / logic_data / lifecycle /
+    concurrency, each with the layer its fix belongs in (retry policy,
+    growth site, crash line, shutdown handler, lock protocol). The
+    classification and per-hypothesis fix_layer flow through the analyst
+    into the fix proposer's prompt and the PR body.
+  - **Crash-site footer fixed**: the old prompt told the LLM the crash
+    location IS the bug and to ignore other functions — actively wrong
+    for every non-logic fault. It now distinguishes where the failure
+    surfaced from where the root cause lives.
+  - **Deterministic search-query enrichment** (no LLM): stack-trace
+    identifiers are always merged into the round-1 query set, and
+    leak-site vocabulary (cache/token/evict/collection-growth) or
+    resilience-layer vocabulary (retry/backoff/autoretry) is added when
+    the crash shape indicates that mechanism. Query cap 8 -> 12; search
+    results shown to round 2 raised from 5 to 24 (the LLM previously
+    picked files_to_read from a 5-line glimpse of the repo).
+  - **Fix-proposer layer rules**: transient network faults get
+    retry-with-backoff in the task/job layer; OOM kills get bounded
+    growth at the growth site; concurrency faults get protocol fixes.
+    Fetched-code render cap 5 -> 6 to match the wider file selection.
+
 ## [1.7.15] — 2026-09-26
 
 ### Fixed

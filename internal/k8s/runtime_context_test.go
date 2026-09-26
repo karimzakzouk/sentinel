@@ -163,3 +163,117 @@ func containsAny(s []string, v ...string) bool {
 
 // Compile-time assertion that the schema type stays wire-compatible.
 var _ = schemas.PodRuntimeContext{}
+
+// TestFetchPodRuntimeContextCrashVitals (v1.7.16) verifies the restart /
+// termination signals are read from the worst-crashing pod's container
+// status: restart count, OOMKilled last termination with exit 137, and
+// the CrashLoopBackOff waiting reason. This is the evidence that was
+// invisible to the investigator in run #29 (user-api OOMKilled 5x while
+// the LLM kept proposing config-validation patches).
+func TestFetchPodRuntimeContextCrashVitals(t *testing.T) {
+	healthy := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "user-api-86cc7c8bf7-aaa",
+			Namespace: "marketly",
+			Labels:    map[string]string{"app.kubernetes.io/name": "user-api"},
+		},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{Name: "user-api", Image: "user-api:1"}},
+		},
+		Status: corev1.PodStatus{
+			ContainerStatuses: []corev1.ContainerStatus{
+				{Name: "user-api", Ready: true, RestartCount: 0},
+			},
+		},
+	}
+	// The crasher: listed SECOND so the worst-pod selection is what finds it.
+	crasher := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "user-api-86cc7c8bf7-bbb",
+			Namespace: "marketly",
+			Labels:    map[string]string{"app.kubernetes.io/name": "user-api"},
+		},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{Name: "user-api", Image: "user-api:1"}},
+		},
+		Status: corev1.PodStatus{
+			ContainerStatuses: []corev1.ContainerStatus{
+				{
+					Name:         "user-api",
+					RestartCount: 5,
+					State: corev1.ContainerState{
+						Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"},
+					},
+					LastTerminationState: corev1.ContainerState{
+						Terminated: &corev1.ContainerStateTerminated{Reason: "OOMKilled", ExitCode: 137},
+					},
+				},
+			},
+		},
+	}
+
+	clientset := k8sfake.NewSimpleClientset(healthy, crasher)
+	c := &Client{clientset: clientset}
+
+	rc, err := c.FetchPodRuntimeContext(context.Background(), "user-api", "marketly")
+	if err != nil {
+		t.Fatalf("FetchPodRuntimeContext: %v", err)
+	}
+	if rc == nil {
+		t.Fatal("expected runtime context, got nil")
+	}
+	if rc.PodName != "user-api-86cc7c8bf7-bbb" {
+		t.Errorf("pod name = %q, want the crash-looping pod user-api-86cc7c8bf7-bbb", rc.PodName)
+	}
+	if rc.RestartCount != 5 {
+		t.Errorf("restart count = %d, want 5", rc.RestartCount)
+	}
+	if rc.LastTerminationReason != "OOMKilled" {
+		t.Errorf("last termination reason = %q, want OOMKilled", rc.LastTerminationReason)
+	}
+	if rc.LastTerminationExitCode != 137 {
+		t.Errorf("last termination exit code = %d, want 137", rc.LastTerminationExitCode)
+	}
+	if !rc.OOMKilled {
+		t.Error("OOMKilled flag not set from OOMKilled termination reason")
+	}
+	if rc.WaitingReason != "CrashLoopBackOff" {
+		t.Errorf("waiting reason = %q, want CrashLoopBackOff", rc.WaitingReason)
+	}
+}
+
+// TestFetchPodRuntimeContextExit137SetsOOM (v1.7.16) — some runtimes
+// report the OOM kill only as exit code 137 without a reason string.
+func TestFetchPodRuntimeContextExit137SetsOOM(t *testing.T) {
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "worker-7d9c8bf7-ccc",
+			Namespace: "marketly",
+			Labels:    map[string]string{"app.kubernetes.io/name": "worker"},
+		},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{Name: "worker", Image: "worker:1"}},
+		},
+		Status: corev1.PodStatus{
+			ContainerStatuses: []corev1.ContainerStatus{
+				{
+					Name:         "worker",
+					RestartCount: 2,
+					LastTerminationState: corev1.ContainerState{
+						Terminated: &corev1.ContainerStateTerminated{ExitCode: 137},
+					},
+				},
+			},
+		},
+	}
+	clientset := k8sfake.NewSimpleClientset(pod)
+	c := &Client{clientset: clientset}
+
+	rc, err := c.FetchPodRuntimeContext(context.Background(), "worker", "marketly")
+	if err != nil {
+		t.Fatalf("FetchPodRuntimeContext: %v", err)
+	}
+	if !rc.OOMKilled {
+		t.Errorf("exit 137 without reason must still set OOMKilled, got %+v", rc)
+	}
+}

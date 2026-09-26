@@ -128,6 +128,17 @@ type Hypothesis struct {
 	Confidence            float64  `json:"confidence"`
 	Falsified             bool     `json:"falsified"`
 	SourceFiles           []string `json:"source_files"`
+
+	// FaultClass is the mechanism classification from the investigator's
+	// round-2 prompt (v1.7.16): transient_infra | resource_leak |
+	// logic_data | lifecycle | concurrency. It tells the fix proposer
+	// WHICH LAYER the fix belongs in — run #29's 1/9 score came from five
+	// symptom-level patches at crash sites that were merely victims.
+	FaultClass string `json:"fault_class,omitempty"`
+	// FixLayer is the free-text companion to FaultClass: which file/layer
+	// the fix belongs in and why (e.g. "tasks.py retry policy — gaierror
+	// is transient, needs backoff not validation").
+	FixLayer string `json:"fix_layer,omitempty"`
 }
 
 // Evidence is a single piece of evidence collected for or against a hypothesis.
@@ -150,6 +161,13 @@ type RootCause struct {
 	Category           string   `json:"category"`
 	HasSchemaMigration bool     `json:"has_schema_migration"`
 	GitCommit          *string  `json:"git_commit,omitempty"`
+
+	// FaultClass / FixLayer (v1.7.16) flow from the surviving hypothesis
+	// into the fix proposer's prompt so the patch lands in the layer the
+	// fault mechanism demands (retry policy, growth site, lock protocol)
+	// instead of the crash line.
+	FaultClass string `json:"fault_class,omitempty"`
+	FixLayer   string `json:"fix_layer,omitempty"`
 }
 
 // SearchReplace is one surgical edit: find Search in the file and replace it
@@ -265,6 +283,17 @@ type PodRuntimeContext struct {
 	// relevant for diagnosing OOM and crash-loop shapes without leaking
 	// argument secrets.
 	Command []string `json:"command,omitempty"`
+
+	// Crash vitals (v1.7.16): restart + termination signals from the live
+	// pod. The run-#29 postmortem showed the investigator never saw that
+	// user-api was OOMKilled repeatedly — the single decisive fact that
+	// separates "find the unbounded growth" from yet another
+	// config-validation patch at the crash line.
+	RestartCount            int    `json:"restart_count,omitempty"`
+	LastTerminationReason   string `json:"last_termination_reason,omitempty"`
+	LastTerminationExitCode int32  `json:"last_termination_exit_code,omitempty"`
+	WaitingReason           string `json:"waiting_reason,omitempty"`
+	OOMKilled               bool   `json:"oom_killed,omitempty"`
 }
 
 // AgentState is the structured object passed between agents in the pipeline.

@@ -34,6 +34,17 @@ const (
 	// MaxHypothesesPerRound is the max hypotheses the investigator generates.
 	MaxHypothesesPerRound = 5
 
+	// MaxSearchQueries (v1.7.16) caps the investigator's search queries
+	// AFTER deterministic enrichment (LLM round-1 queries + stack-trace
+	// identifiers + fault-class hint vocabulary). Run #29: 8 LLM-chosen
+	// queries found the crash file but never the mechanism file.
+	MaxSearchQueries = 12
+
+	// MaxSearchResultsShown (v1.7.16) is how many search hits round 2
+	// displays to the LLM. Was MaxStackFilesToRead (5) — the LLM chose
+	// files_to_read from a 5-line glimpse of the repo.
+	MaxSearchResultsShown = 24
+
 	// ConfidenceFastPath: above this, evidence gathering is skipped — but
 	// ONLY when the fast path is explicitly re-enabled via
 	// Pipeline.SetEvidenceFastPath (SENTINEL_EVIDENCE_FAST_PATH=true).
