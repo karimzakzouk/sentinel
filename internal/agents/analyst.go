@@ -199,6 +199,12 @@ func (a *Analyst) Run(ctx context.Context, state *schemas.AgentState, betaStore 
 		SourceFiles:        survivor.SourceFiles,
 		Category:           category,
 		HasSchemaMigration: hasSchemaMigration,
+		// v1.7.16: mechanism classification flows from the surviving
+		// hypothesis into the fix proposer's prompt — the patch must land
+		// in the layer the mechanism demands (retry policy, growth site,
+		// lock protocol), not at the crash line that merely surfaced it.
+		FaultClass: survivor.FaultClass,
+		FixLayer:   survivor.FixLayer,
 	}
 	for _, e := range state.Evidence {
 		if e.SupportsHypothesisID != nil && *e.SupportsHypothesisID == survivor.HID {

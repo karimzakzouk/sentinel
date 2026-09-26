@@ -56,11 +56,23 @@ You are given:
 - The file tree of the service's GitHub repository
 - Search results from running queries against the local repo clone
 - The detected programming language (if recognizable from the error)
+- The pod's runtime context (env vars, resources, crash vitals) when available
 
-Your job: produce UP TO 5 root cause hypotheses AND list the files we should read in full to write a fix.
+## STEP 1 — Classify the fault mechanism (BEFORE forming hypotheses)
+Using the traceback, the crash vitals (restarts / last termination reason), and the logs, classify the fault into exactly ONE class:
 
-## Hypothesis Rules
-- Base your hypothesis on the ACTUAL ERROR TRACEBACK, not on unrelated code you see in the file.
+- "transient_infra" — network/DNS/timeout errors (gaierror, ECONNREFUSED, ECONNRESET, DNS resolution failures, timeouts, 502/503/504, rate limiting, temporarily unavailable). The failing call is usually CORRECT — what is missing is resilience. The fix belongs in the RETRY layer: the task/job retry policy with backoff and max_retries (e.g. Celery autoretry_for + retry_backoff), connection reacquisition, circuit breaker. NOT input validation, NOT the crash line.
+- "resource_leak" — OOMKilled, heap out of memory, exit code 137/134, cannot allocate memory. The fix belongs at the GROWTH site: bound the collection, add eviction/TTL/cap, stream instead of accumulating. NOT guards at the crash line.
+- "logic_data" — KeyError, NullPointerException, NoMethodError, index out of range, wrong type, invalid input reaching code. The fix belongs at the exact crash line.
+- "lifecycle" — SIGTERM/SIGINT handling, graceful shutdown, startup ordering. The fix belongs in the signal/shutdown handler.
+- "concurrency" — data race, deadlock, lock ordering, check-then-act on shared state. The fix belongs in the synchronization protocol; patching one call site keeps the race.
+
+The crash location is where the failure SURFACED. For logic_data it is usually also the bug. For every other class the crash site is usually a VICTIM — the root cause lives in another file or layer (retry policy, growth site, shutdown handler, lock protocol).
+
+## STEP 2 — Hypotheses
+Rules:
+- Base your hypothesis on the ACTUAL ERROR TRACEBACK and crash vitals, not on unrelated code you see in the file.
+- Each hypothesis must be MECHANISM-LEVEL: name the underlying mechanism (what grows, what lacks retry, what races, what signal is mishandled), not just the visible symptom (which line crashed).
 - If the error is a missing-key access (e.g. Python "KeyError: 99" at "name = users[user_id]", Java "NullPointerException" at "users.get(user_id)", Go "panic: runtime error: index out of range" at "users[user_id]"), the root cause is "the collection doesn't contain key 99". Do NOT speculate about databases, config, or infrastructure unless the traceback mentions them.
 - If the error is a division by zero (e.g. Python "ZeroDivisionError", Java "ArithmeticException", Go "panic: runtime error: integer divide by zero"), the root cause is "no zero check before division". Do NOT mention database connections.
 - Be specific: reference the exact variable, function, and line that caused the error.
@@ -68,24 +80,27 @@ Your job: produce UP TO 5 root cause hypotheses AND list the files we should rea
 
 Each hypothesis must be:
   - Specific (reference the exact line and variable that caused the crash)
+  - Mechanism-level (state WHY it fails, not only WHERE it crashes)
   - Based on the traceback (not on code that wasn't involved in the crash)
   - Testable
   - Independent
 
 Respond with a JSON object of shape:
 {
+  "fault_class": "transient_infra|resource_leak|logic_data|lifecycle|concurrency",
   "hypotheses": [
     {
       "statement": "...",
       "supporting_evidence": ["..."],
       "confidence": 0.0-1.0,
-      "source_files": ["src/handler.<ext>"]
+      "source_files": ["src/handler.<ext>"],
+      "fix_layer": "which file/layer the fix belongs in and why"
     }
   ],
   "files_to_read": ["app/main.<ext>", "app/config.<ext>"]
 }
 
-List 1-5 files in files_to_read — the files most likely to contain the bug. These will be read in full and passed to the Fix Proposer. Use the file extensions that actually appear in the file tree (e.g. .py, .go, .js, .ts, .java, .rs, .rb).
+List 1-6 files in files_to_read — the files most likely to contain the bug OR the mechanism that made the crash site a victim (retry policy, growth site, lock protocol). These will be read in full and passed to the Fix Proposer. Use the file extensions that actually appear in the file tree (e.g. .py, .go, .js, .ts, .java, .rs, .rb).
 
 Do NOT make up evidence — only cite things that appear in the context.`
 
@@ -307,11 +322,19 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
 		}
 	}
 
+	// Deterministic enrichment (v1.7.16): stack-trace identifiers are
+	// ALWAYS merged into the query set — in run #29 the LLM's queries alone
+	// found the crash file but never the mechanism file (user-api's
+	// tokenStore.ts appeared in no result set). Fault-class hints add
+	// leak/retry vocabulary when the crash shape indicates that mechanism.
+	searchQueries = enrichSearchQueries(searchQueries, podLogs, state.RuntimeContext)
+	logging.Info("search queries after enrichment", "count", len(searchQueries))
+
 	// Run the searches locally (instant, no API calls).
 	var allResults []repo.SearchResult
 	seenPaths := map[string]bool{}
 	for i, q := range searchQueries {
-		if i >= 8 {
+		if i >= MaxSearchQueries {
 			break
 		}
 		pattern, _ := q.(string)
@@ -342,6 +365,10 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
 
 	// Parse hypotheses.
 	rawHyps, _ := round2Result["hypotheses"].([]any)
+	faultClass, _ := round2Result["fault_class"].(string)
+	if faultClass != "" {
+		logging.Info("round 2 fault classification", "fault_class", faultClass)
+	}
 	logging.Info("round 2 returned hypotheses", "count", len(rawHyps))
 
 	var newHyps []schemas.Hypothesis
@@ -371,12 +398,15 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
 			supportingStrs := toStringSlice(supporting)
 			srcFiles, _ := hMap["source_files"].([]any)
 			srcFilesStrs := toStringSlice(srcFiles)
+			fixLayer, _ := hMap["fix_layer"].(string)
 			newHyps = append(newHyps, schemas.Hypothesis{
 				HID:                fmt.Sprintf("H%d", i+1),
 				Statement:          statement,
 				SupportingEvidence: supportingStrs,
 				Confidence:         confidence,
 				SourceFiles:        srcFilesStrs,
+				FaultClass:         faultClass,
+				FixLayer:           fixLayer,
 			})
 		}
 	}
@@ -435,6 +465,9 @@ func (a *Investigator) Run(ctx context.Context, state *schemas.AgentState) error
 		"search_queries":   len(searchQueries),
 		"search_results":   len(allResults),
 		"fetched_files":    keysOf(fetched),
+	}
+	if faultClass != "" {
+		trace["fault_class"] = faultClass
 	}
 	state.AgentTrace = append(state.AgentTrace, trace)
 
@@ -570,7 +603,7 @@ func extractCrashLocation(podLogs string) string {
 		fmt.Fprintf(&sb, "- Function: %s\n", parsed.Function)
 	}
 
-	sb.WriteString("\nIMPORTANT: The crash is in the function/file/line above. Do NOT form hypotheses about OTHER functions in the same file — they may have similar bugs but are NOT the crash you need to fix.\n")
+	sb.WriteString("\nIMPORTANT: the failure surfaced at the location above. If the fault is a logic/data error, the bug is usually right there. But if the evidence shows a transient infrastructure error (network/DNS/timeout), a resource kill (OOMKilled / exit 137 / heap out of memory), or a concurrency fault, this crash site is a VICTIM — form hypotheses about the MECHANISM (missing retry policy, unbounded growth, lock protocol), which often lives in a different file.\n")
 
 	return sb.String()
 }
@@ -648,15 +681,81 @@ func (a *Investigator) buildRound2Message(state *schemas.AgentState, podLogs str
 	parts = append(parts, "")
 	parts = append(parts, fmt.Sprintf("## Search Results (%d matches)", len(searchResults)))
 	for i, r := range searchResults {
-		if i >= MaxStackFilesToRead {
+		if i >= MaxSearchResultsShown {
 			break
 		}
 		parts = append(parts, fmt.Sprintf("- %s:%d — %s", r.Path, r.Line, r.Context))
 	}
 	parts = append(parts, "")
 	parts = append(parts, "## Your Task")
-	parts = append(parts, "Produce up to 5 root cause hypotheses AND list 1-5 files to read in full. Be specific.")
+	parts = append(parts, "Classify the fault mechanism, produce up to 5 mechanism-level root cause hypotheses, and list 1-6 files to read in full (crash-site files AND mechanism files).")
 	return strings.Join(parts, "\n")
+}
+
+// enrichSearchQueries merges deterministic queries into the LLM's round-1
+// query set (v1.7.16): stack-trace identifiers ALWAYS, plus mechanism-specific
+// vocabulary when the crash shape indicates a resource leak or a transient
+// fault. Deterministic, no LLM — the queries only widen what the local search
+// can surface; the round-2 LLM still filters what matters.
+func enrichSearchQueries(llmQueries []any, podLogs string, rc *schemas.PodRuntimeContext) []any {
+	seen := map[string]bool{}
+	var out []any
+	add := func(q string) {
+		if q == "" || seen[q] {
+			return
+		}
+		seen[q] = true
+		out = append(out, q)
+	}
+	for _, q := range llmQueries {
+		if s, ok := q.(string); ok {
+			add(s)
+		}
+	}
+	for _, q := range ExtractSearchQueriesUniversal(podLogs) {
+		add(q)
+	}
+
+	lower := strings.ToLower(podLogs)
+	oomShape := (rc != nil && rc.OOMKilled) ||
+		strings.Contains(lower, "out of memory") ||
+		strings.Contains(lower, "oom") ||
+		strings.Contains(lower, "cannot allocate")
+	if oomShape {
+		// Leak-site vocabulary: where does data only grow?
+		for _, q := range []string{
+			`cache|Cache`,
+			`token|session`,
+			`evict|expir|ttl|TTL|lru|maxsize|max_size|MAX_|_CAP|capacity`,
+			`new Map|\.set\(|\.push\(|\.append\(|\.add\(`,
+		} {
+			add(q)
+		}
+	}
+	transientShape := strings.Contains(lower, "gaierror") ||
+		strings.Contains(lower, "econnrefused") ||
+		strings.Contains(lower, "econnreset") ||
+		strings.Contains(lower, "connection refused") ||
+		strings.Contains(lower, "connection reset") ||
+		strings.Contains(lower, "timed out") ||
+		strings.Contains(lower, "timeout") ||
+		strings.Contains(lower, "rate limit") ||
+		strings.Contains(lower, "temporarily unavailable")
+	if transientShape {
+		// Resilience-layer vocabulary: where is the retry policy?
+		for _, q := range []string{
+			`retry|retries|max_retries|maxRetries|MAX_RETRIES`,
+			`autoretry|retry_backoff|retry_policy|backoff|retry_delay`,
+			`acks_late|on_failure|retry_kwargs`,
+		} {
+			add(q)
+		}
+	}
+
+	if len(out) > MaxSearchQueries {
+		out = out[:MaxSearchQueries]
+	}
+	return out
 }
 
 // detectLanguageHint parses the pod logs for the error type + language and
