@@ -300,6 +300,16 @@ func (c *Client) FetchPodRuntimeContext(ctx context.Context, service, namespace 
 	}
 
 	pod := &pods.Items[0]
+	// Pick the pod with the worst crash history (v1.7.16): the highest
+	// restart count carries the termination evidence — restarts,
+	// OOMKilled lastState — that the crash vitals below are read from.
+	// pods.Items[0] is usually fine, but under churn it can be a fresh,
+	// healthy replica with an empty status while its sibling crash-loops.
+	for i := range pods.Items {
+		if totalRestarts(&pods.Items[i]) > totalRestarts(pod) {
+			pod = &pods.Items[i]
+		}
+	}
 	rc := &schemas.PodRuntimeContext{
 		PodName: pod.Name,
 	}
@@ -357,10 +367,54 @@ func (c *Client) FetchPodRuntimeContext(ctx context.Context, service, namespace 
 		rc.MemoryLimit = lm.Memory().String()
 	}
 
+	// Crash vitals (v1.7.16): restart + termination signals for the chosen
+	// container. Prefer the status matching the container we inspected;
+	// fall back to the highest-restart status when names don't line up
+	// (renamed containers, sidecars injected late).
+	var st *corev1.ContainerStatus
+	for i := range pod.Status.ContainerStatuses {
+		cs := &pod.Status.ContainerStatuses[i]
+		if cs.Name == ctr.Name {
+			st = cs
+			break
+		}
+	}
+	if st == nil {
+		for i := range pod.Status.ContainerStatuses {
+			cs := &pod.Status.ContainerStatuses[i]
+			if st == nil || cs.RestartCount > st.RestartCount {
+				st = cs
+			}
+		}
+	}
+	if st != nil {
+		rc.RestartCount = int(st.RestartCount)
+		if term := st.LastTerminationState.Terminated; term != nil {
+			rc.LastTerminationReason = term.Reason
+			rc.LastTerminationExitCode = term.ExitCode
+			if term.Reason == "OOMKilled" || term.ExitCode == 137 {
+				rc.OOMKilled = true
+			}
+		}
+		if st.State.Waiting != nil && st.State.Waiting.Reason != "" {
+			rc.WaitingReason = st.State.Waiting.Reason
+		}
+	}
+
 	sort.Strings(rc.EnvVarNames)
 	sort.Strings(rc.ConfigMapRefs)
 	sort.Strings(rc.SecretRefs)
 	return rc, nil
+}
+
+// totalRestarts sums container restart counts across all containers of a
+// pod. Used to pick the worst-crashing pod in FetchPodRuntimeContext.
+func totalRestarts(pod *corev1.Pod) int {
+	n := 0
+	for i := range pod.Status.ContainerStatuses {
+		n += int(pod.Status.ContainerStatuses[i].RestartCount)
+	}
+	return n
 }
 
 // appendUnique appends s to slice if not already present (dedup refs).

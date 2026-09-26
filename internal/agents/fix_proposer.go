@@ -121,6 +121,10 @@ Given a confirmed root cause and the source code, propose ONE fix using SEARCH/R
 
 ## Fix Quality Requirements
 - Fix the ROOT CAUSE, not just the symptom. If a collection access crashes (dict/key lookup, array index, map get), add a proper check — don't just wrap it in try/catch.
+- Fix the LAYER the fault mechanism demands, not just the crash site (the root cause's fault_class and fix_layer are stated below when available):
+  - Transient network faults (DNS gaierror, ECONNREFUSED/ECONNRESET, timeouts, throttling): add retry-with-backoff in the task/job layer — e.g. Celery autoretry_for=(socket.gaierror, ...), retry_backoff=True, max_retries>=3; JS/TS a retry wrapper with exponential backoff; Java Spring @Retryable. Do NOT add input/config validation at the call site for a transient fault.
+  - OOM / memory kills (OOMKilled, heap out of memory, exit 137): bound the growing structure at its GROWTH site — cap the collection, add eviction/TTL/LRU. Guards at the crash line do NOT stop an OOM.
+  - Concurrency faults (race, deadlock, lock ordering): fix the protocol — consistent lock ordering, atomic check-then-act — not one call site.
 - Use proper error handling for the framework + language in use. For web APIs (FastAPI/Flask in Python, Express/Koa in JS/TS, net/http or chi/gin in Go, Spring in Java, Actix in Rust, etc.):
   - Bad input (missing key, invalid type, out of range) → return appropriate HTTP error (400, 404, 422)
   - Use the framework's error response mechanism (e.g. raise HTTPException in FastAPI, abort() in Flask, c.JSON(status, err) in gin, ResponseEntity.status(status).body(err) in Spring)
@@ -497,6 +501,12 @@ func (a *FixProposer) buildUserMessage(state *schemas.AgentState) string {
 	}
 	parts = append(parts, fmt.Sprintf("- statement: %s", state.RootCause.Statement))
 	parts = append(parts, fmt.Sprintf("- category: %s", state.RootCause.Category))
+	if state.RootCause.FaultClass != "" {
+		parts = append(parts, fmt.Sprintf("- fault class: %s", state.RootCause.FaultClass))
+	}
+	if state.RootCause.FixLayer != "" {
+		parts = append(parts, fmt.Sprintf("- fix layer: %s", state.RootCause.FixLayer))
+	}
 	parts = append(parts, fmt.Sprintf("- confidence: %.3f", state.RootCause.Confidence))
 	parts = append(parts, fmt.Sprintf("- has_schema_migration: %v", state.RootCause.HasSchemaMigration))
 	if len(state.FetchedCode) > 0 {
@@ -518,7 +528,7 @@ func (a *FixProposer) buildUserMessage(state *schemas.AgentState) string {
 	parts = append(parts, "## Fetched Source Code")
 	i := 0
 	for path, content := range state.FetchedCode {
-		if i >= 5 {
+		if i >= 6 {
 			break
 		}
 		parts = append(parts, fmt.Sprintf("### %s", path))
@@ -656,6 +666,12 @@ func buildPRBody(state *schemas.AgentState, rc *schemas.RootCause, fixType strin
 	parts = append(parts, fmt.Sprintf("**Service:** `%s` (namespace: `%s`)", state.Cluster.Service, state.Cluster.Namespace))
 	parts = append(parts, fmt.Sprintf("**Confidence:** `%.3f`", rc.Confidence))
 	parts = append(parts, fmt.Sprintf("**Category:** `%s`", rc.Category))
+	if rc.FaultClass != "" {
+		parts = append(parts, fmt.Sprintf("**Fault class:** `%s`", rc.FaultClass))
+	}
+	if rc.FixLayer != "" {
+		parts = append(parts, fmt.Sprintf("**Fix layer:** %s", rc.FixLayer))
+	}
 	parts = append(parts, "")
 	parts = append(parts, "## Root Cause")
 	parts = append(parts, rc.Statement)
