@@ -5,6 +5,24 @@ All notable changes to Sentinel are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.15] — 2026-09-26
+
+### Fixed
+
+- **Auto-revert, take two: the tree SHA.** Run #29 exposed the second
+  latent bug in `RevertMergeCommit` (the first — parents marshalled as a
+  JSON string — was fixed in 1.7.14 and the GitHub error dutifully
+  changed): the commits API returns `parents: [{"sha": ...}]` with NO
+  tree field inside parent entries, so the old struct read an
+  always-empty tree SHA and GitHub rejected the revert commit with
+  "tree parameter must be exactly 40 characters". Both run-#29
+  regression reverts (user-api, checkout-api — detected correctly by
+  the post-deploy health check within 4 minutes of merge) died on this
+  422. The parent commit is now fetched separately and its top-level
+  tree used, with a 40-hex guard. New end-to-end httptest replays the
+  whole revert flow against a mock GitHub API shaped like the real one
+  (no tree in parents) — it fails against both historical bugs.
+
 ## [1.7.14] — 2026-09-26
 
 Run #28 post-mortem (3/9 vs #27's 4/9): the v1.7.13 gates all worked, but
