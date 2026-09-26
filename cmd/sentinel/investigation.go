@@ -933,6 +933,10 @@ func (w *wiring) executeCodeFix(ctx context.Context, incident *schemas.Incident)
 				AutoMergeAnnotation: autoMergeAnnotation,
 				SandboxOverride:     incident.State.ExecutionResult != nil && incident.State.ExecutionResult.SandboxOverride,
 				CIOverride:          incident.State.ExecutionResult != nil && incident.State.ExecutionResult.CIOverride,
+				// Repo-checks base-relative verdict (run #30): when the repo's
+				// own CI fails identically on base, GitHub's red PR check is
+				// preexisting and must not block or trigger revisions.
+				CIKnownPreexisting: repoBundle != nil && len(repoBundle.newFails) == 0 && len(repoBundle.preexist) > 0,
 			},
 		})
 		logging.Info("PR tracked for auto-merge",
@@ -940,6 +944,7 @@ func (w *wiring) executeCodeFix(ctx context.Context, incident *schemas.Incident)
 			"repo", repoName,
 			"confidence", confidence,
 			"sandbox_verified", sandboxVerified,
+			"ci_known_preexisting", repoBundle != nil && len(repoBundle.newFails) == 0 && len(repoBundle.preexist) > 0,
 		)
 		w.autoMergeMerger.EvaluateNow(ctx, repoName, prResult.PRNumber)
 	}

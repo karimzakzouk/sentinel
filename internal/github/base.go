@@ -287,37 +287,47 @@ func (b *BaseClient) RevertMergeCommit(ctx context.Context, repo, mergeCommitSHA
 	}
 	branchName := fmt.Sprintf("sentinel/revert/%s", shortSHA)
 
-	// Run #29 post-mortem: the commits API returns parents as
+	// Run #29 post-mortem: the REST commits API returns parents as
 	// [{"sha": "..."}] — there is NO tree field inside a parent entry.
 	// The old struct read commit.Parents[0].Tree.SHA, which is always ""
 	// (run #28's parents-encoding bug had masked this: GitHub validated
 	// the malformed parents first and rejected the request before ever
-	// looking at the tree). Fetch the parent commit separately and read
-	// ITS top-level tree — the pre-merge code state we want to restore.
-	var commit struct {
+	// looking at the tree).
+	//
+	// Run #30 post-mortem (THIRD strike): the follow-up fix fetched the
+	// parent commit via the REST commits API and read a TOP-LEVEL "tree"
+	// field — but that endpoint nests the tree at commit.tree.sha and has
+	// NO top-level tree (verified live: parent b8da404's tree only exists
+	// at commit.tree). The e2e mock served the assumed top-level field,
+	// so the test passed while production returned "".
+	//
+	// Correct source of truth: the git database API
+	// (GET /repos/{repo}/git/commits/{sha}) returns BOTH parents and the
+	// tree as TOP-LEVEL fields, guaranteed. Use it for both lookups.
+	var mergeGitCommit struct {
 		Parents []struct {
 			SHA string `json:"sha"`
 		} `json:"parents"`
 	}
 	if err := b.Do(ctx, "GET",
-		fmt.Sprintf("%s/repos/%s/commits/%s", b.APIURL, repo, mergeCommitSHA), nil, &commit); err != nil {
+		fmt.Sprintf("%s/repos/%s/git/commits/%s", b.APIURL, repo, mergeCommitSHA), nil, &mergeGitCommit); err != nil {
 		return 0, fmt.Errorf("get merge commit: %w", err)
 	}
-	if len(commit.Parents) == 0 {
+	if len(mergeGitCommit.Parents) == 0 {
 		return 0, fmt.Errorf("commit %s has no parent — cannot revert", mergeCommitSHA)
 	}
-	parentSHA := commit.Parents[0].SHA
+	parentSHA := mergeGitCommit.Parents[0].SHA
 
-	var parentCommit struct {
+	var parentGitCommit struct {
 		Tree struct {
 			SHA string `json:"sha"`
 		} `json:"tree"`
 	}
 	if err := b.Do(ctx, "GET",
-		fmt.Sprintf("%s/repos/%s/commits/%s", b.APIURL, repo, parentSHA), nil, &parentCommit); err != nil {
+		fmt.Sprintf("%s/repos/%s/git/commits/%s", b.APIURL, repo, parentSHA), nil, &parentGitCommit); err != nil {
 		return 0, fmt.Errorf("get parent commit %s: %w", parentSHA, err)
 	}
-	parentTreeSHA := parentCommit.Tree.SHA
+	parentTreeSHA := parentGitCommit.Tree.SHA
 	if len(parentTreeSHA) != 40 {
 		return 0, fmt.Errorf("parent commit %s has invalid tree sha %q (want 40 hex chars)", parentSHA, parentTreeSHA)
 	}

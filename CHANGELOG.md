@@ -5,6 +5,52 @@ All notable changes to Sentinel are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.17] — 2026-09-26
+
+Run #30 postmortem (2/9 GT, 2 auto-merged): the v1.7.16 investigation
+machinery worked — both ground-truth fixes (shipping-api, notification-worker)
+came straight from mechanism-level classification — but four machine-gate
+bugs kept the correct fixes from merging while letting the wrong ones
+through, and the auto-revert failed a third time on a wrong API shape.
+
+### Fixed
+
+- **Auto-revert: read the parent tree from the git database API.** The
+  revert now fetches both the merge commit and its parent via
+  `GET /git/commits/{sha}` (top-level `tree` + `parents`, guaranteed shape)
+  instead of the REST commits endpoint, which nests the tree at
+  `commit.tree` and has no top-level field — run #30's revert died with
+  `invalid tree sha ""` and the regressed merge stayed on main. The e2e
+  mock now serves the REAL shapes of both endpoints (REST shape nested,
+  git/commits shape top-level), so an endpoint-shape assumption can never
+  pass tests again while failing production.
+- **Transient gates no longer untrack PRs.** A PR whose only failed gates
+  are the regression cooldown or the merge rate limiter is in a WAIT
+  STATE, not rejected — it stays tracked and is re-evaluated after the
+  window. Run #30 abandoned a verified PR 30 seconds into a 10-minute
+  cooldown; the "resumes at 09:13:07" message had nothing to resume.
+- **Preexisting CI failures no longer block or trigger revision loops.**
+  When the pre-PR repo-checks gate has run the repo's own commands on
+  both branch and base and proven every failure preexisting
+  (`new_failures=0`), a red GitHub check on the PR is annotated
+  `ci (preexisting on base)` and passed instead of blocking, and the
+  CI-failure revision loop is skipped. Run #30's shipping-api fix was
+  ground-truth-correct and sandbox-verified but burned a revision on a
+  base-red `mvn` suite it could never fix, then never merged.
+- **Build/typecheck commands run even when a repo has no tests.** The
+  repo-checks gate skip condition now counts `BuildCmds` — a repo whose
+  CI is a bare `tsc --noEmit` typecheck (test step `continue-on-error`,
+  "no tests yet") previously skipped the gate entirely, so the typecheck
+  oracle shipped in v1.7.14 never actually executed.
+- **Sandbox L3 is retry-aware for transient-infrastructure fixes.** A
+  resilience fix (retry with backoff for a transient error such as a DNS
+  failure) does not make the error disappear — the dependency stays
+  down. When the investigator classified the fault as `transient_infra`,
+  observed retry behavior in the canary logs now counts as verification.
+  Run #30's notification-worker fix was ground-truth-correct but failed
+  L3 three times on "gaierror still present", barring its PR from
+  auto-merge.
+
 ## [1.7.16] — 2026-09-26
 
 ### Changed

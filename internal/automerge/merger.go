@@ -55,6 +55,10 @@ type TrackedPR struct {
 	// revision while one is already running (memory only, not persisted).
 	CIRetries       int
 	CIRetryInFlight bool
+
+	// PreexistingNoted records that the "CI red is preexisting on base"
+	// comment has been posted for this PR (memory only, not persisted).
+	PreexistingNoted bool
 }
 
 // GitHubClient is the GitHub API surface the merger needs.
@@ -454,12 +458,27 @@ func (m *Merger) evaluateAndMerge(ctx context.Context, pr *TrackedPR) {
 	// the PR, feed the failing test output back to the fix proposer and
 	// push a corrected commit to the same branch (CI re-runs on the new
 	// commit automatically). Bounded by cfg.MaxCIRetries.
-	if ciStatus.State == "failure" && pr.CIRetryInFlight {
+	//
+	// EXCEPT when the pre-PR repo-checks gate already proved the failures
+	// preexisting on the base branch (run #30: shipping-api's correct fix
+	// burned a revision on a base-red mvn suite it could never fix). In
+	// that case CI red is not the fix's fault: note it once on the PR and
+	// fall through to the policy gate, which overrides the CI gate.
+	if ciStatus.State == "failure" && pr.Input.CIKnownPreexisting && !pr.CIRetryInFlight {
+		if !pr.PreexistingNoted {
+			pr.PreexistingNoted = true
+			logging.Info("automerge: CI red is preexisting on base — skipping revision loop",
+				"repo", pr.Repo, "pr", pr.PRNumber,
+				"failing_checks", ciStatus.Failing, "total_checks", ciStatus.Checks)
+			_ = m.gh.PostComment(ctx, pr.Repo, pr.PRNumber,
+				fmt.Sprintf("ℹ️ CI is red, but the repo-checks gate ran the same commands on the base branch and confirmed these failures predate this fix (new failures: 0). Proceeding — the red check is not attributable to this change."))
+		}
+	} else if ciStatus.State == "failure" && pr.CIRetryInFlight {
 		// A revision is already running for this PR - do nothing.
 		return
 	}
 	if ciStatus.State == "failure" && m.onCIFailure != nil &&
-		pr.CIRetries < m.policy.cfg.MaxCIRetries {
+		pr.CIRetries < m.policy.cfg.MaxCIRetries && !pr.Input.CIKnownPreexisting {
 		pr.CIRetries++
 		pr.CIRetryInFlight = true
 		m.persistSave(pr)
@@ -492,6 +511,15 @@ func (m *Merger) evaluateAndMerge(ctx context.Context, pr *TrackedPR) {
 
 		// Pending (or not-yet-started) CI is not a failure — keep waiting.
 		if ciPending {
+			return
+		}
+
+		// Transient wait-states (run #30 post-mortem: user-api PR #13 was
+		// untracked 30s into a 10-minute regression cooldown — the PR said
+		// "resumes at 09:13:07" but there was nothing left to resume).
+		// Cooldown and rate-limit gates are pauses, not verdicts on the
+		// fix: keep the PR tracked and re-evaluate after the window.
+		if allTransientGates(decision.GatesFailed) {
 			return
 		}
 
@@ -574,6 +602,31 @@ func containsLabel(labels []string, target string) bool {
 		}
 	}
 	return false
+}
+
+// transientGates are policy gates that represent WAIT STATES, not verdicts
+// on the fix itself: the regression cooldown pauses all merging for a
+// fixed window, and the rate limiter throttles merges per hour. A PR whose
+// only failed gates are these must stay tracked and be re-evaluated once
+// the window passes (run #30: a verified PR was abandoned mid-cooldown).
+var transientGates = map[string]bool{
+	"cooldown":   true,
+	"rate_limit": true,
+}
+
+// allTransientGates reports whether every failed gate is a wait-state
+// (and there is at least one). An empty slice means a pre-gate failure
+// (missing annotation etc.), which is NOT transient.
+func allTransientGates(failed []string) bool {
+	if len(failed) == 0 {
+		return false
+	}
+	for _, g := range failed {
+		if !transientGates[g] {
+			return false
+		}
+	}
+	return true
 }
 
 // prKey builds the map key for a tracked PR.

@@ -176,6 +176,23 @@ func (s *SandboxRunner) verifyErrorGoneFromLogs(ctx context.Context, inc *schema
 	canaryLower := strings.ToLower(canaryLogs)
 	errorTypeLower := strings.ToLower(errorType)
 
+	// Retry-aware oracle for transient-infrastructure fixes (run #30
+	// post-mortem): a resilience fix — retries with backoff for a
+	// transient error like a DNS gaierror or a 503 — does NOT make the
+	// error disappear. The upstream dependency is still down; the fix
+	// makes the system TOLERATE it. Requiring "error gone from logs"
+	// makes such fixes permanently unverifiable (notification-worker's
+	// ground-truth max_retries fix failed L3 three times and its PR was
+	// barred from auto-merge). When the investigator classified the fault
+	// as transient_infra, error-gone OR observed-retry-behavior both
+	// count as verified.
+	if rc := inc.State.RootCause; rc != nil && rc.FaultClass == "transient_infra" && retryEvidenceIn(canaryLower) {
+		return &level3Result{
+			passed: true,
+			detail: fmt.Sprintf("%s still present BUT retry-with-backoff behavior confirmed in canary logs (transient_infra fix verified — resilience fixes tolerate the error rather than eliminate it)", errorType),
+		}
+	}
+
 	if strings.Contains(canaryLower, errorTypeLower) {
 		contextLines := extractErrorContext(canaryLogs, errorType, 3)
 		return &level3Result{
@@ -220,6 +237,27 @@ func (s *SandboxRunner) verifyErrorGoneFromLogs(ctx context.Context, inc *schema
 		detail: fmt.Sprintf("%s: %s not found in canary logs during %s sustained window — error is gone, fix verified",
 			errorType, errorDetail, s.sustainedWindow),
 	}
+}
+
+// retryEvidenceIn reports whether the (lower-cased) canary logs show
+// retry behavior: an explicit retry/backoff log line emitted by the
+// framework or application while handling failures. Used ONLY for
+// transient_infra-classified fixes, where retries are the expected fix
+// shape and the original error legitimately persists.
+func retryEvidenceIn(canaryLower string) bool {
+	for _, marker := range []string{
+		"retry",     // celery "Retry in 30s", custom retry lines
+		"retrying",  // "retrying in", "retrying request"
+		"backoff",   // exponential backoff mentions
+		"attempt 2", // "attempt 2/5", "attempt 2 of 5"
+		"requeues",  // amqp requeue wording
+		"will be retried",
+	} {
+		if strings.Contains(canaryLower, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // extractErrorContext returns N lines of context around the first occurrence
