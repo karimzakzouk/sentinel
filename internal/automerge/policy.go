@@ -116,6 +116,17 @@ type Input struct {
 	// the corresponding gate is treated as passed.
 	SandboxOverride bool
 	CIOverride      bool
+
+	// CIKnownPreexisting is set when the pre-PR repo-checks gate ran the
+	// repo's own CI commands on BOTH the fix branch and the base branch and
+	// established that every failure is preexisting on base (new_failures=0,
+	// preexisting>0). GitHub CI on such a repo is permanently red through
+	// no fault of the fix: run #30's shipping-api PR carried a correct,
+	// sandbox-verified fix but was stuck in the CI-revision loop for the
+	// whole eval because a base-branch test failure painted the PR red.
+	// Gate 9 treats red as preexisting instead of blocking, and the merger
+	// skips the CI-failure revision loop.
+	CIKnownPreexisting bool
 }
 
 // CIStatus is the aggregated state of CI checks on the PR head SHA.
@@ -241,9 +252,17 @@ func (p *Policy) Evaluate(in Input) *Decision {
 		} else {
 			switch in.CIStatus.State {
 			case "failure":
-				d.GatesFailed = append(d.GatesFailed, "ci")
-				d.Reason = fmt.Sprintf("CI failing (%d/%d checks failing)", in.CIStatus.Failing, in.CIStatus.Checks)
-				return d
+				if in.CIKnownPreexisting {
+					// Red CI that the repo-checks gate proved preexisting on the
+					// base branch (same commands, sandbox-executed, base-relative
+					// comparison): not attributable to this fix. Proceed with a
+					// visible annotation so the merge record stays honest.
+					d.GatesPassed = append(d.GatesPassed, "ci (preexisting on base)")
+				} else {
+					d.GatesFailed = append(d.GatesFailed, "ci")
+					d.Reason = fmt.Sprintf("CI failing (%d/%d checks failing)", in.CIStatus.Failing, in.CIStatus.Checks)
+					return d
+				}
 			case "success":
 				d.GatesPassed = append(d.GatesPassed, "ci")
 			case "pending":

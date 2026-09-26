@@ -545,3 +545,72 @@ func contains(s []string, want string) bool {
 	}
 	return false
 }
+
+// Run #30 post-mortem: a PR whose only failed gates are wait-states
+// (cooldown, rate_limit) must be reported as such so the merger keeps it
+// tracked instead of untracking it mid-pause.
+func TestPolicy_CooldownPauseIsNotVerdict(t *testing.T) {
+	p := NewPolicy(Config{Enabled: true, Namespaces: []string{"sim"}, RequireCIGreen: true}, &mockSafetyChecker{allowed: true})
+	p.RecordRegression("test regression")
+
+	in := allGatesPassInput()
+	d := p.Evaluate(in)
+	if d.AutoMerge {
+		t.Fatal("expected AutoMerge=false while cooldown active")
+	}
+	if len(d.GatesFailed) != 1 || d.GatesFailed[0] != "cooldown" {
+		t.Fatalf("expected only [cooldown] failed, got %v", d.GatesFailed)
+	}
+	if !allTransientGates(d.GatesFailed) {
+		t.Errorf("cooldown-only failure must classify as transient (keep tracking), got %v", d.GatesFailed)
+	}
+}
+
+func TestPolicy_CIKnownPreexistingOverridesRedCI(t *testing.T) {
+	p := NewPolicy(Config{Enabled: true, Namespaces: []string{"sim"}, RequireCIGreen: true}, &mockSafetyChecker{allowed: true})
+	in := allGatesPassInput()
+	in.CIStatus = CIStatus{State: "failure", Checks: 1, Passing: 0, Failing: 1}
+	// Without the preexisting verdict: hard CI failure.
+	d := p.Evaluate(in)
+	if d.AutoMerge {
+		t.Fatal("expected AutoMerge=false on red CI without preexisting knowledge")
+	}
+	// With repo-checks having proven the failure preexisting on base:
+	// the gate passes with a visible annotation.
+	in.CIKnownPreexisting = true
+	d = p.Evaluate(in)
+	if !d.AutoMerge {
+		t.Fatalf("expected AutoMerge=true with CIKnownPreexisting, got: %s", d.Reason)
+	}
+	found := false
+	for _, g := range d.GatesPassed {
+		if g == "ci (preexisting on base)" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected 'ci (preexisting on base)' in GatesPassed, got %v", d.GatesPassed)
+	}
+}
+
+// allTransientGates: cooldown/rate_limit are wait-states; anything else
+// (sandbox, ci, confidence...) is a verdict.
+func TestAllTransientGates(t *testing.T) {
+	cases := []struct {
+		failed []string
+		want   bool
+	}{
+		{[]string{"cooldown"}, true},
+		{[]string{"rate_limit"}, true},
+		{[]string{"cooldown", "rate_limit"}, true},
+		{[]string{"cooldown", "sandbox"}, false},
+		{[]string{"sandbox"}, false},
+		{[]string{"ci", "cooldown"}, false},
+		{nil, false},
+	}
+	for _, c := range cases {
+		if got := allTransientGates(c.failed); got != c.want {
+			t.Errorf("allTransientGates(%v) = %v, want %v", c.failed, got, c.want)
+		}
+	}
+}
