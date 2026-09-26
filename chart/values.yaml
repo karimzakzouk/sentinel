@@ -103,8 +103,12 @@ sentinel:
     enabled: true
     # Block the PR when the fix introduces NEW test failures.
     required: true
-    # Overall pod timeout (dependency install + tests), seconds.
+    # Overall pod timeout (dependency install + build + tests), seconds.
     timeoutSec: 900
+    # When a canary build fails with a build-class error, build the BASE
+    # branch once (per repo) to tell “fix broke it” from “base is rotten”;
+    # the verdict enriches the fix-proposer feedback (v1.7.14).
+    baseBuildProbe: true
 
   # L2 safe-actions — immediate remediation (restart, rollback, scale)
   safeActions:

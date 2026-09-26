@@ -133,3 +133,69 @@ func TestRunResultSummary(t *testing.T) {
 		t.Errorf("summary = %q", got)
 	}
 }
+
+// Run #28: user-api's CI runs `npx tsc --noEmit` (build phase) before
+// `npm test`. The runner must parse build markers and compare build
+// failures across branches like test failures.
+func TestParseRunOutputBuildPhase(t *testing.T) {
+	ci := &repoci.Discovered{
+		Language:  "node",
+		BuildCmds: []string{"npx tsc --noEmit"},
+		TestCmds:  []string{"npm test"},
+	}
+	out := `cloned
+===SENTINEL_CMD_START key=build-0 phase=build===
+src/db.ts(9,5): error TS2451: Cannot redeclare block-scoped variable 'pool'.
+===SENTINEL_CMD_END key=build-0 exit=2===
+===SENTINEL_CMD_START key=test-0 phase=test===
+===SENTINEL_CMD_END key=test-0 exit=0===
+===SENTINEL_DONE===
+`
+	res := parseRunOutput(out, ci)
+	if len(res.Commands) != 2 {
+		t.Fatalf("commands = %+v", res.Commands)
+	}
+	if res.Commands[0].Phase != "build" || res.Commands[0].Exit != 2 || res.Commands[0].Cmd != "npx tsc --noEmit" {
+		t.Errorf("build cmd: %+v", res.Commands[0])
+	}
+	if !res.BuildsRan {
+		t.Error("BuildsRan should be true")
+	}
+	if !res.TestsRan {
+		t.Error("TestsRan should be true")
+	}
+	if !res.HasTestFailures() {
+		t.Error("build failure must count as a check failure")
+	}
+	if got := res.Summary(); got != "1 passed / 0 failed (build: 0 passed / 1 failed)" {
+		t.Errorf("summary = %q", got)
+	}
+}
+
+func TestCompareRepoTestsBuildFailure(t *testing.T) {
+	mk := func(buildExit int) *RunResult {
+		return &RunResult{
+			Readback: map[string]string{},
+			Commands: []CmdResult{
+				{Phase: "build", Cmd: "npx tsc --noEmit", Exit: buildExit, Output: "src/db.ts(9,5): error TS2451"},
+			},
+			BuildsRan: true,
+		}
+	}
+	// Base builds clean, fix breaks the type check — NEW failure.
+	newFails, preexist := CompareRepoTests(mk(2), mk(0))
+	if len(newFails) != 1 || newFails[0] != "command: npx tsc --noEmit" {
+		t.Errorf("newFails = %v, want [command: npx tsc --noEmit]", newFails)
+	}
+	if len(preexist) != 0 {
+		t.Errorf("preexist = %v, want none", preexist)
+	}
+	// Both branches broken (base rot) — pre-existing, not the fix's fault.
+	newFails2, preexist2 := CompareRepoTests(mk(2), mk(2))
+	if len(newFails2) != 0 {
+		t.Errorf("newFails = %v, want none", newFails2)
+	}
+	if len(preexist2) != 1 {
+		t.Errorf("preexist = %v, want the base-rot failure", preexist2)
+	}
+}

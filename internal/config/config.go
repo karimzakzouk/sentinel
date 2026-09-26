@@ -212,6 +212,14 @@ type Config struct {
 	RepoChecksRequired   bool
 	RepoChecksTimeoutSec int
 
+	// BaseBuildProbe (v1.7.14): when a canary kaniko build fails with a
+	// BUILD-class error, build the BASE branch once (per repo, per
+	// process) to distinguish “the fix broke the build” from “the
+	// repo's Docker build is rotten on base” (run #28: search-api
+	// burns three retries on a base it cannot fix). The verdict
+	// enriches the fix-proposer feedback instead of gating.
+	BaseBuildProbe bool
+
 	AutoRemediationEnabled bool
 
 	// ─── Observability backends ──────────────────────────────────────────
@@ -470,6 +478,7 @@ func Load() *Config {
 		RepoChecksEnabled:    getenvBool("SENTINEL_REPO_CHECKS_ENABLED", true),
 		RepoChecksRequired:   getenvBool("SENTINEL_REPO_CHECKS_REQUIRED", true),
 		RepoChecksTimeoutSec: getenvInt("SENTINEL_REPO_CHECKS_TIMEOUT_SEC", 900),
+		BaseBuildProbe:       getenvBool("SENTINEL_BASE_BUILD_PROBE", true),
 
 		AutoRemediationEnabled: getenvBool("SENTINEL_AUTO_REMEDIATION_ENABLED", false),
 	}

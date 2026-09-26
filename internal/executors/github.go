@@ -271,6 +271,76 @@ func (e *GitHubExecutor) getFileSHA(ctx context.Context, repo, path, ref string)
 	return resp.SHA, nil
 }
 
+// ResetBranchToBase reverts every file that differs between branch and
+// baseBranch back to its base content (deleting files that only exist on
+// the branch). Used before build-failure retries so the next attempt
+// applies its fix to a CLEAN base instead of layering patches on the
+// previous attempt's possibly-broken output — run #28's user-api retry
+// double-applied a db.ts patch (TS2451 Cannot redeclare) precisely
+// because the poisoned branch state was the new baseline.
+//
+// Uses the public compare API: GET /repos/{repo}/compare/{base}...{branch}.
+// Returns the number of files reverted/deleted.
+func (e *GitHubExecutor) ResetBranchToBase(ctx context.Context, repo, branch, baseBranch string) int {
+	url := fmt.Sprintf("%s/repos/%s/compare/%s...%s", e.APIURL, repo, baseBranch, branch)
+	var cmp struct {
+		Files []struct {
+			Filename string `json:"filename"`
+			Status   string `json:"status"` // added|removed|modified
+		} `json:"files"`
+	}
+	if err := e.Do(ctx, "GET", url, nil, &cmp); err != nil {
+		logging.Info("branch reset: compare failed (branch may equal base)", "err", err)
+		return 0
+	}
+
+	reverted := 0
+	for _, f := range cmp.Files {
+		if f.Filename == "" {
+			continue
+		}
+		if f.Status == "removed" {
+			continue // already absent on the branch
+		}
+		baseContent, baseErr := e.GetFileContent(ctx, repo, f.Filename, baseBranch)
+		if baseErr == nil && baseContent != "" {
+			// File exists on base — restore the base content on the branch.
+			if err := e.upsertFile(ctx, repo, branch, f.Filename, baseContent); err != nil {
+				logging.Error("branch reset: restore failed", "file", f.Filename, "err", err)
+				continue
+			}
+			reverted++
+			continue
+		}
+		// File only exists on the branch (added) — delete it.
+		if err := e.deleteFile(ctx, repo, branch, f.Filename, "revert file absent on base"); err != nil {
+			logging.Error("branch reset: delete failed", "file", f.Filename, "err", err)
+			continue
+		}
+		reverted++
+	}
+	if reverted > 0 {
+		logging.Info("branch reset: reverted stale files to base state",
+			"repo", repo, "branch", branch, "files", reverted)
+	}
+	return reverted
+}
+
+// deleteFile removes a file from a branch via the Contents API.
+func (e *GitHubExecutor) deleteFile(ctx context.Context, repo, branch, path, msg string) error {
+	sha, err := e.getFileSHA(ctx, repo, path, branch)
+	if err != nil {
+		return fmt.Errorf("get file sha: %w", err)
+	}
+	url := fmt.Sprintf("%s/repos/%s/contents/%s", e.APIURL, repo, path)
+	body := map[string]any{
+		"message": fmt.Sprintf("[Sentinel] %s: %s", msg, path),
+		"sha":     sha,
+		"branch":  branch,
+	}
+	return e.Do(ctx, "DELETE", url, body, nil)
+}
+
 // GetFileContent fetches the decoded content of a file from a GitHub repo.
 func (e *GitHubExecutor) GetFileContent(ctx context.Context, repo, path, ref string) (string, error) {
 	url := fmt.Sprintf("%s/repos/%s/contents/%s?ref=%s", e.APIURL, repo, path, ref)

@@ -112,6 +112,8 @@ spec:
               value: {{ .Values.sentinel.repoChecks.required | toString | quote }}
             - name: SENTINEL_REPO_CHECKS_TIMEOUT_SEC
               value: {{ .Values.sentinel.repoChecks.timeoutSec | default 900 | quote }}
+            - name: SENTINEL_BASE_BUILD_PROBE
+              value: {{ .Values.sentinel.repoChecks.baseBuildProbe | default true | toString | quote }}
             {{- else }}
             - name: SENTINEL_REPO_CHECKS_ENABLED
               value: "false"
