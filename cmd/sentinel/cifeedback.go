@@ -101,6 +101,59 @@ func (w *wiring) handleCIFailureRevision(ctx context.Context, pr *automerge.Trac
 	logging.Info("ci-feedback: revised fix pushed to branch",
 		"repo", pr.Repo, "pr", pr.PRNumber, "branch", pushed.BranchName, "files", pushed.FilesChanged)
 
+	// 6.5 Pre-push workflow test gate (v1.7.13 Fix #1): run the repo's
+	// own CI commands against the revised branch before spending a
+	// canary build on it. The push above already updated the PR head,
+	// so a failing gate gets ONE immediate revision round here (the
+	// gate output is fed back to the fix proposer exactly like the CI
+	// output was); if the second run still fails, give up this round —
+	// the merger's normal CI-failure handling takes over from the red
+	// CI run that will follow.
+	if w.workflowGate != nil && w.Config().WorkflowTestGateEnabled {
+		const maxGateRounds = 2
+		for round := 0; round < maxGateRounds; round++ {
+			gateRes := w.workflowGate.Run(revCtx, pushed.Repo, pushed.BranchName)
+			if !gateRes.Ran || gateRes.Passed || gateRes.InfraError {
+				break // nothing to gate / fail-open
+			}
+			logging.Error("ci-feedback: revised fix fails the repo's own CI commands",
+				"repo", pr.Repo, "pr", pr.PRNumber, "detail", gateRes.Summary,
+				"round", round+1)
+			if round == maxGateRounds-1 {
+				fail(fmt.Sprintf("revised fix still fails the repo's own CI commands: %s",
+					firstLine(gateRes.Summary)))
+				return
+			}
+			gateFeedback := "## PRE-PUSH CI GATE FAILURE (revised fix)\n\n" +
+				"The revised fix still fails the repository's own CI commands (extracted from .github/workflows and executed locally).\n" +
+				"Failing step: " + gateRes.Summary + "\n\n" +
+				"Command output:\n```\n" + gateRes.Output + "\n```\n\n" +
+				"Generate a corrected fix that makes these commands pass."
+			if err := w.store.SetSandboxFeedback(revCtx, inc.IncidentID, gateFeedback); err != nil {
+				fail(fmt.Sprintf("store gate feedback: %v", err))
+				return
+			}
+			if fetched := fetchCurrentBranchFiles(revCtx, w.ghExec, pushed, inc); len(fetched) > 0 {
+				inc.State.FetchedCode = fetched
+			}
+			if err := w.pipeline.RetryFixProposal(revCtx, &inc.State); err != nil {
+				fail(fmt.Sprintf("fix proposer retry (gate): %v", err))
+				return
+			}
+			if fp = inc.State.FixProposal; fp == nil {
+				fail("fix proposer produced no proposal (gate round)")
+				return
+			}
+			pushed = w.ghExec.PrepareBranch(revCtx, inc)
+			if !pushed.Success || pushed.FilesChanged == 0 {
+				fail(fmt.Sprintf("push gate-revised fix: %s", pushed.Error))
+				return
+			}
+			logging.Info("ci-feedback: gate-revised fix pushed to branch",
+				"repo", pr.Repo, "pr", pr.PRNumber, "branch", pushed.BranchName)
+		}
+	}
+
 	// 7. Re-verify in the sandbox (build canary from the revised branch, run
 	// the 5-level suite). The merge gates require sandbox verification —
 	// silently keeping the OLD verdict for NEW code would weaken the gate.

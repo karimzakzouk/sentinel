@@ -267,6 +267,16 @@ func wire(cfg *config.Config, listenAddr string) (*wiring, error) {
 		WithGitHost(cfg.GitHost).
 		WithGitHubToken(cfg.GitHubToken)
 
+	// Pre-push workflow test gate (v1.7.13 Fix #1): runs the repo's own
+	// .github/workflows test commands against the fix branch before the
+	// PR is opened. Pods run in the Sentinel namespace (egress needed for
+	// dependency downloads), same as the Kaniko builder.
+	w.workflowGate = executors.NewWorkflowTestGate(k8sClient.Clientset(), cfg.Namespace).
+		WithGitHub(ghExec).
+		WithGitHost(cfg.GitHost).
+		WithInitImage(cfg.KanikoInitImage).
+		WithTimeout(time.Duration(cfg.WorkflowTestGateTimeoutSec) * time.Second)
+
 	if cfg.AutoRemediationEnabled {
 		w.remediation = executors.NewRemediationController(k8sClient.Clientset(), cfg.SkipNamespaces)
 	}

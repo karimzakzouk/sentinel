@@ -286,6 +286,29 @@ func (e *GitHubExecutor) GetFileContent(ctx context.Context, repo, path, ref str
 	return resp.Content, nil
 }
 
+// ListDirEntries lists the file names (type "file" only, directories
+// excluded) in a repo directory at the given ref. Returns an
+// errs.NotFound-compatible error when the directory does not exist so
+// callers can distinguish "no such directory" (fine — e.g. a repo
+// without .github/workflows) from transport failures.
+func (e *GitHubExecutor) ListDirEntries(ctx context.Context, repo, path, ref string) ([]string, error) {
+	url := fmt.Sprintf("%s/repos/%s/contents/%s?ref=%s", e.APIURL, repo, path, ref)
+	var resp []struct {
+		Name string `json:"name"`
+		Type string `json:"type"`
+	}
+	if err := e.Do(ctx, "GET", url, nil, &resp); err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(resp))
+	for _, entry := range resp {
+		if entry.Type == "file" {
+			names = append(names, entry.Name)
+		}
+	}
+	return names, nil
+}
+
 // createPR opens a Pull Request. Returns (number, html_url, error).
 func (e *GitHubExecutor) createPR(ctx context.Context, repo, title, body, head, base string) (int, string, error) {
 	url := fmt.Sprintf("%s/repos/%s/pulls", e.APIURL, repo)

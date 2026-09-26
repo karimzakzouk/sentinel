@@ -21,3 +21,16 @@ func IsAlreadyExists(err error) bool {
 	}
 	return strings.Contains(strings.ToLower(err.Error()), "already exists")
 }
+
+// IsNotFound reports whether err carries an HTTP 404 ("Not Found" — the
+// convention used by the GitHub REST API and the K8s API server for missing
+// resources). Used to distinguish "resource absent" (a normal condition,
+// e.g. a repo without .github/workflows) from real transport failures.
+func IsNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "404") ||
+		strings.Contains(strings.ToLower(msg), "not found")
+}

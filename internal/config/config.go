@@ -88,6 +88,13 @@ type Config struct {
 	KanikoInitImage     string
 	KanikoExecutorImage string
 
+	// Workflow test gate (v1.7.13 Fix #1): deterministically parse the
+	// repo's own .github/workflows test commands and run them against the
+	// fix branch before the PR is opened (no LLM in the loop).
+	WorkflowTestGateEnabled    bool
+	WorkflowTestGateTimeoutSec int
+	WorkflowTestGateRequired   bool
+
 	// ─── Concurrency ─────────────────────────────────────────────────────
 	MaxConcurrentInvestigations int
 
@@ -337,6 +344,10 @@ func Load() *Config {
 		KanikoInitImage:     getenv("SENTINEL_KANIKO_INIT_IMAGE", "alpine/git:2.43.0"),
 		KanikoExecutorImage: getenv("SENTINEL_KANIKO_EXECUTOR_IMAGE", "gcr.io/kaniko-project/executor:v1.24.0"),
 
+		WorkflowTestGateEnabled:    getenvBool("SENTINEL_WORKFLOW_TEST_GATE", true),
+		WorkflowTestGateTimeoutSec: getenvInt("SENTINEL_WORKFLOW_TEST_TIMEOUT", 900),
+		WorkflowTestGateRequired:   getenvBool("SENTINEL_WORKFLOW_TEST_REQUIRED", true),
+
 		MaxConcurrentInvestigations: getenvInt("SENTINEL_MAX_CONCURRENT_INVESTIGATIONS", 3),
 		MaxFixServices:              getenvInt("SENTINEL_MAX_FIX_SERVICES", 0),
 
@@ -572,6 +583,10 @@ func (c *Config) Validate() (errors []string, warnings []string) {
 	}
 	if c.SandboxMaxRetries > 10 {
 		warnings = append(warnings, fmt.Sprintf("SENTINEL_SANDBOX_MAX_RETRIES=%d (very high) — each retry takes ~5-10min", c.SandboxMaxRetries))
+	}
+	if c.WorkflowTestGateTimeoutSec < 60 {
+		warnings = append(warnings, fmt.Sprintf("SENTINEL_WORKFLOW_TEST_TIMEOUT=%ds (< 60) — clamping to 60", c.WorkflowTestGateTimeoutSec))
+		c.WorkflowTestGateTimeoutSec = 60
 	}
 	if c.InvestigatorTimeoutSec <= 0 {
 		warnings = append(warnings, fmt.Sprintf("SENTINEL_INVESTIGATOR_TIMEOUT=%d (non-positive)", c.InvestigatorTimeoutSec))

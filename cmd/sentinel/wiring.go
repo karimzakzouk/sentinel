@@ -92,11 +92,12 @@ type wiring struct {
 	safeActions *safeactions.Controller
 
 	// Executors.
-	ghExec      *executors.GitHubExecutor
-	k8sExec     *executors.K8sExecutor
-	sandbox     *executors.SandboxRunner
-	kaniko      *executors.KanikoBuilder
-	remediation *executors.RemediationController
+	ghExec       *executors.GitHubExecutor
+	k8sExec      *executors.K8sExecutor
+	sandbox      *executors.SandboxRunner
+	kaniko       *executors.KanikoBuilder
+	workflowGate *executors.WorkflowTestGate
+	remediation  *executors.RemediationController
 
 	// Detection + correlation.
 	tracker        *detection.ActiveTracker

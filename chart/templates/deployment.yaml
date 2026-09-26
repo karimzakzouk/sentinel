@@ -225,6 +225,12 @@ spec:
               value: {{ .Values.sentinel.sandbox.maxRetries | default 2 | quote }}
             - name: SENTINEL_SANDBOX_NETWORK_POLICY_REQUIRED
               value: {{ .Values.sentinel.sandbox.networkPolicyRequired | default true | quote }}
+            - name: SENTINEL_WORKFLOW_TEST_GATE
+              value: {{ .Values.sentinel.workflowTestGate.enabled | default true | quote }}
+            - name: SENTINEL_WORKFLOW_TEST_TIMEOUT
+              value: {{ .Values.sentinel.workflowTestGate.timeoutSec | default 900 | quote }}
+            - name: SENTINEL_WORKFLOW_TEST_REQUIRED
+              value: {{ .Values.sentinel.workflowTestGate.required | default true | quote }}
             {{- if .Values.sentinel.slackWebhook }}
             - name: SENTINEL_SLACK_WEBHOOK
               value: {{ .Values.sentinel.slackWebhook | quote }}

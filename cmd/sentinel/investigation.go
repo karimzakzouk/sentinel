@@ -466,6 +466,9 @@ func (w *wiring) executeCodeFix(ctx context.Context, incident *schemas.Incident)
 	sandboxSummary := "skipped (sandbox disabled)"
 	sandboxLevels := ""
 	sandboxRan := false
+	// gateNote carries the pre-push workflow-test-gate outcome into the PR
+	// body (PASS / SKIP / INFRA detail) independent of the sandbox phases.
+	gateNote := ""
 
 	if !shouldRunSandbox {
 		sandboxSummary = "skipped (sandbox disabled — fast mode)"
@@ -524,6 +527,64 @@ func (w *wiring) executeCodeFix(ctx context.Context, incident *schemas.Incident)
 					logging.Error("branch re-preparation failed", "error", branchInfo.Error)
 					break
 				}
+			}
+
+			// Phase 1.5: Pre-push workflow test gate (v1.7.13 Fix #1) —
+			// deterministically run the repo's OWN CI test commands from
+			// .github/workflows against the fix branch, BEFORE spending a
+			// Kaniko build + canary deploy on code that would fail CI anyway.
+			// Cheap-first ordering: a broken `go vet` / `tsc` / `ruff` is
+			// caught here in one pod run instead of a red PR + CI feedback
+			// round-trip.
+			gateBlocked := false
+			if cfg.WorkflowTestGateEnabled && w.workflowGate != nil {
+				gateRes := w.workflowGate.Run(ctx, branchInfo.Repo, branchInfo.BranchName)
+				switch {
+				case gateRes.Ran && gateRes.Passed:
+					gateNote = "Pre-push CI gate: PASSED — repo's own workflow tests (" + gateRes.Summary + ")"
+					logging.Info("workflow test gate passed",
+						"fix_id", fp.FixID, "detail", gateRes.Summary)
+				case gateRes.Ran && !gateRes.Passed && !gateRes.InfraError:
+					// A workflow test command failed against the fix branch —
+					// the exact same command would fail GitHub Actions on the
+					// PR. Retryable code failure: feed the output to the fix
+					// proposer (Level 6) instead of opening a known-red PR.
+					gateNote = "Pre-push CI gate: FAILED — " + gateRes.Summary
+					sandboxSummary = gateRes.Summary + "\n\n--- CI OUTPUT (repo's own workflow tests) ---\n" + gateRes.Output
+					metrics.RecordSandboxLevelFailure(6)
+					logging.Error("workflow test gate FAILED — repo CI commands fail on fix branch",
+						"fix_id", fp.FixID, "detail", gateRes.Summary,
+						"attempt", sandboxAttempt+1, "max", maxRetries+1)
+					if sandboxAttempt < maxRetries {
+						logging.Info("workflow test gate failure — retrying with CI output as feedback",
+							"fix_id", fp.FixID)
+						continue
+					}
+					if cfg.WorkflowTestGateRequired {
+						logging.Error("workflow test gate failed and gate is required — not opening PR",
+							"fix_id", fp.FixID, "detail", gateRes.Summary)
+						return fmt.Errorf("workflow_test_gate_failed: %s", gateRes.Summary)
+					}
+					// Required=false: proceed to the PR with a warning, but
+					// skip the kaniko/sandbox phases for this attempt — the
+					// code already failed its own CI and a canary would not
+					// change that. (Flag instead of break-in-switch: a bare
+					// break there would only exit the switch.)
+					gateNote += " (proceeded anyway — SENTINEL_WORKFLOW_TEST_REQUIRED=false)"
+					gateBlocked = true
+				case gateRes.InfraError:
+					// Fail-open: the gate itself could not run (API error, pod
+					// scheduling, image pull, timeout). The sandbox phases still
+					// verify the fix; the note surfaces in the PR body.
+					gateNote = "Pre-push CI gate: infra error (fail-open) — " + gateRes.Summary
+					logging.Warn("workflow test gate infra error — proceeding (fail-open)",
+						"fix_id", fp.FixID, "detail", gateRes.Summary)
+				default:
+					gateNote = "Pre-push CI gate: skipped — " + gateRes.Summary
+				}
+			}
+			if gateBlocked {
+				break
 			}
 
 			// Phase 2: Build canary image (+ post-fix artifacts in parallel on first attempt).
@@ -624,6 +685,9 @@ func (w *wiring) executeCodeFix(ctx context.Context, incident *schemas.Incident)
 	}
 	incident.UpdatedAt = time.Now().UTC()
 	fullPRBody := agents.BuildPRBody(incident, sandboxVerified, sandboxSummary, canaryImg)
+	if gateNote != "" {
+		fullPRBody = gateNote + "\n\n" + fullPRBody
+	}
 	fp.PRBody = &fullPRBody
 
 	prResult := w.ghExec.OpenPR(ctx, incident, branchInfo, sandboxVerified, sandboxLevels, sandboxSummary)
@@ -788,6 +852,7 @@ func (w *wiring) executeCodeFix(ctx context.Context, incident *schemas.Incident)
 //	3 = original error still present in canary logs (PRIMARY ORACLE)
 //	4 = regression test failed
 //	5 = reproducer script crashed (strongest signal)
+//	6 = repo's own CI commands failed in the pre-push workflow gate
 //	0 = infrastructure error (RBAC, image pull, namespace creation)
 func detectSandboxFailureLevel(summary string) int {
 	switch {
@@ -801,6 +866,8 @@ func detectSandboxFailureLevel(summary string) int {
 		return 4
 	case strings.Contains(summary, "reproducer_failed"):
 		return 5
+	case strings.Contains(summary, "workflow_tests_failed"):
+		return 6
 	case strings.Contains(summary, "deploy_failed"), strings.Contains(summary, "create_namespace"), strings.Contains(summary, "kaniko_error"):
 		return 0
 	}
@@ -824,6 +891,8 @@ func levelSpecificFeedback(summary, fullSummary string) string {
 		return fmt.Sprintf("Sandbox Level 4 FAILED: the regression test did not pass.\n\nIMPORTANT: Your fix passed Levels 1-3 (pod is Ready, health endpoints OK, original error gone from logs). But the LLM-generated regression test — which reproduces the original bug — still FAILS against your fixed code. This means your fix did not actually fix the underlying bug; it only masked the symptom.\n\nFull failure detail:\n%s\n\nPlease generate a corrected fix that makes the regression test PASS.", fullSummary)
 	case 5:
 		return fmt.Sprintf("Sandbox Level 5 FAILED: the reproducer script crashed (exit code != 0).\n\nIMPORTANT: Your fix passed Levels 1-4. But the LLM-generated reproducer script — which exercises the buggy code path — still crashes against your fixed code. This is the strongest signal that the fix is incomplete.\n\nFull failure detail:\n%s\n\nPlease generate a corrected fix that makes the reproducer script exit 0.", fullSummary)
+	case 6:
+		return fmt.Sprintf("Pre-push CI gate FAILED (Level 6): the repository's OWN CI test commands — extracted deterministically from .github/workflows on your fix branch — failed when executed. These are the EXACT commands GitHub Actions runs on this PR; merging as-is guarantees a red PR. Read the failing step's output below, fix the underlying code error (compile error, lint violation, type error, or test failure), and regenerate the fix.\n\nFull CI output:\n%s\n\nPlease generate a corrected fix that makes the repository's own CI commands pass.", fullSummary)
 	default:
 		return fmt.Sprintf("Sandbox verification failed (infrastructure or unknown error — the LLM may not be able to fix this):\n%s\n\nPlease generate a corrected fix if you can; otherwise the PR will be opened with needs-review.", fullSummary)
 	}

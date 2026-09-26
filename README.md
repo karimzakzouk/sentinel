@@ -191,6 +191,9 @@ SENTINEL_LLM_PROVIDERS='[{"provider":"openrouter","api_key":"...","fast_model":"
 | `SENTINEL_SANDBOX_ENABLED` | `true` | Run sandbox verification before opening PR |
 | `SENTINEL_SANDBOX_REQUIRED` | `false` | Block PR if sandbox fails |
 | `SENTINEL_SANDBOX_NETWORK_POLICY_REQUIRED` | `true` | Fail closed if the sandbox NetworkPolicy can't be created |
+| `SENTINEL_WORKFLOW_TEST_GATE` | `true` | Run the repo's own `.github/workflows` test commands against the fix branch before opening the PR (deterministic, no LLM) |
+| `SENTINEL_WORKFLOW_TEST_TIMEOUT` | `900` | Per-workflow gate run timeout (seconds) |
+| `SENTINEL_WORKFLOW_TEST_REQUIRED` | `true` | Block the PR when the gate fails after all retries (false = open with needs-review) |
 | `SENTINEL_AUTO_MERGE_ENABLED` | `false` | Enable auto-merge after all 11 gates pass |
 | `SENTINEL_AUTOMERGE_MIN_SANDBOX_LEVEL` | `3` | Minimum sandbox depth for auto-merge (3 or 5) |
 | `SENTINEL_PRODUCTION_NAMESPACES` | `production` | CSV of production namespaces (governance) |

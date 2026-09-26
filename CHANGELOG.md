@@ -5,6 +5,48 @@ All notable changes to Sentinel are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased — v1.7.13 in progress]
+
+### Added
+
+- **Pre-push workflow test gate (Fix #1)** — a deterministic, zero-LLM
+  gate that extracts the repository's OWN CI test commands from
+  `.github/workflows` on the fix branch and executes them in an isolated
+  pod BEFORE the PR is opened (and before a Kaniko build + canary deploy
+  is spent on code that would fail CI anyway). Eval run #27 root cause
+  #1: the sandbox verified fixes with LLM-generated tests while the real
+  test suite (`go vet`, `tsc --noEmit`, `ruff`, `mvn test`, ...) never
+  ran pre-push, so broken fixes produced red PRs. The gate:
+  - keeps only `pull_request`-triggered workflows (push-only deploy
+    workflows are excluded), ubuntu jobs without matrix/services;
+  - reproduces every `run:` step verbatim (multi-line blocks included),
+    honoring step-level `continue-on-error` and `working-directory`,
+    skipping `if:`-conditional and `${{ }}`-expression steps with a
+    note;
+  - maps setup actions to toolchain images (`node:20`, `python:3.12`,
+    `golang:1.22`, `maven:3.9-eclipse-temurin-21`, `rust:<pinned>` with
+    declared components, `ruby:3.3` + implicit `bundle install`,
+    `ubuntu:24.04` + apt bootstrap for cmake/ctest), version-pinned from
+    the workflow's own `with:` inputs;
+  - clones the fix branch with the same hardened init-container pattern
+    as the Kaniko builder (token via env-from-secret, never in the
+    script) and runs the assembled script with `set -e` in the Sentinel
+    namespace (egress is required for dependency downloads);
+  - maps a failing step to the new **Level 6** feedback
+    (`workflow_tests_failed`) — the fix proposer receives the failing
+    step name, its command and the output tail, inside the existing
+    sandbox retry loop, so the PR is never opened with known-red CI;
+  - fails OPEN on infrastructure errors (API errors, pod scheduling,
+    image pulls, timeouts) and on repos with no CI (no-op), noting this
+    in the PR body; fails CLOSED on real test failures once retries are
+    exhausted when `SENTINEL_WORKFLOW_TEST_REQUIRED=true` (default).
+  The CI-failure revision loop (1.7.12) now also runs the gate on every
+  revised fix before re-verifying, with one immediate revision round.
+  Config: `SENTINEL_WORKFLOW_TEST_GATE` (default true),
+  `SENTINEL_WORKFLOW_TEST_TIMEOUT` (seconds, default 900, min 60),
+  `SENTINEL_WORKFLOW_TEST_REQUIRED` (default true); chart values under
+  `sentinel.workflowTestGate`.
+
 ## [1.7.12] — 2026-09-26
 
 ### Changed

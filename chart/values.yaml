@@ -228,6 +228,17 @@ sentinel:
     # egress never runs. Set false only on clusters that forbid
     # NetworkPolicy writes.
     networkPolicyRequired: true
+  # Pre-push workflow test gate (v1.7.13): deterministically parse the
+  # repo's own .github/workflows test commands and run them against the
+  # fix branch before the PR is opened. No LLM in the loop.
+  workflowTestGate:
+    enabled: true
+    # Per-workflow run timeout in seconds (matches the post-deploy
+    # health-check window default).
+    timeoutSec: 900
+    # When the gate fails after all retries: block the PR (true) or open
+    # it with needs-review (false).
+    required: true
 
   # Slack webhook (optional)
   slackWebhook: ""
