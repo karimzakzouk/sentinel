@@ -91,7 +91,3 @@ type ActionRequestList struct {
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []ActionRequest `json:"items"`
 }
-
-func init() {
-	SchemeBuilder.Register(&ActionRequest{}, &ActionRequestList{})
-}
