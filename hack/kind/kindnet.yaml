@@ -1,0 +1,7 @@
+# kind's default network plugin. It does not enforce NetworkPolicy, so this
+# cluster exercises the path where the Lab must refuse to run.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+  - role: worker
