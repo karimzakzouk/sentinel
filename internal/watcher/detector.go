@@ -35,8 +35,9 @@ type Detection struct {
 // series with a decayed history of counts and exposure. At every tick, the
 // count in the sliding window is compared with the Gamma–Poisson predictive
 // distribution given the series' history and a prior pooled across workloads.
-// History is frozen while a series is in an episode, so an incident never
-// teaches the baseline that incidents are normal.
+// While any series of a workload is in an episode, all of that workload's
+// history is frozen, so an incident never teaches the baseline that its
+// symptoms are normal.
 type CountDetector struct {
 	Window time.Duration
 	Tick   time.Duration
