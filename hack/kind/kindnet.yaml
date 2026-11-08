@@ -2,6 +2,10 @@
 # cluster exercises the path where the Lab must refuse to run.
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
+networking:
+  # Kernels without the iptables "statistic" match cannot load-balance
+  # Services with several endpoints in iptables mode; nftables mode works there.
+  kubeProxyMode: nftables
 nodes:
   - role: control-plane
   - role: worker
