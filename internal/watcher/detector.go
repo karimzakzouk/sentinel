@@ -46,9 +46,24 @@ type CountDetector struct {
 	HalfLife           time.Duration
 	// Hyper is the hyperprior over per-second fact rates.
 	Hyper stats.Gamma
+	// Trace, when set, is called for every series with facts in its window,
+	// so "why did it not alert?" can be answered from the log.
+	Trace func(t Trace)
 
 	mu        sync.Mutex
 	workloads map[string]*workloadSeries
+}
+
+// Trace is one series' evaluation at one tick.
+type Trace struct {
+	Workload        model.ObjectRef
+	Kind            FactKind
+	Count           int
+	TailProbability float64
+	Alpha           float64
+	InEpisode       bool
+	HistoryCount    float64
+	HistoryExposure float64
 }
 
 type workloadSeries struct {
@@ -169,20 +184,25 @@ func (d *CountDetector) Advance(now time.Time) []Detection {
 		for _, kind := range FactKinds {
 			s := w.series[kind]
 			count, onset, revs, sample := s.window()
-			switch {
-			case s.episode == nil && count > 0:
-				p := priors[kind].Posterior(s.histCount, s.histExp).PredictiveTail(count, window)
-				if p < alpha {
-					det := Detection{ID: model.NewID(), Workload: w.ref, Kind: kind, Count: count, TailProbability: p,
-						Alpha: alpha, Onset: onset, At: now, Revisions: revs, Sample: sample}
-					s.episode = &det
-					out = append(out, det)
+			if count == 0 {
+				if s.episode != nil {
+					end := *s.episode
+					end.Ended, end.At, end.Count = true, now, 0
+					s.episode = nil
+					out = append(out, end)
 				}
-			case s.episode != nil && count == 0:
-				end := *s.episode
-				end.Ended, end.At, end.Count = true, now, 0
-				s.episode = nil
-				out = append(out, end)
+				continue
+			}
+			p := priors[kind].Posterior(s.histCount, s.histExp).PredictiveTail(count, window)
+			if d.Trace != nil {
+				d.Trace(Trace{Workload: w.ref, Kind: kind, Count: count, TailProbability: p, Alpha: alpha,
+					InEpisode: s.episode != nil, HistoryCount: s.histCount, HistoryExposure: s.histExp})
+			}
+			if s.episode == nil && p < alpha {
+				det := Detection{ID: model.NewID(), Workload: w.ref, Kind: kind, Count: count, TailProbability: p,
+					Alpha: alpha, Onset: onset, At: now, Revisions: revs, Sample: sample}
+				s.episode = &det
+				out = append(out, det)
 			}
 		}
 		// While any series of the workload is in an episode, none of its series

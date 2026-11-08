@@ -66,6 +66,9 @@ spec:
           image: {{ include "sentinel.image" . }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args: [run, --config, /etc/sentinel/config.yaml]
+          env:
+            - name: SENTINEL_LOG_LEVEL
+              value: {{ .Values.logLevel | quote }}
           ports:
             - name: health
               containerPort: 8081

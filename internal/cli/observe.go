@@ -64,10 +64,15 @@ func newObserver(log *slog.Logger, cfg *config.Config, client kubernetes.Interfa
 		return nil, err
 	}
 	d := cfg.Detection
-	w := &watcher.Watcher{
-		Client: client, Namespaces: cfg.Namespaces, Log: log,
-		Detector: watcher.NewCountDetector(d.Window.Duration, d.Tick.Duration, d.FalseAlarmsPerWeek, d.HalfLife.Duration),
+	detector := watcher.NewCountDetector(d.Window.Duration, d.Tick.Duration, d.FalseAlarmsPerWeek, d.HalfLife.Duration)
+	if log.Enabled(context.Background(), slog.LevelDebug) {
+		detector.Trace = func(t watcher.Trace) {
+			log.Debug("series evaluated", "workload", t.Workload.String(), "kind", t.Kind, "count", t.Count,
+				"tailProbability", t.TailProbability, "alpha", t.Alpha, "inEpisode", t.InEpisode,
+				"historyCount", t.HistoryCount, "historyExposureSeconds", t.HistoryExposure)
+		}
 	}
+	w := &watcher.Watcher{Client: client, Namespaces: cfg.Namespaces, Log: log, Detector: detector}
 	b := &brain.Brain{Ledger: l, Log: log, Classify: classify, Attribute: attribute, Decide: decide,
 		Revisions: w.NewestRevision, Lookback: time.Hour, Gap: d.IncidentGap.Duration}
 	w.OnTick = func(ctx context.Context) {

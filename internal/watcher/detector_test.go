@@ -68,6 +68,29 @@ func TestOneRestartInAQuietWorkloadIsNotAnIncident(t *testing.T) {
 	}
 }
 
+func TestTraceExplainsWhyASeriesDidNotAlert(t *testing.T) {
+	d := newTestDetector()
+	var traces []Trace
+	d.Trace = func(tr Trace) { traces = append(traces, tr) }
+	d.Register(web)
+	run(d, t0, 240, nil)
+	if len(traces) != 0 {
+		t.Fatalf("series without facts were traced: %+v", traces)
+	}
+	d.Observe(Fact{Kind: FactRestarted, Workload: web, At: t0.Add(time.Hour)})
+	if got := d.Advance(t0.Add(time.Hour + d.Tick)); len(got) != 0 {
+		t.Fatalf("a single restart raised %+v", got)
+	}
+	if len(traces) != 1 {
+		t.Fatalf("traces = %+v, want one", traces)
+	}
+	tr := traces[0]
+	if tr.Workload != web || tr.Kind != FactRestarted || tr.Count != 1 || tr.InEpisode ||
+		tr.TailProbability < tr.Alpha || tr.HistoryExposure == 0 {
+		t.Fatalf("trace = %+v, want one restart above alpha with history", tr)
+	}
+}
+
 func TestAWorkloadThatAlwaysRestartsLearnsItsOwnBaseline(t *testing.T) {
 	d := newTestDetector()
 	job := model.ObjectRef{Group: "apps", Kind: "Deployment", Namespace: "batch", Name: "flaky"}
