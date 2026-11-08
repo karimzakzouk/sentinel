@@ -268,6 +268,40 @@ func TestAnIncidentNamesTheWorkloadsThatDependOnIt(t *testing.T) {
 	}
 }
 
+// A restarted controller takes back the incidents it left open, instead of
+// leaving them open forever and opening duplicates.
+func TestIncidentsSurviveARestart(t *testing.T) {
+	b, l := newBrain(t)
+	det := watcher.Detection{ID: model.NewID(), Workload: web, Kind: watcher.FactCrashLoop, Count: 3, Onset: onset, At: onset}
+	if err := b.OnDetection(ctx, det); err != nil {
+		t.Fatal(err)
+	}
+	restarted := &Brain{Ledger: l, Log: b.Log, Classify: b.Classify, Attribute: b.Attribute, Decide: b.Decide,
+		Lookback: b.Lookback, Gap: b.Gap, Now: b.Now}
+	if n, err := restarted.Restore(ctx); err != nil || n != 1 {
+		t.Fatalf("restored %d, %v", n, err)
+	}
+	again := det
+	again.ID = model.NewID()
+	if err := restarted.OnDetection(ctx, again); err != nil {
+		t.Fatal(err)
+	}
+	if got := incidents(t, l); len(got) != 1 {
+		t.Fatalf("incidents = %d after the restart, want the same one", len(got))
+	}
+	again.Ended = true
+	if err := restarted.OnDetection(ctx, again); err != nil {
+		t.Fatal(err)
+	}
+	restarted.Now = func() time.Time { return onset.Add(time.Hour) }
+	if err := restarted.Sweep(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := incidents(t, l); got[0].State != model.IncidentResolved {
+		t.Fatalf("state = %s, want resolved", got[0].State)
+	}
+}
+
 func TestAnUnexplainedCrashLoopIsEscalatedNotRolledBack(t *testing.T) {
 	b, l := newBrain(t)
 	det := watcher.Detection{ID: model.NewID(), Workload: web, Kind: watcher.FactCrashLoop, Count: 5, Onset: onset, At: onset}

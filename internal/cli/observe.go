@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -91,6 +92,11 @@ func newObserver(log *slog.Logger, cfg *config.Config, client kubernetes.Interfa
 		Dependents:   func(ref model.ObjectRef) []model.ObjectRef { return w.Topology().Dependents(ref) },
 		Dependencies: func(ref model.ObjectRef) []topology.Reach { return w.Topology().DependenciesWithHops(ref) },
 		Deviations:   w.Deviations}
+	if n, err := b.Restore(context.Background()); err != nil {
+		return nil, fmt.Errorf("restore open incidents: %w", err)
+	} else if n > 0 {
+		log.Info("took back incidents left open by the last run", "incidents", n)
+	}
 	w.OnTick = func(ctx context.Context) {
 		if err := b.Sweep(ctx); err != nil {
 			log.Error("could not resolve quiet incidents", "error", err)
