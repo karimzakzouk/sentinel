@@ -188,6 +188,9 @@ type Action struct {
 	State        ActionState       `json:"state"`
 	Reversible   bool              `json:"reversible"`
 	DecidedBy    string            `json:"decidedBy"`
+	// Shadow marks an action Sentinel would have taken but did not, because
+	// its autonomy level for this action is observe.
+	Shadow bool `json:"shadow,omitempty"`
 }
 
 // Outcome is the result of a verification or a Lab experiment.
