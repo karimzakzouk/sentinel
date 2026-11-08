@@ -1,0 +1,15 @@
+Sentinel is running in observe mode: it reads, reports and records, and changes nothing.
+
+Watched namespaces: {{ join ", " .Values.watch.namespaces }}
+
+See what Sentinel can see and do on this cluster, as its own identity:
+
+  sentinel capabilities --namespaces {{ join "," .Values.watch.namespaces }} \
+    --agent-namespace {{ .Release.Namespace }} \
+    --as system:serviceaccount:{{ .Release.Namespace }}:sentinel
+
+The controller also records every change in its capability report in the Ledger:
+
+  kubectl -n {{ .Release.Namespace }} logs deploy/sentinel | grep "capability report"
+
+Install the sentinel-fence chart (as a cluster admin) to bound what Sentinel itself may change.

@@ -1,0 +1,131 @@
+{{- $labels := include "sentinel.labels" . }}
+{{- $controller := dict "kind" "ServiceAccount" "name" "sentinel" "namespace" .Release.Namespace }}
+# Read-only access to workloads. Secrets, exec and nodes/proxy are deliberately absent.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Release.Name }}-watch
+  labels:
+    {{- $labels | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [pods, events, configmaps, services]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get]
+  - apiGroups: [apps]
+    resources: [deployments, replicasets, statefulsets, daemonsets]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Release.Name }}-cluster-read
+  labels:
+    {{- $labels | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [nodes]
+    verbs: [get, list, watch]
+  - apiGroups: [node.k8s.io]
+    resources: [runtimeclasses]
+    verbs: [list]
+  {{- if .Values.actor.enabled }}
+  # Lets the capability report check what the actor may do.
+  - apiGroups: [authorization.k8s.io]
+    resources: [subjectaccessreviews]
+    verbs: [create]
+  {{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Release.Name }}-cluster-read
+  labels:
+    {{- $labels | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ .Release.Name }}-cluster-read
+subjects:
+  - {{ toJson $controller }}
+{{- range .Values.watch.namespaces }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $.Release.Name }}-watch
+  namespace: {{ . }}
+  labels:
+    {{- $labels | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $.Release.Name }}-watch
+subjects:
+  - {{ toJson $controller }}
+{{- end }}
+{{- if .Values.capabilities.dryRunProbes }}
+{{- range concat (list .Release.Namespace) (include "sentinel.labNamespaces" . | fromJsonArray) }}
+---
+# Pod creates are for dry-run probes only; sentinel-fence rejects real ones.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $.Release.Name }}-probe
+  namespace: {{ . }}
+  labels:
+    {{- $labels | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $.Release.Name }}-probe
+  namespace: {{ . }}
+  labels:
+    {{- $labels | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $.Release.Name }}-probe
+subjects:
+  - {{ toJson $controller }}
+{{- end }}
+{{- end }}
+{{- if .Values.actor.enabled }}
+---
+# Patch existing workloads and their scale; never create, delete or read Secrets.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Release.Name }}-act
+  labels:
+    {{- $labels | nindent 4 }}
+rules:
+  - apiGroups: [apps]
+    resources: [deployments, statefulsets, deployments/scale, statefulsets/scale]
+    verbs: [get, patch]
+{{- range .Values.watch.namespaces }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $.Release.Name }}-act
+  namespace: {{ . }}
+  labels:
+    {{- $labels | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $.Release.Name }}-act
+subjects:
+  - kind: ServiceAccount
+    name: {{ $.Values.actor.serviceAccount }}
+    namespace: {{ $.Values.actor.namespace }}
+{{- end }}
+{{- end }}

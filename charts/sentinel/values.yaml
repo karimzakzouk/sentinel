@@ -1,0 +1,55 @@
+image:
+  repository: ghcr.io/karimzakzouk/sentinel
+  # Defaults to the chart's appVersion.
+  tag: ""
+  # When set, the image is pulled by digest and tag is ignored.
+  digest: ""
+  pullPolicy: IfNotPresent
+
+# Namespaces Sentinel may watch. Required: an empty list fails the install,
+# because Sentinel never guesses where it is allowed to look.
+watch:
+  namespaces: []
+
+# The identity that will execute actions. It lives in its own namespace, so
+# the controller, which may create (dry-run) pods in its namespace, can never
+# start a pod that runs as the actor.
+actor:
+  enabled: false
+  namespace: sentinel-actor
+  serviceAccount: sentinel-actor
+
+# A pool of namespaces created at install for Lab runs. Sentinel never creates
+# namespaces or RBAC at runtime.
+lab:
+  enabled: false
+  namespacePrefix: sentinel-lab-
+  poolSize: 2
+  quota:
+    pods: "20"
+    requests.cpu: "4"
+    requests.memory: 8Gi
+    limits.memory: 8Gi
+
+capabilities:
+  interval: 10m
+  # Dry-run probes create no objects. The sentinel-fence chart enforces that
+  # the controller's pod creates are dry runs.
+  dryRunProbes: true
+
+ledger:
+  storage:
+    size: 1Gi
+    # Empty uses the cluster's default StorageClass.
+    storageClassName: ""
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    memory: 256Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
