@@ -41,7 +41,7 @@ concurrency:
 
 jobs:
   e2e:
-    name: kind (kindnet, NetworkPolicy not enforced)
+    name: kind (kindnet)
     uses: ./.github/workflows/e2e-run.yml
     with:
       network: kindnet
