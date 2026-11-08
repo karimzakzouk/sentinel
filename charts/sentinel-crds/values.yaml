@@ -1,0 +1,3 @@
+# The CRDs are kept when the release is uninstalled: deleting a CRD deletes
+# every object of that type, which would erase policies and pending requests.
+{}
