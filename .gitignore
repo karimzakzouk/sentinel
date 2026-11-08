@@ -1,37 +1,18 @@
-# Build artifacts
+# Build output
 /bin/
-/sentinel
-/sentinelctl
+/dist/
 coverage.out
-coverage.html
-
-# Web
-/web/node_modules/
-/web/.next/
-/web/out/
 
 # Local data
 *.db
 *.db-wal
 *.db-shm
-/data/
 
-# Helm
-chart/charts/
-chart/Chart.lock
+# Harness output
+/test/results/
 
-# Local config — never commit (may contain real tokens)
-my-values.yaml
-
-# IDE
+# Editors and OS
 .vscode/
 .idea/
 *.swp
-*.swo
-
-# OS
 .DS_Store
-Thumbs.db
-
-# Logs
-*.log
