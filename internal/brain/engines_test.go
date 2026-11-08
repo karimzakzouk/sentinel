@@ -47,6 +47,10 @@ func TestClassifierPicksTheMatchingClass(t *testing.T) {
 		{map[string]int{"service.no-endpoints": 12}, []string{"scale"}, ClassDependencyUnavailable},
 		// Crashing pods also empty a Service; the crash still names the class.
 		{map[string]int{"pod.crash-loop": 9, "pod.restarted": 3, "service.no-endpoints": 6}, []string{"config"}, ClassCrashOnStart},
+		{map[string]int{"log.errors": 300}, nil, ClassRuntimeErrors},
+		// A deploy's new errors raise the error rate too; the test of the
+		// revisions still names the class.
+		{map[string]int{"log.new-error": 40, "log.errors": 300}, []string{"config"}, ClassNewErrors},
 	}
 	for _, tc := range cases {
 		if got := classify(t, tc.facts, tc.changes...).Top().Value; got != tc.want {

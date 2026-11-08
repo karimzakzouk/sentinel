@@ -40,11 +40,16 @@ detection:
   halfLife: 168h
   # How long an incident stays open after its signals go quiet.
   incidentGap: 5m
+  # How long a workload's error rate is learned before it may alarm.
+  warmUp: 30m
 
 # Container logs fetched when a container crashes or a pod stays unready,
-# 30 fetches a minute at most. Only redacted summaries are kept.
+# and each workload's errors sampled from one ready pod, 30 fetches a minute
+# at most. Only redacted summaries are kept.
 logs:
   enabled: true
+  # Between the tick and the window; 0s turns sampling off.
+  sampleInterval: 1m
 
 capabilities:
   interval: 10m

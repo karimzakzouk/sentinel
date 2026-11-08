@@ -20,6 +20,8 @@ const (
 	FactRestarted     FactKind = "pod.restarted"
 	FactProbeFailed   FactKind = "pod.probe-failed"
 	FactUnschedulable FactKind = "pod.unschedulable"
+	// FactLogErrors is an error record in a workload's sampled logs.
+	FactLogErrors FactKind = "log.errors"
 )
 
 // States are counted once per pod and tick while they hold, because a single
@@ -36,7 +38,7 @@ const (
 
 // FactKinds lists every kind, in a stable order.
 var FactKinds = []FactKind{
-	FactOOMKilled, FactRestarted, FactProbeFailed, FactUnschedulable,
+	FactOOMKilled, FactRestarted, FactProbeFailed, FactUnschedulable, FactLogErrors,
 	FactImagePullError, FactCrashLoop, FactConfigError, FactNotReady, FactNoEndpoints, FactMemoryNearLimit,
 }
 

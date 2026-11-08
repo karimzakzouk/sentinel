@@ -11,6 +11,7 @@ const classes: Record<string, { label: string; meaning: string }> = {
   "capacity.unschedulable": { label: "Cannot schedule", meaning: "no node can take the pods" },
   "runtime.crash": { label: "Crashing", meaning: "the containers keep crashing without a change that explains it" },
   "dependency.unavailable": { label: "Dependency unavailable", meaning: "a workload others depend on has no ready endpoints" },
+  "runtime.errors": { label: "Errors without a change", meaning: "the pods stay up but log errors at an unusual rate, and no change explains it" },
 };
 
 const actions: Record<string, { label: string; verb: string }> = {

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -33,6 +34,11 @@ type pendingEvidence struct {
 // now, or one that opens within the TTL. Evidence that never joins an
 // incident never reaches the Ledger.
 func (b *Brain) OnEvidence(ctx context.Context, ev watcher.LogEvidence) error {
+	// Error sampling sends every workload's logs every minute; what holds no
+	// error would only crowd crash logs out of the buffer.
+	if !informative(ev) {
+		return nil
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.evidence == nil {
@@ -77,7 +83,7 @@ func (b *Brain) liveEvidence(key string) []*pendingEvidence {
 func (b *Brain) evidenceDrafts(inc *incident, key string) []ledger.Draft {
 	var drafts []ledger.Draft
 	for _, p := range b.evidence[key] {
-		if p.attachedTo == inc.rec.ID || p.ev.CollectedAt.Before(inc.rec.OpenedAt.Add(-evidenceLead)) || !informative(p.ev) {
+		if p.attachedTo == inc.rec.ID || p.ev.CollectedAt.Before(inc.rec.OpenedAt.Add(-evidenceLead)) {
 			continue
 		}
 		p.attachedTo = inc.rec.ID
@@ -98,7 +104,7 @@ func (b *Brain) evidenceDrafts(inc *incident, key string) []ledger.Draft {
 }
 
 // informative reports evidence worth recording: the logs of a crash or an
-// unready pod, or a rollout sample that holds errors.
+// unready pod, or a rollout or error sample that holds errors.
 func informative(ev watcher.LogEvidence) bool {
 	if ev.Summary.Lines == 0 {
 		return false
@@ -114,23 +120,37 @@ func informative(ev watcher.LogEvidence) bool {
 	return false
 }
 
-// contentDigest identifies what a log says, whichever pod said it.
+// contentDigest identifies what a log says, whichever pod said it. For an
+// error sample, that is which errors it holds: its counts change every
+// minute, and an incident needs a new sample only when its errors do.
 func contentDigest(ev watcher.LogEvidence) string {
 	type tpl struct {
 		T string
 		N int
 	}
+	sample := ev.Reason == watcher.ReasonSample
 	content := struct {
 		Container, Reason string
 		Templates         []tpl
 		Exceptions        []tpl
 	}{Container: ev.Container, Reason: ev.Reason}
 	for _, t := range ev.Summary.Templates {
-		content.Templates = append(content.Templates, tpl{t.Template, t.Count})
+		switch {
+		case !sample:
+			content.Templates = append(content.Templates, tpl{t.Template, t.Count})
+		case t.Error:
+			content.Templates = append(content.Templates, tpl{T: t.Template})
+		}
 	}
+	slices.SortFunc(content.Templates, func(a, b tpl) int { return strings.Compare(a.T, b.T) })
 	for _, e := range ev.Summary.Exceptions {
-		content.Exceptions = append(content.Exceptions, tpl{e.Fingerprint, e.Count})
+		n := e.Count
+		if sample {
+			n = 0
+		}
+		content.Exceptions = append(content.Exceptions, tpl{e.Fingerprint, n})
 	}
+	slices.SortFunc(content.Exceptions, func(a, b tpl) int { return strings.Compare(a.T, b.T) })
 	b, _ := json.Marshal(content)
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])

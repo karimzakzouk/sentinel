@@ -33,6 +33,9 @@ type LogRequest struct {
 	Reason string
 	// Key identifies the request; the same key is fetched once.
 	Key string
+	// LowPriority requests are served only while the budget keeps a reserve
+	// and a fetch slot stays free for the others.
+	LowPriority bool
 }
 
 // LogEvidence is a fetched log, summarized and redacted.
@@ -74,9 +77,14 @@ type LogCollector struct {
 	seen      map[string]time.Time
 	inflight  int
 	dropped   int
+	deferred  int
 	forbidden map[string]bool
 	wg        sync.WaitGroup
 }
+
+// lowPriorityReserve is the part of the burst low-priority requests leave
+// for crashes, readiness flips and rollouts.
+const lowPriorityReserve = 5
 
 // NewLogCollector returns a collector with the budget of the phase 1 plan:
 // 30 fetches a minute, two at a time, 300 lines and 64 KiB each.
@@ -97,6 +105,11 @@ func (c *LogCollector) Request(ctx context.Context, r LogRequest) bool {
 		c.seen, c.forbidden = map[string]time.Time{}, map[string]bool{}
 	}
 	if _, done := c.seen[r.Key]; done || c.forbidden[r.Namespace] {
+		c.mu.Unlock()
+		return false
+	}
+	if r.LowPriority && (c.inflight >= max(1, c.Concurrency-1) || c.Limiter.TokensAt(now) < lowPriorityReserve+1) {
+		c.deferred++
 		c.mu.Unlock()
 		return false
 	}
@@ -132,6 +145,13 @@ func (c *LogCollector) Dropped() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.dropped
+}
+
+// Deferred reports how many low-priority requests waited for budget.
+func (c *LogCollector) Deferred() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.deferred
 }
 
 // Wait blocks until fetches in flight finish.

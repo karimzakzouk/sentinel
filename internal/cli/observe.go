@@ -74,10 +74,11 @@ func newObserver(log *slog.Logger, cfg *config.Config, client kubernetes.Interfa
 	}
 	d := cfg.Detection
 	detector := watcher.NewCountDetector(d.Window.Duration, d.Tick.Duration, d.FalseAlarmsPerWeek, d.HalfLife.Duration)
+	detector.WarmUp = d.WarmUp.Duration
 	if log.Enabled(context.Background(), slog.LevelDebug) {
 		detector.Trace = func(t watcher.Trace) {
 			log.Debug("series evaluated", "workload", t.Workload.String(), "kind", t.Kind, "count", t.Count,
-				"tailProbability", t.TailProbability, "alpha", t.Alpha, "inEpisode", t.InEpisode,
+				"expected", t.Expected, "tailProbability", t.TailProbability, "alpha", t.Alpha, "inEpisode", t.InEpisode,
 				"historyCount", t.HistoryCount, "historyExposureSeconds", t.HistoryExposure)
 		}
 	}
@@ -118,6 +119,7 @@ func newObserver(log *slog.Logger, cfg *config.Config, client kubernetes.Interfa
 				log.Error("could not record log evidence", "workload", ev.Workload.String(), "pod", ev.Pod, "error", err)
 			}
 		})
+		w.SampleInterval = cfg.Logs.SampleEvery()
 	}
 	return w, nil
 }

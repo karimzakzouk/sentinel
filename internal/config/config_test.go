@@ -37,11 +37,29 @@ func TestLoadRejectsUnsafeOrAmbiguousConfig(t *testing.T) {
 		"lab ns is watched":     "namespaces: [a]\nlabNamespaces: [a]\nledger: {path: /l.db}\n",
 		"interval too short":    "namespaces: [a]\nledger: {path: /l.db}\ncapabilities: {interval: 5s}\n",
 		"slot without champion": "namespaces: [a]\nledger: {path: /l.db}\nslots: {brain.classify: {shadows: [x]}}\n",
+		"samples under a tick":  "namespaces: [a]\nledger: {path: /l.db}\nlogs: {sampleInterval: 5s}\n",
+		"samples over a window": "namespaces: [a]\nledger: {path: /l.db}\nlogs: {sampleInterval: 10m}\n",
+		"negative warm-up":      "namespaces: [a]\nledger: {path: /l.db}\ndetection: {warmUp: -1m}\n",
 	}
 	for name, content := range cases {
 		if _, err := Load(write(t, content)); err == nil {
 			t.Errorf("%s: Load accepted it", name)
 		}
+	}
+}
+
+func TestErrorSampling(t *testing.T) {
+	on, err := Load(write(t, "namespaces: [a]\nledger: {path: /l.db}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	off, err := Load(write(t, "namespaces: [a]\nledger: {path: /l.db}\nlogs: {sampleInterval: 0s}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if on.Logs.SampleEvery() != time.Minute || off.Logs.SampleEvery() != 0 || on.Detection.WarmUp.Duration != 30*time.Minute {
+		t.Fatalf("sampling every %v by default and %v when off, warm-up %v", on.Logs.SampleEvery(), off.Logs.SampleEvery(),
+			on.Detection.WarmUp.Duration)
 	}
 }
 

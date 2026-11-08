@@ -184,6 +184,83 @@ func TestForgettingAWorkloadEndsItsEpisodes(t *testing.T) {
 	}
 }
 
+// errorsPerMinute samples a workload's errors as error sampling does: once a
+// minute, rate(i) error records.
+func errorsPerMinute(rate func(i int) int) func(i int, now time.Time) []Fact {
+	return func(i int, now time.Time) []Fact {
+		if i%4 != 0 {
+			return nil
+		}
+		facts := make([]Fact, rate(i))
+		for j := range facts {
+			facts[j] = Fact{Kind: FactLogErrors, Workload: web, At: now, Detail: "upstream timeout"}
+		}
+		return facts
+	}
+}
+
+// A busy workload's error volume is large, so small changes in it are
+// significant; only a change of at least MinRatio is an episode, and the
+// episode ends when the volume is back near its level, though never zero.
+func TestErrorVolumeAlarmsOnEffectNotOnSignificanceAlone(t *testing.T) {
+	d := newTestDetector()
+	d.Register(web)
+	steady := errorsPerMinute(func(int) int { return 200 })
+	run(d, t0, 24*240, steady)
+	day := t0.Add(24 * time.Hour)
+	if got := run(d, day, 120, errorsPerMinute(func(int) int { return 240 })); len(got) != 0 {
+		t.Fatalf("a fifth more errors raised %+v", got)
+	}
+	got := run(d, day.Add(30*time.Minute), 40, errorsPerMinute(func(int) int { return 600 }))
+	if len(got) != 1 || got[0].Kind != FactLogErrors || got[0].Ended {
+		t.Fatalf("three times the errors raised %+v, want one started detection", got)
+	}
+	ends := run(d, day.Add(40*time.Minute), 40, steady)
+	if len(ends) != 1 || !ends[0].Ended || ends[0].ID != got[0].ID {
+		t.Fatalf("back to the usual volume: %+v, want the episode to end", ends)
+	}
+}
+
+// A workload's usual error volume is its own: after Sentinel starts, the
+// series learns for WarmUp before it may alarm, so errors that are routine
+// but happen to begin ten minutes in are learned, not reported.
+func TestErrorSeriesLearnBeforeTheyAlarm(t *testing.T) {
+	afterTenMinutes := errorsPerMinute(func(i int) int {
+		if i < 40 {
+			return 0
+		}
+		return 50
+	})
+	cold := newTestDetector()
+	cold.Register(web)
+	if got := run(cold, t0, 2*240, afterTenMinutes); len(got) == 0 {
+		t.Fatal("without a warm-up, errors after ten quiet minutes should alarm; the test proves nothing")
+	}
+	d := newTestDetector()
+	d.WarmUp = 30 * time.Minute
+	d.Register(web)
+	if got := run(d, t0, 2*240, afterTenMinutes); len(got) != 0 {
+		t.Fatalf("errors within the warm-up raised %+v", got)
+	}
+}
+
+// A level that holds is the workload's new normal: the episode ends after
+// learnedEpisodeLimit, and the series learns the level instead of alarming
+// on it again.
+func TestAnErrorLevelThatHoldsBecomesTheNewNormal(t *testing.T) {
+	d := newTestDetector()
+	d.WarmUp = 30 * time.Minute
+	d.Register(web)
+	run(d, t0, 240, errorsPerMinute(func(int) int { return 20 }))
+	got := run(d, t0.Add(time.Hour), 4*240, errorsPerMinute(func(int) int { return 200 }))
+	if len(got) != 2 || got[0].Ended || !got[1].Ended || got[1].ID != got[0].ID {
+		t.Fatalf("four hours at a new level: %+v, want one episode that ends", got)
+	}
+	if held := got[1].At.Sub(got[0].At); held < learnedEpisodeLimit || held > learnedEpisodeLimit+d.Tick {
+		t.Fatalf("the episode lasted %v, want %v", held, learnedEpisodeLimit)
+	}
+}
+
 func TestAlphaComesFromTheBudget(t *testing.T) {
 	d := newTestDetector()
 	ticksPerWeek := 7 * 24 * 3600 / 15.0
