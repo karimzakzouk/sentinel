@@ -93,6 +93,33 @@ Design as built:
 - **Proof**: Online Boutique's Redis scenario is localized to Redis, not to
   where the errors appear.
 
+What the Redis scenario actually shows, measured before designing: the cart
+service stays ready (its health check does not touch Redis) and logs Redis
+exceptions; the frontend logs about one error a second; Kubernetes reports
+the `redis-cart` Service with no endpoints; and the scale to zero is a
+recorded change. Design as built, in order:
+
+- **Service endpoints.** A Service with a selector whose ready endpoints drop
+  to zero is a state fact (`service.no-endpoints`) on the workloads its
+  selector matches, counted per tick like other states. A Service that
+  always has none learns that as its baseline.
+- **Dependency map from configuration.** Environment values in pod templates
+  that name a Service in the namespace (`redis-cart:6379`,
+  `http://cartservice:7070`, the Service's DNS names) become edges from the
+  workload to the Service's workloads. Edges carry their source and a
+  reliability; logs (hosts in connection errors) add edges in slice 4, fused
+  by noisy-OR.
+- **Incidents name their impact.** An incident on a workload lists the
+  workloads that depend on it, transitively.
+- **`dependency.unavailable` and restoring scale.** A new fault class for a
+  depended-on workload with no endpoints, and a new action, `scale.restore`,
+  for a culprit that is a scale change: rolling back a template does not bring
+  replicas back.
+- **`brain.localize`.** Ranks candidate root causes for an incident over the
+  workload and what it depends on: each candidate's own anomaly evidence,
+  weighted toward upstream workloads. Metrics join the scoring once
+  metrics-server is in the test clusters.
+
 ### 4. Rate detectors
 
 Seasonal decomposition with median/MAD residuals, SPOT/DSPOT tail

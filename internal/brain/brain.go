@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 	"time"
 
@@ -253,7 +254,7 @@ func (b *Brain) assess(ctx context.Context, inc *incident, workload model.Object
 	if decision.Action != ActionNone && decision.Action != inc.lastAction {
 		a := model.Action{ID: model.NewID(), IncidentID: inc.rec.ID, Type: decision.Action, Target: decision.Target,
 			Params: map[string]string{"reason": decision.Reason}, Owner: "kubernetes", State: model.ActionProposed,
-			Reversible: decision.Action == ActionRolloutUndo, DecidedBy: b.Decide.Champion(), Shadow: true}
+			Reversible: slices.Contains(ReversibleActions, decision.Action), DecidedBy: b.Decide.Champion(), Shadow: true}
 		drafts = append(drafts, ledger.RecordDraft(source, model.KindAction, "proposed", a.ID, inc.rec.ID, a))
 	}
 	inc.lastAction = decision.Action

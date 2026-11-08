@@ -42,6 +42,9 @@ func TestClassifierPicksTheMatchingClass(t *testing.T) {
 		{map[string]int{"pod.crash-loop": 6, "pod.restarted": 6}, nil, ClassRuntimeCrash},
 		{map[string]int{"log.new-error": 40}, []string{"config"}, ClassNewErrors},
 		{map[string]int{"log.new-error": 40}, []string{"image"}, ClassNewErrors},
+		{map[string]int{"service.no-endpoints": 12}, []string{"scale"}, ClassDependencyUnavailable},
+		// Crashing pods also empty a Service; the crash still names the class.
+		{map[string]int{"pod.crash-loop": 9, "pod.restarted": 3, "service.no-endpoints": 6}, []string{"config"}, ClassCrashOnStart},
 	}
 	for _, tc := range cases {
 		if got := classify(t, tc.facts, tc.changes...).Top().Value; got != tc.want {
@@ -121,6 +124,12 @@ func TestExpectedLossDecisions(t *testing.T) {
 	d, _ = e.Decide(ctx, DecideInput{Workload: web, Classes: badImage, TopChange: &RankedChange{Change: CandidateChange{Kind: "template", Object: other}, P: 0.9}})
 	if d.Action == ActionRolloutUndo {
 		t.Fatal("rolled back a workload other than the one failing")
+	}
+	// A rollback would not bring back the replicas a scale change removed.
+	gone := classify(t, map[string]int{"service.no-endpoints": 12}, "scale")
+	d, _ = e.Decide(ctx, DecideInput{Workload: web, Classes: gone, TopChange: &RankedChange{Change: CandidateChange{Kind: "scale", Object: web}, P: 0.9}})
+	if d.Validate() != nil || d.Action != ActionScaleRestore {
+		t.Fatalf("decision = %+v; want the replicas restored", d)
 	}
 }
 

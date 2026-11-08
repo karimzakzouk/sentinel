@@ -29,12 +29,15 @@ const (
 	FactCrashLoop      FactKind = "pod.crash-loop"
 	FactConfigError    FactKind = "pod.config-error"
 	FactNotReady       FactKind = "pod.not-ready"
+	// FactNoEndpoints is a Service left without ready endpoints, counted
+	// once per tick on each workload its selector matches.
+	FactNoEndpoints FactKind = "service.no-endpoints"
 )
 
 // FactKinds lists every kind, in a stable order.
 var FactKinds = []FactKind{
 	FactOOMKilled, FactRestarted, FactProbeFailed, FactUnschedulable,
-	FactImagePullError, FactCrashLoop, FactConfigError, FactNotReady,
+	FactImagePullError, FactCrashLoop, FactConfigError, FactNotReady, FactNoEndpoints,
 }
 
 // Fact is one observation about a pod, attributed to the workload that owns it.
