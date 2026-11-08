@@ -10,12 +10,15 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	appslisters "k8s.io/client-go/listers/apps/v1"
 	corelisters "k8s.io/client-go/listers/core/v1"
+	discoverylisters "k8s.io/client-go/listers/discovery/v1"
 	"k8s.io/client-go/tools/cache"
 
 	"github.com/karimzakzouk/sentinel/internal/model"
@@ -39,12 +42,17 @@ type Watcher struct {
 	ns          map[string]*namespaceListers
 	eventCounts map[string]int32
 	rollouts    map[string]*rollout
+	// hadEndpoints marks Services seen with ready endpoints.
+	hadEndpoints map[types.UID]bool
 }
 
 type namespaceListers struct {
 	pods        corelisters.PodLister
 	replicaSets appslisters.ReplicaSetLister
+	deployments appslisters.DeploymentLister
 	statefulSet appslisters.StatefulSetLister
+	services    corelisters.ServiceLister
+	slices      discoverylisters.EndpointSliceLister
 	owners      Owners
 }
 
@@ -53,6 +61,7 @@ func (w *Watcher) Run(ctx context.Context) error {
 	w.ns = map[string]*namespaceListers{}
 	w.eventCounts = map[string]int32{}
 	w.rollouts = map[string]*rollout{}
+	w.hadEndpoints = map[types.UID]bool{}
 	if w.Logs != nil {
 		toBrain := w.Logs.OnEvidence
 		w.Logs.OnEvidence = func(ctx context.Context, ev LogEvidence) {
@@ -66,7 +75,9 @@ func (w *Watcher) Run(ctx context.Context) error {
 		f := informers.NewSharedInformerFactoryWithOptions(w.Client, 0, informers.WithNamespace(ns), informers.WithTransform(Transform))
 		pods, rs, deps, sts := f.Core().V1().Pods(), f.Apps().V1().ReplicaSets(), f.Apps().V1().Deployments(), f.Apps().V1().StatefulSets()
 		cms, events := f.Core().V1().ConfigMaps(), f.Core().V1().Events()
-		l := &namespaceListers{pods: pods.Lister(), replicaSets: rs.Lister(), statefulSet: sts.Lister(), owners: Owners{ReplicaSets: rs.Lister()}}
+		svcs, slices := f.Core().V1().Services(), f.Discovery().V1().EndpointSlices()
+		l := &namespaceListers{pods: pods.Lister(), replicaSets: rs.Lister(), deployments: deps.Lister(), statefulSet: sts.Lister(),
+			services: svcs.Lister(), slices: slices.Lister(), owners: Owners{ReplicaSets: rs.Lister()}}
 		w.ns[ns] = l
 
 		if _, err := pods.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
@@ -142,7 +153,8 @@ func (w *Watcher) Run(ctx context.Context) error {
 		}
 		f.Start(ctx.Done())
 		synced = append(synced, pods.Informer().HasSynced, rs.Informer().HasSynced, deps.Informer().HasSynced,
-			sts.Informer().HasSynced, cms.Informer().HasSynced, events.Informer().HasSynced)
+			sts.Informer().HasSynced, cms.Informer().HasSynced, events.Informer().HasSynced,
+			svcs.Informer().HasSynced, slices.Informer().HasSynced)
 	}
 	if !cache.WaitForCacheSync(ctx.Done(), synced...) {
 		return fmt.Errorf("informer caches did not sync")
@@ -157,7 +169,8 @@ func (w *Watcher) Run(ctx context.Context) error {
 			return nil
 		case <-tick.C:
 			now := time.Now().UTC()
-			for _, l := range w.ns {
+			for ns, l := range w.ns {
+				w.Detector.Observe(w.serviceFacts(ns, l, now)...)
 				pods, err := l.pods.List(labels.Everything())
 				if err != nil {
 					continue
@@ -178,6 +191,38 @@ func (w *Watcher) Run(ctx context.Context) error {
 			}
 		}
 	}
+}
+
+// serviceFacts reports the namespace's Services that have lost every ready
+// endpoint after having had some.
+func (w *Watcher) serviceFacts(ns string, l *namespaceListers, now time.Time) []Fact {
+	svcs, err := l.services.Services(ns).List(labels.Everything())
+	if err != nil {
+		return nil
+	}
+	deps, _ := l.deployments.Deployments(ns).List(labels.Everything())
+	sts, _ := l.statefulSet.StatefulSets(ns).List(labels.Everything())
+	var out []Fact
+	for _, svc := range svcs {
+		if len(svc.Spec.Selector) == 0 || svc.Spec.Type == corev1.ServiceTypeExternalName {
+			continue
+		}
+		slices, err := l.slices.EndpointSlices(ns).List(labels.SelectorFromSet(labels.Set{discoveryv1.LabelServiceName: svc.Name}))
+		if err != nil {
+			continue
+		}
+		ready := ReadyEndpoints(slices)
+		w.mu.Lock()
+		had := w.hadEndpoints[svc.UID]
+		if ready > 0 {
+			w.hadEndpoints[svc.UID] = true
+		}
+		w.mu.Unlock()
+		if ready == 0 && had {
+			out = append(out, ServiceFacts(svc, BackingWorkloads(svc, deps, sts), now)...)
+		}
+	}
+	return out
 }
 
 // forget ends a deleted workload's episodes and rollout.

@@ -27,14 +27,18 @@ const (
 	// ClassNewErrors is a deploy whose pods stay up but log errors the old
 	// revision did not.
 	ClassNewErrors = "deploy.new-errors"
+	// ClassDependencyUnavailable is a workload others depend on left without
+	// ready endpoints, such as one scaled to zero.
+	ClassDependencyUnavailable = "dependency.unavailable"
 )
 
 // Classes lists the fault classes in a stable order.
 var Classes = []string{ClassBadImage, ClassCrashOnStart, ClassMemoryLimit, ClassProbe, ClassConfigError, ClassUnschedulable,
-	ClassRuntimeCrash, ClassNewErrors}
+	ClassRuntimeCrash, ClassNewErrors, ClassDependencyUnavailable}
 
-// ChangeInducedClasses are the classes a rollback can mitigate.
-var ChangeInducedClasses = []string{ClassBadImage, ClassCrashOnStart, ClassMemoryLimit, ClassProbe, ClassConfigError, ClassNewErrors}
+// ChangeInducedClasses are the classes that undoing a change can mitigate.
+var ChangeInducedClasses = []string{ClassBadImage, ClassCrashOnStart, ClassMemoryLimit, ClassProbe, ClassConfigError, ClassNewErrors,
+	ClassDependencyUnavailable}
 
 // ClassifyInput is the evidence for the fault-class decision.
 type ClassifyInput struct {
@@ -50,34 +54,39 @@ type ClassifyInput struct {
 // expert estimates, to be calibrated against the scenario pool's outcomes.
 var likelihoods = map[string]map[string]float64{
 	ClassBadImage: {"pod.image-pull-error": 0.95, "pod.crash-loop": 0.05, "pod.oom-killed": 0.02, "pod.not-ready": 0.1, "pod.probe-failed": 0.1,
-		"pod.config-error": 0.05, "pod.unschedulable": 0.02, "pod.restarted": 0.05, "log.new-error": 0.01,
+		"pod.config-error": 0.05, "pod.unschedulable": 0.02, "pod.restarted": 0.05, "log.new-error": 0.01, "service.no-endpoints": 0.2,
 		"image": 0.9, "resources": 0.1, "probes": 0.1, "config": 0.2, "scale": 0.05, "none": 0.05},
 	ClassCrashOnStart: {"pod.image-pull-error": 0.02, "pod.crash-loop": 0.95, "pod.oom-killed": 0.05, "pod.not-ready": 0.3, "pod.probe-failed": 0.3,
-		"pod.config-error": 0.05, "pod.unschedulable": 0.02, "pod.restarted": 0.9, "log.new-error": 0.05,
+		"pod.config-error": 0.05, "pod.unschedulable": 0.02, "pod.restarted": 0.9, "log.new-error": 0.05, "service.no-endpoints": 0.3,
 		"image": 0.5, "resources": 0.1, "probes": 0.1, "config": 0.6, "scale": 0.05, "none": 0.1},
 	ClassMemoryLimit: {"pod.image-pull-error": 0.02, "pod.crash-loop": 0.8, "pod.oom-killed": 0.95, "pod.not-ready": 0.3, "pod.probe-failed": 0.2,
-		"pod.config-error": 0.02, "pod.unschedulable": 0.05, "pod.restarted": 0.3, "log.new-error": 0.1,
+		"pod.config-error": 0.02, "pod.unschedulable": 0.05, "pod.restarted": 0.3, "log.new-error": 0.1, "service.no-endpoints": 0.3,
 		"image": 0.2, "resources": 0.7, "probes": 0.05, "config": 0.2, "scale": 0.05, "none": 0.3},
 	ClassProbe: {"pod.image-pull-error": 0.02, "pod.crash-loop": 0.1, "pod.oom-killed": 0.02, "pod.not-ready": 0.95, "pod.probe-failed": 0.9,
-		"pod.config-error": 0.02, "pod.unschedulable": 0.02, "pod.restarted": 0.2, "log.new-error": 0.05,
+		"pod.config-error": 0.02, "pod.unschedulable": 0.02, "pod.restarted": 0.2, "log.new-error": 0.05, "service.no-endpoints": 0.4,
 		"image": 0.2, "resources": 0.05, "probes": 0.8, "config": 0.2, "scale": 0.05, "none": 0.1},
 	ClassConfigError: {"pod.image-pull-error": 0.02, "pod.crash-loop": 0.1, "pod.oom-killed": 0.02, "pod.not-ready": 0.1, "pod.probe-failed": 0.05,
-		"pod.config-error": 0.95, "pod.unschedulable": 0.02, "pod.restarted": 0.05, "log.new-error": 0.02,
+		"pod.config-error": 0.95, "pod.unschedulable": 0.02, "pod.restarted": 0.05, "log.new-error": 0.02, "service.no-endpoints": 0.2,
 		"image": 0.2, "resources": 0.05, "probes": 0.05, "config": 0.7, "scale": 0.05, "none": 0.2},
 	ClassUnschedulable: {"pod.image-pull-error": 0.02, "pod.crash-loop": 0.02, "pod.oom-killed": 0.02, "pod.not-ready": 0.1, "pod.probe-failed": 0.05,
-		"pod.config-error": 0.02, "pod.unschedulable": 0.95, "pod.restarted": 0.02, "log.new-error": 0.01,
+		"pod.config-error": 0.02, "pod.unschedulable": 0.95, "pod.restarted": 0.02, "log.new-error": 0.01, "service.no-endpoints": 0.3,
 		"image": 0.1, "resources": 0.5, "probes": 0.05, "config": 0.1, "scale": 0.6, "none": 0.3},
 	ClassRuntimeCrash: {"pod.image-pull-error": 0.02, "pod.crash-loop": 0.7, "pod.oom-killed": 0.1, "pod.not-ready": 0.4, "pod.probe-failed": 0.4,
-		"pod.config-error": 0.02, "pod.unschedulable": 0.02, "pod.restarted": 0.9, "log.new-error": 0.2,
+		"pod.config-error": 0.02, "pod.unschedulable": 0.02, "pod.restarted": 0.9, "log.new-error": 0.2, "service.no-endpoints": 0.5,
 		"image": 0.1, "resources": 0.05, "probes": 0.05, "config": 0.1, "scale": 0.05, "none": 0.8},
 	// The new-error test samples only ready pods, so its pods rarely fail.
 	ClassNewErrors: {"pod.image-pull-error": 0.01, "pod.crash-loop": 0.05, "pod.oom-killed": 0.02, "pod.not-ready": 0.1, "pod.probe-failed": 0.1,
-		"pod.config-error": 0.01, "pod.unschedulable": 0.01, "pod.restarted": 0.05, "log.new-error": 0.95,
+		"pod.config-error": 0.01, "pod.unschedulable": 0.01, "pod.restarted": 0.05, "log.new-error": 0.95, "service.no-endpoints": 0.01,
 		"image": 0.5, "resources": 0.1, "probes": 0.05, "config": 0.6, "scale": 0.05, "none": 0.05},
+	// Endpoints gone without failing pods: the pods were scaled away or deleted.
+	ClassDependencyUnavailable: {"pod.image-pull-error": 0.02, "pod.crash-loop": 0.05, "pod.oom-killed": 0.02, "pod.not-ready": 0.2,
+		"pod.probe-failed": 0.1, "pod.config-error": 0.02, "pod.unschedulable": 0.1, "pod.restarted": 0.05, "log.new-error": 0.01,
+		"service.no-endpoints": 0.95,
+		"image":                0.1, "resources": 0.05, "probes": 0.05, "config": 0.1, "scale": 0.8, "none": 0.2},
 }
 
 var factFeatures = []string{"pod.image-pull-error", "pod.crash-loop", "pod.oom-killed", "pod.not-ready", "pod.probe-failed",
-	"pod.config-error", "pod.unschedulable", "pod.restarted", "log.new-error"}
+	"pod.config-error", "pod.unschedulable", "pod.restarted", "log.new-error", "service.no-endpoints"}
 
 var changeFeatures = []string{"image", "resources", "probes", "config", "scale"}
 
@@ -306,9 +315,15 @@ func relevance(classes slot.Distribution[string], group string) float64 {
 // Action types the Brain chooses among.
 const (
 	ActionRolloutUndo = "rollout.undo"
-	ActionNone        = "none"
-	ActionEscalate    = "escalate"
+	// ActionScaleRestore sets a workload's replicas back to what they were
+	// before a scale change: rolling back its template would not.
+	ActionScaleRestore = "scale.restore"
+	ActionNone         = "none"
+	ActionEscalate     = "escalate"
 )
+
+// ReversibleActions undo a recorded change.
+var ReversibleActions = []string{ActionRolloutUndo, ActionScaleRestore}
 
 // DecideInput is what the expected-loss decision needs.
 type DecideInput struct {
@@ -329,7 +344,7 @@ type Decision struct {
 // Validate checks the decision names a known action with finite losses.
 func (d Decision) Validate() error {
 	switch d.Action {
-	case ActionRolloutUndo, ActionNone, ActionEscalate:
+	case ActionRolloutUndo, ActionScaleRestore, ActionNone, ActionEscalate:
 	default:
 		return fmt.Errorf("unknown action %q", d.Action)
 	}
@@ -358,8 +373,18 @@ type ExpectedLoss struct {
 func (ExpectedLoss) ID() string { return "expected-loss-v1" }
 
 func (e ExpectedLoss) Decide(_ context.Context, in DecideInput) (Decision, error) {
-	pHelps := 0.0
-	if in.TopChange != nil && in.TopChange.Change.Kind == "template" && in.TopChange.Change.Object == in.Workload {
+	// Undoing the likeliest culprit: a rollback for a template change, the
+	// old replica count for a scale change.
+	undo, pHelps := "", 0.0
+	if tc := in.TopChange; tc != nil && tc.Change.Object == in.Workload {
+		switch tc.Change.Kind {
+		case "template":
+			undo = ActionRolloutUndo
+		case "scale":
+			undo = ActionScaleRestore
+		}
+	}
+	if undo != "" {
 		induced := 0.0
 		for _, c := range ChangeInducedClasses {
 			induced += in.Classes.P(c)
@@ -371,17 +396,24 @@ func (e ExpectedLoss) Decide(_ context.Context, in DecideInput) (Decision, error
 		ActionEscalate: e.Escalation + e.PReal*e.Slower,
 	}
 	if pHelps > 0 {
-		losses[ActionRolloutUndo] = e.Disruption + (1-pHelps)*e.PReal*e.Impact
+		losses[undo] = e.Disruption + (1-pHelps)*e.PReal*e.Impact
 	}
 	best := ActionNone
-	for _, a := range []string{ActionRolloutUndo, ActionEscalate, ActionNone} {
+	for _, a := range []string{ActionRolloutUndo, ActionScaleRestore, ActionEscalate, ActionNone} {
 		if l, ok := losses[a]; ok && l < losses[best] {
 			best = a
 		}
 	}
-	reason := fmt.Sprintf("a rollback would help with probability %.2f", pHelps)
+	reason := fmt.Sprintf("undoing the %s change would help with probability %.2f", in.changeKind(), pHelps)
 	if pHelps == 0 {
-		reason = "no recent template change on this workload explains it"
+		reason = "no recent change on this workload that can be undone explains it"
 	}
 	return Decision{Action: best, Target: in.Workload, ExpectedLoss: losses, Reason: reason}, nil
+}
+
+func (in DecideInput) changeKind() string {
+	if in.TopChange == nil {
+		return ""
+	}
+	return in.TopChange.Change.Kind
 }
