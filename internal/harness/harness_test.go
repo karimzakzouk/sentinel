@@ -64,6 +64,12 @@ func TestMatchesConditions(t *testing.T) {
 		Name: "c", LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Reason: "OOMKilled"}},
 	}}}}
 	notReady := &corev1.Pod{Status: corev1.PodStatus{Phase: corev1.PodRunning, Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionFalse}}}}
+	backingOff := &corev1.Pod{Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{
+		Name: "c", RestartCount: 1, State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Reason: "Error", ExitCode: 1}},
+	}}}}
+	firstExit := &corev1.Pod{Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{
+		Name: "c", State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Reason: "Error", ExitCode: 1}},
+	}}}}
 	cases := []struct {
 		c    Condition
 		pod  *corev1.Pod
@@ -72,6 +78,8 @@ func TestMatchesConditions(t *testing.T) {
 		{ConditionImagePullError, waiting("ImagePullBackOff"), true},
 		{ConditionImagePullError, waiting("CrashLoopBackOff"), false},
 		{ConditionCrashLoop, waiting("CrashLoopBackOff"), true},
+		{ConditionCrashLoop, backingOff, true},
+		{ConditionCrashLoop, firstExit, false},
 		{ConditionOOMKilled, oom, true},
 		{ConditionOOMKilled, waiting("CrashLoopBackOff"), false},
 		{ConditionNotReady, notReady, true},
