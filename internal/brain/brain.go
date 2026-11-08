@@ -200,20 +200,21 @@ func (b *Brain) OnDetection(ctx context.Context, d watcher.Detection) error {
 		recorded = "updated"
 	}
 	evidence := b.evidenceDrafts(inc, key)
+	var more []ledger.Draft
+	var summary []any
+	if !symptom {
+		m, s, err := b.assess(ctx, inc, inc.primary)
+		if err != nil {
+			b.Log.Error("assessment failed; the incident is recorded without it", "incident", inc.rec.ID, "error", err)
+		}
+		more, summary = append(m, b.absorbDependents(ctx, inc)...), s
+	}
+	// The incident is recorded after the assessment, which it carries.
 	drafts := []ledger.Draft{
 		ledger.RecordDraft(source, model.KindSignal, "observed", sig.ID, inc.rec.ID, sig),
 		ledger.RecordDraft(source, model.KindIncident, recorded, inc.rec.ID, inc.rec.ID, inc.rec),
 	}
-	drafts = append(drafts, evidence...)
-	var summary []any
-	if !symptom {
-		more, s, err := b.assess(ctx, inc, inc.primary)
-		if err != nil {
-			b.Log.Error("assessment failed; the incident is recorded without it", "incident", inc.rec.ID, "error", err)
-		}
-		drafts, summary = append(drafts, more...), s
-		drafts = append(drafts, b.absorbDependents(ctx, inc)...)
-	}
+	drafts = append(append(drafts, evidence...), more...)
 	if _, err := b.Ledger.Append(ctx, drafts...); err != nil {
 		return err
 	}
@@ -424,18 +425,23 @@ func (b *Brain) assess(ctx context.Context, inc *incident, workload model.Object
 	}
 	inc.lastAction = decision.Action
 
-	summary := []any{"class", classes.Top().Value, "classP", round(classes.Top().P), "decision", decision.Action}
+	a := &model.Assessment{Class: classes.Top().Value, ClassP: round(classes.Top().P), Decision: decision.Action}
+	summary := []any{"class", a.Class, "classP", a.ClassP, "decision", decision.Action}
 	if top != nil {
-		summary = append(summary, "culprit", top.Change.Object.String(), "culpritFields", top.Change.Fields, "culpritP", round(top.P))
+		a.Culprit = &model.Culprit{ChangeID: top.Change.ID, Kind: top.Change.Kind, Object: top.Change.Object, Fields: top.Change.Fields, P: round(top.P)}
+		summary = append(summary, "culprit", top.Change.Object.String(), "culpritFields", top.Change.Fields, "culpritP", a.Culprit.P)
 	}
+	inc.rec.Assessment = a
 	if b.Localize != nil {
 		suspects, err := b.Localize.Decide(ctx, b.rootCauseInput(workload, inc.facts, inc.rec.OpenedAt))
 		if err != nil {
 			return drafts, summary, err
 		}
-		if len(suspects.Items) > 0 {
-			s := suspects.Items[0].Item
-			summary = append(summary, "suspect", s.Workload.String(), "suspectP", round(s.P))
+		for _, it := range suspects.Items {
+			a.RootCauses = append(a.RootCauses, model.RankedObject{Object: it.Item.Workload, P: round(it.Item.P), InSet: it.InSet})
+		}
+		if len(a.RootCauses) > 0 {
+			summary = append(summary, "suspect", a.RootCauses[0].Object.String(), "suspectP", a.RootCauses[0].P)
 		}
 	}
 	return drafts, summary, nil

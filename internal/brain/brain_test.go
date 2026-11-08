@@ -53,6 +53,10 @@ func TestBadImageRolloutBecomesAnExplainedIncident(t *testing.T) {
 	if len(incidents) != 1 || incidents[0].State != model.IncidentOpen {
 		t.Fatalf("incidents = %+v", incidents)
 	}
+	if a := incidents[0].Assessment; a == nil || a.Class != ClassBadImage || a.Culprit == nil || a.Culprit.Object != web ||
+		a.Decision != ActionRolloutUndo {
+		t.Fatalf("the incident record does not carry its assessment: %+v", a)
+	}
 	id := incidents[0].ID
 	hyps, _ := ledger.List[model.Hypothesis](ctx, l, model.KindHypothesis, id)
 	var top model.Hypothesis

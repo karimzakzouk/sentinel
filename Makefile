@@ -5,7 +5,7 @@ IMAGE ?= sentinel:dev
 E2E_CLUSTER ?= sentinel-e2e
 LDFLAGS := -s -w -X github.com/karimzakzouk/sentinel/internal/version.Version=$(VERSION)
 
-.PHONY: all build test lint fmt vuln generate verify image helm-lint scenarios e2e-up e2e e2e-down tidy boutique-up
+.PHONY: all build test lint fmt vuln generate verify image helm-lint scenarios e2e-up e2e e2e-down tidy boutique-up score
 
 all: build
 
@@ -57,3 +57,7 @@ e2e-down:
 
 boutique-up:
 	E2E_CLUSTER=$(E2E_CLUSTER) hack/boutique-up.sh
+
+# Score the scenario runs since SINCE (RFC 3339) against Sentinel's incidents.
+score: build
+	E2E_CLUSTER=$(E2E_CLUSTER) hack/score.sh $(SINCE)
