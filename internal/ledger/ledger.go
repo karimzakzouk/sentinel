@@ -132,6 +132,8 @@ var migrations = []string{
 		PRIMARY KEY (kind, id)
 	);
 	CREATE INDEX entities_by_incident ON entities (incident_id, kind);`,
+	`CREATE INDEX events_by_incident ON events (incident_id, seq);
+	CREATE INDEX events_by_type ON events (type, seq);`,
 }
 
 func (l *Ledger) migrate(ctx context.Context) error {
@@ -307,9 +309,24 @@ func (l *Ledger) Events(ctx context.Context, after int64, limit int) ([]Event, e
 	if limit <= 0 {
 		limit = 1000
 	}
-	rows, err := l.db.QueryContext(ctx,
-		`SELECT seq, id, type, source, subject, time, entity_kind, entity_id, incident_id, data, prev_hash, hash
-		 FROM events WHERE seq > ? ORDER BY seq LIMIT ?`, after, limit)
+	return l.queryEvents(ctx, `SELECT `+eventColumns+` FROM events WHERE seq > ? ORDER BY seq LIMIT ?`, after, limit)
+}
+
+// IncidentEvents returns every event recorded for an incident, oldest first.
+func (l *Ledger) IncidentEvents(ctx context.Context, incidentID model.ID) ([]Event, error) {
+	return l.queryEvents(ctx, `SELECT `+eventColumns+` FROM events WHERE incident_id = ? ORDER BY seq`, string(incidentID))
+}
+
+// Latest returns up to limit events of one type, newest first.
+func (l *Ledger) Latest(ctx context.Context, eventType string, limit int) ([]Event, error) {
+	return l.queryEvents(ctx, `SELECT `+eventColumns+` FROM events WHERE type = ? ORDER BY seq DESC LIMIT ?`, eventType, limit)
+}
+
+const eventColumns = `seq, id, type, source, subject, time, entity_kind, entity_id, incident_id, data, prev_hash, hash`
+
+// queryEvents runs one of the constant event queries above.
+func (l *Ledger) queryEvents(ctx context.Context, query string, args ...any) ([]Event, error) {
+	rows, err := l.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query events: %w", err)
 	}

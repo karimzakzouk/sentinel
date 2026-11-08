@@ -18,3 +18,8 @@ coverage.out
 .idea/
 *.swp
 .DS_Store
+
+# The built UI is embedded at build time, not committed
+/internal/ui/dist/*
+!/internal/ui/dist/.gitkeep
+/ui/node_modules/

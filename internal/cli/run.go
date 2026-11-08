@@ -17,10 +17,12 @@ import (
 	"github.com/spf13/cobra"
 	"k8s.io/client-go/kubernetes"
 
+	"github.com/karimzakzouk/sentinel/internal/api"
 	"github.com/karimzakzouk/sentinel/internal/capability"
 	"github.com/karimzakzouk/sentinel/internal/config"
 	"github.com/karimzakzouk/sentinel/internal/kube"
 	"github.com/karimzakzouk/sentinel/internal/ledger"
+	webui "github.com/karimzakzouk/sentinel/internal/ui"
 	"github.com/karimzakzouk/sentinel/internal/version"
 )
 
@@ -73,12 +75,18 @@ func runController(ctx context.Context, log *slog.Logger, cfg *config.Config, cl
 
 	var ready atomic.Bool
 	srv := &http.Server{Addr: cfg.HealthAddr, Handler: healthHandler(&ready), ReadHeaderTimeout: 5 * time.Second}
-	serveErr := make(chan error, 1)
+	ui := &http.Server{Addr: cfg.UI.Address, ReadHeaderTimeout: 5 * time.Second, Handler: (&api.Server{
+		Ledger: l, Version: version.Get().Version, Verified: api.Verification{Events: n, At: time.Now().UTC()}, UI: webui.Handler(),
+	}).Handler()}
+	serveErr := make(chan error, 2)
 	go func() { serveErr <- srv.ListenAndServe() }()
+	go func() { serveErr <- ui.ListenAndServe() }()
+	log.Info("UI listening", "address", cfg.UI.Address)
 	defer func() {
 		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
 		_ = srv.Shutdown(shutdownCtx)
+		_ = ui.Shutdown(shutdownCtx)
 	}()
 
 	w, err := newObserver(log, cfg, client, l)
@@ -106,7 +114,7 @@ func runController(ctx context.Context, log *slog.Logger, cfg *config.Config, cl
 			return nil
 		case err := <-serveErr:
 			if !errors.Is(err, http.ErrServerClosed) {
-				return fmt.Errorf("health server: %w", err)
+				return fmt.Errorf("http server: %w", err)
 			}
 			return nil
 		case err := <-watchErr:
