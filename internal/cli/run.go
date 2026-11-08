@@ -75,6 +75,13 @@ func runController(ctx context.Context, log *slog.Logger, cfg *config.Config, cl
 		_ = srv.Shutdown(shutdownCtx)
 	}()
 
+	w, err := newObserver(log, cfg, client, l)
+	if err != nil {
+		return err
+	}
+	watchErr := make(chan error, 1)
+	go func() { watchErr <- w.Run(ctx) }()
+
 	detector := &capability.Detector{Client: client, Options: capability.Options{
 		Namespaces: cfg.Namespaces, AgentNamespace: cfg.AgentNamespace, ActorUser: cfg.ActorUser,
 	}}
@@ -94,6 +101,11 @@ func runController(ctx context.Context, log *slog.Logger, cfg *config.Config, cl
 		case err := <-serveErr:
 			if !errors.Is(err, http.ErrServerClosed) {
 				return fmt.Errorf("health server: %w", err)
+			}
+			return nil
+		case err := <-watchErr:
+			if err != nil {
+				return fmt.Errorf("watcher: %w", err)
 			}
 			return nil
 		case <-tick.C:

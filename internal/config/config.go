@@ -29,6 +29,7 @@ type Config struct {
 	ActorUser    string                 `json:"actorUser,omitempty"`
 	Ledger       Ledger                 `json:"ledger"`
 	Capabilities Capabilities           `json:"capabilities,omitempty"`
+	Detection    Detection              `json:"detection,omitempty"`
 	HealthAddr   string                 `json:"healthAddr,omitempty"`
 	Slots        map[string]slot.Config `json:"slots,omitempty"`
 }
@@ -42,6 +43,17 @@ type Ledger struct {
 type Capabilities struct {
 	// Interval between capability reports.
 	Interval metav1.Duration `json:"interval,omitempty"`
+}
+
+// Detection configures the count detector. The budget is the only knob that
+// sets thresholds; the window and tick only trade detection speed for noise.
+type Detection struct {
+	// FalseAlarmsPerWeek is the accepted false alarms per workload per week.
+	FalseAlarmsPerWeek float64         `json:"falseAlarmsPerWeek,omitempty"`
+	Window             metav1.Duration `json:"window,omitempty"`
+	Tick               metav1.Duration `json:"tick,omitempty"`
+	// HalfLife is how fast old history fades from the baselines.
+	HalfLife metav1.Duration `json:"halfLife,omitempty"`
 }
 
 // Load reads, defaults and validates a config file. Unknown fields are
@@ -68,6 +80,19 @@ func (c *Config) setDefaults() {
 	}
 	if c.HealthAddr == "" {
 		c.HealthAddr = ":8081"
+	}
+	d := &c.Detection
+	if d.FalseAlarmsPerWeek == 0 {
+		d.FalseAlarmsPerWeek = 1
+	}
+	if d.Window.Duration == 0 {
+		d.Window.Duration = 5 * time.Minute
+	}
+	if d.Tick.Duration == 0 {
+		d.Tick.Duration = 15 * time.Second
+	}
+	if d.HalfLife.Duration == 0 {
+		d.HalfLife.Duration = 7 * 24 * time.Hour
 	}
 }
 
@@ -103,6 +128,14 @@ func (c *Config) Validate() error {
 	}
 	if c.Capabilities.Interval.Duration < time.Minute {
 		errs = append(errs, fmt.Errorf("capabilities.interval %s is shorter than 1m", c.Capabilities.Interval.Duration))
+	}
+	d := c.Detection
+	if d.FalseAlarmsPerWeek <= 0 || d.FalseAlarmsPerWeek > 100 {
+		errs = append(errs, fmt.Errorf("detection.falseAlarmsPerWeek %v is outside (0, 100]", d.FalseAlarmsPerWeek))
+	}
+	if d.Tick.Duration < time.Second || d.Window.Duration < 2*d.Tick.Duration || d.HalfLife.Duration < d.Window.Duration {
+		errs = append(errs, fmt.Errorf("detection needs tick >= 1s, window >= 2 ticks and halfLife >= window (got %s, %s, %s)",
+			d.Tick.Duration, d.Window.Duration, d.HalfLife.Duration))
 	}
 	for name, s := range c.Slots {
 		if s.Champion == "" {
