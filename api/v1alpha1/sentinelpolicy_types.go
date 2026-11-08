@@ -103,7 +103,3 @@ type SentinelPolicyList struct {
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []SentinelPolicy `json:"items"`
 }
-
-func init() {
-	SchemeBuilder.Register(&SentinelPolicy{}, &SentinelPolicyList{})
-}
