@@ -124,10 +124,24 @@ func TestCapabilityReportAsSentinel(t *testing.T) {
 }
 
 func TestNetworkPolicyProbeMatchesTheNetworkPlugin(t *testing.T) {
+	network := env("E2E_NETWORK", "kindnet")
 	got := capability.NetworkPolicyProbe{Client: clientAs(t, ""), Namespace: labNS, Settle: 30 * time.Second}.Run(context.Background())
-	want := map[string]capability.Status{"kindnet": capability.Unavailable, "calico": capability.Available}[env("E2E_NETWORK", "kindnet")]
-	if got.Status != want {
-		t.Fatalf("NetworkPolicy probe = %s (%s), want %s", got.Status, got.Detail, want)
+	t.Logf("%s: %s (%s)", network, got.Status, got.Detail)
+	switch network {
+	case "calico":
+		if got.Status != capability.Available {
+			t.Fatalf("Calico enforces NetworkPolicy, but the probe says %s", got.Status)
+		}
+	case "flannel":
+		if got.Status != capability.Unavailable {
+			t.Fatalf("Flannel never enforces NetworkPolicy, but the probe says %s", got.Status)
+		}
+	default:
+		// kindnet enforces only on kernels with NFQUEUE, so either answer can be
+		// right; what matters is that the probe reaches one.
+		if got.Status == capability.Unknown {
+			t.Fatalf("the probe could not decide: %s", got.Detail)
+		}
 	}
 }
 
