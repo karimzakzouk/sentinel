@@ -1,0 +1,9 @@
+id: smoke-control
+title: No fault. Any alarm or action during this window is a false positive
+app: smoke
+fault:
+  kind: none
+groundTruth:
+  faultClass: none
+  changeType: none
+  mitigation: none
