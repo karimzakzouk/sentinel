@@ -46,6 +46,43 @@ tabs). Deviations get an entry in `docs/decisions.md`.
 - Evidence records hold a redacted summary and a hash, never raw lines.
 - New error after deploy: a Poisson rate-ratio test of new pods against old.
 
+Design as built:
+
+- **Fetch triggers.** A container restart or OOM kill fetches the previous
+  container's logs (the kubelet keeps them only until the next restart), once
+  per pod, container and restart count. A pod not ready past its grace period
+  fetches current logs once per readiness episode. Each fetch asks for at most
+  300 lines and 64 KiB, with timestamps.
+- **Budget.** A token bucket allows 30 fetches a minute across the cluster,
+  two at a time. Fetches over budget are dropped and counted, never queued
+  without bound.
+- **Rollout samples.** When a Deployment or StatefulSet gets a new revision,
+  the old revision's pods (up to three) are sampled at once for their last five
+  minutes, before the rollout replaces them. The new revision's pods are
+  sampled one and three minutes after they start. Exposure is pod-seconds of
+  log covered.
+- **New error after deploy.** For each error-like template or exception
+  fingerprint, a conditional binomial test asks whether its rate on new pods
+  exceeds its rate on old pods (rate ratio above 1). Bonferroni across the
+  templates tested in that rollout at a family level of 10⁻³. A significant
+  template is a signal on the workload; the rollout's change is the candidate
+  cause, and the fault class is `deploy.new-errors`.
+- **Evidence.** A fetch becomes a summary: pod, container, time range, line
+  and record counts, the top templates with one redacted sample each, the
+  exceptions with fingerprint, types and in-app frames, redaction counts by
+  rule, and the SHA-256 of the raw bytes. The Brain keeps summaries per
+  workload for 30 minutes and records them in the Ledger only when they join
+  an incident. Raw lines never leave the fetch.
+- **Permissions.** The controller needs `get` on `pods/log` in watched
+  namespaces; the capability report checks it, and without it log features
+  turn off and slice 1 keeps working.
+- **Proof.** The smoke crash-on-start incident carries the container's error
+  as a template. A new smoke scenario crashes after printing canary secrets
+  of every kind; the end-to-end test exports the Ledger and finds none of
+  them. A new Online Boutique scenario points the frontend at a wrong port
+  for the product catalog: no pod fails, slice 1 sees nothing, and the
+  rate-ratio test finds the new error and blames the change.
+
 ### 3. Metrics and localization
 
 - metrics.k8s.io when present (metrics-server is added to the test clusters).

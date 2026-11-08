@@ -41,7 +41,7 @@ func (r Rule) attributes() *authorizationv1.ResourceAttributes {
 
 // WatcherRules are the read permissions the watcher needs in one namespace.
 func WatcherRules(ns string) []Rule {
-	rules := []Rule{{Verb: "get", Resource: "pods", Subresource: "log", Namespace: ns}}
+	var rules []Rule
 	for _, res := range []struct{ group, resource string }{
 		{"", "pods"}, {"", "events"}, {"", "configmaps"}, {"", "services"},
 		{"apps", "deployments"}, {"apps", "replicasets"}, {"apps", "statefulsets"}, {"apps", "daemonsets"},
@@ -51,6 +51,12 @@ func WatcherRules(ns string) []Rule {
 		}
 	}
 	return rules
+}
+
+// LogRules are the permissions log evidence needs in one namespace. Without
+// them the watcher still works from Kubernetes facts alone.
+func LogRules(ns string) []Rule {
+	return []Rule{{Verb: "get", Resource: "pods", Subresource: "log", Namespace: ns}}
 }
 
 // ActorRules are the write permissions the actor needs in one namespace. The
@@ -135,7 +141,7 @@ func (d *Detector) checkAll(ctx context.Context, rules []Rule, can func(context.
 	return res
 }
 
-func (d *Detector) checkWatcherAccess(ctx context.Context, rep *Report) (watchable []string) {
+func (d *Detector) checkWatcherAccess(ctx context.Context, rep *Report) (watchable, loggable []string) {
 	for _, ns := range d.Options.Namespaces {
 		res := d.checkAll(ctx, WatcherRules(ns), d.selfCan)
 		id := "access.watch/" + ns
@@ -145,8 +151,19 @@ func (d *Detector) checkWatcherAccess(ctx context.Context, rep *Report) (watchab
 		case len(res.missing) > 0:
 			rep.add(id, Unavailable, "missing: %s", joinRules(res.missing))
 		default:
-			rep.add(id, Available, "can read pods, logs, events and workloads")
+			rep.add(id, Available, "can read pods, events and workloads")
 			watchable = append(watchable, ns)
+		}
+		logs := d.checkAll(ctx, LogRules(ns), d.selfCan)
+		id = "access.logs/" + ns
+		switch {
+		case logs.err != nil:
+			rep.add(id, Unknown, "could not check permissions: %v", logs.err)
+		case len(logs.missing) > 0:
+			rep.add(id, Unavailable, "missing: %s", joinRules(logs.missing))
+		default:
+			rep.add(id, Available, "can read container logs")
+			loggable = append(loggable, ns)
 		}
 	}
 	nodes := d.checkAll(ctx, []Rule{{Verb: "list", Resource: "nodes"}, {Verb: "watch", Resource: "nodes"}}, d.selfCan)
@@ -158,7 +175,7 @@ func (d *Detector) checkWatcherAccess(ctx context.Context, rep *Report) (watchab
 	default:
 		rep.add("access.nodes", Available, "can read nodes")
 	}
-	return watchable
+	return watchable, loggable
 }
 
 func (d *Detector) checkLeastPrivilege(ctx context.Context, rep *Report) {

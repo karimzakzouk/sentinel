@@ -154,6 +154,22 @@ func TestReportOnAKindCluster(t *testing.T) {
 	}
 }
 
+// Without log access Sentinel still watches; only log evidence turns off.
+func TestLogAccessIsItsOwnFeature(t *testing.T) {
+	c := newCluster(t, kindNode("n1"))
+	c.allow(WatcherRules("shop")...)
+	rep := run(t, c, Options{Namespaces: []string{"shop"}})
+	wantFeature(t, rep, "detect.api", true)
+	wantFeature(t, rep, "detect.logs", false)
+	if ch, _ := rep.Check("access.logs/shop"); ch.Status != Unavailable || !strings.Contains(ch.Detail, "pods/log") {
+		t.Fatalf("log access = %+v", ch)
+	}
+	c.allow(LogRules("shop")...)
+	if f := wantFeature(t, run(t, c, Options{Namespaces: []string{"shop"}}), "detect.logs", true); !strings.Contains(f.Reason, "shop") {
+		t.Fatalf("detect.logs reason = %q", f.Reason)
+	}
+}
+
 func TestOverPrivilegedIdentityIsFlagged(t *testing.T) {
 	c := newCluster(t, kindNode("n1"))
 	c.allow(WatcherRules("shop")...)
