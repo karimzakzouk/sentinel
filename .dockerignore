@@ -4,3 +4,5 @@
 !api/
 !cmd/
 !internal/
+!ui/
+ui/node_modules

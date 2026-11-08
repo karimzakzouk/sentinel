@@ -45,7 +45,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/incidents", s.incidents)
 	mux.HandleFunc("GET /api/incidents/{id}", s.incident)
 	mux.HandleFunc("GET /api/capabilities", s.capabilities)
-	mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("GET /api/", func(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusNotFound, errors.New("no such API route"))
 	})
 	if s.UI != nil {
