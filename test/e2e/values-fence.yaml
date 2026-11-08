@@ -1,0 +1,4 @@
+namespaces: [e2e-smoke, boutique]
+replicas:
+  min: 1
+  max: 5

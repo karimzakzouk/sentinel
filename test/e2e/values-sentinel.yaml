@@ -1,0 +1,9 @@
+watch:
+  namespaces: [e2e-smoke, boutique]
+actor:
+  enabled: true
+lab:
+  enabled: true
+  poolSize: 1
+capabilities:
+  interval: 1m
