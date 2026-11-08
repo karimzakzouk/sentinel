@@ -81,6 +81,7 @@ func (w *Watcher) Run(ctx context.Context) error {
 		w.Logs.OnEvidence = func(ctx context.Context, ev LogEvidence) {
 			w.rolloutEvidence(ctx, ev)
 			if ev.Reason == ReasonSample {
+				w.Detector.Expose(ev.Workload, FactLogErrors, ev.Exposure)
 				w.Detector.Observe(SampleFacts(ev)...)
 			}
 			toBrain(ctx, ev)

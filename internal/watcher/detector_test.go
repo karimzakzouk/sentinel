@@ -185,12 +185,13 @@ func TestForgettingAWorkloadEndsItsEpisodes(t *testing.T) {
 }
 
 // errorsPerMinute samples a workload's errors as error sampling does: once a
-// minute, rate(i) error records.
-func errorsPerMinute(rate func(i int) int) func(i int, now time.Time) []Fact {
+// minute, a minute of logs holding rate(i) error records.
+func errorsPerMinute(d *CountDetector, rate func(i int) int) func(i int, now time.Time) []Fact {
 	return func(i int, now time.Time) []Fact {
 		if i%4 != 0 {
 			return nil
 		}
+		d.Expose(web, FactLogErrors, 60)
 		facts := make([]Fact, rate(i))
 		for j := range facts {
 			facts[j] = Fact{Kind: FactLogErrors, Workload: web, At: now, Detail: "upstream timeout"}
@@ -205,13 +206,13 @@ func errorsPerMinute(rate func(i int) int) func(i int, now time.Time) []Fact {
 func TestErrorVolumeAlarmsOnEffectNotOnSignificanceAlone(t *testing.T) {
 	d := newTestDetector()
 	d.Register(web)
-	steady := errorsPerMinute(func(int) int { return 200 })
+	steady := errorsPerMinute(d, func(int) int { return 200 })
 	run(d, t0, 24*240, steady)
 	day := t0.Add(24 * time.Hour)
-	if got := run(d, day, 120, errorsPerMinute(func(int) int { return 240 })); len(got) != 0 {
+	if got := run(d, day, 120, errorsPerMinute(d, func(int) int { return 240 })); len(got) != 0 {
 		t.Fatalf("a fifth more errors raised %+v", got)
 	}
-	got := run(d, day.Add(30*time.Minute), 40, errorsPerMinute(func(int) int { return 600 }))
+	got := run(d, day.Add(30*time.Minute), 40, errorsPerMinute(d, func(int) int { return 600 }))
 	if len(got) != 1 || got[0].Kind != FactLogErrors || got[0].Ended {
 		t.Fatalf("three times the errors raised %+v, want one started detection", got)
 	}
@@ -225,22 +226,49 @@ func TestErrorVolumeAlarmsOnEffectNotOnSignificanceAlone(t *testing.T) {
 // series learns for WarmUp before it may alarm, so errors that are routine
 // but happen to begin ten minutes in are learned, not reported.
 func TestErrorSeriesLearnBeforeTheyAlarm(t *testing.T) {
-	afterTenMinutes := errorsPerMinute(func(i int) int {
+	afterTenMinutes := func(i int) int {
 		if i < 40 {
 			return 0
 		}
 		return 50
-	})
+	}
 	cold := newTestDetector()
 	cold.Register(web)
-	if got := run(cold, t0, 2*240, afterTenMinutes); len(got) == 0 {
+	if got := run(cold, t0, 2*240, errorsPerMinute(cold, afterTenMinutes)); len(got) == 0 {
 		t.Fatal("without a warm-up, errors after ten quiet minutes should alarm; the test proves nothing")
 	}
 	d := newTestDetector()
 	d.WarmUp = 30 * time.Minute
 	d.Register(web)
-	if got := run(d, t0, 2*240, afterTenMinutes); len(got) != 0 {
+	if got := run(d, t0, 2*240, errorsPerMinute(d, afterTenMinutes)); len(got) != 0 {
 		t.Fatalf("errors within the warm-up raised %+v", got)
+	}
+}
+
+// Samples the budget skips change how much is known, not the rate: a
+// workload sampled every minute, then only every third minute, at the same
+// error rate raises nothing, and a window without a sample is no evidence
+// that an episode has ended.
+func TestSkippedSamplesAreNotAChangeInRate(t *testing.T) {
+	d := newTestDetector()
+	d.Register(web)
+	run(d, t0, 24*240, errorsPerMinute(d, func(int) int { return 30 }))
+	day := t0.Add(24 * time.Hour)
+	everyThirdMinute := func(i int, now time.Time) []Fact {
+		if i%12 != 0 {
+			return nil
+		}
+		return errorsPerMinute(d, func(int) int { return 30 })(0, now)
+	}
+	if got := run(d, day, 240, everyThirdMinute); len(got) != 0 {
+		t.Fatalf("sparser samples at the same rate raised %+v", got)
+	}
+	got := run(d, day.Add(time.Hour), 8, errorsPerMinute(d, func(int) int { return 150 }))
+	if len(got) != 1 || got[0].Ended {
+		t.Fatalf("five times the errors raised %+v", got)
+	}
+	if ends := run(d, day.Add(time.Hour+2*time.Minute), 40, nil); len(ends) != 0 {
+		t.Fatalf("ten minutes without samples ended the episode: %+v", ends)
 	}
 }
 
@@ -251,8 +279,8 @@ func TestAnErrorLevelThatHoldsBecomesTheNewNormal(t *testing.T) {
 	d := newTestDetector()
 	d.WarmUp = 30 * time.Minute
 	d.Register(web)
-	run(d, t0, 240, errorsPerMinute(func(int) int { return 20 }))
-	got := run(d, t0.Add(time.Hour), 4*240, errorsPerMinute(func(int) int { return 200 }))
+	run(d, t0, 240, errorsPerMinute(d, func(int) int { return 20 }))
+	got := run(d, t0.Add(time.Hour), 4*240, errorsPerMinute(d, func(int) int { return 200 }))
 	if len(got) != 2 || got[0].Ended || !got[1].Ended || got[1].ID != got[0].ID {
 		t.Fatalf("four hours at a new level: %+v, want one episode that ends", got)
 	}
