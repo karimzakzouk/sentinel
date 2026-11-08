@@ -1,0 +1,20 @@
+id: boutique-productcatalog-oom
+title: A config change sets productcatalogservice's memory limit below what it needs
+app: online-boutique
+fault:
+  kind: patch
+  target: {apiVersion: apps/v1, kind: Deployment, namespace: boutique, name: productcatalogservice}
+  patch:
+    type: strategic
+    content: '{"spec":{"template":{"spec":{"containers":[{"name":"server","resources":{"requests":{"memory":"8Mi"},"limits":{"memory":"8Mi"}}}]}}}}'
+groundTruth:
+  faultClass: resource.memory-limit
+  rootCause: {apiVersion: apps/v1, kind: Deployment, namespace: boutique, name: productcatalogservice}
+  changeType: resources
+  symptoms: [pod.oom-killed, pod.crash-loop, frontend.errors]
+  mitigation: rollout.undo
+manifest:
+  condition: oom-killed
+  namespace: boutique
+  selector: app=productcatalogservice
+  timeout: 4m
