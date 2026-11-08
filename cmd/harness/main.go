@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"time"
 
 	"github.com/spf13/cobra"
 	"k8s.io/client-go/discovery/cached/memory"
@@ -128,7 +130,56 @@ func newRoot() *cobra.Command {
 		},
 	}
 
-	root.AddCommand(validate, inject, revertCmd, version)
+	var runsDir, ledgerPath, since string
+	var grace time.Duration
+	var asJSON bool
+	score := &cobra.Command{
+		Use:   "score",
+		Short: "Score Sentinel's incidents against the runs' ground truth",
+		Long: `Reads the run records in --runs and a Ledger export (sentinel ledger export),
+and reports, per run and overall: detection (recall, and precision over every
+incident opened), detection latency, the root cause's rank (AC@1, AC@3,
+Avg@5), and whether the fault class, the culprit change and the decision were
+right. Incidents during control runs are false alarms.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			runs, err := harness.LoadRuns(runsDir)
+			if err != nil {
+				return err
+			}
+			if since != "" {
+				t, err := time.Parse(time.RFC3339, since)
+				if err != nil {
+					return fmt.Errorf("--since: %w", err)
+				}
+				runs = slices.DeleteFunc(runs, func(r *harness.Run) bool { return r.InjectedAt.Before(t) })
+			}
+			f, err := os.Open(ledgerPath) //nolint:gosec // the path comes from the operator
+			if err != nil {
+				return err
+			}
+			defer func() { _ = f.Close() }()
+			incidents, err := harness.ReadIncidents(f)
+			if err != nil {
+				return err
+			}
+			rep := harness.Score(runs, incidents, harness.ScoreOptions{Grace: grace})
+			if asJSON {
+				enc := json.NewEncoder(cmd.OutOrStdout())
+				enc.SetIndent("", "  ")
+				return enc.Encode(rep)
+			}
+			return rep.WriteMarkdown(cmd.OutOrStdout())
+		},
+	}
+	score.Flags().StringVar(&runsDir, "runs", "test/results", "directory of run records")
+	score.Flags().StringVar(&ledgerPath, "ledger", "", "Ledger export to score (required)")
+	score.Flags().StringVar(&since, "since", "", "score only runs injected at or after this time (RFC 3339)")
+	score.Flags().DurationVar(&grace, "grace", 2*time.Minute, "how long after a revert an incident still counts toward the run")
+	score.Flags().BoolVar(&asJSON, "json", false, "print the report as JSON")
+	_ = score.MarkFlagRequired("ledger")
+
+	root.AddCommand(validate, inject, revertCmd, score, version)
 	return root
 }
 

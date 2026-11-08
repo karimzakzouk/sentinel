@@ -134,6 +134,38 @@ type Incident struct {
 	// MergedInto names the incident this one was folded into when its
 	// symptoms turned out to share that incident's cause.
 	MergedInto ID `json:"mergedInto,omitempty"`
+	// Assessment is the Brain's latest explanation of the incident.
+	Assessment *Assessment `json:"assessment,omitempty"`
+}
+
+// Assessment is what the Brain concluded about an incident at one moment:
+// what kind of fault, which change caused it, which workload is the root
+// cause, and what it would do.
+type Assessment struct {
+	Class  string  `json:"class"`
+	ClassP float64 `json:"classP"`
+	// Culprit is the likeliest causing change, if any.
+	Culprit *Culprit `json:"culprit,omitempty"`
+	// RootCauses ranks the workloads that may be the root cause, most likely
+	// first; InSet marks the confidence set.
+	RootCauses []RankedObject `json:"rootCauses,omitempty"`
+	Decision   string         `json:"decision"`
+}
+
+// Culprit is a change blamed for an incident.
+type Culprit struct {
+	ChangeID ID        `json:"changeId"`
+	Kind     string    `json:"kind"`
+	Object   ObjectRef `json:"object"`
+	Fields   []string  `json:"fields,omitempty"`
+	P        float64   `json:"p"`
+}
+
+// RankedObject is one entry of a ranking with its probability.
+type RankedObject struct {
+	Object ObjectRef `json:"object"`
+	P      float64   `json:"p"`
+	InSet  bool      `json:"inSet"`
 }
 
 // Evidence is one piece of collected data attached to an incident. Only the
