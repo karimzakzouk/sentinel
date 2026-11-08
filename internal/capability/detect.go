@@ -64,7 +64,7 @@ func (d *Detector) Run(ctx context.Context) (*Report, error) {
 	rep.Cluster.Platform = detectPlatform(nodes, apis)
 	rep.Cluster.NetworkPlugin = detectNetworkPlugin(nodes, apis, rep.Cluster.Platform)
 
-	watchable := d.checkWatcherAccess(ctx, rep)
+	watchable, loggable := d.checkWatcherAccess(ctx, rep)
 	d.checkLeastPrivilege(ctx, rep)
 	actable := d.checkActorAccess(ctx, rep)
 	probes := d.runDryRunProbes(ctx, rep)
@@ -72,7 +72,7 @@ func (d *Detector) Run(ctx context.Context) (*Report, error) {
 	d.checkNetworkPolicy(rep, apis)
 	d.checkOwners(ctx, rep, apis, watchable)
 
-	d.deriveFeatures(rep, watchable, actable, probes, sandbox)
+	d.deriveFeatures(rep, watchable, loggable, actable, probes, sandbox)
 	rep.Nodes = coverNodes(nodes, probes, len(watchable) > 0)
 	rep.sortChecks()
 	return rep, nil
@@ -278,7 +278,7 @@ func (d *Detector) checkOwners(ctx context.Context, rep *Report, apis apiSet, wa
 	}
 }
 
-func (d *Detector) deriveFeatures(rep *Report, watchable, actable []string, probes probeResults, sandbox []string) {
+func (d *Detector) deriveFeatures(rep *Report, watchable, loggable, actable []string, probes probeResults, sandbox []string) {
 	status := func(id string) Status {
 		c, _ := rep.Check(id)
 		return c.Status
@@ -287,6 +287,11 @@ func (d *Detector) deriveFeatures(rep *Report, watchable, actable []string, prob
 		rep.feature("detect.api", true, "Kubernetes API signals in %d namespace(s): %s", len(watchable), strings.Join(watchable, ", "))
 	} else {
 		rep.feature("detect.api", false, "Sentinel cannot read workloads in any allowed namespace")
+	}
+	if len(loggable) > 0 {
+		rep.feature("detect.logs", true, "container log evidence in %d namespace(s): %s", len(loggable), strings.Join(loggable, ", "))
+	} else {
+		rep.feature("detect.logs", false, "Sentinel cannot read container logs in any allowed namespace")
 	}
 	rep.feature("detect.metrics", status("api.metrics") == Available, "%s", detail(rep, "api.metrics"))
 	rep.feature("detect.node-agent", probes.nodeAgent == Available, "%s", detail(rep, "probe.node-agent"))
