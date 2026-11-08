@@ -163,6 +163,27 @@ func TestAnIncidentDoesNotTeachItsSymptomsAreNormal(t *testing.T) {
 	}
 }
 
+// A deleted workload's incident must be able to resolve.
+func TestForgettingAWorkloadEndsItsEpisodes(t *testing.T) {
+	d := newTestDetector()
+	d.Register(web)
+	run(d, t0, 240, nil)
+	stuck := func(_ int, now time.Time) []Fact {
+		return []Fact{{Kind: FactImagePullError, Workload: web, At: now}}
+	}
+	started := run(d, t0.Add(time.Hour), 10, stuck)
+	if len(started) != 1 {
+		t.Fatalf("detections = %+v", started)
+	}
+	ended := d.Forget(web, t0.Add(2*time.Hour))
+	if len(ended) != 1 || !ended[0].Ended || ended[0].ID != started[0].ID {
+		t.Fatalf("Forget = %+v, want the episode's end", ended)
+	}
+	if again := d.Forget(web, t0.Add(2*time.Hour)); len(again) != 0 {
+		t.Fatalf("a second Forget = %+v", again)
+	}
+}
+
 func TestAlphaComesFromTheBudget(t *testing.T) {
 	d := newTestDetector()
 	ticksPerWeek := 7 * 24 * 3600 / 15.0

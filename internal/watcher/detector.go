@@ -130,11 +130,25 @@ func (d *CountDetector) register(ref model.ObjectRef) *workloadSeries {
 	return w
 }
 
-// Forget drops a deleted workload.
-func (d *CountDetector) Forget(ref model.ObjectRef) {
+// Forget drops a deleted workload and returns the ends of its open episodes,
+// so its incident can resolve.
+func (d *CountDetector) Forget(ref model.ObjectRef, now time.Time) []Detection {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	w := d.workloads[ref.String()]
 	delete(d.workloads, ref.String())
+	if w == nil {
+		return nil
+	}
+	var ended []Detection
+	for _, kind := range FactKinds {
+		if s := w.series[kind]; s != nil && s.episode != nil {
+			end := *s.episode
+			end.Ended, end.At, end.Count = true, now, 0
+			ended = append(ended, end)
+		}
+	}
+	return ended
 }
 
 // Observe records facts in the current tick.

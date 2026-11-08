@@ -86,8 +86,8 @@ func (w *Watcher) Run(ctx context.Context) error {
 				w.changes(ctx, DeploymentChanges(oldObj.(*appsv1.Deployment), newObj.(*appsv1.Deployment), time.Now().UTC()))
 			},
 			DeleteFunc: func(obj any) {
-				if d, ok := obj.(*appsv1.Deployment); ok {
-					w.Detector.Forget(deploymentRef(d))
+				if d, ok := deleted(obj).(*appsv1.Deployment); ok {
+					w.forget(ctx, deploymentRef(d))
 				}
 			},
 		}); err != nil {
@@ -99,8 +99,8 @@ func (w *Watcher) Run(ctx context.Context) error {
 				w.changes(ctx, StatefulSetChanges(oldObj.(*appsv1.StatefulSet), newObj.(*appsv1.StatefulSet), time.Now().UTC()))
 			},
 			DeleteFunc: func(obj any) {
-				if s, ok := obj.(*appsv1.StatefulSet); ok {
-					w.Detector.Forget(statefulSetRef(s))
+				if s, ok := deleted(obj).(*appsv1.StatefulSet); ok {
+					w.forget(ctx, statefulSetRef(s))
 				}
 			},
 		}); err != nil {
@@ -178,6 +178,27 @@ func (w *Watcher) Run(ctx context.Context) error {
 			}
 		}
 	}
+}
+
+// forget ends a deleted workload's episodes and rollout.
+func (w *Watcher) forget(ctx context.Context, ref model.ObjectRef) {
+	now := time.Now().UTC()
+	ended := w.Detector.Forget(ref, now)
+	w.mu.Lock()
+	if r := w.rollouts[ref.String()]; r != nil {
+		ended = append(ended, r.end(now)...)
+		delete(w.rollouts, ref.String())
+	}
+	w.mu.Unlock()
+	w.deliver(ctx, ended)
+}
+
+// deleted unwraps the tombstone an informer delivers when it missed a delete.
+func deleted(obj any) any {
+	if t, ok := obj.(cache.DeletedFinalStateUnknown); ok {
+		return t.Obj
+	}
+	return obj
 }
 
 func (w *Watcher) requestLogs(ctx context.Context, pod *corev1.Pod, facts []Fact) {
