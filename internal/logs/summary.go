@@ -46,11 +46,14 @@ type ExceptionCount struct {
 	Sample string `json:"sample"`
 }
 
-// Summary limits keep evidence small.
+// Summary limits keep evidence small. Error templates beyond the most
+// frequent ones are kept too, so a busy service's info lines cannot crowd
+// its errors out.
 const (
-	maxTemplates  = 10
-	maxExceptions = 5
-	maxSample     = 300
+	maxTemplates      = 10
+	maxErrorTemplates = 20
+	maxExceptions     = 5
+	maxSample         = 300
 )
 
 // Summarize processes a fetched log: lines with runtime timestamps, as the
@@ -114,7 +117,17 @@ func Summarize(raw []byte, r *redact.Redactor) Summary {
 		s.Templates = append(s.Templates, TemplateCount{Template: tpl.String(), Count: tpl.Count, Error: st.error, Sample: st.sample})
 	}
 	sort.SliceStable(s.Templates, func(i, j int) bool { return s.Templates[i].Count > s.Templates[j].Count })
-	s.Templates = s.Templates[:min(len(s.Templates), maxTemplates)]
+	kept, errs := s.Templates[:0], 0
+	for i, t := range s.Templates {
+		switch {
+		case i < maxTemplates:
+			kept = append(kept, t)
+		case t.Error && errs < maxErrorTemplates:
+			kept = append(kept, t)
+			errs++
+		}
+	}
+	s.Templates = kept
 	for _, ec := range exceptions {
 		s.Exceptions = append(s.Exceptions, *ec)
 	}
@@ -151,6 +164,10 @@ func message(line string) (string, string) {
 		if json.Unmarshal([]byte(line), &fields) == nil {
 			msg := firstString(fields, "msg", "message", "MESSAGE", "Message", "log")
 			level := firstString(fields, "level", "severity", "lvl", "LEVEL", "Level", "levelname")
+			// Structured loggers often keep the error apart from the message.
+			if e := firstString(fields, "error", "err", "exception"); e != "" {
+				msg += ": " + e
+			}
 			if msg != "" {
 				return msg, strings.ToLower(level)
 			}

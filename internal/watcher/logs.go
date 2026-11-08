@@ -10,6 +10,7 @@ import (
 	"golang.org/x/time/rate"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/karimzakzouk/sentinel/internal/logs"
@@ -27,7 +28,9 @@ type LogRequest struct {
 	// Previous asks for the last terminated container's logs, which the
 	// kubelet keeps only until the next restart.
 	Previous bool
-	Reason   string
+	// Since, when set, limits the fetch to lines written after it.
+	Since  time.Time
+	Reason string
 	// Key identifies the request; the same key is fetched once.
 	Key string
 }
@@ -44,8 +47,12 @@ type LogEvidence struct {
 	Bytes       int             `json:"bytes"`
 	// Truncated reports a fetch that reached its line or byte limit, so
 	// older lines were not seen.
-	Truncated bool         `json:"truncated,omitempty"`
-	Summary   logs.Summary `json:"summary"`
+	Truncated bool `json:"truncated,omitempty"`
+	// Exposure is the time, in seconds, the log covers: since the requested
+	// start, or since the first line seen when the fetch was truncated.
+	Exposure float64      `json:"exposureSeconds,omitempty"`
+	Summary  logs.Summary `json:"summary"`
+	key      string
 }
 
 // LogCollector fetches container logs within a budget and passes on their
@@ -135,6 +142,9 @@ func (c *LogCollector) fetch(ctx context.Context, r LogRequest) {
 	defer cancel()
 	opts := &corev1.PodLogOptions{Container: r.Container, Previous: r.Previous, Timestamps: true,
 		TailLines: &c.TailLines, LimitBytes: &c.LimitBytes}
+	if !r.Since.IsZero() {
+		opts.SinceTime = &metav1.Time{Time: r.Since}
+	}
 	raw, err := c.Client.CoreV1().Pods(r.Namespace).GetLogs(r.Pod, opts).DoRaw(ctx)
 	if err != nil {
 		if apierrors.IsForbidden(err) {
@@ -151,11 +161,19 @@ func (c *LogCollector) fetch(ctx context.Context, r LogRequest) {
 		return
 	}
 	s := logs.Summarize(raw, c.Redactor)
-	c.OnEvidence(ctx, LogEvidence{
+	ev := LogEvidence{
 		Workload: r.Workload, Revision: r.Revision, Pod: r.Pod, Container: r.Container, Previous: r.Previous,
 		Reason: r.Reason, CollectedAt: time.Now().UTC(), Bytes: len(raw),
-		Truncated: int64(len(raw)) >= c.LimitBytes || int64(s.Lines) >= c.TailLines, Summary: s,
-	})
+		Truncated: int64(len(raw)) >= c.LimitBytes || int64(s.Lines) >= c.TailLines, Summary: s, key: r.Key,
+	}
+	if !r.Since.IsZero() {
+		start := r.Since
+		if ev.Truncated && s.From.After(start) {
+			start = s.From
+		}
+		ev.Exposure = ev.CollectedAt.Sub(start).Seconds()
+	}
+	c.OnEvidence(ctx, ev)
 }
 
 // LogRequests returns the log fetches a pod's facts call for: the previous
