@@ -61,26 +61,34 @@ func (r *rollout) key(phase, pod string, n int) string {
 	return fmt.Sprintf("%s%s/%s/%d", r.prefix, phase, pod, n)
 }
 
-// add takes a sample and returns the detection it completes, if any.
-func (r *rollout) add(ev LogEvidence, now time.Time) []Detection {
+// comparison is what one comparison of a rollout's samples found.
+type comparison struct {
+	before, after float64 // exposure, seconds
+	tested        int
+	bestP, alpha  float64
+}
+
+// add takes a sample and returns the detection it completes, if any, and
+// the comparison it ran.
+func (r *rollout) add(ev LogEvidence, now time.Time) ([]Detection, *comparison) {
 	switch ev.Reason {
 	case "rollout-before":
 		r.before[ev.Pod] = ev
-		return nil
+		return nil, nil
 	case "rollout-after":
 		r.after[ev.Pod] = ev
 	default:
-		return nil
+		return nil, nil
 	}
 	if r.episode != nil {
-		return nil
+		return nil, nil
 	}
-	d, ok := r.compare(now)
-	if !ok {
-		return nil
+	d, cmp := r.compare(now)
+	if d == nil {
+		return nil, cmp
 	}
-	r.episode = &d
-	return []Detection{d}
+	r.episode = d
+	return []Detection{*d}, cmp
 }
 
 // end closes the rollout's episode, if it has one.
@@ -102,16 +110,17 @@ type errorCounts struct {
 
 // compare tests each error the new revision logs: is its rate more than
 // rolloutRatio times the old revision's? Bonferroni across the errors tested.
-func (r *rollout) compare(now time.Time) (Detection, bool) {
-	var t0, t1 float64
+func (r *rollout) compare(now time.Time) (*Detection, *comparison) {
+	cmp := &comparison{bestP: 1}
 	for _, ev := range r.before {
-		t0 += ev.Exposure
+		cmp.before += ev.Exposure
 	}
 	for _, ev := range r.after {
-		t1 += ev.Exposure
+		cmp.after += ev.Exposure
 	}
+	t0, t1 := cmp.before, cmp.after
 	if t0 <= 0 || t1 <= 0 {
-		return Detection{}, false
+		return nil, cmp
 	}
 	// Templates mined in separate samples are matched by mining them again
 	// together; exceptions match by fingerprint.
@@ -162,32 +171,37 @@ func (r *rollout) compare(now time.Time) (Detection, bool) {
 			tested = append(tested, c)
 		}
 	}
+	cmp.tested = len(tested)
 	if len(tested) == 0 {
-		return Detection{}, false
+		return nil, cmp
 	}
 	sort.Slice(tested, func(i, j int) bool { return tested[i].sample < tested[j].sample })
 	alpha := rolloutAlpha / float64(len(tested))
+	cmp.alpha = alpha
 	var c *errorCounts
-	bestP := 1.0
 	for _, e := range tested {
-		if p := stats.RateRatioTest(e.before, t0, e.after, t1, rolloutRatio); p < alpha && p < bestP {
-			c, bestP = e, p
+		if p := stats.RateRatioTest(e.before, t0, e.after, t1, rolloutRatio); p < cmp.bestP {
+			cmp.bestP = p
+			if p < alpha {
+				c = e
+			}
 		}
 	}
 	if c == nil {
-		return Detection{}, false
+		return nil, cmp
 	}
+	bestP := cmp.bestP
 	onset := now
 	for _, ev := range r.after {
 		if start := ev.CollectedAt.Add(-time.Duration(ev.Exposure * float64(time.Second))); start.Before(onset) {
 			onset = start
 		}
 	}
-	return Detection{
+	return &Detection{
 		ID: model.NewID(), Workload: r.workload, Kind: FactNewError, Count: c.after, TailProbability: bestP,
 		Alpha: alpha, Onset: onset, At: now, Revisions: map[string]int{c.revision: c.after}, Sample: c.sample,
 		Window: map[FactKind]int{FactNewError: c.after},
-	}, true
+	}, cmp
 }
 
 func sortedKeys(m map[string]LogEvidence) []string {
@@ -259,13 +273,23 @@ func (w *Watcher) sampleRollouts(ctx context.Context, now time.Time) {
 
 // rolloutEvidence routes a rollout sample to its rollout.
 func (w *Watcher) rolloutEvidence(ctx context.Context, ev LogEvidence) {
+	if !strings.HasPrefix(ev.Reason, "rollout-") {
+		return
+	}
 	w.mu.Lock()
 	r := w.rollouts[ev.Workload.String()]
 	var dets []Detection
+	var cmp *comparison
 	if r != nil && strings.HasPrefix(ev.key, r.prefix) {
-		dets = r.add(ev, time.Now().UTC())
+		dets, cmp = r.add(ev, time.Now().UTC())
 	}
 	w.mu.Unlock()
+	if cmp != nil {
+		w.Log.Debug("rollout compared", "workload", ev.Workload.String(), "beforeSeconds", cmp.before, "afterSeconds", cmp.after,
+			"errorsTested", cmp.tested, "bestP", cmp.bestP, "alpha", cmp.alpha, "newError", len(dets) > 0)
+	} else if r == nil || !strings.HasPrefix(ev.key, r.prefix) {
+		w.Log.Debug("rollout sample without its rollout", "workload", ev.Workload.String(), "pod", ev.Pod)
+	}
 	w.deliver(ctx, dets)
 }
 
