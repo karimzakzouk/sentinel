@@ -276,9 +276,41 @@ func revertAndRecover(t *testing.T, in *harness.Injector, client kubernetes.Inte
 	})
 }
 
+// waitForQuiet waits until a workload has no open incident, so a new fault
+// opens its own rather than joining one left by an earlier run.
+func waitForQuiet(t *testing.T, client kubernetes.Interface, workload string) {
+	t.Helper()
+	ctx := context.Background()
+	eventually(t, 5*time.Minute, "no open incident on "+workload, func() (bool, error) {
+		pods, err := client.CoreV1().Pods(sentinelNS).List(ctx, metav1.ListOptions{LabelSelector: "app.kubernetes.io/component=controller"})
+		if err != nil || len(pods.Items) == 0 {
+			return false, err
+		}
+		raw, err := client.CoreV1().Pods(sentinelNS).GetLogs(pods.Items[0].Name, &corev1.PodLogOptions{}).DoRaw(ctx)
+		if err != nil {
+			return false, err
+		}
+		open := 0
+		for _, line := range strings.Split(string(raw), "\n") {
+			var e map[string]any
+			if json.Unmarshal([]byte(line), &e) != nil || e["workload"] != workload {
+				continue
+			}
+			switch e["msg"] {
+			case "incident opened":
+				open++
+			case "incident resolved":
+				open--
+			}
+		}
+		return open <= 0, nil
+	})
+}
+
 func TestBadImageScenario(t *testing.T) {
 	ctx := context.Background()
 	in, client := newInjector(t)
+	waitForQuiet(t, client, "Deployment.apps/"+smokeNS+"/web")
 	s, err := harness.LoadScenario("../scenarios/smoke/bad-image.yaml")
 	if err != nil {
 		t.Fatal(err)
