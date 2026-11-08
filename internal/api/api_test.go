@@ -103,6 +103,26 @@ func TestOnlyLoopbackHostsAreServed(t *testing.T) {
 	}
 }
 
+// With the UI mounted, its routes and the API's must coexist, and writes
+// must be refused.
+func TestTheUIAndTheAPIShareTheServer(t *testing.T) {
+	s, _, _ := newServer(t)
+	s.UI = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ui")) })
+	if res := get(t, s, "localhost", "/incidents/x", nil); res.Code != http.StatusOK || res.Body.String() != "ui" {
+		t.Fatalf("UI route: %d %q", res.Code, res.Body.String())
+	}
+	if res := get(t, s, "localhost", "/api/nope", nil); res.Code != http.StatusNotFound {
+		t.Fatalf("unknown API route: %d", res.Code)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/summary", nil)
+	req.Host = "localhost"
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST: %d, want 405", rec.Code)
+	}
+}
+
 func TestSecurityHeaders(t *testing.T) {
 	s, _, _ := newServer(t)
 	res := get(t, s, "localhost", "/api/summary", nil)

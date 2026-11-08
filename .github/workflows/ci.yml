@@ -30,6 +30,13 @@ jobs:
       - run: make lint
       - run: make vuln
       - run: make test
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - name: Type-check and build the UI
+        run: make ui
       - run: make build
       - run: make helm-lint
       - run: make scenarios
