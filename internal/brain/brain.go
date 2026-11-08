@@ -53,6 +53,8 @@ type incident struct {
 	lastAction string
 	// quietSince is when the last active signal ended; zero while any is active.
 	quietSince time.Time
+	// evidenceDigests identify the content of the evidence already attached.
+	evidenceDigests map[string]bool
 }
 
 func (b *Brain) now() time.Time {

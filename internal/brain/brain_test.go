@@ -199,7 +199,9 @@ func TestLogEvidenceJoinsTheWorkloadsIncident(t *testing.T) {
 	if err := b.OnDetection(ctx, det); err != nil {
 		t.Fatal(err)
 	}
-	if err := b.OnEvidence(ctx, logEvidence("web-2", onset.Add(time.Minute))); err != nil {
+	during := logEvidence("web-2", onset.Add(time.Minute))
+	during.Summary.Templates[0].Count = 2
+	if err := b.OnEvidence(ctx, during); err != nil {
 		t.Fatal(err)
 	}
 
@@ -217,6 +219,27 @@ func TestLogEvidenceJoinsTheWorkloadsIncident(t *testing.T) {
 	incidents, _ := ledger.List[model.Incident](ctx, l, model.KindIncident, "")
 	if len(incidents) != 1 || len(incidents[0].EvidenceIDs) != 2 {
 		t.Fatalf("incident = %+v", incidents)
+	}
+}
+
+// A crash loop prints the same lines at every crash, and a rollout sample of
+// a quiet pod says nothing; neither belongs in the incident twice or at all.
+func TestOnlyNewInformativeEvidenceIsRecorded(t *testing.T) {
+	b, l := newBrain(t)
+	b.Now = func() time.Time { return onset }
+	det := watcher.Detection{ID: model.NewID(), Workload: web, Kind: watcher.FactCrashLoop, Count: 3, Onset: onset, At: onset}
+	if err := b.OnDetection(ctx, det); err != nil {
+		t.Fatal(err)
+	}
+	quiet := watcher.LogEvidence{Workload: web, Pod: "web-0", Container: "web", Reason: "rollout-before", CollectedAt: onset}
+	for _, ev := range []watcher.LogEvidence{logEvidence("web-1", onset), logEvidence("web-1", onset.Add(time.Minute)),
+		logEvidence("web-2", onset.Add(2*time.Minute)), quiet} {
+		if err := b.OnEvidence(ctx, ev); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if ev, _ := ledger.List[model.Evidence](ctx, l, model.KindEvidence, ""); len(ev) != 1 {
+		t.Fatalf("evidence recorded = %d, want the crash logs once", len(ev))
 	}
 }
 
