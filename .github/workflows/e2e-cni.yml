@@ -1,6 +1,7 @@
-# The Calico run proves the path where NetworkPolicy is enforced. It is
-# slower, so it runs when the code it covers changes, weekly, and on demand.
-name: E2E Calico
+# Proves the capability report's NetworkPolicy answer against network plugins
+# with known behavior: Calico always enforces policy, Flannel never does. It
+# runs when the code it covers changes, weekly, and on demand.
+name: E2E network plugins
 
 on:
   push:
@@ -11,7 +12,7 @@ on:
       - hack/kind-up.sh
       - hack/kind/**
       - test/e2e/**
-      - .github/workflows/e2e-calico.yml
+      - .github/workflows/e2e-cni.yml
       - .github/workflows/e2e-run.yml
   schedule:
     - cron: "17 3 * * 1"
@@ -21,12 +22,16 @@ permissions:
   contents: read
 
 concurrency:
-  group: e2e-calico-${{ github.ref }}
+  group: e2e-cni-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   e2e:
-    name: kind (Calico, NetworkPolicy enforced)
+    name: kind
+    strategy:
+      fail-fast: false
+      matrix:
+        network: [calico, flannel]
     uses: ./.github/workflows/e2e-run.yml
     with:
-      network: calico
+      network: ${{ matrix.network }}
