@@ -38,10 +38,13 @@ func probePod(ns, name string) *corev1.Pod {
 	}
 }
 
-// nodeAgentPod is shaped like the tier-1 node agent: read-only host paths for
-// pod logs and cgroup stats, no added capabilities.
+// nodeAgentPod is shaped like the tier-1 node agent: root without any
+// capabilities, so it can read root-owned pod logs and cgroup files through
+// read-only host paths and nothing else.
 func nodeAgentPod(ns string) *corev1.Pod {
 	p := probePod(ns, "sentinel-probe-node-agent")
+	p.Spec.SecurityContext = &corev1.PodSecurityContext{SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}}
+	p.Spec.Containers[0].SecurityContext.RunAsUser = ptr.To(int64(0))
 	hostPath := func(name, path string) corev1.Volume {
 		return corev1.Volume{Name: name, VolumeSource: corev1.VolumeSource{
 			HostPath: &corev1.HostPathVolumeSource{Path: path, Type: ptr.To(corev1.HostPathDirectory)},
@@ -84,23 +87,20 @@ type probeResults struct {
 }
 
 func (d *Detector) runDryRunProbes(ctx context.Context, rep *Report) probeResults {
-	ns := d.Options.ProbeNamespace
-	if ns == "" {
-		for _, id := range []string{"probe.node-agent", "probe.ebpf", "probe.user-namespace"} {
-			rep.add(id, Unknown, "no probe namespace configured")
+	run := func(id, ns, role string, build func(string) *corev1.Pod) Status {
+		if ns == "" {
+			rep.add(id, Unknown, "no %s namespace configured", role)
+			return Unknown
 		}
-		return probeResults{Unknown, Unknown, Unknown}
-	}
-	run := func(id string, pod *corev1.Pod) Status {
-		_, err := d.Client.CoreV1().Pods(ns).Create(ctx, pod, metav1.CreateOptions{DryRun: []string{metav1.DryRunAll}})
+		_, err := d.Client.CoreV1().Pods(ns).Create(ctx, build(ns), metav1.CreateOptions{DryRun: []string{metav1.DryRunAll}})
 		status, detail := classifyDryRun(err)
-		rep.add(id, status, "%s", detail)
+		rep.add(id, status, "in %s: %s", ns, detail)
 		return status
 	}
 	return probeResults{
-		nodeAgent:     run("probe.node-agent", nodeAgentPod(ns)),
-		ebpf:          run("probe.ebpf", ebpfPod(ns)),
-		userNamespace: run("probe.user-namespace", userNamespacePod(ns)),
+		nodeAgent:     run("probe.node-agent", d.Options.AgentNamespace, "agent", nodeAgentPod),
+		ebpf:          run("probe.ebpf", d.Options.AgentNamespace, "agent", ebpfPod),
+		userNamespace: run("probe.user-namespace", d.Options.LabNamespace, "Lab", userNamespacePod),
 	}
 }
 

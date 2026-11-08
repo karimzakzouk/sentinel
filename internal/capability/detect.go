@@ -20,8 +20,12 @@ import (
 type Options struct {
 	// Namespaces are the workload namespaces Sentinel is allowed to watch.
 	Namespaces []string
-	// ProbeNamespace is where dry-run probe pods are tested.
-	ProbeNamespace string
+	// AgentNamespace is where Sentinel's own workloads run, including the
+	// node agent. Node-agent and eBPF probes are dry-run there.
+	AgentNamespace string
+	// LabNamespace is one namespace from the Lab pool. The user-namespace
+	// probe and the active NetworkPolicy probe run there.
+	LabNamespace string
 	// ActorUser is the identity that executes actions, such as
 	// "system:serviceaccount:sentinel:sentinel-actor".
 	ActorUser   string
@@ -300,7 +304,7 @@ func (d *Detector) deriveFeatures(rep *Report, watchable, actable []string, prob
 	switch {
 	case status(NetworkPolicyCheckID) != Available:
 		rep.feature("lab", false, "the Lab stays off until NetworkPolicy enforcement is proven: %s", detail(rep, NetworkPolicyCheckID))
-	case d.Options.ProbeNamespace == "":
+	case d.Options.LabNamespace == "":
 		rep.feature("lab", false, "no Lab namespace is configured")
 	default:
 		rep.feature("lab", true, "NetworkPolicy enforcement is proven by live traffic")

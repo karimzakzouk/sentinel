@@ -113,6 +113,9 @@ func (r *Report) WriteText(w io.Writer) error {
 		p("Network plugin:\t%s\n", r.Cluster.NetworkPlugin)
 	}
 	p("Checked as:\t%s\n", r.Identity)
+	if !strings.Contains(r.Identity, "sentinel") {
+		p("\t(permission findings describe this identity; use --as system:serviceaccount:<namespace>:sentinel to check Sentinel's own)\n")
+	}
 	p("Generated:\t%s\n\n", r.GeneratedAt.UTC().Format(time.RFC3339))
 
 	p("FEATURE\tSTATE\tWHY\n")

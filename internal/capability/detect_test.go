@@ -115,7 +115,7 @@ func TestReportOnAKindCluster(t *testing.T) {
 	c.podErr["sentinel-probe-ebpf"] = apierrors.NewForbidden(schema.GroupResource{Resource: "pods"}, "sentinel-probe-ebpf",
 		errors.New(`admission webhook "policy.example.com" does not support dry run`))
 
-	rep := run(t, c, Options{Namespaces: []string{"shop", "payments"}, ProbeNamespace: "sentinel-probes"})
+	rep := run(t, c, Options{Namespaces: []string{"shop", "payments"}, AgentNamespace: "sentinel", LabNamespace: "sentinel-lab-0"})
 
 	if rep.Cluster.Platform != "kind" || rep.Cluster.ServerVersion != "v1.37.0" || rep.Cluster.Nodes != 1 {
 		t.Fatalf("cluster = %+v", rep.Cluster)
@@ -175,7 +175,7 @@ func TestActorAndProvenNetworkPolicyEnableActAndLab(t *testing.T) {
 		c.allowed[actor+" "+r.String()] = true
 	}
 	proven := &Check{Status: Available, Detail: "enforced"}
-	rep := run(t, c, Options{Namespaces: []string{"shop"}, ProbeNamespace: "sentinel-lab", ActorUser: actor, NetworkPolicy: proven})
+	rep := run(t, c, Options{Namespaces: []string{"shop"}, LabNamespace: "sentinel-lab-0", ActorUser: actor, NetworkPolicy: proven})
 	wantFeature(t, rep, "act", true)
 	wantFeature(t, rep, "lab", true)
 }

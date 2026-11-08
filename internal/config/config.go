@@ -21,8 +21,10 @@ import (
 type Config struct {
 	// Namespaces Sentinel may watch. There is no wildcard.
 	Namespaces []string `json:"namespaces"`
-	// ProbeNamespace holds dry-run capability probes.
-	ProbeNamespace string `json:"probeNamespace,omitempty"`
+	// AgentNamespace is where Sentinel's own workloads run.
+	AgentNamespace string `json:"agentNamespace,omitempty"`
+	// LabNamespaces is the pool of namespaces created at install for Lab runs.
+	LabNamespaces []string `json:"labNamespaces,omitempty"`
 	// ActorUser is the identity that executes actions.
 	ActorUser    string                 `json:"actorUser,omitempty"`
 	Ledger       Ledger                 `json:"ledger"`
@@ -85,12 +87,15 @@ func (c *Config) Validate() error {
 		}
 		seen[ns] = true
 	}
-	if c.ProbeNamespace != "" {
-		if msgs := validation.IsDNS1123Label(c.ProbeNamespace); len(msgs) > 0 {
-			errs = append(errs, fmt.Errorf("probeNamespace %q is invalid: %v", c.ProbeNamespace, msgs))
+	for _, ns := range append([]string{c.AgentNamespace}, c.LabNamespaces...) {
+		if ns == "" {
+			continue
 		}
-		if seen[c.ProbeNamespace] {
-			errs = append(errs, fmt.Errorf("probeNamespace %q must not be a watched workload namespace", c.ProbeNamespace))
+		if msgs := validation.IsDNS1123Label(ns); len(msgs) > 0 {
+			errs = append(errs, fmt.Errorf("namespace %q is invalid: %v", ns, msgs))
+		}
+		if seen[ns] {
+			errs = append(errs, fmt.Errorf("namespace %q must not be both a watched workload namespace and one of Sentinel's own", ns))
 		}
 	}
 	if c.Ledger.Path == "" || !filepath.IsAbs(c.Ledger.Path) {
