@@ -127,23 +127,42 @@ func NewMap(edges []Edge) *Map { return &Map{edges: edges} }
 // Edges returns every edge.
 func (m *Map) Edges() []Edge { return m.edges }
 
+// Reach is a workload reached through the map, and how many edges away.
+type Reach struct {
+	Workload model.ObjectRef `json:"workload"`
+	Hops     int             `json:"hops"`
+}
+
 // Dependents returns the workloads that depend on ref, directly or through
 // others, nearest first.
 func (m *Map) Dependents(ref model.ObjectRef) []model.ObjectRef {
-	return m.walk(ref, func(e Edge) (model.ObjectRef, model.ObjectRef) { return e.To, e.From })
+	return workloads(m.walk(ref, func(e Edge) (model.ObjectRef, model.ObjectRef) { return e.To, e.From }))
 }
 
 // Dependencies returns the workloads ref depends on, directly or through
 // others, nearest first.
 func (m *Map) Dependencies(ref model.ObjectRef) []model.ObjectRef {
+	return workloads(m.DependenciesWithHops(ref))
+}
+
+// DependenciesWithHops is Dependencies with each workload's distance.
+func (m *Map) DependenciesWithHops(ref model.ObjectRef) []Reach {
 	return m.walk(ref, func(e Edge) (model.ObjectRef, model.ObjectRef) { return e.From, e.To })
 }
 
-func (m *Map) walk(start model.ObjectRef, dir func(Edge) (model.ObjectRef, model.ObjectRef)) []model.ObjectRef {
+func workloads(rs []Reach) []model.ObjectRef {
+	out := make([]model.ObjectRef, len(rs))
+	for i, r := range rs {
+		out[i] = r.Workload
+	}
+	return out
+}
+
+func (m *Map) walk(start model.ObjectRef, dir func(Edge) (model.ObjectRef, model.ObjectRef)) []Reach {
 	seen := map[model.ObjectRef]bool{start: true}
-	var out []model.ObjectRef
+	var out []Reach
 	frontier := []model.ObjectRef{start}
-	for len(frontier) > 0 {
+	for hops := 1; len(frontier) > 0; hops++ {
 		var next []model.ObjectRef
 		for _, cur := range frontier {
 			for _, e := range m.edges {
@@ -154,7 +173,9 @@ func (m *Map) walk(start model.ObjectRef, dir func(Edge) (model.ObjectRef, model
 			}
 		}
 		sort.Slice(next, func(i, j int) bool { return next[i].String() < next[j].String() })
-		out = append(out, next...)
+		for _, w := range next {
+			out = append(out, Reach{Workload: w, Hops: hops})
+		}
 		frontier = next
 	}
 	return out

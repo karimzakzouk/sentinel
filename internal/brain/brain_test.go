@@ -18,6 +18,8 @@ import (
 	"github.com/karimzakzouk/sentinel/internal/watcher"
 )
 
+func unmarshal(b []byte, v any) error { return json.Unmarshal(b, v) }
+
 func newBrain(t *testing.T) (*Brain, *ledger.Ledger) {
 	t.Helper()
 	l, err := ledger.Open(ctx, filepath.Join(t.TempDir(), "ledger.db"))

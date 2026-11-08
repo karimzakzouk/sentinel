@@ -4,13 +4,16 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math"
 	"slices"
+	"sort"
 	"sync"
 	"time"
 
 	"github.com/karimzakzouk/sentinel/internal/ledger"
 	"github.com/karimzakzouk/sentinel/internal/model"
 	"github.com/karimzakzouk/sentinel/internal/slot"
+	"github.com/karimzakzouk/sentinel/internal/topology"
 	"github.com/karimzakzouk/sentinel/internal/watcher"
 )
 
@@ -33,6 +36,10 @@ type Brain struct {
 	// Dependents, when set, reports the workloads that depend on one,
 	// directly or through others.
 	Dependents func(model.ObjectRef) []model.ObjectRef
+	// Dependencies, when set, reports the workloads one depends on, with
+	// their distance; Localize ranks them as possible root causes.
+	Dependencies func(model.ObjectRef) []topology.Reach
+	Localize     *slot.Slot[LocalizeInput, slot.Ranking[Suspect]]
 	// Lookback is how long changes are kept as candidate causes.
 	Lookback time.Duration
 	// Gap is how long an incident stays open after its last signal goes
@@ -273,7 +280,54 @@ func (b *Brain) assess(ctx context.Context, inc *incident, workload model.Object
 	if top != nil {
 		summary = append(summary, "culprit", top.Change.Object.String(), "culpritFields", top.Change.Fields, "culpritP", round(top.P))
 	}
+	if b.Localize != nil {
+		suspects, err := b.Localize.Decide(ctx, b.localizeInput(inc, workload))
+		if err != nil {
+			return drafts, summary, err
+		}
+		if len(suspects.Items) > 0 {
+			s := suspects.Items[0].Item
+			summary = append(summary, "suspect", s.Workload.String(), "suspectP", round(s.P))
+		}
+	}
 	return drafts, summary, nil
+}
+
+// localizeInput gathers the root-cause candidates of an incident: its
+// workload and what it depends on, each with its own anomalies and latest
+// change. Callers hold b.mu.
+func (b *Brain) localizeInput(inc *incident, workload model.ObjectRef) LocalizeInput {
+	in := LocalizeInput{Workload: workload}
+	candidates := []topology.Reach{{Workload: workload}}
+	if b.Dependencies != nil {
+		candidates = append(candidates, b.Dependencies(workload)...)
+	}
+	for _, c := range candidates {
+		lc := LocalizeCandidate{Workload: c.Workload, Hops: c.Hops, ChangedBefore: -1}
+		facts := inc.facts
+		if c.Hops > 0 {
+			facts = nil
+			if other := b.open[c.Workload.String()]; other != nil {
+				facts = other.facts
+			}
+		}
+		for kind, n := range facts {
+			if n > 0 {
+				lc.Anomalous = append(lc.Anomalous, kind)
+			}
+		}
+		sort.Strings(lc.Anomalous)
+		for _, ch := range b.changes {
+			if ch.Object != c.Workload || ch.At.After(inc.rec.OpenedAt.Add(time.Minute)) {
+				continue
+			}
+			if before := inc.rec.OpenedAt.Sub(ch.At).Seconds(); lc.ChangedBefore < 0 || before < lc.ChangedBefore {
+				lc.ChangedBefore = math.Max(before, 0)
+			}
+		}
+		in.Candidates = append(in.Candidates, lc)
+	}
+	return in
 }
 
 func (b *Brain) revision(w model.ObjectRef) string {

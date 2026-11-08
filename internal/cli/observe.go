@@ -12,6 +12,7 @@ import (
 	"github.com/karimzakzouk/sentinel/internal/ledger"
 	"github.com/karimzakzouk/sentinel/internal/model"
 	"github.com/karimzakzouk/sentinel/internal/slot"
+	"github.com/karimzakzouk/sentinel/internal/topology"
 	"github.com/karimzakzouk/sentinel/internal/watcher"
 )
 
@@ -20,6 +21,7 @@ import (
 var defaultChampions = map[string]string{
 	slot.BrainClassify:  brain.NaiveBayes{}.ID(),
 	slot.BrainAttribute: brain.LikelihoodRatios{}.ID(),
+	slot.BrainLocalize:  brain.EvidenceRanking{}.ID(),
 	slot.BrainDecide:    brain.ExpectedLoss{}.ID(),
 }
 
@@ -29,6 +31,7 @@ func Registry() (*slot.Registry, error) {
 	for _, err := range []error{
 		slot.Register(r, slot.BrainClassify, brain.NaiveBayes{}),
 		slot.Register(r, slot.BrainAttribute, brain.LikelihoodRatios{Lookback: time.Hour, Typical: 5 * time.Minute}),
+		slot.Register(r, slot.BrainLocalize, brain.EvidenceRanking{Lookback: time.Hour, Typical: 5 * time.Minute}),
 		slot.Register(r, slot.BrainDecide, brain.ExpectedLoss{Impact: 60, Escalation: 10, Slower: 15, Disruption: 5, PReal: 0.95}),
 	} {
 		if err != nil {
@@ -60,6 +63,10 @@ func newObserver(log *slog.Logger, cfg *config.Config, client kubernetes.Interfa
 	if err != nil {
 		return nil, err
 	}
+	localize, err := slot.Build[brain.LocalizeInput, slot.Ranking[brain.Suspect]](reg, slot.BrainLocalize, slotConfig(cfg, slot.BrainLocalize), rec)
+	if err != nil {
+		return nil, err
+	}
 	decide, err := slot.Build[brain.DecideInput, brain.Decision](reg, slot.BrainDecide, slotConfig(cfg, slot.BrainDecide), rec)
 	if err != nil {
 		return nil, err
@@ -75,8 +82,9 @@ func newObserver(log *slog.Logger, cfg *config.Config, client kubernetes.Interfa
 	}
 	w := &watcher.Watcher{Client: client, Namespaces: cfg.Namespaces, Log: log, Detector: detector}
 	b := &brain.Brain{Ledger: l, Log: log, Classify: classify, Attribute: attribute, Decide: decide,
-		Revisions: w.NewestRevision, Lookback: time.Hour, Gap: d.IncidentGap.Duration,
-		Dependents: func(ref model.ObjectRef) []model.ObjectRef { return w.Topology().Dependents(ref) }}
+		Revisions: w.NewestRevision, Lookback: time.Hour, Gap: d.IncidentGap.Duration, Localize: localize,
+		Dependents:   func(ref model.ObjectRef) []model.ObjectRef { return w.Topology().Dependents(ref) },
+		Dependencies: func(ref model.ObjectRef) []topology.Reach { return w.Topology().DependenciesWithHops(ref) }}
 	w.OnTick = func(ctx context.Context) {
 		if err := b.Sweep(ctx); err != nil {
 			log.Error("could not resolve quiet incidents", "error", err)
