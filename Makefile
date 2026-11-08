@@ -22,7 +22,7 @@ fmt:
 
 generate:
 	$(GO) tool controller-gen object paths=./api/...
-	$(GO) tool controller-gen crd paths=./api/... output:crd:artifacts:config=charts/sentinel-crds/templates
+	$(GO) tool controller-gen crd paths=./api/... output:crd:artifacts:config=charts/sentinel-crds/files
 
 tidy:
 	$(GO) mod tidy

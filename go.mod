@@ -4,7 +4,9 @@ go 1.27.3
 
 require (
 	github.com/google/uuid v1.6.0
+	k8s.io/apimachinery v0.37.2
 	modernc.org/sqlite v1.62.0
+	sigs.k8s.io/controller-runtime v0.25.2
 )
 
 require (
@@ -52,7 +54,6 @@ require (
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	k8s.io/api v0.37.2 // indirect
 	k8s.io/apiextensions-apiserver v0.37.0 // indirect
-	k8s.io/apimachinery v0.37.2 // indirect
 	k8s.io/client-go v0.37.2 // indirect
 	k8s.io/code-generator v0.37.0 // indirect
 	k8s.io/gengo/v2 v2.0.0-20260408192533-25e2208e0dc3 // indirect
