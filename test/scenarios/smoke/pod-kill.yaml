@@ -1,0 +1,12 @@
+id: smoke-pod-kill
+title: The web pod is killed; its Deployment replaces it, so the right action is to do nothing
+app: smoke
+fault:
+  kind: delete-pods
+  target: {namespace: e2e-smoke}
+  selector: app=web
+groundTruth:
+  faultClass: infra.pod-kill
+  changeType: none
+  symptoms: [pod.restarted]
+  mitigation: none

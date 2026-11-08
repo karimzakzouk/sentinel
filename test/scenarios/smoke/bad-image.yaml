@@ -1,0 +1,20 @@
+id: smoke-bad-image
+title: A deploy points the web Deployment at an image tag that does not exist
+app: smoke
+fault:
+  kind: patch
+  target: {apiVersion: apps/v1, kind: Deployment, namespace: e2e-smoke, name: web}
+  patch:
+    type: strategic
+    content: '{"spec":{"template":{"spec":{"containers":[{"name":"web","image":"registry.k8s.io/e2e-test-images/agnhost:0.0.0-does-not-exist"}]}}}}'
+groundTruth:
+  faultClass: deploy.bad-image
+  rootCause: {apiVersion: apps/v1, kind: Deployment, namespace: e2e-smoke, name: web}
+  changeType: image
+  symptoms: [pod.image-pull-error]
+  mitigation: rollout.undo
+manifest:
+  condition: image-pull-error
+  namespace: e2e-smoke
+  selector: app=web
+  timeout: 3m

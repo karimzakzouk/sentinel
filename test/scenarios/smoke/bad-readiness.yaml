@@ -1,0 +1,20 @@
+id: smoke-bad-readiness
+title: A config change points the web readiness probe at a port nothing listens on
+app: smoke
+fault:
+  kind: patch
+  target: {apiVersion: apps/v1, kind: Deployment, namespace: e2e-smoke, name: web}
+  patch:
+    type: strategic
+    content: '{"spec":{"template":{"spec":{"containers":[{"name":"web","readinessProbe":{"tcpSocket":{"port":9999},"periodSeconds":2,"failureThreshold":1}}]}}}}'
+groundTruth:
+  faultClass: config.probe
+  rootCause: {apiVersion: apps/v1, kind: Deployment, namespace: e2e-smoke, name: web}
+  changeType: probe
+  symptoms: [pod.not-ready]
+  mitigation: rollout.undo
+manifest:
+  condition: not-ready
+  namespace: e2e-smoke
+  selector: app=web
+  timeout: 3m
