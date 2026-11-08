@@ -1,0 +1,15 @@
+id: boutique-redis-down
+title: The cart's Redis is scaled to zero; errors show up in cartservice and the frontend, not in Redis
+app: online-boutique
+fault:
+  kind: patch
+  target: {apiVersion: apps/v1, kind: Deployment, namespace: boutique, name: redis-cart}
+  patch:
+    type: merge
+    content: '{"spec":{"replicas":0}}'
+groundTruth:
+  faultClass: dependency.unavailable
+  rootCause: {apiVersion: apps/v1, kind: Deployment, namespace: boutique, name: redis-cart}
+  changeType: replicas
+  symptoms: [cartservice.errors, frontend.errors]
+  mitigation: scale

@@ -1,0 +1,20 @@
+id: boutique-cart-bad-image
+title: A deploy points cartservice at an image tag that does not exist
+app: online-boutique
+fault:
+  kind: patch
+  target: {apiVersion: apps/v1, kind: Deployment, namespace: boutique, name: cartservice}
+  patch:
+    type: strategic
+    content: '{"spec":{"template":{"spec":{"containers":[{"name":"server","image":"us-central1-docker.pkg.dev/online-boutique-ci/microservices-demo/cartservice:v0.0.0-does-not-exist"}]}}}}'
+groundTruth:
+  faultClass: deploy.bad-image
+  rootCause: {apiVersion: apps/v1, kind: Deployment, namespace: boutique, name: cartservice}
+  changeType: image
+  symptoms: [pod.image-pull-error]
+  mitigation: rollout.undo
+manifest:
+  condition: image-pull-error
+  namespace: boutique
+  selector: app=cartservice
+  timeout: 3m

@@ -1,0 +1,9 @@
+id: boutique-control
+title: No fault while the load generator runs. Any alarm or action is a false positive
+app: online-boutique
+fault:
+  kind: none
+groundTruth:
+  faultClass: none
+  changeType: none
+  mitigation: none

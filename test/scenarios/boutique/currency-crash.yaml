@@ -1,0 +1,20 @@
+id: boutique-currency-crash
+title: A config change gives currencyservice a Node.js option it rejects, so it exits at start
+app: online-boutique
+fault:
+  kind: patch
+  target: {apiVersion: apps/v1, kind: Deployment, namespace: boutique, name: currencyservice}
+  patch:
+    type: strategic
+    content: '{"spec":{"template":{"spec":{"containers":[{"name":"server","env":[{"name":"NODE_OPTIONS","value":"--no-such-node-option"}]}]}}}}'
+groundTruth:
+  faultClass: deploy.crash-on-start
+  rootCause: {apiVersion: apps/v1, kind: Deployment, namespace: boutique, name: currencyservice}
+  changeType: config
+  symptoms: [pod.crash-loop, frontend.errors]
+  mitigation: rollout.undo
+manifest:
+  condition: crash-loop
+  namespace: boutique
+  selector: app=currencyservice
+  timeout: 4m
