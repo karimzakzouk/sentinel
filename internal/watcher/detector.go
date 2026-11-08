@@ -184,8 +184,19 @@ func (d *CountDetector) Advance(now time.Time) []Detection {
 				s.episode = nil
 				out = append(out, end)
 			}
+		}
+		// While any series of the workload is in an episode, none of its series
+		// learns: an OOM's crash loops must not teach the crash-loop baseline
+		// that crash loops are normal for this workload.
+		learning := true
+		for _, s := range w.series {
+			if s.episode != nil {
+				learning = false
+			}
+		}
+		for _, s := range w.series {
 			next := (s.cur + 1) % len(s.buckets)
-			if s.episode == nil {
+			if learning {
 				s.histCount = s.histCount*decay + float64(s.buckets[next].count)
 				s.histExp = s.histExp*decay + tick
 			}

@@ -86,6 +86,38 @@ func TestAWorkloadThatAlwaysRestartsLearnsItsOwnBaseline(t *testing.T) {
 	}
 }
 
+// Symptoms that accompany an incident must not become part of the baseline:
+// after an OOM incident with crash loops, a later crash loop is still news.
+func TestAnIncidentDoesNotTeachItsSymptomsAreNormal(t *testing.T) {
+	d := newTestDetector()
+	d.Register(web)
+	run(d, t0, 240, nil)
+	// Six hours of OOM kills, with one crash-loop fact per window: never
+	// significant on its own, so it would leak into the baseline unnoticed.
+	oomWithSparseCrashLoops := func(i int, now time.Time) []Fact {
+		var facts []Fact
+		if i%4 == 0 {
+			facts = append(facts, Fact{Kind: FactOOMKilled, Workload: web, At: now})
+		}
+		if i%20 == 0 {
+			facts = append(facts, Fact{Kind: FactCrashLoop, Workload: web, At: now})
+		}
+		return facts
+	}
+	run(d, t0.Add(time.Hour), 6*240, oomWithSparseCrashLoops)
+	run(d, t0.Add(7*time.Hour), 120, nil)
+	crashLoop := func(_ int, now time.Time) []Fact { return []Fact{{Kind: FactCrashLoop, Workload: web, At: now}} }
+	var started []Detection
+	for _, det := range run(d, t0.Add(8*time.Hour), 3, crashLoop) {
+		if !det.Ended && det.Kind == FactCrashLoop {
+			started = append(started, det)
+		}
+	}
+	if len(started) != 1 {
+		t.Fatal("a new crash loop after an OOM incident was not detected within three ticks")
+	}
+}
+
 func TestAlphaComesFromTheBudget(t *testing.T) {
 	d := newTestDetector()
 	ticksPerWeek := 7 * 24 * 3600 / 15.0
