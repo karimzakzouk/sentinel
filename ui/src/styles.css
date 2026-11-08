@@ -578,3 +578,59 @@ summary {
     padding: 18px;
   }
 }
+
+.warnings {
+  margin-bottom: 16px;
+  border-color: var(--amber);
+}
+
+.warnings p {
+  margin: 0 0 8px;
+}
+
+.warnings summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-weight: 550;
+  margin-bottom: 8px;
+}
+
+.warnings .scope {
+  white-space: nowrap;
+  color: var(--muted);
+  vertical-align: top;
+  width: 1%;
+}
+
+.chip {
+  display: inline-block;
+  margin: 2px 6px 2px 0;
+  padding: 1px 8px;
+  border-radius: 6px;
+  background: var(--panel-2);
+  font-size: 12px;
+}
+
+.owners {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.owners li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.owners .name {
+  font-weight: 600;
+  min-width: 150px;
+}
+
+.owners .why {
+  color: var(--muted);
+  font-size: 12.5px;
+}
