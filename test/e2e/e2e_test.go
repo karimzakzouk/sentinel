@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -70,6 +71,37 @@ func eventually(t *testing.T, timeout time.Duration, what string, ok func() (boo
 	}
 }
 
+// waitForLogEntry waits for the controller to log, at or after since, a JSON
+// entry that match accepts, and returns it.
+func waitForLogEntry(t *testing.T, client kubernetes.Interface, since time.Time, timeout time.Duration, what string, match func(entry map[string]any) bool) map[string]any {
+	t.Helper()
+	ctx := context.Background()
+	var found map[string]any
+	eventually(t, timeout, what, func() (bool, error) {
+		pods, err := client.CoreV1().Pods(sentinelNS).List(ctx, metav1.ListOptions{LabelSelector: "app.kubernetes.io/component=controller"})
+		if err != nil || len(pods.Items) == 0 {
+			return false, err
+		}
+		opts := &corev1.PodLogOptions{}
+		if !since.IsZero() {
+			opts.SinceTime = &metav1.Time{Time: since}
+		}
+		raw, err := client.CoreV1().Pods(sentinelNS).GetLogs(pods.Items[0].Name, opts).DoRaw(ctx)
+		if err != nil {
+			return false, err
+		}
+		for _, line := range strings.Split(string(raw), "\n") {
+			var entry map[string]any
+			if json.Unmarshal([]byte(line), &entry) == nil && match(entry) {
+				found = entry
+				return true, nil
+			}
+		}
+		return false, nil
+	})
+	return found
+}
+
 func TestControllerRecordsACapabilityReport(t *testing.T) {
 	ctx := context.Background()
 	admin := clientAs(t, "")
@@ -77,24 +109,8 @@ func TestControllerRecordsACapabilityReport(t *testing.T) {
 		d, err := admin.AppsV1().Deployments(sentinelNS).Get(ctx, "sentinel", metav1.GetOptions{})
 		return err == nil && d.Status.AvailableReplicas == 1, err
 	})
-	pods, err := admin.CoreV1().Pods(sentinelNS).List(ctx, metav1.ListOptions{LabelSelector: "app.kubernetes.io/component=controller"})
-	if err != nil || len(pods.Items) == 0 {
-		t.Fatalf("controller pod not found: %v", err)
-	}
-	var report map[string]any
-	eventually(t, 2*time.Minute, "a capability report in the controller log", func() (bool, error) {
-		raw, err := admin.CoreV1().Pods(sentinelNS).GetLogs(pods.Items[0].Name, &corev1.PodLogOptions{}).DoRaw(ctx)
-		if err != nil {
-			return false, err
-		}
-		for _, line := range strings.Split(string(raw), "\n") {
-			var entry map[string]any
-			if json.Unmarshal([]byte(line), &entry) == nil && entry["msg"] == "capability report recorded" {
-				report = entry
-				return true, nil
-			}
-		}
-		return false, nil
+	report := waitForLogEntry(t, admin, time.Time{}, 2*time.Minute, "a capability report in the controller log", func(e map[string]any) bool {
+		return e["msg"] == "capability report recorded"
 	})
 	if report["identity"] != controllerUser || report["platform"] != "kind" {
 		t.Fatalf("report logged as %v on %v", report["identity"], report["platform"])
@@ -213,7 +229,10 @@ func TestFenceBlocksForbiddenWrites(t *testing.T) {
 	}
 }
 
-func TestScenarioInjectionRecordsGroundTruth(t *testing.T) {
+// The bad-image scenario end to end: the harness records the ground truth,
+// and Sentinel, observing only, opens an incident with the right fault class,
+// blames the image change and proposes a rollback without making it.
+func TestBadImageScenario(t *testing.T) {
 	ctx := context.Background()
 	cfg, err := flags("").RESTConfig("sentinel-e2e")
 	if err != nil {
@@ -237,9 +256,31 @@ func TestScenarioInjectionRecordsGroundTruth(t *testing.T) {
 	if run.ManifestedAt == nil {
 		t.Fatalf("fault did not manifest: %s", run.Observation)
 	}
-	if run.GroundTruth.FaultClass != "deploy.bad-image" || run.GroundTruth.RootCause.Name != "web" {
-		t.Fatalf("ground truth = %+v", run.GroundTruth)
-	}
+	t.Run("harness records ground truth", func(t *testing.T) {
+		if run.GroundTruth.FaultClass != "deploy.bad-image" || run.GroundTruth.RootCause.Name != "web" {
+			t.Fatalf("ground truth = %+v", run.GroundTruth)
+		}
+	})
+	t.Run("Sentinel explains it without acting", func(t *testing.T) {
+		injected, err := client.AppsV1().Deployments(smokeNS).Get(ctx, "web", metav1.GetOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		incident := waitForLogEntry(t, client, run.InjectedAt, 2*time.Minute, "an incident on web", func(e map[string]any) bool {
+			return e["msg"] == "incident opened" && e["workload"] == "Deployment.apps/"+smokeNS+"/web"
+		})
+		fields, _ := incident["culpritFields"].([]any)
+		if incident["class"] != "deploy.bad-image" || incident["decision"] != "rollout.undo" || !slices.Contains(fields, any("image:web")) {
+			t.Fatalf("incident = %v, want class deploy.bad-image, culprit image:web, decision rollout.undo", incident)
+		}
+		d, err := client.AppsV1().Deployments(smokeNS).Get(ctx, "web", metav1.GetOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if d.Generation != injected.Generation {
+			t.Fatalf("web changed while Sentinel was only observing: generation %d, then %d", injected.Generation, d.Generation)
+		}
+	})
 	if err := in.Revert(ctx, run); err != nil {
 		t.Fatal(err)
 	}
