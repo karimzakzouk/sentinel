@@ -6,7 +6,9 @@ package e2e
 import (
 	"context"
 	"encoding/json"
+	"math/rand/v2"
 	"os"
+	"os/exec"
 	"slices"
 	"strings"
 	"testing"
@@ -15,6 +17,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/discovery/cached/memory"
@@ -232,22 +235,24 @@ func TestFenceBlocksForbiddenWrites(t *testing.T) {
 // The bad-image scenario end to end: the harness records the ground truth,
 // and Sentinel, observing only, opens an incident with the right fault class,
 // blames the image change and proposes a rollback without making it.
-func TestBadImageScenario(t *testing.T) {
-	ctx := context.Background()
+func newInjector(t *testing.T) (*harness.Injector, kubernetes.Interface) {
+	t.Helper()
 	cfg, err := flags("").RESTConfig("sentinel-e2e")
 	if err != nil {
 		t.Fatal(err)
 	}
 	client := kubernetes.NewForConfigOrDie(cfg)
-	in := &harness.Injector{
+	return &harness.Injector{
 		Client:  client,
 		Dynamic: dynamic.NewForConfigOrDie(cfg),
 		Mapper:  restmapper.NewDeferredDiscoveryRESTMapper(memory.NewMemCacheClient(client.Discovery())),
-	}
-	s, err := harness.LoadScenario("../scenarios/smoke/bad-image.yaml")
-	if err != nil {
-		t.Fatal(err)
-	}
+	}, client
+}
+
+// inject injects a scenario that must manifest, and reverts it when the test ends.
+func inject(t *testing.T, in *harness.Injector, s *harness.Scenario) *harness.Run {
+	t.Helper()
+	ctx := context.Background()
 	run, err := in.Inject(ctx, s)
 	if err != nil {
 		t.Fatal(err)
@@ -256,6 +261,29 @@ func TestBadImageScenario(t *testing.T) {
 	if run.ManifestedAt == nil {
 		t.Fatalf("fault did not manifest: %s", run.Observation)
 	}
+	return run
+}
+
+func revertAndRecover(t *testing.T, in *harness.Injector, client kubernetes.Interface, run *harness.Run) {
+	t.Helper()
+	ctx := context.Background()
+	if err := in.Revert(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, 3*time.Minute, "web to recover after the revert", func() (bool, error) {
+		d, err := client.AppsV1().Deployments(smokeNS).Get(ctx, "web", metav1.GetOptions{})
+		return err == nil && rolledOut(d), err
+	})
+}
+
+func TestBadImageScenario(t *testing.T) {
+	ctx := context.Background()
+	in, client := newInjector(t)
+	s, err := harness.LoadScenario("../scenarios/smoke/bad-image.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := inject(t, in, s)
 	t.Run("harness records ground truth", func(t *testing.T) {
 		if run.GroundTruth.FaultClass != "deploy.bad-image" || run.GroundTruth.RootCause.Name != "web" {
 			t.Fatalf("ground truth = %+v", run.GroundTruth)
@@ -281,13 +309,114 @@ func TestBadImageScenario(t *testing.T) {
 			t.Fatalf("web changed while Sentinel was only observing: generation %d, then %d", injected.Generation, d.Generation)
 		}
 	})
-	if err := in.Revert(ctx, run); err != nil {
+	revertAndRecover(t, in, client, run)
+}
+
+func randomString(alphabet string, n int) string {
+	b := make([]byte, n)
+	for i := range b {
+		b[i] = alphabet[rand.IntN(len(alphabet))]
+	}
+	return string(b)
+}
+
+// A workload prints secrets of many kinds and crashes. Sentinel fetches its
+// logs and attaches them to the incident, and none of the secrets reaches the
+// Ledger or the controller's own log. The secrets are made up at run time,
+// so none is ever committed.
+func TestLeakedSecretsNeverReachTheLedger(t *testing.T) {
+	ctx := context.Background()
+	const base62 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+	secrets := map[string]string{
+		"AWS access key":   "AKIA" + randomString("ABCDEFGHIJKLMNOPQRSTUVWXYZ234567", 16),
+		"GitHub token":     "ghp_" + randomString(base62, 36),
+		"password":         "Cn" + randomString(base62, 14),
+		"bearer token":     randomString(base62, 32),
+		"private key body": randomString(base62+"+/", 64),
+		"card number":      "4111 1111 1111 1111",
+		"email address":    "jane." + randomString("abcdefghijklmnopqrstuvwxyz", 8) + "@example.com",
+	}
+	lines := []string{
+		"starting with credentials " + secrets["AWS access key"],
+		"git clone https://" + secrets["GitHub token"] + "@github.com/shop/catalog.git",
+		`{"level":"error","msg":"database login failed","password":"` + secrets["password"] + `"}`,
+		"Authorization: Bearer " + secrets["bearer token"],
+		"-----BEGIN RSA PRIVATE KEY-----", secrets["private key body"], "-----END RSA PRIVATE KEY-----",
+		"charging card " + secrets["card number"],
+		"notifying " + secrets["email address"],
+		"fatal error: catalog config invalid",
+	}
+	script := "printf '%s\\n'"
+	for _, l := range lines {
+		script += " '" + l + "'"
+	}
+	script += "; exit 1"
+
+	// A workload of its own, so no earlier incident on a shared one absorbs it.
+	name := "leaky-" + randomString("abcdefghijklmnopqrstuvwxyz", 6)
+	labels := map[string]string{"app": name}
+	client := clientAs(t, "")
+	started := time.Now()
+	_, err := client.AppsV1().Deployments(smokeNS).Create(ctx, &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: smokeNS},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: ptr.To[int32](1),
+			Selector: &metav1.LabelSelector{MatchLabels: labels},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: labels},
+				Spec: corev1.PodSpec{
+					AutomountServiceAccountToken: ptr.To(false),
+					SecurityContext: &corev1.PodSecurityContext{RunAsNonRoot: ptr.To(true), RunAsUser: ptr.To[int64](65534),
+						SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}},
+					Containers: []corev1.Container{{
+						Name: "app", Image: "registry.k8s.io/e2e-test-images/agnhost:2.61", Command: []string{"/bin/sh", "-c", script},
+						Resources: corev1.ResourceRequirements{
+							Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("10m"), corev1.ResourceMemory: resource.MustParse("16Mi")},
+							Limits:   corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("32Mi")},
+						},
+						SecurityContext: &corev1.SecurityContext{AllowPrivilegeEscalation: ptr.To(false), ReadOnlyRootFilesystem: ptr.To(true),
+							Capabilities: &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}}},
+					}},
+				},
+			},
+		},
+	}, metav1.CreateOptions{})
+	if err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, 3*time.Minute, "web to recover after the revert", func() (bool, error) {
-		d, err := client.AppsV1().Deployments(smokeNS).Get(ctx, "web", metav1.GetOptions{})
-		return err == nil && rolledOut(d), err
+	t.Cleanup(func() { _ = client.AppsV1().Deployments(smokeNS).Delete(ctx, name, metav1.DeleteOptions{}) })
+
+	attached := waitForLogEntry(t, client, started, 4*time.Minute, "crash logs attached to an incident on "+name, func(e map[string]any) bool {
+		summary, _ := e["summary"].(string)
+		return e["msg"] == "evidence attached" && e["workload"] == "Deployment.apps/"+smokeNS+"/"+name && strings.HasPrefix(summary, "crash logs")
 	})
+	if summary, _ := attached["summary"].(string); !strings.Contains(summary, "catalog config invalid") {
+		t.Errorf("the evidence does not carry the container's error: %q", summary)
+	}
+	export, err := exec.CommandContext(ctx, "kubectl", "--context", flags("").Context, "-n", sentinelNS, "exec", "deploy/sentinel",
+		"--", "/sentinel", "ledger", "export", "--path", "/var/lib/sentinel/ledger.db").Output()
+	if err != nil {
+		t.Fatalf("exporting the Ledger: %v", err)
+	}
+	if !strings.Contains(string(export), `"redactions"`) {
+		t.Error("the Ledger holds no redacted log evidence")
+	}
+	pods, err := client.CoreV1().Pods(sentinelNS).List(ctx, metav1.ListOptions{LabelSelector: "app.kubernetes.io/component=controller"})
+	if err != nil || len(pods.Items) == 0 {
+		t.Fatalf("controller pod not found: %v", err)
+	}
+	controllerLog, err := client.CoreV1().Pods(sentinelNS).GetLogs(pods.Items[0].Name, &corev1.PodLogOptions{}).DoRaw(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for kind, secret := range secrets {
+		if strings.Contains(string(export), secret) {
+			t.Errorf("the %s reached the Ledger", kind)
+		}
+		if strings.Contains(string(controllerLog), secret) {
+			t.Errorf("the %s reached the controller log", kind)
+		}
+	}
 }
 
 func rolledOut(d *appsv1.Deployment) bool {

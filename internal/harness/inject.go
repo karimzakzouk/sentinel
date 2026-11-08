@@ -182,6 +182,14 @@ func matches(c Condition, p *corev1.Pod) (bool, string) {
 			if w != nil && w.Reason == "CrashLoopBackOff" {
 				return true, fmt.Sprintf("pod %s container %s: CrashLoopBackOff after %d restarts", p.Name, cs.Name, cs.RestartCount)
 			}
+			// Recent Kubernetes versions show a container waiting out its
+			// back-off as terminated, and CrashLoopBackOff only briefly.
+			if t := cs.State.Terminated; t != nil && t.ExitCode != 0 && cs.RestartCount > 0 {
+				return true, fmt.Sprintf("pod %s container %s: exited with code %d after %d restarts", p.Name, cs.Name, t.ExitCode, cs.RestartCount)
+			}
+			if last != nil && last.ExitCode != 0 && cs.RestartCount >= 2 {
+				return true, fmt.Sprintf("pod %s container %s: restarted %d times, last exit code %d", p.Name, cs.Name, cs.RestartCount, last.ExitCode)
+			}
 		case ConditionOOMKilled:
 			if last != nil && last.Reason == "OOMKilled" {
 				return true, fmt.Sprintf("pod %s container %s: OOMKilled", p.Name, cs.Name)
