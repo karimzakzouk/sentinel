@@ -191,6 +191,12 @@ func detectNetworkPlugin(nodes []corev1.Node, apis apiSet, platform string) stri
 			return "calico"
 		}
 	}
+	// Canal, Flannel with Calico's policy engine, matched Calico above.
+	for _, n := range nodes {
+		if hasLabelPrefix(n.Annotations, "flannel.alpha.coreos.com/") {
+			return "flannel"
+		}
+	}
 	if platform == "kind" {
 		return "kindnet (kind default, unless replaced)"
 	}
