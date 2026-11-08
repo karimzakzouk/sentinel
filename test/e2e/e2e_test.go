@@ -6,7 +6,10 @@ package e2e
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"math/rand/v2"
+	"net/http"
 	"os"
 	"os/exec"
 	"slices"
@@ -117,6 +120,55 @@ func TestControllerRecordsACapabilityReport(t *testing.T) {
 	})
 	if report["identity"] != controllerUser || report["platform"] != "kind" {
 		t.Fatalf("report logged as %v on %v", report["identity"], report["platform"])
+	}
+}
+
+// The UI and its API listen on localhost inside the pod; kubectl
+// port-forward is the way in, and the image carries the built web app.
+func TestTheUIAnswersThroughPortForward(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	const port = "18090"
+	pf := exec.CommandContext(ctx, "kubectl", "--context", flags("").Context, "-n", sentinelNS,
+		"port-forward", "deploy/sentinel", port+":8090")
+	if err := pf.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		cancel()
+		_ = pf.Wait()
+	})
+	fetch := func(path string) (int, string, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1:"+port+path, nil)
+		if err != nil {
+			return 0, "", err
+		}
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return 0, "", err
+		}
+		defer func() { _ = res.Body.Close() }()
+		body, err := io.ReadAll(res.Body)
+		return res.StatusCode, string(body), err
+	}
+	var summary struct {
+		Mode   string `json:"mode"`
+		Ledger struct {
+			HeadSeq int64 `json:"headSeq"`
+		} `json:"ledger"`
+	}
+	eventually(t, time.Minute, "the API through port-forward", func() (bool, error) {
+		status, body, err := fetch("/api/summary")
+		if err != nil || status != http.StatusOK {
+			return false, fmt.Errorf("status %d: %w", status, err)
+		}
+		return json.Unmarshal([]byte(body), &summary) == nil, nil
+	})
+	if summary.Mode != "observe" || summary.Ledger.HeadSeq == 0 {
+		t.Fatalf("summary = %+v", summary)
+	}
+	status, body, err := fetch("/")
+	if err != nil || status != http.StatusOK || !strings.Contains(body, `<div id="root">`) {
+		t.Fatalf("the web app is not in the image: %d %v\n%.300s", status, err, body)
 	}
 }
 
