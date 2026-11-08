@@ -1,0 +1,64 @@
+# Checks the capability report on Kubernetes distributions other than kind.
+# Runs when the report's code changes, weekly, and on demand.
+name: Capability report across distributions
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - internal/capability/**
+      - hack/capability-check.sh
+      - .github/workflows/capabilities.yml
+  schedule:
+    - cron: "41 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: capabilities-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  K3D_VERSION: v5.9.0
+  K3D_SHA256: 06d8f25bc3a971c4eb29e0ff08429b180402db0f4dec838c9eac427e296800a0
+  MINIKUBE_VERSION: v1.39.0
+  MINIKUBE_SHA256: b738496da01be06bbaf80c688f57ce25acd3849fbb518155f3a88e03ef555aa4
+
+jobs:
+  k3s:
+    name: k3s (built-in policy controller enforces NetworkPolicy)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: make build
+      - name: Install k3d
+        run: |
+          curl -fsSL --retry 3 -o /tmp/k3d "https://github.com/k3d-io/k3d/releases/download/${K3D_VERSION}/k3d-linux-amd64"
+          echo "${K3D_SHA256}  /tmp/k3d" | sha256sum -c -
+          sudo install -m 0755 /tmp/k3d /usr/local/bin/k3d
+      - run: k3d cluster create capability --agents 1 --wait --timeout 5m
+      - run: hack/capability-check.sh k3d-capability k3s available
+
+  minikube:
+    name: minikube (bridge network plugin ignores NetworkPolicy)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: make build
+      - name: Install minikube
+        run: |
+          curl -fsSL --retry 3 -o /tmp/minikube "https://github.com/kubernetes/minikube/releases/download/${MINIKUBE_VERSION}/minikube-linux-amd64"
+          echo "${MINIKUBE_SHA256}  /tmp/minikube" | sha256sum -c -
+          sudo install -m 0755 /tmp/minikube /usr/local/bin/minikube
+      - run: minikube start --driver=docker --cni=bridge --wait=all
+      - run: hack/capability-check.sh minikube minikube unavailable
