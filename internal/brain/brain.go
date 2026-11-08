@@ -110,6 +110,39 @@ func (b *Brain) now() time.Time {
 	return time.Now().UTC()
 }
 
+// Restore takes back the incidents left open when the controller last
+// stopped. Their episodes ended with the old process, so each starts quiet:
+// it resolves after the gap unless its workloads' trouble returns, and then
+// joins it.
+func (b *Brain) Restore(ctx context.Context) (int, error) {
+	incidents, err := ledger.List[model.Incident](ctx, b.Ledger, model.KindIncident, "")
+	if err != nil {
+		return 0, err
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.open == nil {
+		b.open, b.route = map[string]*incident{}, map[string]*incident{}
+	}
+	restored := 0
+	for _, rec := range incidents {
+		if rec.MergedInto != "" || rec.State == model.IncidentResolved || rec.State == model.IncidentClosed || len(rec.Objects) == 0 {
+			continue
+		}
+		inc := &incident{rec: rec, primary: rec.Objects[0], episodes: map[model.ID]bool{}, facts: map[string]int{},
+			revisions: map[string]int{}, symptomFacts: map[string]map[string]int{}, quietSince: b.now()}
+		if rec.Assessment != nil {
+			inc.lastAction = rec.Assessment.Decision
+		}
+		b.open[inc.primary.String()] = inc
+		for _, o := range rec.Objects {
+			b.route[o.String()] = inc
+		}
+		restored++
+	}
+	return restored, nil
+}
+
 // OnChange records a change and keeps it as a candidate cause.
 func (b *Brain) OnChange(ctx context.Context, c watcher.Change) error {
 	if _, err := b.Ledger.Append(ctx, ledger.Draft{Type: ChangeEventType, Source: "/watcher", Subject: c.Object.String(), Data: c}); err != nil {

@@ -10,8 +10,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -19,6 +21,7 @@ import (
 
 	"github.com/karimzakzouk/sentinel/internal/capability"
 	"github.com/karimzakzouk/sentinel/internal/ledger"
+	"github.com/karimzakzouk/sentinel/internal/model"
 )
 
 func TestRecordCapabilitiesOnlyWhenTheReportChanges(t *testing.T) {
@@ -80,6 +83,43 @@ func TestVersionCommandJSON(t *testing.T) {
 	var v map[string]any
 	if err := json.Unmarshal(out.Bytes(), &v); err != nil || v["version"] == "" {
 		t.Fatalf("version output %q: %v", out.String(), err)
+	}
+}
+
+func TestIncidentsAndShadowReport(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "ledger.db")
+	l, err := ledger.Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	web := model.ObjectRef{Group: "apps", Kind: "Deployment", Namespace: "shop", Name: "web"}
+	inc := model.Incident{ID: model.NewID(), State: model.IncidentOpen, OpenedAt: time.Now(), Objects: []model.ObjectRef{web},
+		Assessment: &model.Assessment{Class: "deploy.bad-image", ClassP: 0.99, Decision: "rollout.undo",
+			Culprit: &model.Culprit{Kind: "template", Object: web, P: 0.97}}}
+	merged := model.Incident{ID: model.NewID(), State: model.IncidentClosed, OpenedAt: time.Now(), MergedInto: inc.ID}
+	if _, err := l.Append(ctx, ledger.RecordDraft("/test", model.KindIncident, "opened", inc.ID, inc.ID, inc),
+		ledger.RecordDraft("/test", model.KindIncident, "merged", merged.ID, merged.ID, merged)); err != nil {
+		t.Fatal(err)
+	}
+	_ = l.Close()
+	run := func(args ...string) string {
+		t.Helper()
+		root := NewRoot()
+		var out bytes.Buffer
+		root.SetOut(&out)
+		root.SetArgs(append(args, "--path", path))
+		if err := root.Execute(); err != nil {
+			t.Fatal(err)
+		}
+		return out.String()
+	}
+	if out := run("incidents"); !strings.Contains(out, "shop/web") || !strings.Contains(out, "deploy.bad-image (99%)") ||
+		!strings.Contains(out, "template change to shop/web (97%)") || strings.Count(out, "\n") != 2 {
+		t.Fatalf("incidents:\n%s", out)
+	}
+	if out := run("report", "shadow"); !strings.Contains(out, "opened 1 incident(s)") || !strings.Contains(out, "rolled back a rollout  1") {
+		t.Fatalf("shadow report:\n%s", out)
 	}
 }
 
