@@ -87,7 +87,7 @@ func (p NetworkPolicyProbe) Run(ctx context.Context) Check {
 	// a failed control connection is retried with a fresh client.
 	controlStart := time.Now()
 	for attempt := 0; ; attempt++ {
-		ok, err := p.connect(ctx, fmt.Sprintf("%s-control-%d", id, attempt), target, labels)
+		ok, why, err := p.connect(ctx, fmt.Sprintf("%s-control-%d", id, attempt), target, labels)
 		if err != nil {
 			return Check{ID: NetworkPolicyCheckID, Status: Unknown, Detail: "control connection could not run: " + err.Error()}
 		}
@@ -96,7 +96,7 @@ func (p NetworkPolicyProbe) Run(ctx context.Context) Check {
 		}
 		if time.Since(controlStart) > p.Settle {
 			return Check{ID: NetworkPolicyCheckID, Status: Unknown, Detail: fmt.Sprintf(
-				"the control connection kept failing for %s even though a policy allowed it, so pod networking itself is broken here", p.Settle)}
+				"the control connection kept failing for %s even though a policy allowed it (last error: %s), so pod networking itself is broken here", p.Settle, why)}
 		}
 		select {
 		case <-ctx.Done():
@@ -120,7 +120,7 @@ func (p NetworkPolicyProbe) Run(ctx context.Context) Check {
 	}
 	applied := time.Now()
 	for attempt := 0; ; attempt++ {
-		ok, err := p.connect(ctx, fmt.Sprintf("%s-test-%d", id, attempt), target, labels)
+		ok, _, err := p.connect(ctx, fmt.Sprintf("%s-test-%d", id, attempt), target, labels)
 		if err != nil {
 			return Check{ID: NetworkPolicyCheckID, Status: Unknown, Detail: "test connection could not run: " + err.Error()}
 		}
@@ -140,34 +140,46 @@ func (p NetworkPolicyProbe) Run(ctx context.Context) Check {
 	}
 }
 
-// connect runs a one-shot client pod and reports whether it reached target.
-func (p NetworkPolicyProbe) connect(ctx context.Context, suffix, target string, labels map[string]string) (bool, error) {
+// connect runs a one-shot client pod and reports whether it reached target
+// and, when it did not, the client's own explanation.
+func (p NetworkPolicyProbe) connect(ctx context.Context, suffix, target string, labels map[string]string) (bool, string, error) {
 	client := probePod(p.Namespace, "sentinel-np-client-"+suffix)
 	client.Labels = mergeLabels(client.Labels, labels, map[string]string{"sentinel-probe-role": "client"})
 	client.Spec.SecurityContext = restrictedPodSecurity()
 	client.Spec.Containers[0].Args = []string{"connect", target, "--timeout=3s"}
 	if _, err := p.Client.CoreV1().Pods(p.Namespace).Create(ctx, client, metav1.CreateOptions{}); err != nil {
-		return false, err
+		return false, "", err
 	}
 	deadline := time.Now().Add(90 * time.Second)
 	for time.Now().Before(deadline) {
 		pod, err := p.Client.CoreV1().Pods(p.Namespace).Get(ctx, client.Name, metav1.GetOptions{})
 		if err != nil {
-			return false, err
+			return false, "", err
 		}
 		switch pod.Status.Phase {
 		case corev1.PodSucceeded:
-			return true, nil
+			return true, "", nil
 		case corev1.PodFailed:
-			return false, nil
+			return false, p.clientOutput(ctx, client.Name), nil
 		}
 		select {
 		case <-ctx.Done():
-			return false, ctx.Err()
+			return false, "", ctx.Err()
 		case <-time.After(time.Second):
 		}
 	}
-	return false, errors.New("client pod did not finish within 90s")
+	return false, "", errors.New("client pod did not finish within 90s")
+}
+
+func (p NetworkPolicyProbe) clientOutput(ctx context.Context, pod string) string {
+	raw, err := p.Client.CoreV1().Pods(p.Namespace).GetLogs(pod, &corev1.PodLogOptions{TailLines: ptr.To(int64(3))}).DoRaw(ctx)
+	if err != nil {
+		return "could not read the client's log: " + truncate(err.Error(), 120)
+	}
+	if out := strings.TrimSpace(string(raw)); out != "" {
+		return truncate(out, 200)
+	}
+	return "the client printed nothing"
 }
 
 func (p NetworkPolicyProbe) waitReady(ctx context.Context, name string) (string, error) {
