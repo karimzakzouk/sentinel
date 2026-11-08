@@ -44,7 +44,7 @@ func (b *Brain) OnEvidence(ctx context.Context, ev watcher.LogEvidence) error {
 		pending = pending[len(pending)-maxPendingEvidence:]
 	}
 	b.evidence[key] = pending
-	inc := b.open[key]
+	inc := b.route[key]
 	if inc == nil {
 		return nil
 	}
