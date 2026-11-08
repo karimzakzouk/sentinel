@@ -15,7 +15,7 @@ fi
 # Some VM images carry iptables-legacy rules whose FORWARD policy drops traffic
 # from Docker bridges that the nftables rules accept. Both rule sets apply, so
 # kind nodes lose internet access and cannot pull images.
-if command -v iptables-legacy >/dev/null && sudo iptables-legacy -S FORWARD 2>/dev/null | grep -q '^-P FORWARD DROP'; then
+if command -v iptables-legacy >/dev/null && sudo iptables-legacy -S FORWARD 2>/dev/null | grep '^-P FORWARD DROP' >/dev/null; then
   for dir in -i -o; do
     sudo iptables-legacy -C FORWARD "$dir" br-+ -j ACCEPT 2>/dev/null ||
       sudo iptables-legacy -I FORWARD "$dir" br-+ -j ACCEPT
