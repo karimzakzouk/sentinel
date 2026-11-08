@@ -1,6 +1,6 @@
 # Status
 
-Last updated: Monday 9 November 2026, 00:40 Cairo time (UTC+2).
+Last updated: Monday 9 November 2026, 01:05 Cairo time (UTC+2).
 
 ## Where things stand
 
@@ -17,7 +17,7 @@ changes nothing.
 |---|---|---|
 | 1. Kubernetes facts → signals → incidents | Done | Smoke pool 6 of 6; Online Boutique below; `TestBadImageScenario` in CI |
 | 2. Logs: evidence, redaction, new errors after a deploy | Done | `TestLeakedSecretsNeverReachTheLedger` in CI; the frontend scenario below |
-| 3. Metrics, dependency map, localization | Next | |
+| 3. Metrics, dependency map, localization | Under way: Service endpoints, dependency map, impact and root-cause ranking done; metrics next | The Redis scenario below |
 | 4. Rate detectors | | |
 | 5. Shadow report, CLI, read-only UI | | |
 | 6. Scoring (`harness score`) | | |
@@ -39,7 +39,7 @@ and the action it would take.
 | Boutique: cart image missing | bad image (1.00), blames `image:server` (0.985), roll back | Yes |
 | Boutique: currency service crashes | crash on start (0.78), blames `env:server` (0.97), roll back | Yes |
 | Boutique: product catalog memory | missed | No: one OOM kill every two minutes never puts two in the one-minute window the development cluster uses (decision 27) |
-| Boutique: Redis scaled to zero | missed | Expected: the errors show in other services, not in Redis; slice 3's dependency map is for this |
+| Boutique: Redis scaled to zero | Redis unavailable (0.991), blames `replicas:1->0` (0.98), restore the replicas; impact: cart, checkout, frontend, load generator | Yes, since slice 3: the Service lost its endpoints, and the dependency map names who is hurt. Slice 1 alone missed it: no pod fails |
 | Boutique: control | nothing | Yes |
 | Boutique: frontend's catalog address misspelled (no pod fails; every page logs an error) | new errors after a deploy (0.997), blames `env:server` (0.93), roll back; the new pods' error attached as evidence | Yes, from logs alone: the new revision's error rate against the old one's, p = 1.2×10⁻⁷ |
 
@@ -66,8 +66,10 @@ Full reasoning in [decisions.md](decisions.md).
 
 ## Next
 
-Slice 3: metrics (metrics-server), a dependency map from configuration and
-logs, and localization, so the Redis scenario is blamed on Redis.
+The rest of slice 3: metrics from metrics-server, scored for deviation and
+fed to the root-cause ranking. Then slice 4: rate detectors over log
+templates, which also let symptoms downstream of a fault (the cart service's
+errors when Redis is gone) join the fault's incident.
 
 ## Waiting on you
 
