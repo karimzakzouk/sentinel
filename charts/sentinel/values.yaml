@@ -53,6 +53,10 @@ ledger:
     # Empty uses the cluster's default StorageClass.
     storageClassName: ""
 
+# debug, info, warn or error. debug also logs every detector evaluation that
+# had facts in its window: count, tail probability, threshold, episode state.
+logLevel: info
+
 resources:
   requests:
     cpu: 50m

@@ -5,6 +5,7 @@ actor:
 lab:
   enabled: true
   poolSize: 1
+logLevel: debug
 capabilities:
   interval: 1m
 # Short windows make episodes end soon after a scenario is reverted.

@@ -35,7 +35,13 @@ func newRunCmd(kf *kube.Flags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
+			var level slog.Level
+			if v := os.Getenv("SENTINEL_LOG_LEVEL"); v != "" {
+				if err := level.UnmarshalText([]byte(v)); err != nil {
+					return fmt.Errorf("SENTINEL_LOG_LEVEL: %w", err)
+				}
+			}
+			log := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
 			client, err := kf.Clientset(version.UserAgent("controller"))
 			if err != nil {
 				return err
