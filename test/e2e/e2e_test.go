@@ -133,7 +133,8 @@ func TestCapabilityReportAsSentinel(t *testing.T) {
 	if c, _ := rep.Check("security.least-privilege"); c.Status != capability.Available || len(rep.Warnings) > 0 {
 		t.Fatalf("least privilege: %+v, warnings %v", c, rep.Warnings)
 	}
-	want := map[string]bool{"detect.api": true, "detect.logs": true, "act": true, "lab": false, "lab.user-namespaces": true, "detect.node-agent": true}
+	want := map[string]bool{"detect.api": true, "detect.logs": true, "detect.metrics": true, "act": true, "lab": false,
+		"lab.user-namespaces": true, "detect.node-agent": true}
 	for name, enabled := range want {
 		f, ok := rep.Feature(name)
 		if !ok || f.Enabled != enabled {

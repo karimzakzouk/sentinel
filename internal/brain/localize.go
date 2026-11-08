@@ -10,6 +10,7 @@ import (
 
 	"github.com/karimzakzouk/sentinel/internal/model"
 	"github.com/karimzakzouk/sentinel/internal/slot"
+	"github.com/karimzakzouk/sentinel/internal/watcher"
 )
 
 // LocalizeInput is the evidence for ranking an incident's possible root
@@ -30,7 +31,14 @@ type LocalizeCandidate struct {
 	// ChangedBefore is how long before the incident's onset it last changed,
 	// in seconds; negative when it did not change within the lookback.
 	ChangedBefore float64 `json:"changedBeforeSeconds"`
+	// Deviations are how far its resource use is from its usual, in robust
+	// standard deviations.
+	Deviations []watcher.Deviation `json:"deviations,omitempty"`
 }
+
+// deviationScore is how many robust standard deviations from its usual a
+// workload's resource use must be to count as evidence.
+const deviationScore = 4
 
 // Suspect is a ranked root-cause candidate with its readable evidence.
 type Suspect struct {
@@ -69,6 +77,16 @@ func (e EvidenceRanking) Decide(_ context.Context, in LocalizeInput) (slot.Ranki
 			}
 		case c.Hops > 0:
 			ratios = append(ratios, model.LikelihoodRatio{Factor: "no anomaly of its own", Ratio: 0.2})
+		}
+		for _, d := range c.Deviations {
+			if math.Abs(d.Score) >= deviationScore {
+				direction := "above"
+				if d.Score < 0 {
+					direction = "below"
+				}
+				ratios = append(ratios, model.LikelihoodRatio{
+					Factor: fmt.Sprintf("its %s use is %.1f robust deviations %s its usual", d.Resource, math.Abs(d.Score), direction), Ratio: 5})
+			}
 		}
 		if c.ChangedBefore >= 0 && c.ChangedBefore <= e.Lookback.Seconds() {
 			timing := e.Lookback.Seconds() / e.Typical.Seconds() * math.Exp(-c.ChangedBefore/e.Typical.Seconds())

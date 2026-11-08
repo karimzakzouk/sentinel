@@ -39,7 +39,10 @@ type Brain struct {
 	// Dependencies, when set, reports the workloads one depends on, with
 	// their distance; Localize ranks them as possible root causes.
 	Dependencies func(model.ObjectRef) []topology.Reach
-	Localize     *slot.Slot[LocalizeInput, slot.Ranking[Suspect]]
+	// Deviations, when set, reports how far a workload's resource use is
+	// from its usual.
+	Deviations func(model.ObjectRef) []watcher.Deviation
+	Localize   *slot.Slot[LocalizeInput, slot.Ranking[Suspect]]
 	// Lookback is how long changes are kept as candidate causes.
 	Lookback time.Duration
 	// Gap is how long an incident stays open after its last signal goes
@@ -304,6 +307,9 @@ func (b *Brain) localizeInput(inc *incident, workload model.ObjectRef) LocalizeI
 	}
 	for _, c := range candidates {
 		lc := LocalizeCandidate{Workload: c.Workload, Hops: c.Hops, ChangedBefore: -1}
+		if b.Deviations != nil {
+			lc.Deviations = b.Deviations(c.Workload)
+		}
 		facts := inc.facts
 		if c.Hops > 0 {
 			facts = nil

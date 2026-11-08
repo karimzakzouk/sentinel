@@ -24,6 +24,8 @@ FLANNEL_VERSION=v0.28.10
 FLANNEL_SHA256=393bdbce53eb50c8eb97dd513b218518b7d6e7985dc7b889be956e112a711084
 CNI_PLUGINS_VERSION=v1.9.1
 CNI_PLUGINS_SHA256=b98f74a0f8522f0a83867178729c1aa70f2158f90c45a2ca8fa791db1c76b303
+METRICS_SERVER_VERSION=v0.9.1
+METRICS_SERVER_SHA256=3c7f57cdbee0f57fb0259a150e8f6d6cb4f29d72d1aa5dce8803151dd6d4c2a1
 
 case "$network" in
   kindnet | calico | flannel) ;;
@@ -69,4 +71,12 @@ case "$network" in
 esac
 
 kubectl --context "$ctx" wait node --all --for condition=Ready --timeout 5m
+
+# metrics-server serves the resource metrics Sentinel reads. kind's kubelets
+# serve self-signed certificates.
+fetch "https://github.com/kubernetes-sigs/metrics-server/releases/download/${METRICS_SERVER_VERSION}/components.yaml" "$tmp/metrics-server.yaml" "$METRICS_SERVER_SHA256"
+sed -i 's/- --metric-resolution=15s/- --metric-resolution=15s\n        - --kubelet-insecure-tls/' "$tmp/metrics-server.yaml"
+kubectl --context "$ctx" apply -f "$tmp/metrics-server.yaml" >/dev/null
+kubectl --context "$ctx" -n kube-system rollout status deployment/metrics-server --timeout 5m
+
 echo "cluster $name ($network) is ready; context $ctx"

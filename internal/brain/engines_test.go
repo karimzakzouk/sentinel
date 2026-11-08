@@ -2,11 +2,13 @@ package brain
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/karimzakzouk/sentinel/internal/model"
 	"github.com/karimzakzouk/sentinel/internal/slot"
+	"github.com/karimzakzouk/sentinel/internal/watcher"
 )
 
 var (
@@ -130,6 +132,23 @@ func TestExpectedLossDecisions(t *testing.T) {
 	d, _ = e.Decide(ctx, DecideInput{Workload: web, Classes: gone, TopChange: &RankedChange{Change: CandidateChange{Kind: "scale", Object: web}, P: 0.9}})
 	if d.Validate() != nil || d.Action != ActionScaleRestore {
 		t.Fatalf("decision = %+v; want the replicas restored", d)
+	}
+}
+
+func TestEveryClassStatesEveryFeature(t *testing.T) {
+	features := append(append([]string{}, factFeatures...), changeFeatures...)
+	features = append(features, "none")
+	for _, c := range Classes {
+		for _, f := range features {
+			if p, ok := likelihoods[c][f]; !ok || p <= 0 || p >= 1 {
+				t.Errorf("class %s, feature %s: P = %v", c, f, p)
+			}
+		}
+	}
+	for _, k := range append(watcher.FactKinds, watcher.FactNewError) {
+		if !slices.Contains(factFeatures, string(k)) {
+			t.Errorf("the watcher reports %s, which the classifier ignores", k)
+		}
 	}
 }
 
