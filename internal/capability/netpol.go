@@ -83,12 +83,26 @@ func (p NetworkPolicyProbe) Run(ctx context.Context) Check {
 	}
 	target := net.JoinHostPort(ip, strconv.Itoa(probePort))
 
-	ok, err := p.connect(ctx, id, 0, target, labels)
-	switch {
-	case err != nil:
-		return Check{ID: NetworkPolicyCheckID, Status: Unknown, Detail: "control connection could not run: " + err.Error()}
-	case !ok:
-		return Check{ID: NetworkPolicyCheckID, Status: Unknown, Detail: "the control connection failed even though a policy allowed it, so pod networking itself is broken here"}
+	// A policy controller needs a moment to program rules for each new pod, so
+	// a failed control connection is retried with a fresh client.
+	controlStart := time.Now()
+	for attempt := 0; ; attempt++ {
+		ok, err := p.connect(ctx, fmt.Sprintf("%s-control-%d", id, attempt), target, labels)
+		if err != nil {
+			return Check{ID: NetworkPolicyCheckID, Status: Unknown, Detail: "control connection could not run: " + err.Error()}
+		}
+		if ok {
+			break
+		}
+		if time.Since(controlStart) > p.Settle {
+			return Check{ID: NetworkPolicyCheckID, Status: Unknown, Detail: fmt.Sprintf(
+				"the control connection kept failing for %s even though a policy allowed it, so pod networking itself is broken here", p.Settle)}
+		}
+		select {
+		case <-ctx.Done():
+			return Check{ID: NetworkPolicyCheckID, Status: Unknown, Detail: "probe cancelled: " + ctx.Err().Error()}
+		case <-time.After(p.Poll):
+		}
 	}
 
 	deny := &networkingv1.NetworkPolicy{
@@ -105,8 +119,8 @@ func (p NetworkPolicyProbe) Run(ctx context.Context) Check {
 		return Check{ID: NetworkPolicyCheckID, Status: Unknown, Detail: "could not remove the allow policy: " + truncate(err.Error(), 200)}
 	}
 	applied := time.Now()
-	for attempt := 1; ; attempt++ {
-		ok, err := p.connect(ctx, id, attempt, target, labels)
+	for attempt := 0; ; attempt++ {
+		ok, err := p.connect(ctx, fmt.Sprintf("%s-test-%d", id, attempt), target, labels)
 		if err != nil {
 			return Check{ID: NetworkPolicyCheckID, Status: Unknown, Detail: "test connection could not run: " + err.Error()}
 		}
@@ -127,8 +141,8 @@ func (p NetworkPolicyProbe) Run(ctx context.Context) Check {
 }
 
 // connect runs a one-shot client pod and reports whether it reached target.
-func (p NetworkPolicyProbe) connect(ctx context.Context, id string, attempt int, target string, labels map[string]string) (bool, error) {
-	client := probePod(p.Namespace, fmt.Sprintf("sentinel-np-client-%s-%d", id, attempt))
+func (p NetworkPolicyProbe) connect(ctx context.Context, suffix, target string, labels map[string]string) (bool, error) {
+	client := probePod(p.Namespace, "sentinel-np-client-"+suffix)
 	client.Labels = mergeLabels(client.Labels, labels, map[string]string{"sentinel-probe-role": "client"})
 	client.Spec.SecurityContext = restrictedPodSecurity()
 	client.Spec.Containers[0].Args = []string{"connect", target, "--timeout=3s"}
