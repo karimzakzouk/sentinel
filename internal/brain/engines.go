@@ -34,7 +34,8 @@ var ChangeInducedClasses = []string{ClassBadImage, ClassCrashOnStart, ClassMemor
 
 // ClassifyInput is the evidence for the fault-class decision.
 type ClassifyInput struct {
-	// Facts holds the fact kinds seen in the incident, with counts.
+	// Facts holds the fact kinds seen in the incident, each with the largest
+	// count seen in one window, whether or not the kind was significant.
 	Facts map[string]int `json:"facts"`
 	// ChangeFields holds the field groups of recent changes on the
 	// incident's workloads, such as "image", "resources", "env" or "configmap".

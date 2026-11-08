@@ -1,6 +1,7 @@
 package watcher
 
 import (
+	"maps"
 	"math"
 	"sort"
 	"sync"
@@ -29,6 +30,10 @@ type Detection struct {
 	Revisions map[string]int
 	// Sample is one fact's detail. It is untrusted text.
 	Sample string
+	// Window counts every fact kind of the workload in the window when the
+	// episode started, including kinds not significant on their own: one OOM
+	// kill among crash loops says what kind of crash it is.
+	Window map[FactKind]int
 }
 
 // CountDetector turns facts into detections. Each (workload, fact kind) is a
@@ -182,10 +187,18 @@ func (d *CountDetector) Advance(now time.Time) []Detection {
 	var out []Detection
 	for _, key := range keys {
 		w := d.workloads[key]
+		windows := make(map[FactKind]windowSummary, len(FactKinds))
+		counts := map[FactKind]int{}
 		for _, kind := range FactKinds {
-			s := w.series[kind]
-			count, onset, revs, sample := s.window()
-			if count == 0 {
+			ws := w.series[kind].window()
+			windows[kind] = ws
+			if ws.count > 0 {
+				counts[kind] = ws.count
+			}
+		}
+		for _, kind := range FactKinds {
+			s, ws := w.series[kind], windows[kind]
+			if ws.count == 0 {
 				if s.episode != nil {
 					end := *s.episode
 					end.Ended, end.At, end.Count = true, now, 0
@@ -194,14 +207,14 @@ func (d *CountDetector) Advance(now time.Time) []Detection {
 				}
 				continue
 			}
-			p := priors[kind].Posterior(s.histCount, s.histExp).PredictiveTail(count, window)
+			p := priors[kind].Posterior(s.histCount, s.histExp).PredictiveTail(ws.count, window)
 			if d.Trace != nil {
-				d.Trace(Trace{Workload: w.ref, Kind: kind, Count: count, TailProbability: p, Alpha: alpha,
+				d.Trace(Trace{Workload: w.ref, Kind: kind, Count: ws.count, TailProbability: p, Alpha: alpha,
 					InEpisode: s.episode != nil, HistoryCount: s.histCount, HistoryExposure: s.histExp})
 			}
 			if s.episode == nil && p < alpha {
-				det := Detection{ID: model.NewID(), Workload: w.ref, Kind: kind, Count: count, TailProbability: p,
-					Alpha: alpha, Onset: onset, At: now, Revisions: revs, Sample: sample}
+				det := Detection{ID: model.NewID(), Workload: w.ref, Kind: kind, Count: ws.count, TailProbability: p,
+					Alpha: alpha, Onset: ws.onset, At: now, Revisions: ws.revs, Sample: ws.sample, Window: maps.Clone(counts)}
 				s.episode = &det
 				out = append(out, det)
 			}
@@ -228,25 +241,29 @@ func (d *CountDetector) Advance(now time.Time) []Detection {
 	return out
 }
 
-func (s *series) window() (int, time.Time, map[string]int, string) {
-	var count int
-	var onset time.Time
-	revs := map[string]int{}
-	sample := ""
+type windowSummary struct {
+	count  int
+	onset  time.Time
+	revs   map[string]int
+	sample string
+}
+
+func (s *series) window() windowSummary {
+	ws := windowSummary{revs: map[string]int{}}
 	for _, b := range s.buckets {
 		if b.count == 0 {
 			continue
 		}
-		count += b.count
-		if onset.IsZero() || b.first.Before(onset) {
-			onset = b.first
+		ws.count += b.count
+		if ws.onset.IsZero() || b.first.Before(ws.onset) {
+			ws.onset = b.first
 		}
 		for r, n := range b.revs {
-			revs[r] += n
+			ws.revs[r] += n
 		}
-		if sample == "" {
-			sample = b.sample
+		if ws.sample == "" {
+			ws.sample = b.sample
 		}
 	}
-	return count, onset, revs, sample
+	return ws
 }

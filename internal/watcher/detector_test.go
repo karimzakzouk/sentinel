@@ -53,6 +53,28 @@ func TestStuckImagePullIsDetectedOnceAndEnds(t *testing.T) {
 	}
 }
 
+func TestADetectionCarriesTheWholeWindow(t *testing.T) {
+	d := newTestDetector()
+	d.Register(web)
+	run(d, t0, 240, nil)
+	oomThenCrashLoop := func(i int, now time.Time) []Fact {
+		facts := []Fact{{Kind: FactCrashLoop, Workload: web, At: now}}
+		if i == 0 {
+			facts = append(facts, Fact{Kind: FactOOMKilled, Workload: web, At: now})
+		}
+		return facts
+	}
+	var started []Detection
+	for _, det := range run(d, t0.Add(time.Hour), 4, oomThenCrashLoop) {
+		if !det.Ended {
+			started = append(started, det)
+		}
+	}
+	if len(started) != 1 || started[0].Kind != FactCrashLoop || started[0].Window[FactOOMKilled] != 1 {
+		t.Fatalf("detections = %+v, want one crash-loop detection whose window holds the OOM kill", started)
+	}
+}
+
 func TestOneRestartInAQuietWorkloadIsNotAnIncident(t *testing.T) {
 	d := newTestDetector()
 	d.Register(web)
