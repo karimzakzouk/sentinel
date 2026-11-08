@@ -30,11 +30,15 @@ const (
 	// ClassDependencyUnavailable is a workload others depend on left without
 	// ready endpoints, such as one scaled to zero.
 	ClassDependencyUnavailable = "dependency.unavailable"
+	// ClassRuntimeErrors is a workload logging errors at an unusual rate
+	// while its pods stay up, with no change to blame: a failing dependency
+	// outside the cluster, say, or traffic that finds a bug.
+	ClassRuntimeErrors = "runtime.errors"
 )
 
 // Classes lists the fault classes in a stable order.
 var Classes = []string{ClassBadImage, ClassCrashOnStart, ClassMemoryLimit, ClassProbe, ClassConfigError, ClassUnschedulable,
-	ClassRuntimeCrash, ClassNewErrors, ClassDependencyUnavailable}
+	ClassRuntimeCrash, ClassNewErrors, ClassDependencyUnavailable, ClassRuntimeErrors}
 
 // ChangeInducedClasses are the classes that undoing a change can mitigate.
 var ChangeInducedClasses = []string{ClassBadImage, ClassCrashOnStart, ClassMemoryLimit, ClassProbe, ClassConfigError, ClassNewErrors,
@@ -54,39 +58,45 @@ type ClassifyInput struct {
 // expert estimates, to be calibrated against the scenario pool's outcomes.
 var likelihoods = map[string]map[string]float64{
 	ClassBadImage: {"pod.image-pull-error": 0.95, "pod.crash-loop": 0.05, "pod.oom-killed": 0.02, "pod.not-ready": 0.1, "pod.probe-failed": 0.1,
-		"pod.config-error": 0.05, "pod.unschedulable": 0.02, "pod.restarted": 0.05, "log.new-error": 0.01, "service.no-endpoints": 0.2, "pod.memory-near-limit": 0.01,
+		"pod.config-error": 0.05, "pod.unschedulable": 0.02, "pod.restarted": 0.05, "log.new-error": 0.01, "service.no-endpoints": 0.2, "pod.memory-near-limit": 0.01, "log.errors": 0.05,
 		"image": 0.9, "resources": 0.1, "probes": 0.1, "config": 0.2, "scale": 0.05, "none": 0.05},
 	ClassCrashOnStart: {"pod.image-pull-error": 0.02, "pod.crash-loop": 0.95, "pod.oom-killed": 0.05, "pod.not-ready": 0.3, "pod.probe-failed": 0.3,
-		"pod.config-error": 0.05, "pod.unschedulable": 0.02, "pod.restarted": 0.9, "log.new-error": 0.05, "service.no-endpoints": 0.3, "pod.memory-near-limit": 0.05,
+		"pod.config-error": 0.05, "pod.unschedulable": 0.02, "pod.restarted": 0.9, "log.new-error": 0.05, "service.no-endpoints": 0.3, "pod.memory-near-limit": 0.05, "log.errors": 0.1,
 		"image": 0.5, "resources": 0.1, "probes": 0.1, "config": 0.6, "scale": 0.05, "none": 0.1},
 	ClassMemoryLimit: {"pod.image-pull-error": 0.02, "pod.crash-loop": 0.8, "pod.oom-killed": 0.95, "pod.not-ready": 0.3, "pod.probe-failed": 0.2,
-		"pod.config-error": 0.02, "pod.unschedulable": 0.05, "pod.restarted": 0.3, "log.new-error": 0.1, "service.no-endpoints": 0.3, "pod.memory-near-limit": 0.9,
+		"pod.config-error": 0.02, "pod.unschedulable": 0.05, "pod.restarted": 0.3, "log.new-error": 0.1, "service.no-endpoints": 0.3, "pod.memory-near-limit": 0.9, "log.errors": 0.15,
 		"image": 0.2, "resources": 0.7, "probes": 0.05, "config": 0.2, "scale": 0.05, "none": 0.3},
 	ClassProbe: {"pod.image-pull-error": 0.02, "pod.crash-loop": 0.1, "pod.oom-killed": 0.02, "pod.not-ready": 0.95, "pod.probe-failed": 0.9,
-		"pod.config-error": 0.02, "pod.unschedulable": 0.02, "pod.restarted": 0.2, "log.new-error": 0.05, "service.no-endpoints": 0.4, "pod.memory-near-limit": 0.05,
+		"pod.config-error": 0.02, "pod.unschedulable": 0.02, "pod.restarted": 0.2, "log.new-error": 0.05, "service.no-endpoints": 0.4, "pod.memory-near-limit": 0.05, "log.errors": 0.15,
 		"image": 0.2, "resources": 0.05, "probes": 0.8, "config": 0.2, "scale": 0.05, "none": 0.1},
 	ClassConfigError: {"pod.image-pull-error": 0.02, "pod.crash-loop": 0.1, "pod.oom-killed": 0.02, "pod.not-ready": 0.1, "pod.probe-failed": 0.05,
-		"pod.config-error": 0.95, "pod.unschedulable": 0.02, "pod.restarted": 0.05, "log.new-error": 0.02, "service.no-endpoints": 0.2, "pod.memory-near-limit": 0.01,
+		"pod.config-error": 0.95, "pod.unschedulable": 0.02, "pod.restarted": 0.05, "log.new-error": 0.02, "service.no-endpoints": 0.2, "pod.memory-near-limit": 0.01, "log.errors": 0.05,
 		"image": 0.2, "resources": 0.05, "probes": 0.05, "config": 0.7, "scale": 0.05, "none": 0.2},
 	ClassUnschedulable: {"pod.image-pull-error": 0.02, "pod.crash-loop": 0.02, "pod.oom-killed": 0.02, "pod.not-ready": 0.1, "pod.probe-failed": 0.05,
-		"pod.config-error": 0.02, "pod.unschedulable": 0.95, "pod.restarted": 0.02, "log.new-error": 0.01, "service.no-endpoints": 0.3, "pod.memory-near-limit": 0.01,
+		"pod.config-error": 0.02, "pod.unschedulable": 0.95, "pod.restarted": 0.02, "log.new-error": 0.01, "service.no-endpoints": 0.3, "pod.memory-near-limit": 0.01, "log.errors": 0.05,
 		"image": 0.1, "resources": 0.5, "probes": 0.05, "config": 0.1, "scale": 0.6, "none": 0.3},
 	ClassRuntimeCrash: {"pod.image-pull-error": 0.02, "pod.crash-loop": 0.7, "pod.oom-killed": 0.1, "pod.not-ready": 0.4, "pod.probe-failed": 0.4,
-		"pod.config-error": 0.02, "pod.unschedulable": 0.02, "pod.restarted": 0.9, "log.new-error": 0.2, "service.no-endpoints": 0.5, "pod.memory-near-limit": 0.15,
+		"pod.config-error": 0.02, "pod.unschedulable": 0.02, "pod.restarted": 0.9, "log.new-error": 0.2, "service.no-endpoints": 0.5, "pod.memory-near-limit": 0.15, "log.errors": 0.4,
 		"image": 0.1, "resources": 0.05, "probes": 0.05, "config": 0.1, "scale": 0.05, "none": 0.8},
 	// The new-error test samples only ready pods, so its pods rarely fail.
 	ClassNewErrors: {"pod.image-pull-error": 0.01, "pod.crash-loop": 0.05, "pod.oom-killed": 0.02, "pod.not-ready": 0.1, "pod.probe-failed": 0.1,
-		"pod.config-error": 0.01, "pod.unschedulable": 0.01, "pod.restarted": 0.05, "log.new-error": 0.95, "service.no-endpoints": 0.01, "pod.memory-near-limit": 0.05,
+		"pod.config-error": 0.01, "pod.unschedulable": 0.01, "pod.restarted": 0.05, "log.new-error": 0.95, "service.no-endpoints": 0.01, "pod.memory-near-limit": 0.05, "log.errors": 0.7,
 		"image": 0.5, "resources": 0.1, "probes": 0.05, "config": 0.6, "scale": 0.05, "none": 0.05},
 	// Endpoints gone without failing pods: the pods were scaled away or deleted.
 	ClassDependencyUnavailable: {"pod.image-pull-error": 0.02, "pod.crash-loop": 0.05, "pod.oom-killed": 0.02, "pod.not-ready": 0.2,
 		"pod.probe-failed": 0.1, "pod.config-error": 0.02, "pod.unschedulable": 0.1, "pod.restarted": 0.05, "log.new-error": 0.01,
-		"service.no-endpoints": 0.95, "pod.memory-near-limit": 0.01,
+		"service.no-endpoints": 0.95, "pod.memory-near-limit": 0.01, "log.errors": 0.05,
 		"image": 0.1, "resources": 0.05, "probes": 0.05, "config": 0.1, "scale": 0.8, "none": 0.2},
+	// Error sampling reads ready pods, so these pods mostly stay up.
+	ClassRuntimeErrors: {"pod.image-pull-error": 0.01, "pod.crash-loop": 0.05, "pod.oom-killed": 0.02, "pod.not-ready": 0.2,
+		"pod.probe-failed": 0.2, "pod.config-error": 0.01, "pod.unschedulable": 0.01, "pod.restarted": 0.1, "log.new-error": 0.1,
+		"service.no-endpoints": 0.05, "pod.memory-near-limit": 0.05, "log.errors": 0.95,
+		"image": 0.1, "resources": 0.05, "probes": 0.05, "config": 0.1, "scale": 0.05, "none": 0.8},
 }
 
 var factFeatures = []string{"pod.image-pull-error", "pod.crash-loop", "pod.oom-killed", "pod.not-ready", "pod.probe-failed",
-	"pod.config-error", "pod.unschedulable", "pod.restarted", "log.new-error", "service.no-endpoints", "pod.memory-near-limit"}
+	"pod.config-error", "pod.unschedulable", "pod.restarted", "log.new-error", "service.no-endpoints", "pod.memory-near-limit",
+	"log.errors"}
 
 var changeFeatures = []string{"image", "resources", "probes", "config", "scale"}
 

@@ -50,6 +50,14 @@ type CountDetector struct {
 	// evenly over fact kinds and ticks to give each test's significance level.
 	FalseAlarmsPerWeek float64
 	HalfLife           time.Duration
+	// MinRatio is the effect an episode needs besides significance: a window
+	// count of at least MinRatio times the expected one. With much history
+	// the predictive is near Poisson, and bursty series such as error logs
+	// would otherwise alarm on small, significant changes. An episode ends
+	// when its window is empty or back under three quarters of that.
+	MinRatio float64
+	// WarmUp is the history a learned series needs before it may alarm.
+	WarmUp time.Duration
 	// Hyper is the hyperprior over per-second fact rates.
 	Hyper stats.Gamma
 	// Trace, when set, is called for every series with facts in its window,
@@ -67,6 +75,7 @@ type Trace struct {
 	Count           int
 	TailProbability float64
 	Alpha           float64
+	Expected        float64
 	InEpisode       bool
 	HistoryCount    float64
 	HistoryExposure float64
@@ -95,7 +104,7 @@ type series struct {
 func NewCountDetector(window, tick time.Duration, falseAlarmsPerWeek float64, halfLife time.Duration) *CountDetector {
 	week := 7 * 24 * time.Hour
 	return &CountDetector{
-		Window: window, Tick: tick, FalseAlarmsPerWeek: falseAlarmsPerWeek, HalfLife: halfLife,
+		Window: window, Tick: tick, FalseAlarmsPerWeek: falseAlarmsPerWeek, HalfLife: halfLife, MinRatio: 2,
 		// A weak hyperprior: about one fact per kind per week, worth half an event of evidence.
 		Hyper:     stats.Gamma{Shape: 0.5, Rate: 0.5 * week.Seconds()},
 		workloads: map[string]*workloadSeries{},
@@ -185,6 +194,10 @@ func (d *CountDetector) Advance(now time.Time) []Detection {
 
 	priors := map[FactKind]stats.Gamma{}
 	for _, k := range FactKinds {
+		if learnedKinds[k] {
+			priors[k] = learnedPrior
+			continue
+		}
 		var hist []stats.Series
 		for _, w := range d.workloads {
 			s := w.series[k]
@@ -212,21 +225,28 @@ func (d *CountDetector) Advance(now time.Time) []Detection {
 		}
 		for _, kind := range FactKinds {
 			s, ws := w.series[kind], windows[kind]
-			if ws.count == 0 {
+			post := priors[kind].Posterior(s.histCount, s.histExp)
+			expected := post.Mean() * window
+			outlived := s.episode != nil && learnedKinds[kind] && now.Sub(s.episode.At) >= learnedEpisodeLimit
+			if ws.count == 0 || s.episode != nil && float64(ws.count) < 0.75*d.MinRatio*expected || outlived {
 				if s.episode != nil {
 					end := *s.episode
 					end.Ended, end.At, end.Count = true, now, 0
 					s.episode = nil
 					out = append(out, end)
 				}
+				if outlived {
+					s.histCount, s.histExp = 0, 0
+				}
 				continue
 			}
-			p := priors[kind].Posterior(s.histCount, s.histExp).PredictiveTail(ws.count, window)
+			p := post.PredictiveTail(ws.count, window)
 			if d.Trace != nil {
-				d.Trace(Trace{Workload: w.ref, Kind: kind, Count: ws.count, TailProbability: p, Alpha: alpha,
+				d.Trace(Trace{Workload: w.ref, Kind: kind, Count: ws.count, TailProbability: p, Alpha: alpha, Expected: expected,
 					InEpisode: s.episode != nil, HistoryCount: s.histCount, HistoryExposure: s.histExp})
 			}
-			if s.episode == nil && p < alpha {
+			warm := !learnedKinds[kind] || s.histExp >= max(d.WarmUp, d.Window).Seconds()
+			if s.episode == nil && p < alpha && float64(ws.count) >= d.MinRatio*expected && warm {
 				det := Detection{ID: model.NewID(), Workload: w.ref, Kind: kind, Count: ws.count, TailProbability: p,
 					Alpha: alpha, Onset: ws.onset, At: now, Revisions: ws.revs, Sample: ws.sample, Window: maps.Clone(counts)}
 				s.episode = &det
@@ -254,6 +274,18 @@ func (d *CountDetector) Advance(now time.Time) []Detection {
 	}
 	return out
 }
+
+// learnedKinds are series whose normal level is the workload's own, not the
+// zero the pooled prior expects. They take a prior worth seconds of
+// exposure, learn for WarmUp before they may alarm, and an episode of theirs
+// ends after learnedEpisodeLimit, when the series learns afresh: a level
+// that holds that long is the workload's new normal, or an incident already
+// on record that alarming again would not help.
+var learnedKinds = map[FactKind]bool{FactLogErrors: true}
+
+var learnedPrior = stats.Gamma{Shape: 0.5, Rate: 10}
+
+const learnedEpisodeLimit = time.Hour
 
 type windowSummary struct {
 	count  int

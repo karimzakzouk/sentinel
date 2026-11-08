@@ -59,13 +59,29 @@ type Detection struct {
 	// IncidentGap is how long an incident stays open after its signals go
 	// quiet; signals within it rejoin the same incident.
 	IncidentGap metav1.Duration `json:"incidentGap,omitempty"`
+	// WarmUp is how long a workload's sampled error series learns before it
+	// may alarm: its usual error volume, unlike its usual crash count, is
+	// rarely zero.
+	WarmUp metav1.Duration `json:"warmUp,omitempty"`
 }
 
 // Logs configures log evidence: container logs fetched, within a budget, when
-// a container crashes or a pod stays unready.
+// a container crashes or a pod stays unready, and every workload's errors
+// sampled.
 type Logs struct {
 	// Enabled defaults to true.
 	Enabled *bool `json:"enabled,omitempty"`
+	// SampleInterval is how often each workload's errors are sampled from
+	// one ready pod. It defaults to a minute; 0s turns sampling off.
+	SampleInterval *metav1.Duration `json:"sampleInterval,omitempty"`
+}
+
+// SampleEvery returns the sampling interval, zero when sampling is off.
+func (l Logs) SampleEvery() time.Duration {
+	if l.SampleInterval == nil {
+		return time.Minute
+	}
+	return l.SampleInterval.Duration
 }
 
 // On reports whether log evidence is enabled.
@@ -122,6 +138,9 @@ func (c *Config) setDefaults() {
 	if d.IncidentGap.Duration == 0 {
 		d.IncidentGap.Duration = 5 * time.Minute
 	}
+	if d.WarmUp.Duration == 0 {
+		d.WarmUp.Duration = 30 * time.Minute
+	}
 }
 
 // Validate reports every problem at once.
@@ -160,6 +179,13 @@ func (c *Config) Validate() error {
 	d := c.Detection
 	if d.FalseAlarmsPerWeek <= 0 || d.FalseAlarmsPerWeek > 100 {
 		errs = append(errs, fmt.Errorf("detection.falseAlarmsPerWeek %v is outside (0, 100]", d.FalseAlarmsPerWeek))
+	}
+	if s := c.Logs.SampleEvery(); s != 0 && (s < d.Tick.Duration || s > d.Window.Duration) {
+		errs = append(errs, fmt.Errorf("logs.sampleInterval %s must be 0s, for off, or between the tick (%s) and the window (%s)",
+			s, d.Tick.Duration, d.Window.Duration))
+	}
+	if d.WarmUp.Duration < 0 {
+		errs = append(errs, fmt.Errorf("detection.warmUp %s is negative", d.WarmUp.Duration))
 	}
 	if d.Tick.Duration < time.Second || d.Window.Duration < 2*d.Tick.Duration || d.HalfLife.Duration < d.Window.Duration {
 		errs = append(errs, fmt.Errorf("detection needs tick >= 1s, window >= 2 ticks and halfLife >= window (got %s, %s, %s)",

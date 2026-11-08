@@ -23,6 +23,7 @@ const signalLabels: Record<string, string> = {
   "pod.memory-near-limit": "Memory near its limit",
   "service.no-endpoints": "Service without ready endpoints",
   "log.new-error": "New errors in the logs",
+  "log.errors": "Errors in the logs",
 };
 
 function Bar({ label, p, dim, title }: { label: ReactNode; p: number; dim?: boolean; title?: string }) {

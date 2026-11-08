@@ -45,6 +45,35 @@ func TestPredictiveTailEdges(t *testing.T) {
 	}
 }
 
+// Far out, every term of the tail underflows; the sum must still end at
+// once, at a probability of zero or nearly, and agree with the terms summed
+// in log space where they do not underflow.
+func TestPredictiveTailFarOut(t *testing.T) {
+	quiet := Gamma{Shape: 0.5, Rate: 302400}
+	if p := quiet.PredictiveTail(1000, 300); p > 1e-300 {
+		t.Errorf("a thousand events where one a week is usual: P = %g", p)
+	}
+	g := Gamma{Shape: 50, Rate: 100}
+	x, w := 200, 60.0
+	r, pr := g.Shape, g.Rate/(g.Rate+w)
+	logs := []float64{}
+	for k := x; k < x+5000; k++ {
+		lg1, _ := math.Lgamma(r + float64(k))
+		lg2, _ := math.Lgamma(r)
+		lg3, _ := math.Lgamma(float64(k) + 1)
+		logs = append(logs, lg1-lg2-lg3+r*math.Log(pr)+float64(k)*math.Log(1-pr))
+	}
+	maxLog := logs[0]
+	sum := 0.0
+	for _, l := range logs {
+		sum += math.Exp(l - maxLog)
+	}
+	want := math.Exp(maxLog) * sum
+	if got := g.PredictiveTail(x, w); !approx(got, want, 1e-9) {
+		t.Errorf("P(X >= %d) = %g, want %g", x, got, want)
+	}
+}
+
 // The design's own example: one OOM in a service that never restarts is
 // anomalous; the same OOM in a routinely restarting job is not.
 func TestOneEventIsSurprisingOnlyForQuietSeries(t *testing.T) {

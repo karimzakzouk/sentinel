@@ -302,6 +302,49 @@ func TestIncidentsSurviveARestart(t *testing.T) {
 	}
 }
 
+func errorSample(pod string, at time.Time, count int) watcher.LogEvidence {
+	return watcher.LogEvidence{Workload: web, Pod: pod, Container: "web", Reason: watcher.ReasonSample, CollectedAt: at,
+		Summary: logs.Summary{Lines: 100, SHA256: pod + at.String(), Templates: []logs.TemplateCount{
+			{Template: "GET <*> 200", Count: 100 - count},
+			{Template: "redis: connection refused", Count: count, Error: true, Sample: "redis: connection refused"},
+		}}}
+}
+
+// Errors at an unusual rate with nothing to undo are escalated, and the
+// samples behind them join the incident once while they say the same thing.
+func TestAnErrorRateIncidentIsEscalatedWithItsSamples(t *testing.T) {
+	b, l := newBrain(t)
+	b.Now = func() time.Time { return onset }
+	det := watcher.Detection{ID: model.NewID(), Workload: web, Kind: watcher.FactLogErrors, Count: 400, Onset: onset, At: onset,
+		Window: map[watcher.FactKind]int{watcher.FactLogErrors: 400}}
+	if err := b.OnDetection(ctx, det); err != nil {
+		t.Fatal(err)
+	}
+	for i, pod := range []string{"web-1", "web-2", "web-1"} {
+		if err := b.OnEvidence(ctx, errorSample(pod, onset.Add(time.Duration(i)*time.Minute), 60+i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := incidents(t, l)
+	if len(got) != 1 || got[0].Assessment == nil || got[0].Assessment.Class != ClassRuntimeErrors ||
+		got[0].Assessment.Decision != ActionEscalate {
+		t.Fatalf("incident = %+v, want runtime errors, escalated", got)
+	}
+	if ev, _ := ledger.List[model.Evidence](ctx, l, model.KindEvidence, ""); len(ev) != 1 {
+		t.Fatalf("evidence recorded = %d, want one sample: the others hold the same errors", len(ev))
+	}
+	b.Now = func() time.Time { return onset.Add(5 * time.Minute) }
+	changed := errorSample("web-2", onset.Add(5*time.Minute), 80)
+	changed.Summary.Templates = append(changed.Summary.Templates,
+		logs.TemplateCount{Template: "circuit breaker open", Count: 20, Error: true, Sample: "circuit breaker open"})
+	if err := b.OnEvidence(ctx, changed); err != nil {
+		t.Fatal(err)
+	}
+	if ev, _ := ledger.List[model.Evidence](ctx, l, model.KindEvidence, ""); len(ev) != 2 {
+		t.Fatalf("evidence recorded = %d, want a second sample once a new error appears", len(ev))
+	}
+}
+
 func TestAnUnexplainedCrashLoopIsEscalatedNotRolledBack(t *testing.T) {
 	b, l := newBrain(t)
 	det := watcher.Detection{ID: model.NewID(), Workload: web, Kind: watcher.FactCrashLoop, Count: 5, Onset: onset, At: onset}

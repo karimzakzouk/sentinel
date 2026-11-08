@@ -13,3 +13,7 @@ detection:
   window: 1m
   tick: 5s
   incidentGap: 1m
+  warmUp: 3m
+# Two samples in every window.
+logs:
+  sampleInterval: 30s

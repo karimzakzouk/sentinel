@@ -37,12 +37,20 @@ type Watcher struct {
 	OnTick func(context.Context)
 	// Logs, when set, fetches logs that facts call for.
 	Logs *LogCollector
+	// SampleInterval, when positive and Logs is set, is how often each
+	// workload's errors are sampled.
+	SampleInterval time.Duration
 	// Metrics, when set, is polled every MetricsInterval for resource use.
 	Metrics         MetricsSource
 	MetricsInterval time.Duration
 	Log             *slog.Logger
 
 	metrics metricsState
+	// sampled holds each workload's last error sample; only the tick loop
+	// uses it.
+	sampled map[string]time.Time
+	// request replaces Logs.Request in tests.
+	request func(context.Context, LogRequest) bool
 
 	mu          sync.Mutex
 	ns          map[string]*namespaceListers
@@ -72,6 +80,9 @@ func (w *Watcher) Run(ctx context.Context) error {
 		toBrain := w.Logs.OnEvidence
 		w.Logs.OnEvidence = func(ctx context.Context, ev LogEvidence) {
 			w.rolloutEvidence(ctx, ev)
+			if ev.Reason == ReasonSample {
+				w.Detector.Observe(SampleFacts(ev)...)
+			}
 			toBrain(ctx, ev)
 		}
 	}
@@ -191,6 +202,7 @@ func (w *Watcher) Run(ctx context.Context) error {
 				}
 			}
 			w.sampleRollouts(ctx, now)
+			w.sampleWorkloads(ctx, now)
 			for _, d := range w.Detector.Advance(now) {
 				w.OnDetection(ctx, d)
 			}

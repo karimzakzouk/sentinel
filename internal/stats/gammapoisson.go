@@ -52,16 +52,19 @@ func (g Gamma) PredictiveTail(x int, w float64) float64 {
 		return math.Max(0, math.Min(1, 1-lower))
 	}
 	// Past the mean the terms shrink geometrically, so sum the tail directly to
-	// keep precision for very small probabilities.
+	// keep precision for very small probabilities. The sum is taken relative
+	// to its first term: far out, every term underflows, and the sum must
+	// still converge.
+	first := logPMF(x)
 	sum := 0.0
-	for k := x; ; k++ {
-		term := math.Exp(logPMF(k))
+	for k := x; k-x <= 100000; k++ {
+		term := math.Exp(logPMF(k) - first)
 		sum += term
-		if term < sum*1e-15 || k-x > 100000 {
+		if term < sum*1e-15 {
 			break
 		}
 	}
-	return math.Min(1, sum)
+	return math.Min(1, math.Exp(first)*sum)
 }
 
 // Series is one count series' history: events and the time it was observed.
