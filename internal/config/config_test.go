@@ -34,7 +34,7 @@ func TestLoadRejectsUnsafeOrAmbiguousConfig(t *testing.T) {
 		"duplicate namespace":   "namespaces: [a, a]\nledger: {path: /l.db}\n",
 		"relative ledger path":  "namespaces: [a]\nledger: {path: l.db}\n",
 		"typo in field":         "namespaces: [a]\nledger: {path: /l.db}\nnamespacess: [b]\n",
-		"probe ns is watched":   "namespaces: [a]\nprobeNamespace: a\nledger: {path: /l.db}\n",
+		"lab ns is watched":     "namespaces: [a]\nlabNamespaces: [a]\nledger: {path: /l.db}\n",
 		"interval too short":    "namespaces: [a]\nledger: {path: /l.db}\ncapabilities: {interval: 5s}\n",
 		"slot without champion": "namespaces: [a]\nledger: {path: /l.db}\nslots: {brain.classify: {shadows: [x]}}\n",
 	}

@@ -76,7 +76,7 @@ func runController(ctx context.Context, log *slog.Logger, cfg *config.Config, cl
 	}()
 
 	detector := &capability.Detector{Client: client, Options: capability.Options{
-		Namespaces: cfg.Namespaces, ProbeNamespace: cfg.ProbeNamespace, ActorUser: cfg.ActorUser,
+		Namespaces: cfg.Namespaces, AgentNamespace: cfg.AgentNamespace, ActorUser: cfg.ActorUser,
 	}}
 	var last [sha256.Size]byte
 	tick := time.NewTicker(cfg.Capabilities.Interval.Duration)
