@@ -101,6 +101,22 @@ func TestEventFactsCountOnlyNewOccurrences(t *testing.T) {
 	}
 }
 
+func TestHistoricEvent(t *testing.T) {
+	start := t0
+	old := &corev1.Event{LastTimestamp: metav1.Time{Time: t0.Add(-48 * time.Minute)}}
+	if !HistoricEvent(old, start) {
+		t.Error("an event last seen 48 minutes before start counted as new")
+	}
+	recurring := old.DeepCopy()
+	recurring.Series = &corev1.EventSeries{LastObservedTime: metav1.MicroTime{Time: t0.Add(time.Second)}}
+	if HistoricEvent(recurring, start) {
+		t.Error("an event series observed after start counted as historic")
+	}
+	if HistoricEvent(&corev1.Event{}, start) {
+		t.Error("an event without timestamps counted as historic")
+	}
+}
+
 func TestTemplateFields(t *testing.T) {
 	base := corev1.PodTemplateSpec{
 		ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "web"}},

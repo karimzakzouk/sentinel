@@ -54,6 +54,9 @@ type Detection struct {
 	Tick               metav1.Duration `json:"tick,omitempty"`
 	// HalfLife is how fast old history fades from the baselines.
 	HalfLife metav1.Duration `json:"halfLife,omitempty"`
+	// IncidentGap is how long an incident stays open after its signals go
+	// quiet; signals within it rejoin the same incident.
+	IncidentGap metav1.Duration `json:"incidentGap,omitempty"`
 }
 
 // Load reads, defaults and validates a config file. Unknown fields are
@@ -93,6 +96,9 @@ func (c *Config) setDefaults() {
 	}
 	if d.HalfLife.Duration == 0 {
 		d.HalfLife.Duration = 7 * 24 * time.Hour
+	}
+	if d.IncidentGap.Duration == 0 {
+		d.IncidentGap.Duration = 5 * time.Minute
 	}
 }
 

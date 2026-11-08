@@ -31,6 +31,16 @@ lab:
     requests.memory: 8Gi
     limits.memory: 8Gi
 
+# The false-alarm budget per workload per week sets every detection
+# threshold. The window and tick only trade detection speed for noise.
+detection:
+  falseAlarmsPerWeek: 1
+  window: 5m
+  tick: 15s
+  halfLife: 168h
+  # How long an incident stays open after its signals go quiet.
+  incidentGap: 5m
+
 capabilities:
   interval: 10m
   # Dry-run probes create no objects. The sentinel-fence chart enforces that

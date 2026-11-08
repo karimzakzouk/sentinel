@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# Runs scenarios one after another against the end-to-end cluster and prints
+# what Sentinel concluded for each. Every scenario is reverted, and the next
+# one starts only after Sentinel has resolved the previous incident.
+#
+#   hack/run-scenarios.sh test/scenarios/smoke/*.yaml
+set -euo pipefail
+
+ctx="kind-${E2E_CLUSTER:-sentinel-e2e}"
+root=$(cd "$(dirname "$0")/.." && pwd)
+observe=${OBSERVE_SECONDS:-60}
+
+for scenario in "$@"; do
+  start=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  out=$("$root/bin/harness" --context "$ctx" inject --scenario "$scenario" --out "$root/test/results")
+  run=$(grep -o 'test/results/[^ ]*\.json' <<<"$out" || true)
+  sleep "$observe"
+  [ -n "$run" ] && "$root/bin/harness" --context "$ctx" revert --run "$root/$run"
+  echo "== $(basename "$scenario" .yaml)"
+  kubectl --context "$ctx" -n sentinel logs deploy/sentinel --since-time="$start" |
+    python3 -c '
+import json, sys
+for line in sys.stdin:
+    try:
+        e = json.loads(line)
+    except ValueError:
+        continue
+    if e.get("msg") in ("incident opened", "incident updated"):
+        keys = ("msg", "workload", "signal", "class", "classP", "culpritFields", "culpritP", "decision")
+        print("  ", {k: e[k] for k in keys if k in e})'
+  # Wait for open incidents to resolve so they do not absorb the next scenario.
+  for _ in $(seq 1 60); do
+    opened=$(kubectl --context "$ctx" -n sentinel logs deploy/sentinel | grep -c '"msg":"incident opened"' || true)
+    resolved=$(kubectl --context "$ctx" -n sentinel logs deploy/sentinel | grep -c '"msg":"incident resolved"' || true)
+    [ "$opened" -le "$resolved" ] && break
+    sleep 5
+  done
+done

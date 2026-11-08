@@ -7,3 +7,8 @@ lab:
   poolSize: 1
 capabilities:
   interval: 1m
+# Short windows make episodes end soon after a scenario is reverted.
+detection:
+  window: 1m
+  tick: 5s
+  incidentGap: 1m

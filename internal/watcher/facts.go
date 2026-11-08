@@ -158,6 +158,18 @@ func readinessGrace(p *corev1.Probe) time.Duration {
 	return time.Duration(p.InitialDelaySeconds+threshold*period) * time.Second
 }
 
+// HistoricEvent reports an event whose last occurrence came before start.
+func HistoricEvent(ev *corev1.Event, start time.Time) bool {
+	last := ev.LastTimestamp.Time
+	if ev.EventTime.After(last) {
+		last = ev.EventTime.Time
+	}
+	if ev.Series != nil && ev.Series.LastObservedTime.After(last) {
+		last = ev.Series.LastObservedTime.Time
+	}
+	return !last.IsZero() && last.Before(start)
+}
+
 // EventFacts turns a Kubernetes event about a pod into facts. Events are
 // aggregated by the API server, so the count since the last observation is
 // what is new. Event counts are lower bounds: Kubernetes thins them.

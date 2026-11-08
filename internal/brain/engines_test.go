@@ -54,7 +54,7 @@ func TestAttributionPrefersARelevantTimelyChange(t *testing.T) {
 		Onset: onset, Classes: classes, NewRevisionShare: 1,
 		Candidates: []CandidateChange{
 			{ID: "cm", Kind: "configmap", Object: model.ObjectRef{Kind: "ConfigMap", Namespace: "shop", Name: "web-config"}, Fields: []string{"key:mode"}, At: onset.Add(-50 * time.Minute)},
-			{ID: "img", Kind: "template", Object: web, Fields: []string{"image:web"}, At: onset.Add(-2 * time.Minute)},
+			{ID: "img", Kind: "template", Object: web, Fields: []string{"image:web"}, At: onset.Add(-2 * time.Minute), ProducedNewestRevision: true},
 			{ID: "late", Kind: "template", Object: web, Fields: []string{"image:web"}, At: onset.Add(5 * time.Minute)},
 		},
 	}
@@ -75,6 +75,23 @@ func TestAttributionPrefersARelevantTimelyChange(t *testing.T) {
 	}
 	if len(r.Items[0].Item.Ratios) != 3 {
 		t.Fatalf("a template change should carry three readable ratios, got %+v", r.Items[0].Item.Ratios)
+	}
+}
+
+// A revert minutes earlier is also a template change; only the latest change
+// produced the revision the failing pods run, so it must keep the blame.
+func TestTheChangeThatProducedTheFailingRevisionWins(t *testing.T) {
+	classes := classify(t, map[string]int{"pod.crash-loop": 8, "pod.restarted": 4}, "config", "resources")
+	in := AttributeInput{Onset: onset, Classes: classes, NewRevisionShare: 1, Candidates: []CandidateChange{
+		{ID: "revert", Kind: "template", Object: web, Fields: []string{"resources:web"}, At: onset.Add(-3 * time.Minute)},
+		{ID: "args", Kind: "template", Object: web, Fields: []string{"args:web"}, At: onset.Add(-20 * time.Second), ProducedNewestRevision: true},
+	}}
+	r, err := LikelihoodRatios{Lookback: time.Hour, Typical: 5 * time.Minute}.Decide(ctx, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if top := r.Items[0].Item; top.Change.ID != "args" || top.P < 0.8 {
+		t.Fatalf("top = %s with p %.3f; want the args change above 0.8", top.Change.ID, top.P)
 	}
 }
 
