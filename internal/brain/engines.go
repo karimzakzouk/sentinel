@@ -166,6 +166,9 @@ type CandidateChange struct {
 	Fields []string        `json:"fields,omitempty"`
 	At     time.Time       `json:"at"`
 	Actor  string          `json:"actor,omitempty"`
+	// ProducedNewestRevision marks the latest template change of the failing
+	// workload: the one that produced the revision its new pods run.
+	ProducedNewestRevision bool `json:"producedNewestRevision,omitempty"`
 }
 
 // AttributeInput is the evidence for the "what changed?" decision.
@@ -238,8 +241,13 @@ func (e LikelihoodRatios) Decide(_ context.Context, in AttributeInput) (slot.Ran
 		}
 		ratios = append(ratios, model.LikelihoodRatio{Factor: fmt.Sprintf("symptoms began %s after it", gap.Round(time.Second)), Ratio: math.Max(timing, 1e-6)})
 		if c.Kind == "template" && in.NewRevisionShare >= 0 {
-			share := (in.NewRevisionShare*0.9 + 0.05) / 0.5
-			ratios = append(ratios, model.LikelihoodRatio{Factor: fmt.Sprintf("%.0f%% of failing facts are on the new revision", 100*in.NewRevisionShare), Ratio: share})
+			// Only the latest template change produced the revision the new pods
+			// run. Facts on it implicate that change and clear the older ones.
+			share, factor := in.NewRevisionShare, "%.0f%% of failing facts are on the revision this change produced"
+			if !c.ProducedNewestRevision {
+				share, factor = 1-in.NewRevisionShare, "%.0f%% of failing facts are on older revisions than the newest"
+			}
+			ratios = append(ratios, model.LikelihoodRatio{Factor: fmt.Sprintf(factor, 100*share), Ratio: (share*0.9 + 0.05) / 0.5})
 		}
 		logOdds := 0.0
 		for _, r := range ratios {

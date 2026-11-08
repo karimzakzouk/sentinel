@@ -42,6 +42,12 @@ ledger:
   path: /var/lib/sentinel/ledger.db
 capabilities:
   interval: {{ .Values.capabilities.interval }}
+detection:
+  falseAlarmsPerWeek: {{ .Values.detection.falseAlarmsPerWeek }}
+  window: {{ .Values.detection.window }}
+  tick: {{ .Values.detection.tick }}
+  halfLife: {{ .Values.detection.halfLife }}
+  incidentGap: {{ .Values.detection.incidentGap }}
 healthAddr: ":8081"
 {{- end }}
 

@@ -31,7 +31,11 @@ type Brain struct {
 	Revisions func(model.ObjectRef) string
 	// Lookback is how long changes are kept as candidate causes.
 	Lookback time.Duration
-	Now      func() time.Time
+	// Gap is how long an incident stays open after its last signal goes
+	// quiet, so a fault that pauses (a crash loop's back-off, for one) stays
+	// one incident.
+	Gap time.Duration
+	Now func() time.Time
 
 	mu      sync.Mutex
 	changes []watcher.Change
@@ -44,6 +48,8 @@ type incident struct {
 	facts      map[string]int
 	revisions  map[string]int
 	lastAction string
+	// quietSince is when the last active signal ended; zero while any is active.
+	quietSince time.Time
 }
 
 func (b *Brain) now() time.Time {
@@ -88,14 +94,13 @@ func (b *Brain) OnDetection(ctx context.Context, d watcher.Detection) error {
 			return nil
 		}
 		delete(inc.episodes, d.ID)
-		if len(inc.episodes) > 0 {
-			return nil
+		if len(inc.episodes) == 0 {
+			inc.quietSince = now
 		}
-		inc.rec.State, inc.rec.UpdatedAt = model.IncidentResolved, now
-		delete(b.open, key)
-		_, err := b.Ledger.Append(ctx, ledger.RecordDraft(source, model.KindIncident, "resolved", inc.rec.ID, inc.rec.ID, inc.rec))
-		b.Log.Info("incident resolved", "incident", inc.rec.ID, "workload", key)
-		return err
+		return nil
+	}
+	if inc != nil {
+		inc.quietSince = time.Time{}
 	}
 
 	verb := "updated"
@@ -136,15 +141,43 @@ func (b *Brain) OnDetection(ctx context.Context, d watcher.Detection) error {
 	return nil
 }
 
+// Sweep resolves incidents that have been quiet for the whole gap.
+func (b *Brain) Sweep(ctx context.Context) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	now := b.now()
+	var drafts []ledger.Draft
+	for key, inc := range b.open {
+		if inc.quietSince.IsZero() || now.Sub(inc.quietSince) < b.Gap {
+			continue
+		}
+		inc.rec.State, inc.rec.UpdatedAt = model.IncidentResolved, now
+		drafts = append(drafts, ledger.RecordDraft(source, model.KindIncident, "resolved", inc.rec.ID, inc.rec.ID, inc.rec))
+		delete(b.open, key)
+		b.Log.Info("incident resolved", "incident", inc.rec.ID, "workload", key)
+	}
+	if len(drafts) == 0 {
+		return nil
+	}
+	_, err := b.Ledger.Append(ctx, drafts...)
+	return err
+}
+
 // assess runs the three slots and returns the records to append and a log summary.
 func (b *Brain) assess(ctx context.Context, inc *incident, workload model.ObjectRef) ([]ledger.Draft, []any, error) {
 	var candidates []CandidateChange
 	var groups []string
 	seen := map[string]bool{}
+	latestTemplate := -1
 	for _, c := range b.changes {
 		related := c.Object == workload || (c.Kind == watcher.ChangeConfigMap && c.Object.Namespace == workload.Namespace)
 		if !related || c.At.After(inc.rec.OpenedAt.Add(time.Minute)) {
 			continue
+		}
+		if c.Kind == watcher.ChangeTemplate && c.Object == workload {
+			if latestTemplate < 0 || c.At.After(candidates[latestTemplate].At) {
+				latestTemplate = len(candidates)
+			}
 		}
 		candidates = append(candidates, CandidateChange{ID: c.ID, Kind: string(c.Kind), Object: c.Object, Fields: c.Fields, At: c.At, Actor: c.Actor})
 		for _, f := range c.Fields {
@@ -153,6 +186,9 @@ func (b *Brain) assess(ctx context.Context, inc *incident, workload model.Object
 				groups = append(groups, g)
 			}
 		}
+	}
+	if latestTemplate >= 0 {
+		candidates[latestTemplate].ProducedNewestRevision = true
 	}
 	classes, err := b.Classify.Decide(ctx, ClassifyInput{Facts: inc.facts, ChangeFields: groups})
 	if err != nil {

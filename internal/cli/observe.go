@@ -69,7 +69,12 @@ func newObserver(log *slog.Logger, cfg *config.Config, client kubernetes.Interfa
 		Detector: watcher.NewCountDetector(d.Window.Duration, d.Tick.Duration, d.FalseAlarmsPerWeek, d.HalfLife.Duration),
 	}
 	b := &brain.Brain{Ledger: l, Log: log, Classify: classify, Attribute: attribute, Decide: decide,
-		Revisions: w.NewestRevision, Lookback: time.Hour}
+		Revisions: w.NewestRevision, Lookback: time.Hour, Gap: d.IncidentGap.Duration}
+	w.OnTick = func(ctx context.Context) {
+		if err := b.Sweep(ctx); err != nil {
+			log.Error("could not resolve quiet incidents", "error", err)
+		}
+	}
 	w.OnChange = func(ctx context.Context, c watcher.Change) {
 		if err := b.OnChange(ctx, c); err != nil {
 			log.Error("could not record a change", "object", c.Object.String(), "error", err)

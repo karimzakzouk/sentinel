@@ -25,7 +25,8 @@ func newBrain(t *testing.T) (*Brain, *ledger.Ledger) {
 	attribute, _ := slot.New[AttributeInput, slot.Ranking[RankedChange]](slot.BrainAttribute, LikelihoodRatios{Lookback: time.Hour, Typical: 5 * time.Minute}, nil, rec)
 	decide, _ := slot.New[DecideInput, Decision](slot.BrainDecide, ExpectedLoss{Impact: 60, Escalation: 10, Slower: 15, Disruption: 5, PReal: 0.95}, nil, rec)
 	b := &Brain{Ledger: l, Log: slog.New(slog.NewTextHandler(io.Discard, nil)), Classify: classify, Attribute: attribute, Decide: decide,
-		Revisions: func(model.ObjectRef) string { return "new" }, Lookback: time.Hour, Now: func() time.Time { return onset.Add(time.Minute) }}
+		Revisions: func(model.ObjectRef) string { return "new" }, Lookback: time.Hour, Gap: 5 * time.Minute,
+		Now: func() time.Time { return onset.Add(time.Minute) }}
 	return b, l
 }
 
@@ -72,8 +73,18 @@ func TestBadImageRolloutBecomesAnExplainedIncident(t *testing.T) {
 		t.Fatal(err)
 	}
 	var got model.Incident
+	if err := b.Sweep(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, _ = l.Get(ctx, model.KindIncident, id, &got); got.State != model.IncidentOpen {
+		t.Fatalf("the incident is %s right after its signal went quiet; want it open for the gap", got.State)
+	}
+	b.Now = func() time.Time { return onset.Add(time.Minute + b.Gap) }
+	if err := b.Sweep(ctx); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := l.Get(ctx, model.KindIncident, id, &got); err != nil || got.State != model.IncidentResolved {
-		t.Fatalf("after the episode ended the incident is %s, want resolved (%v)", got.State, err)
+		t.Fatalf("after the gap the incident is %s, want resolved (%v)", got.State, err)
 	}
 	if n, err := l.Verify(ctx); err != nil || n == 0 {
 		t.Fatalf("ledger verify = %d, %v", n, err)

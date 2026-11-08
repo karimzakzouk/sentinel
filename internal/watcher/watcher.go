@@ -29,7 +29,9 @@ type Watcher struct {
 	Detector    *CountDetector
 	OnChange    func(context.Context, Change)
 	OnDetection func(context.Context, Detection)
-	Log         *slog.Logger
+	// OnTick runs after every tick's detections have been delivered.
+	OnTick func(context.Context)
+	Log    *slog.Logger
 
 	mu          sync.Mutex
 	ns          map[string]*namespaceListers
@@ -47,6 +49,7 @@ type namespaceListers struct {
 func (w *Watcher) Run(ctx context.Context) error {
 	w.ns = map[string]*namespaceListers{}
 	w.eventCounts = map[string]int32{}
+	start := time.Now().UTC()
 	var synced []cache.InformerSynced
 	for _, ns := range w.Namespaces {
 		f := informers.NewSharedInformerFactoryWithOptions(w.Client, 0, informers.WithNamespace(ns), informers.WithTransform(Transform))
@@ -97,7 +100,7 @@ func (w *Watcher) Run(ctx context.Context) error {
 		}); err != nil {
 			return err
 		}
-		eventHandler := func(obj any) {
+		eventHandler := func(obj any, initial bool) {
 			ev, ok := obj.(*corev1.Event)
 			if !ok || ev.InvolvedObject.Kind != "Pod" {
 				return
@@ -106,6 +109,11 @@ func (w *Watcher) Run(ctx context.Context) error {
 			prev := w.eventCounts[string(ev.UID)]
 			w.eventCounts[string(ev.UID)] = max(ev.Count, 1)
 			w.mu.Unlock()
+			// Events listed at startup, or last seen before it, already happened:
+			// they set the baseline count and are not new facts.
+			if initial || HistoricEvent(ev, start) {
+				return
+			}
 			pod, err := l.pods.Pods(ev.Namespace).Get(ev.InvolvedObject.Name)
 			if err != nil {
 				return
@@ -113,9 +121,9 @@ func (w *Watcher) Run(ctx context.Context) error {
 			workload, rev := l.owners.Resolve(pod)
 			w.Detector.Observe(EventFacts(prev, ev, workload, rev, time.Now().UTC())...)
 		}
-		if _, err := events.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
+		if _, err := events.Informer().AddEventHandler(cache.ResourceEventHandlerDetailedFuncs{
 			AddFunc:    eventHandler,
-			UpdateFunc: func(_, newObj any) { eventHandler(newObj) },
+			UpdateFunc: func(_, newObj any) { eventHandler(newObj, false) },
 		}); err != nil {
 			return err
 		}
@@ -148,6 +156,9 @@ func (w *Watcher) Run(ctx context.Context) error {
 			}
 			for _, d := range w.Detector.Advance(now) {
 				w.OnDetection(ctx, d)
+			}
+			if w.OnTick != nil {
+				w.OnTick(ctx)
 			}
 		}
 	}
