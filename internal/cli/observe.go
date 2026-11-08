@@ -10,6 +10,7 @@ import (
 	"github.com/karimzakzouk/sentinel/internal/brain"
 	"github.com/karimzakzouk/sentinel/internal/config"
 	"github.com/karimzakzouk/sentinel/internal/ledger"
+	"github.com/karimzakzouk/sentinel/internal/model"
 	"github.com/karimzakzouk/sentinel/internal/slot"
 	"github.com/karimzakzouk/sentinel/internal/watcher"
 )
@@ -74,7 +75,8 @@ func newObserver(log *slog.Logger, cfg *config.Config, client kubernetes.Interfa
 	}
 	w := &watcher.Watcher{Client: client, Namespaces: cfg.Namespaces, Log: log, Detector: detector}
 	b := &brain.Brain{Ledger: l, Log: log, Classify: classify, Attribute: attribute, Decide: decide,
-		Revisions: w.NewestRevision, Lookback: time.Hour, Gap: d.IncidentGap.Duration}
+		Revisions: w.NewestRevision, Lookback: time.Hour, Gap: d.IncidentGap.Duration,
+		Dependents: func(ref model.ObjectRef) []model.ObjectRef { return w.Topology().Dependents(ref) }}
 	w.OnTick = func(ctx context.Context) {
 		if err := b.Sweep(ctx); err != nil {
 			log.Error("could not resolve quiet incidents", "error", err)

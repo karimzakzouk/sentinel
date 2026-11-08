@@ -22,6 +22,7 @@ import (
 	"k8s.io/client-go/tools/cache"
 
 	"github.com/karimzakzouk/sentinel/internal/model"
+	"github.com/karimzakzouk/sentinel/internal/topology"
 )
 
 // Watcher runs informers in the allowed namespaces, turns what they see into
@@ -223,6 +224,28 @@ func (w *Watcher) serviceFacts(ns string, l *namespaceListers, now time.Time) []
 		}
 	}
 	return out
+}
+
+// Topology returns the dependency map of the watched namespaces, from the
+// workloads' configuration.
+func (w *Watcher) Topology() *topology.Map {
+	var edges []topology.Edge
+	for ns, l := range w.ns {
+		svcs, _ := l.services.Services(ns).List(labels.Everything())
+		deps, _ := l.deployments.Deployments(ns).List(labels.Everything())
+		sts, _ := l.statefulSet.StatefulSets(ns).List(labels.Everything())
+		targets := map[string]topology.ServiceTarget{}
+		for _, s := range svcs {
+			targets[s.Name] = topology.ServiceTarget{Name: s.Name, Backing: BackingWorkloads(s, deps, sts)}
+		}
+		for _, d := range deps {
+			edges = append(edges, topology.ConfigEdges(deploymentRef(d), d.Spec.Template, targets)...)
+		}
+		for _, s := range sts {
+			edges = append(edges, topology.ConfigEdges(statefulSetRef(s), s.Spec.Template, targets)...)
+		}
+	}
+	return topology.NewMap(edges)
 }
 
 // forget ends a deleted workload's episodes and rollout.

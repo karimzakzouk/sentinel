@@ -30,6 +30,9 @@ type Brain struct {
 	Decide    *slot.Slot[DecideInput, Decision]
 	// Revisions reports a workload's newest pod revision, or "" when unknown.
 	Revisions func(model.ObjectRef) string
+	// Dependents, when set, reports the workloads that depend on one,
+	// directly or through others.
+	Dependents func(model.ObjectRef) []model.ObjectRef
 	// Lookback is how long changes are kept as candidate causes.
 	Lookback time.Duration
 	// Gap is how long an incident stays open after its last signal goes
@@ -134,6 +137,9 @@ func (b *Brain) OnDetection(ctx context.Context, d watcher.Detection) error {
 	}
 	inc.rec.SignalIDs = append(inc.rec.SignalIDs, sig.ID)
 	inc.rec.UpdatedAt = now
+	if b.Dependents != nil {
+		inc.rec.Impacted = b.Dependents(d.Workload)
+	}
 
 	evidence := b.evidenceDrafts(inc, key)
 	drafts := []ledger.Draft{
@@ -148,7 +154,11 @@ func (b *Brain) OnDetection(ctx context.Context, d watcher.Detection) error {
 	if _, err := b.Ledger.Append(ctx, append(drafts, more...)...); err != nil {
 		return err
 	}
-	b.Log.Info("incident "+verb, append([]any{"incident", inc.rec.ID, "workload", key, "signal", d.Kind}, summary...)...)
+	impacted := make([]string, 0, len(inc.rec.Impacted))
+	for _, r := range inc.rec.Impacted {
+		impacted = append(impacted, r.Name)
+	}
+	b.Log.Info("incident "+verb, append([]any{"incident", inc.rec.ID, "workload", key, "signal", d.Kind, "impacted", impacted}, summary...)...)
 	return nil
 }
 
