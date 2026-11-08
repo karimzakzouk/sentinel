@@ -77,14 +77,20 @@ type LogCollector struct {
 	seen      map[string]time.Time
 	inflight  int
 	dropped   int
-	deferred  int
 	forbidden map[string]bool
 	wg        sync.WaitGroup
+	// queue holds low-priority requests, one per workload, oldest first.
+	queue    []LogRequest
+	replaced int
+	draining sync.Once
 }
 
 // lowPriorityReserve is the part of the burst low-priority requests leave
 // for crashes, readiness flips and rollouts.
 const lowPriorityReserve = 5
+
+// drainEvery is how often queued low-priority requests are looked at.
+const drainEvery = 200 * time.Millisecond
 
 // NewLogCollector returns a collector with the budget of the phase 1 plan:
 // 30 fetches a minute, two at a time, 300 lines and 64 KiB each.
@@ -98,26 +104,35 @@ func NewLogCollector(client kubernetes.Interface, log *slog.Logger, onEvidence f
 
 // Request starts a fetch unless the key was fetched before, the namespace
 // denies logs, or the budget is spent. It reports whether a fetch started.
+//
+// A low-priority request is queued instead, and reports true: it is served
+// when a fetch slot is free and the budget keeps its reserve, and a newer
+// request for the same workload replaces it while it waits.
 func (c *LogCollector) Request(ctx context.Context, r LogRequest) bool {
 	now := time.Now()
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.seen == nil {
 		c.seen, c.forbidden = map[string]time.Time{}, map[string]bool{}
 	}
 	if _, done := c.seen[r.Key]; done || c.forbidden[r.Namespace] {
-		c.mu.Unlock()
 		return false
 	}
-	if r.LowPriority && (c.inflight >= max(1, c.Concurrency-1) || c.Limiter.TokensAt(now) < lowPriorityReserve+1) {
-		c.deferred++
-		c.mu.Unlock()
-		return false
+	if r.LowPriority {
+		c.enqueue(r)
+		c.draining.Do(func() { go c.drain(ctx) })
+		return true
 	}
 	if c.inflight >= c.Concurrency || !c.Limiter.AllowN(now, 1) {
 		c.dropped++
-		c.mu.Unlock()
 		return false
 	}
+	c.start(ctx, r, now)
+	return true
+}
+
+// start runs a fetch. Callers hold c.mu and have taken the budget.
+func (c *LogCollector) start(ctx context.Context, r LogRequest, now time.Time) {
 	c.seen[r.Key] = now
 	for k, t := range c.seen {
 		if now.Sub(t) > time.Hour {
@@ -126,8 +141,6 @@ func (c *LogCollector) Request(ctx context.Context, r LogRequest) bool {
 	}
 	c.inflight++
 	c.wg.Add(1)
-	c.mu.Unlock()
-
 	go func() {
 		defer func() {
 			c.mu.Lock()
@@ -137,7 +150,45 @@ func (c *LogCollector) Request(ctx context.Context, r LogRequest) bool {
 		}()
 		c.fetch(ctx, r)
 	}()
-	return true
+}
+
+// enqueue queues a low-priority request. Callers hold c.mu.
+func (c *LogCollector) enqueue(r LogRequest) {
+	for i, q := range c.queue {
+		if q.Workload == r.Workload {
+			c.queue = append(c.queue[:i], c.queue[i+1:]...)
+			c.replaced++
+			break
+		}
+	}
+	c.queue = append(c.queue, r)
+}
+
+// drain serves queued low-priority requests until ctx ends.
+func (c *LogCollector) drain(ctx context.Context) {
+	t := time.NewTicker(drainEvery)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		c.serveQueue(ctx, time.Now())
+	}
+}
+
+func (c *LogCollector) serveQueue(ctx context.Context, now time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for len(c.queue) > 0 && c.inflight < c.Concurrency && c.Limiter.TokensAt(now) >= lowPriorityReserve+1 {
+		r := c.queue[0]
+		c.queue = c.queue[1:]
+		if _, done := c.seen[r.Key]; done || c.forbidden[r.Namespace] || !c.Limiter.AllowN(now, 1) {
+			continue
+		}
+		c.start(ctx, r, now)
+	}
 }
 
 // Dropped reports how many requests the budget refused.
@@ -147,11 +198,19 @@ func (c *LogCollector) Dropped() int {
 	return c.dropped
 }
 
-// Deferred reports how many low-priority requests waited for budget.
-func (c *LogCollector) Deferred() int {
+// Replaced reports how many low-priority requests were replaced by newer
+// ones before the budget allowed them.
+func (c *LogCollector) Replaced() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.deferred
+	return c.replaced
+}
+
+// Queued reports how many low-priority requests wait.
+func (c *LogCollector) Queued() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.queue)
 }
 
 // Wait blocks until fetches in flight finish.

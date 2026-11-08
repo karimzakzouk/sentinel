@@ -2,11 +2,14 @@ package watcher
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
+	"sync"
 	"testing"
 	"time"
 
+	"golang.org/x/time/rate"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -37,31 +40,51 @@ func TestSampleFactsCountErrorRecords(t *testing.T) {
 	}
 }
 
-func TestSamplesLeaveBudgetAndASlotForTheRest(t *testing.T) {
-	c := NewLogCollector(fake.NewClientset(), slog.New(slog.NewTextHandler(io.Discard, nil)), func(context.Context, LogEvidence) {})
-	ctx := context.Background()
-	req := func(key string, low bool) LogRequest {
-		return LogRequest{Workload: web, Namespace: "shop", Pod: "web-1", Container: "web", Reason: ReasonSample, Key: key, LowPriority: low}
+func TestSamplesWaitForBudgetAndLeaveAReserve(t *testing.T) {
+	var mu sync.Mutex
+	served := 0
+	c := NewLogCollector(fake.NewClientset(), slog.New(slog.NewTextHandler(io.Discard, nil)), func(context.Context, LogEvidence) {
+		mu.Lock()
+		served++
+		mu.Unlock()
+	})
+	c.Limiter = rate.NewLimiter(rate.Every(time.Hour), 10)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sample := func(workload, key string) LogRequest {
+		ref := web
+		ref.Name = workload
+		return LogRequest{Workload: ref, Namespace: "shop", Pod: workload + "-1", Container: "web", Reason: ReasonSample,
+			Key: key, LowPriority: true}
 	}
-	samples := 0
-	for i := range 20 {
-		if c.Request(ctx, req(string(rune('a'+i)), true)) {
-			samples++
+	for i := range 12 {
+		name := fmt.Sprintf("w%d", i)
+		if !c.Request(ctx, sample(name, name)) {
+			t.Fatal("a sample was refused instead of queued")
 		}
-		c.Wait()
 	}
-	burst := c.Limiter.Burst()
-	if samples != burst-lowPriorityReserve || c.Deferred() == 0 {
-		t.Fatalf("samples took %d of a burst of %d (deferred %d), want all but the reserve of %d",
-			samples, burst, c.Deferred(), lowPriorityReserve)
+	servedNow := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return served
 	}
-	if !c.Request(ctx, req("crash", false)) {
+	want := c.Limiter.Burst() - lowPriorityReserve
+	for deadline := time.Now().Add(3 * time.Second); servedNow() < want && time.Now().Before(deadline); {
+		time.Sleep(20 * time.Millisecond)
+	}
+	time.Sleep(3 * drainEvery)
+	c.Wait()
+	if servedNow() != want || c.Queued() != 12-want {
+		t.Fatalf("served %d and %d wait, want %d served: the budget's all but its reserve", servedNow(), c.Queued(), want)
+	}
+	if !c.Request(ctx, sample("w11", "w11-later")) || c.Queued() != 12-want || c.Replaced() != 1 {
+		t.Fatalf("a newer sample of a waiting workload: %d wait, %d replaced; want it to replace the older one",
+			c.Queued(), c.Replaced())
+	}
+	if !c.Request(ctx, LogRequest{Workload: web, Namespace: "shop", Pod: "web-1", Container: "web", Reason: "crash", Key: "crash"}) {
 		t.Fatal("a crash fetch found no budget left after samples")
 	}
 	c.Wait()
-	if c.Dropped() != 0 {
-		t.Fatalf("dropped = %d: samples that wait are not drops", c.Dropped())
-	}
 }
 
 // sampleWatcher returns a watcher over namespace shop with the web
@@ -139,7 +162,7 @@ func TestEachWorkloadIsSampledOncePerIntervalFromItsReadyPods(t *testing.T) {
 	}
 }
 
-func TestADeferredSampleIsAskedForAgain(t *testing.T) {
+func TestARefusedSampleIsAskedForAgain(t *testing.T) {
 	w, requests := sampleWatcher(t, readyWebPod("web-1", true))
 	refuse := true
 	w.request = func(_ context.Context, r LogRequest) bool {

@@ -39,9 +39,12 @@ func SampleFacts(ev LogEvidence) []Fact {
 }
 
 // sampleWorkloads asks for the samples that are due. Workloads' turns are
-// spread over the interval, and the collector serves samples only while it
-// keeps budget and a fetch slot for crashes and rollouts; a sample it turns
-// down is asked for again at the next tick.
+// spread over the interval. The collector queues samples and serves them
+// while its budget keeps a reserve for crashes and rollouts; a sample that
+// waits past its workload's next turn is replaced by the newer one, and the
+// detector counts the seconds of logs read, so waiting costs knowledge, not
+// accuracy. A sample the collector refuses outright is asked for again at
+// the next tick.
 func (w *Watcher) sampleWorkloads(ctx context.Context, now time.Time) {
 	if w.Logs == nil || w.SampleInterval <= 0 {
 		return

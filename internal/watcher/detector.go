@@ -91,6 +91,8 @@ type bucket struct {
 	first  time.Time
 	revs   map[string]int
 	sample string
+	// exposure is the time observed, for learned series.
+	exposure float64
 }
 
 type series struct {
@@ -184,6 +186,18 @@ func (d *CountDetector) Observe(facts ...Fact) {
 	}
 }
 
+// Expose records time observed on a learned series in the current tick: the
+// seconds of logs a sample read, whether or not they held errors. A learned
+// series' window and history count this exposure, not the clock, so samples
+// the budget delays or skips change how much is known, never the rate.
+func (d *CountDetector) Expose(ref model.ObjectRef, kind FactKind, seconds float64) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if s := d.register(ref).series[kind]; s != nil && learnedKinds[kind] && seconds > 0 {
+		s.buckets[s.cur].exposure += seconds
+	}
+}
+
 // Advance evaluates every series at the end of a tick and moves the window.
 // It returns the episodes that started or ended.
 func (d *CountDetector) Advance(now time.Time) []Detection {
@@ -225,9 +239,18 @@ func (d *CountDetector) Advance(now time.Time) []Detection {
 		}
 		for _, kind := range FactKinds {
 			s, ws := w.series[kind], windows[kind]
+			learned := learnedKinds[kind]
+			outlived := s.episode != nil && learned && now.Sub(s.episode.At) >= learnedEpisodeLimit
+			span := window
+			if learned {
+				span = ws.exposure
+				if span == 0 && !outlived {
+					// Nothing was read: no evidence either way.
+					continue
+				}
+			}
 			post := priors[kind].Posterior(s.histCount, s.histExp)
-			expected := post.Mean() * window
-			outlived := s.episode != nil && learnedKinds[kind] && now.Sub(s.episode.At) >= learnedEpisodeLimit
+			expected := post.Mean() * span
 			if ws.count == 0 || s.episode != nil && float64(ws.count) < 0.75*d.MinRatio*expected || outlived {
 				if s.episode != nil {
 					end := *s.episode
@@ -240,12 +263,12 @@ func (d *CountDetector) Advance(now time.Time) []Detection {
 				}
 				continue
 			}
-			p := post.PredictiveTail(ws.count, window)
+			p := post.PredictiveTail(ws.count, span)
 			if d.Trace != nil {
 				d.Trace(Trace{Workload: w.ref, Kind: kind, Count: ws.count, TailProbability: p, Alpha: alpha, Expected: expected,
 					InEpisode: s.episode != nil, HistoryCount: s.histCount, HistoryExposure: s.histExp})
 			}
-			warm := !learnedKinds[kind] || s.histExp >= max(d.WarmUp, d.Window).Seconds()
+			warm := !learned || s.histExp >= max(d.WarmUp, d.Window).Seconds()
 			if s.episode == nil && p < alpha && float64(ws.count) >= d.MinRatio*expected && warm {
 				det := Detection{ID: model.NewID(), Workload: w.ref, Kind: kind, Count: ws.count, TailProbability: p,
 					Alpha: alpha, Onset: ws.onset, At: now, Revisions: ws.revs, Sample: ws.sample, Window: maps.Clone(counts)}
@@ -262,11 +285,15 @@ func (d *CountDetector) Advance(now time.Time) []Detection {
 				learning = false
 			}
 		}
-		for _, s := range w.series {
+		for kind, s := range w.series {
 			next := (s.cur + 1) % len(s.buckets)
 			if learning {
+				exposure := tick
+				if learnedKinds[kind] {
+					exposure = s.buckets[next].exposure
+				}
 				s.histCount = s.histCount*decay + float64(s.buckets[next].count)
-				s.histExp = s.histExp*decay + tick
+				s.histExp = s.histExp*decay + exposure
 			}
 			s.buckets[next] = bucket{}
 			s.cur = next
@@ -288,15 +315,17 @@ var learnedPrior = stats.Gamma{Shape: 0.5, Rate: 10}
 const learnedEpisodeLimit = time.Hour
 
 type windowSummary struct {
-	count  int
-	onset  time.Time
-	revs   map[string]int
-	sample string
+	count    int
+	exposure float64
+	onset    time.Time
+	revs     map[string]int
+	sample   string
 }
 
 func (s *series) window() windowSummary {
 	ws := windowSummary{revs: map[string]int{}}
 	for _, b := range s.buckets {
+		ws.exposure += b.exposure
 		if b.count == 0 {
 			continue
 		}
