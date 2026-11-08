@@ -70,7 +70,9 @@ func TestResourceDeviationsCount(t *testing.T) {
 	}
 }
 
-func TestTheBrainLocalizesWithOtherIncidentsEvidence(t *testing.T) {
+// newGroupingBrain is a Brain whose cart service depends on Redis.
+func newGroupingBrain(t *testing.T) (*Brain, *ledger.Ledger) {
+	t.Helper()
 	b, l := newBrain(t)
 	rec := slot.LedgerRecorder{Ledger: l, Source: "/test"}
 	b.Localize, _ = slot.New[LocalizeInput, slot.Ranking[Suspect]](slot.BrainLocalize, ranker, nil, rec)
@@ -80,30 +82,124 @@ func TestTheBrainLocalizesWithOtherIncidentsEvidence(t *testing.T) {
 		}
 		return nil
 	}
+	b.Dependents = func(ref model.ObjectRef) []model.ObjectRef {
+		if ref == redis {
+			return []model.ObjectRef{cart}
+		}
+		return nil
+	}
 	if err := b.OnChange(ctx, watcher.Change{ID: model.NewID(), Kind: watcher.ChangeScale, Object: redis, Fields: []string{"replicas:1->0"},
 		At: onset.Add(-time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
-	for _, d := range []watcher.Detection{
-		{ID: model.NewID(), Workload: redis, Kind: watcher.FactNoEndpoints, Count: 3, Onset: onset, At: onset},
-		{ID: model.NewID(), Workload: cart, Kind: watcher.FactNewError, Count: 30, Onset: onset.Add(time.Minute), At: onset.Add(time.Minute)},
-	} {
+	return b, l
+}
+
+var (
+	redisGone  = watcher.Detection{ID: model.NewID(), Workload: redis, Kind: watcher.FactNoEndpoints, Count: 3, Onset: onset, At: onset}
+	cartErrors = watcher.Detection{ID: model.NewID(), Workload: cart, Kind: watcher.FactNewError, Count: 30,
+		Onset: onset.Add(time.Minute), At: onset.Add(time.Minute)}
+)
+
+func detect(t *testing.T, b *Brain, ds ...watcher.Detection) {
+	t.Helper()
+	for _, d := range ds {
 		if err := b.OnDetection(ctx, d); err != nil {
 			t.Fatal(err)
 		}
 	}
-	recs, err := slot.Records(ctx, l, slot.BrainLocalize)
-	if err != nil || len(recs) != 2 {
-		t.Fatalf("localize records = %d, %v", len(recs), err)
-	}
-	var cartRanking slot.Ranking[Suspect]
-	if err := unmarshal(recs[1].Output, &cartRanking); err != nil {
+}
+
+func incidents(t *testing.T, l *ledger.Ledger) []model.Incident {
+	t.Helper()
+	got, err := ledger.List[model.Incident](ctx, l, model.KindIncident, "")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if top := cartRanking.Items[0].Item; top.Workload != redis {
-		t.Fatalf("the cart incident's top suspect is %s, want redis-cart", top.Workload.Name)
+	return got
+}
+
+// The cart service's errors come after Redis lost its endpoints: they join
+// Redis's incident instead of opening their own.
+func TestASymptomJoinsItsCausesIncident(t *testing.T) {
+	b, l := newGroupingBrain(t)
+	detect(t, b, redisGone, cartErrors)
+	got := incidents(t, l)
+	if len(got) != 1 || len(got[0].Objects) != 2 || got[0].Objects[1] != cart {
+		t.Fatalf("incidents = %+v", got)
 	}
-	if incidents, _ := ledger.List[model.Incident](ctx, l, model.KindIncident, ""); len(incidents) != 2 {
-		t.Fatalf("incidents = %d", len(incidents))
+	recs, _ := slot.Records(ctx, l, slot.BrainLocalize)
+	var joinRanking slot.Ranking[Suspect]
+	if len(recs) != 2 || unmarshal(recs[1].Output, &joinRanking) != nil || joinRanking.Items[0].Item.Workload != redis {
+		t.Fatalf("the join was not decided by ranking redis-cart first: %d records", len(recs))
+	}
+	// The symptom's facts do not change the cause's class.
+	if top := topClass(t, l); top.FaultClass != ClassDependencyUnavailable {
+		t.Fatalf("class = %s", top.FaultClass)
+	}
+}
+
+// The cart service's errors come first; when Redis's own trouble shows, the
+// cart incident folds into Redis's.
+func TestAnEarlierSymptomIncidentMergesIntoItsCause(t *testing.T) {
+	b, l := newGroupingBrain(t)
+	early := cartErrors
+	early.Onset, early.At = onset.Add(-30*time.Second), onset.Add(-30*time.Second)
+	detect(t, b, early, redisGone)
+	var merged, cause *model.Incident
+	for _, inc := range incidents(t, l) {
+		switch {
+		case inc.MergedInto != "":
+			merged = &inc
+		default:
+			cause = &inc
+		}
+	}
+	if merged == nil || cause == nil || merged.MergedInto != cause.ID || merged.State != model.IncidentClosed || len(cause.Objects) != 2 {
+		t.Fatalf("merged = %+v, cause = %+v", merged, cause)
+	}
+	// Later symptoms go straight to the cause's incident.
+	again := cartErrors
+	again.ID = model.NewID()
+	detect(t, b, again)
+	if n := len(incidents(t, l)); n != 2 {
+		t.Fatalf("incidents = %d after a later symptom, want the same two", n)
+	}
+	// It resolves only when every workload's episodes have ended.
+	for _, d := range []watcher.Detection{redisGone, early} {
+		d.Ended = true
+		detect(t, b, d)
+	}
+	b.Now = func() time.Time { return onset.Add(time.Hour) }
+	if err := b.Sweep(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := b.route[cart.String()]; got == nil || got.rec.ID != cause.ID {
+		t.Fatal("the cause resolved while a symptom's episode was still active")
+	}
+	again.Ended = true
+	detect(t, b, again)
+	b.Now = func() time.Time { return onset.Add(2 * time.Hour) }
+	if err := b.Sweep(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if b.route[cart.String()] != nil || b.route[redis.String()] != nil {
+		t.Fatal("the incident did not resolve once every episode ended")
+	}
+}
+
+// A dependent with a bad change of its own has its own incident, even while
+// its dependency is in trouble.
+func TestAnIndependentFaultKeepsItsOwnIncident(t *testing.T) {
+	b, l := newGroupingBrain(t)
+	if err := b.OnChange(ctx, watcher.Change{ID: model.NewID(), Kind: watcher.ChangeTemplate, Object: cart, Fields: []string{"image:server"},
+		At: onset}); err != nil {
+		t.Fatal(err)
+	}
+	bad := watcher.Detection{ID: model.NewID(), Workload: cart, Kind: watcher.FactImagePullError, Count: 10,
+		Onset: onset.Add(30 * time.Second), At: onset.Add(30 * time.Second)}
+	detect(t, b, redisGone, bad)
+	if got := incidents(t, l); len(got) != 2 {
+		t.Fatalf("incidents = %d, want two independent ones", len(got))
 	}
 }

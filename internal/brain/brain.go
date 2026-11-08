@@ -53,22 +53,54 @@ type Brain struct {
 
 	mu      sync.Mutex
 	changes []watcher.Change
-	open    map[string]*incident
+	// open holds incidents by the workload that is their root cause; route
+	// maps every workload in an incident, root cause or symptom, to it.
+	open  map[string]*incident
+	route map[string]*incident
 	// resolvedAt holds when each workload's last incident resolved.
 	resolvedAt map[string]time.Time
 	evidence   map[string][]*pendingEvidence
 }
 
 type incident struct {
-	rec        model.Incident
-	episodes   map[model.ID]bool
-	facts      map[string]int
-	revisions  map[string]int
-	lastAction string
+	rec model.Incident
+	// primary is the workload the incident is about; its facts drive the
+	// class, the attribution and the decision.
+	primary  model.ObjectRef
+	episodes map[model.ID]bool
+	facts    map[string]int
+	// symptomFacts are the facts of workloads whose trouble this incident
+	// explains, by workload.
+	symptomFacts map[string]map[string]int
+	revisions    map[string]int
+	lastAction   string
 	// quietSince is when the last active signal ended; zero while any is active.
 	quietSince time.Time
 	// evidenceDigests identify the content of the evidence already attached.
 	evidenceDigests map[string]bool
+}
+
+// factsOf returns the facts an incident holds for one of its workloads.
+func (inc *incident) factsOf(ref model.ObjectRef) map[string]int {
+	if ref == inc.primary {
+		return inc.facts
+	}
+	return inc.symptomFacts[ref.String()]
+}
+
+// detectionFacts are the fact kinds a detection saw in its window.
+func detectionFacts(d watcher.Detection) map[string]int {
+	facts := map[string]int{string(d.Kind): d.Count}
+	for kind, n := range d.Window {
+		facts[string(kind)] = max(facts[string(kind)], n)
+	}
+	return facts
+}
+
+func mergeFacts(into, from map[string]int) {
+	for kind, n := range from {
+		into[kind] = max(into[kind], n)
+	}
 }
 
 func (b *Brain) now() time.Time {
@@ -97,15 +129,17 @@ func (b *Brain) OnChange(ctx context.Context, c watcher.Change) error {
 	return nil
 }
 
-// OnDetection updates the workload's incident and reassesses it.
+// OnDetection files a detection under the incident it belongs to, opening
+// one if none fits, and reassesses the incident. A symptom of a fault in a
+// workload it depends on joins that fault's incident.
 func (b *Brain) OnDetection(ctx context.Context, d watcher.Detection) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.open == nil {
-		b.open = map[string]*incident{}
+		b.open, b.route = map[string]*incident{}, map[string]*incident{}
 	}
 	key := d.Workload.String()
-	inc := b.open[key]
+	inc := b.route[key]
 	now := b.now()
 
 	if d.Ended {
@@ -118,50 +152,69 @@ func (b *Brain) OnDetection(ctx context.Context, d watcher.Detection) error {
 		}
 		return nil
 	}
-	if inc != nil {
-		inc.quietSince = time.Time{}
-	}
 
 	verb := "updated"
 	if inc == nil {
-		verb = "opened"
-		inc = &incident{
-			rec: model.Incident{ID: model.NewID(), Fingerprint: key, State: model.IncidentOpen,
-				Title: fmt.Sprintf("%s on %s", d.Kind, key), OpenedAt: d.Onset, Objects: []model.ObjectRef{d.Workload}},
-			episodes: map[model.ID]bool{}, facts: map[string]int{}, revisions: map[string]int{},
+		if up := b.upstreamIncident(ctx, d); up != nil {
+			inc, verb = up, "joined"
+			b.route[key] = inc
+			inc.rec.Objects = append(inc.rec.Objects, d.Workload)
+		} else {
+			verb = "opened"
+			inc = &incident{
+				rec: model.Incident{ID: model.NewID(), Fingerprint: key, State: model.IncidentOpen,
+					Title: fmt.Sprintf("%s on %s", d.Kind, key), OpenedAt: d.Onset, Objects: []model.ObjectRef{d.Workload}},
+				primary: d.Workload, episodes: map[model.ID]bool{}, facts: map[string]int{}, revisions: map[string]int{},
+				symptomFacts: map[string]map[string]int{},
+			}
+			b.open[key], b.route[key] = inc, inc
 		}
-		b.open[key] = inc
 	}
+	inc.quietSince = time.Time{}
 	sig := model.Signal{
 		ID: d.ID, Type: string(d.Kind), Object: d.Workload, ObservedAt: d.At, Onset: d.Onset,
 		TailProbability: d.TailProbability, Detector: "counts/gamma-poisson-v1", Trust: model.TrustObserved,
 		Attributes: map[string]string{"count": fmt.Sprint(d.Count), "alpha": fmt.Sprintf("%.3g", d.Alpha)},
 	}
 	inc.episodes[d.ID] = true
-	inc.facts[string(d.Kind)] = max(inc.facts[string(d.Kind)], d.Count)
-	for kind, n := range d.Window {
-		inc.facts[string(kind)] = max(inc.facts[string(kind)], n)
-	}
-	for r, n := range d.Revisions {
-		inc.revisions[r] += n
+	symptom := d.Workload != inc.primary
+	if symptom {
+		if inc.symptomFacts[key] == nil {
+			inc.symptomFacts[key] = map[string]int{}
+		}
+		mergeFacts(inc.symptomFacts[key], detectionFacts(d))
+	} else {
+		mergeFacts(inc.facts, detectionFacts(d))
+		for r, n := range d.Revisions {
+			inc.revisions[r] += n
+		}
 	}
 	inc.rec.SignalIDs = append(inc.rec.SignalIDs, sig.ID)
 	inc.rec.UpdatedAt = now
 	if b.Dependents != nil {
-		inc.rec.Impacted = b.Dependents(d.Workload)
+		inc.rec.Impacted = b.Dependents(inc.primary)
 	}
 
+	recorded := verb
+	if verb == "joined" {
+		recorded = "updated"
+	}
 	evidence := b.evidenceDrafts(inc, key)
 	drafts := []ledger.Draft{
 		ledger.RecordDraft(source, model.KindSignal, "observed", sig.ID, inc.rec.ID, sig),
-		ledger.RecordDraft(source, model.KindIncident, verb, inc.rec.ID, inc.rec.ID, inc.rec),
+		ledger.RecordDraft(source, model.KindIncident, recorded, inc.rec.ID, inc.rec.ID, inc.rec),
 	}
 	drafts = append(drafts, evidence...)
-	more, summary, err := b.assess(ctx, inc, d.Workload)
-	if err != nil {
-		b.Log.Error("assessment failed; the incident is recorded without it", "incident", inc.rec.ID, "error", err)
+	var summary []any
+	if !symptom {
+		more, s, err := b.assess(ctx, inc, inc.primary)
+		if err != nil {
+			b.Log.Error("assessment failed; the incident is recorded without it", "incident", inc.rec.ID, "error", err)
+		}
+		drafts, summary = append(drafts, more...), s
+		drafts = append(drafts, b.absorbDependents(ctx, inc)...)
 	}
-	if _, err := b.Ledger.Append(ctx, append(drafts, more...)...); err != nil {
+	if _, err := b.Ledger.Append(ctx, drafts...); err != nil {
 		return err
 	}
 	impacted := make([]string, 0, len(inc.rec.Impacted))
@@ -170,6 +223,93 @@ func (b *Brain) OnDetection(ctx context.Context, d watcher.Detection) error {
 	}
 	b.Log.Info("incident "+verb, append([]any{"incident", inc.rec.ID, "workload", key, "signal", d.Kind, "impacted", impacted}, summary...)...)
 	return nil
+}
+
+// upstreamIncident returns the open incident of a workload that d's workload
+// depends on, if localization ranks that workload as the likelier cause of
+// d's symptoms. Callers hold b.mu.
+func (b *Brain) upstreamIncident(ctx context.Context, d watcher.Detection) *incident {
+	if b.Dependencies == nil || b.Localize == nil {
+		return nil
+	}
+	troubled := false
+	for _, dep := range b.Dependencies(d.Workload) {
+		troubled = troubled || b.route[dep.Workload.String()] != nil
+	}
+	if !troubled {
+		return nil
+	}
+	ranking, err := b.Localize.Decide(ctx, b.rootCauseInput(d.Workload, detectionFacts(d), d.Onset))
+	if err != nil || len(ranking.Items) == 0 {
+		return nil
+	}
+	top := ranking.Items[0].Item.Workload
+	if top == d.Workload {
+		return nil
+	}
+	return b.route[top.String()]
+}
+
+// absorbDependents folds into inc the open incidents of workloads that depend
+// on its workload, when localization, re-ranked with inc's evidence, blames
+// inc's workload for their symptoms. Callers hold b.mu.
+func (b *Brain) absorbDependents(ctx context.Context, inc *incident) []ledger.Draft {
+	if b.Dependents == nil || b.Localize == nil {
+		return nil
+	}
+	var drafts []ledger.Draft
+	for _, dep := range b.Dependents(inc.primary) {
+		other := b.open[dep.String()]
+		if other == nil || other == inc {
+			continue
+		}
+		ranking, err := b.Localize.Decide(ctx, b.rootCauseInput(other.primary, other.facts, other.rec.OpenedAt))
+		if err != nil || len(ranking.Items) == 0 || b.route[ranking.Items[0].Item.Workload.String()] != inc {
+			continue
+		}
+		drafts = append(drafts, b.merge(other, inc)...)
+	}
+	return drafts
+}
+
+// merge folds one incident into another: its workloads, facts, signals,
+// evidence and active episodes move, and it closes, naming where it went.
+// Callers hold b.mu.
+func (b *Brain) merge(from, into *incident) []ledger.Draft {
+	now := b.now()
+	for key, inc := range b.route {
+		if inc == from {
+			b.route[key] = into
+		}
+	}
+	into.rec.Objects = append(into.rec.Objects, from.rec.Objects...)
+	if into.symptomFacts[from.primary.String()] == nil {
+		into.symptomFacts[from.primary.String()] = map[string]int{}
+	}
+	mergeFacts(into.symptomFacts[from.primary.String()], from.facts)
+	for key, facts := range from.symptomFacts {
+		if into.symptomFacts[key] == nil {
+			into.symptomFacts[key] = map[string]int{}
+		}
+		mergeFacts(into.symptomFacts[key], facts)
+	}
+	for id := range from.episodes {
+		into.episodes[id] = true
+	}
+	if len(into.episodes) > 0 {
+		into.quietSince = time.Time{}
+	}
+	into.rec.SignalIDs = append(into.rec.SignalIDs, from.rec.SignalIDs...)
+	into.rec.EvidenceIDs = append(into.rec.EvidenceIDs, from.rec.EvidenceIDs...)
+	into.rec.UpdatedAt = now
+	delete(b.open, from.primary.String())
+	from.rec.State, from.rec.MergedInto, from.rec.UpdatedAt = model.IncidentClosed, into.rec.ID, now
+	b.Log.Info("incident merged", "incident", from.rec.ID, "into", into.rec.ID, "workload", from.primary.String(),
+		"cause", into.primary.String())
+	return []ledger.Draft{
+		ledger.RecordDraft(source, model.KindIncident, "merged", from.rec.ID, from.rec.ID, from.rec),
+		ledger.RecordDraft(source, model.KindIncident, "updated", into.rec.ID, into.rec.ID, into.rec),
+	}
 }
 
 // Sweep resolves incidents that have been quiet for the whole gap.
@@ -189,7 +329,12 @@ func (b *Brain) Sweep(ctx context.Context) error {
 		if b.resolvedAt == nil {
 			b.resolvedAt = map[string]time.Time{}
 		}
-		b.resolvedAt[key] = now
+		for member, routed := range b.route {
+			if routed == inc {
+				delete(b.route, member)
+				b.resolvedAt[member] = now
+			}
+		}
 		b.Log.Info("incident resolved", "incident", inc.rec.ID, "workload", key)
 	}
 	if len(drafts) == 0 {
@@ -284,7 +429,7 @@ func (b *Brain) assess(ctx context.Context, inc *incident, workload model.Object
 		summary = append(summary, "culprit", top.Change.Object.String(), "culpritFields", top.Change.Fields, "culpritP", round(top.P))
 	}
 	if b.Localize != nil {
-		suspects, err := b.Localize.Decide(ctx, b.localizeInput(inc, workload))
+		suspects, err := b.Localize.Decide(ctx, b.rootCauseInput(workload, inc.facts, inc.rec.OpenedAt))
 		if err != nil {
 			return drafts, summary, err
 		}
@@ -296,10 +441,11 @@ func (b *Brain) assess(ctx context.Context, inc *incident, workload model.Object
 	return drafts, summary, nil
 }
 
-// localizeInput gathers the root-cause candidates of an incident: its
-// workload and what it depends on, each with its own anomalies and latest
-// change. Callers hold b.mu.
-func (b *Brain) localizeInput(inc *incident, workload model.ObjectRef) LocalizeInput {
+// rootCauseInput gathers the possible causes of symptoms on a workload: the
+// workload, with its own facts, and what it depends on, each with the
+// anomalies of whatever incident it is in, its latest change before the
+// onset and its resource deviations. Callers hold b.mu.
+func (b *Brain) rootCauseInput(workload model.ObjectRef, own map[string]int, onset time.Time) LocalizeInput {
 	in := LocalizeInput{Workload: workload}
 	candidates := []topology.Reach{{Workload: workload}}
 	if b.Dependencies != nil {
@@ -310,11 +456,11 @@ func (b *Brain) localizeInput(inc *incident, workload model.ObjectRef) LocalizeI
 		if b.Deviations != nil {
 			lc.Deviations = b.Deviations(c.Workload)
 		}
-		facts := inc.facts
+		facts := own
 		if c.Hops > 0 {
 			facts = nil
-			if other := b.open[c.Workload.String()]; other != nil {
-				facts = other.facts
+			if other := b.route[c.Workload.String()]; other != nil {
+				facts = other.factsOf(c.Workload)
 			}
 		}
 		for kind, n := range facts {
@@ -324,10 +470,10 @@ func (b *Brain) localizeInput(inc *incident, workload model.ObjectRef) LocalizeI
 		}
 		sort.Strings(lc.Anomalous)
 		for _, ch := range b.changes {
-			if ch.Object != c.Workload || ch.At.After(inc.rec.OpenedAt.Add(time.Minute)) {
+			if ch.Object != c.Workload || ch.At.After(onset.Add(time.Minute)) {
 				continue
 			}
-			if before := inc.rec.OpenedAt.Sub(ch.At).Seconds(); lc.ChangedBefore < 0 || before < lc.ChangedBefore {
+			if before := onset.Sub(ch.At).Seconds(); lc.ChangedBefore < 0 || before < lc.ChangedBefore {
 				lc.ChangedBefore = math.Max(before, 0)
 			}
 		}

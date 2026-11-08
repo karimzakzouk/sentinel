@@ -40,6 +40,24 @@ type LocalizeCandidate struct {
 // workload's resource use must be to count as evidence.
 const deviationScore = 4
 
+// localOnly are symptoms no dependency can cause: a dependency being down
+// does not stop an image from pulling or a pod from scheduling.
+var localOnly = map[string]bool{
+	"pod.image-pull-error": true, "pod.config-error": true, "pod.unschedulable": true,
+	"pod.oom-killed": true, "pod.memory-near-limit": true,
+}
+
+// fromDependency reports whether any of the symptoms could come from a
+// dependency. Unknown symptoms could.
+func fromDependency(symptoms []string) bool {
+	for _, s := range symptoms {
+		if !localOnly[s] {
+			return true
+		}
+	}
+	return len(symptoms) == 0
+}
+
 // Suspect is a ranked root-cause candidate with its readable evidence.
 type Suspect struct {
 	Workload model.ObjectRef         `json:"workload"`
@@ -66,9 +84,19 @@ func (e EvidenceRanking) Decide(_ context.Context, in LocalizeInput) (slot.Ranki
 	if len(in.Candidates) == 0 {
 		return out, nil
 	}
+	var symptoms []string
+	for _, c := range in.Candidates {
+		if c.Hops == 0 {
+			symptoms = c.Anomalous
+		}
+	}
 	suspects := make([]Suspect, 0, len(in.Candidates))
 	for _, c := range in.Candidates {
 		var ratios []model.LikelihoodRatio
+		if c.Hops > 0 && !fromDependency(symptoms) {
+			ratios = append(ratios, model.LikelihoodRatio{
+				Factor: "the symptoms (" + strings.Join(symptoms, ", ") + ") are not ones a dependency causes", Ratio: 0.05})
+		}
 		switch {
 		case len(c.Anomalous) > 0:
 			ratios = append(ratios, model.LikelihoodRatio{Factor: "its own anomaly: " + strings.Join(c.Anomalous, ", "), Ratio: 20})

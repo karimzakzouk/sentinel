@@ -131,6 +131,9 @@ type Incident struct {
 	Impacted    []ObjectRef `json:"impacted,omitempty"`
 	SignalIDs   []ID        `json:"signalIds,omitempty"`
 	EvidenceIDs []ID        `json:"evidenceIds,omitempty"`
+	// MergedInto names the incident this one was folded into when its
+	// symptoms turned out to share that incident's cause.
+	MergedInto ID `json:"mergedInto,omitempty"`
 }
 
 // Evidence is one piece of collected data attached to an incident. Only the
