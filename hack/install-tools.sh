@@ -16,7 +16,8 @@ trap 'rm -rf "$tmp"' EXIT
 fetch() { curl -fsSL --retry 3 -o "$2" "$1"; }
 verify() { echo "$1  $2" | sha256sum -c --quiet -; }
 
-if [ "$(/usr/local/go/bin/go env GOVERSION 2>/dev/null)" != "go${GO_VERSION}" ]; then
+# CI provides Go through actions/setup-go; anywhere else, install it.
+if [ "$(go env GOVERSION 2>/dev/null)" != "go${GO_VERSION}" ]; then
   go_file="go${GO_VERSION}.linux-${ARCH}.tar.gz"
   go_sum=$(curl -fsSL 'https://go.dev/dl/?mode=json&include=all' |
     jq -r --arg f "$go_file" '.[].files[] | select(.filename == $f) | .sha256')
@@ -24,9 +25,9 @@ if [ "$(/usr/local/go/bin/go env GOVERSION 2>/dev/null)" != "go${GO_VERSION}" ];
   verify "$go_sum" "$tmp/go.tgz"
   sudo rm -rf /usr/local/go
   sudo tar -C /usr/local -xzf "$tmp/go.tgz"
+  sudo ln -sf /usr/local/go/bin/go /usr/local/bin/go
+  sudo ln -sf /usr/local/go/bin/gofmt /usr/local/bin/gofmt
 fi
-sudo ln -sf /usr/local/go/bin/go /usr/local/bin/go
-sudo ln -sf /usr/local/go/bin/gofmt /usr/local/bin/gofmt
 
 if [ "$(kubectl version --client -o json 2>/dev/null | jq -r .clientVersion.gitVersion)" != "$KUBECTL_VERSION" ]; then
   url="https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${ARCH}/kubectl"

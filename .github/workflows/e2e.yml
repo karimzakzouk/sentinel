@@ -1,0 +1,47 @@
+name: E2E
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - api/**
+      - cmd/**
+      - internal/**
+      - charts/**
+      - test/**
+      - hack/**
+      - Dockerfile
+      - Makefile
+      - go.mod
+      - go.sum
+      - .github/workflows/e2e.yml
+      - .github/workflows/e2e-run.yml
+  pull_request:
+    paths:
+      - api/**
+      - cmd/**
+      - internal/**
+      - charts/**
+      - test/**
+      - hack/**
+      - Dockerfile
+      - Makefile
+      - go.mod
+      - go.sum
+      - .github/workflows/e2e.yml
+      - .github/workflows/e2e-run.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    name: kind (kindnet, NetworkPolicy not enforced)
+    uses: ./.github/workflows/e2e-run.yml
+    with:
+      network: kindnet
