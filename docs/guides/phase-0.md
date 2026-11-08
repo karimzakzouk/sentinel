@@ -76,9 +76,10 @@ engine earns promotion.
 platform, permissions it has and the ones it must never have, dry-run probes
 for the node agent, eBPF and user namespaces, sandbox runtimes, deploy tools,
 and an active probe that proves NetworkPolicy enforcement with real traffic.
-Every disabled feature says why. Building it proved the design wrong once:
-kind's default network plugin does not enforce NetworkPolicy, so on plain kind
-the Lab correctly stays off.
+Every disabled feature says why. Building it showed why the active probe is
+needed: the same kind cluster enforces NetworkPolicy on GitHub's runners and
+silently does not on the development VM, because kind's network plugin needs a
+kernel feature the VM lacks. The probe answered correctly on both.
 
 ## The fence
 
