@@ -21,4 +21,10 @@ platform=$(jq -r .cluster.platform <<<"$report")
 netpol=$(jq -r '.checks[] | select(.id == "network.policy-enforced") | .status' <<<"$report")
 echo "platform: $platform (expected $want_platform)"
 echo "NetworkPolicy: $netpol (expected $want_netpol): $(jq -r '.checks[] | select(.id == "network.policy-enforced") | .detail' <<<"$report")"
-[ "$platform" = "$want_platform" ] && [ "$netpol" = "$want_netpol" ]
+if [ "$platform" != "$want_platform" ] || [ "$netpol" != "$want_netpol" ]; then
+  echo "--- cluster state for diagnosis"
+  kubectl --context "$ctx" get nodes -o wide
+  kubectl --context "$ctx" get pods -A -o wide
+  kubectl --context "$ctx" get networkpolicies -A
+  exit 1
+fi
