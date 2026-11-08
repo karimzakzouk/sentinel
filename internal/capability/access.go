@@ -60,6 +60,11 @@ func LogRules(ns string) []Rule {
 	return []Rule{{Verb: "get", Resource: "pods", Subresource: "log", Namespace: ns}}
 }
 
+// MetricsRules are the permissions metric signals need in one namespace.
+func MetricsRules(ns string) []Rule {
+	return []Rule{{Verb: "list", Group: "metrics.k8s.io", Resource: "pods", Namespace: ns}}
+}
+
 // ActorRules are the write permissions the actor needs in one namespace. The
 // actor only patches existing workloads: creating one would implicitly grant
 // every Secret and ServiceAccount in the namespace.
@@ -142,7 +147,7 @@ func (d *Detector) checkAll(ctx context.Context, rules []Rule, can func(context.
 	return res
 }
 
-func (d *Detector) checkWatcherAccess(ctx context.Context, rep *Report) (watchable, loggable []string) {
+func (d *Detector) checkWatcherAccess(ctx context.Context, rep *Report) (watchable, loggable, measurable []string) {
 	for _, ns := range d.Options.Namespaces {
 		res := d.checkAll(ctx, WatcherRules(ns), d.selfCan)
 		id := "access.watch/" + ns
@@ -166,6 +171,17 @@ func (d *Detector) checkWatcherAccess(ctx context.Context, rep *Report) (watchab
 			rep.add(id, Available, "can read container logs")
 			loggable = append(loggable, ns)
 		}
+		metrics := d.checkAll(ctx, MetricsRules(ns), d.selfCan)
+		id = "access.metrics/" + ns
+		switch {
+		case metrics.err != nil:
+			rep.add(id, Unknown, "could not check permissions: %v", metrics.err)
+		case len(metrics.missing) > 0:
+			rep.add(id, Unavailable, "missing: %s", joinRules(metrics.missing))
+		default:
+			rep.add(id, Available, "can read pod resource metrics")
+			measurable = append(measurable, ns)
+		}
 	}
 	nodes := d.checkAll(ctx, []Rule{{Verb: "list", Resource: "nodes"}, {Verb: "watch", Resource: "nodes"}}, d.selfCan)
 	switch {
@@ -176,7 +192,7 @@ func (d *Detector) checkWatcherAccess(ctx context.Context, rep *Report) (watchab
 	default:
 		rep.add("access.nodes", Available, "can read nodes")
 	}
-	return watchable, loggable
+	return watchable, loggable, measurable
 }
 
 func (d *Detector) checkLeastPrivilege(ctx context.Context, rep *Report) {

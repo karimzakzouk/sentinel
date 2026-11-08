@@ -52,6 +52,24 @@ func TestLocalizationStaysWhenDependenciesAreHealthy(t *testing.T) {
 	}
 }
 
+// A dependency whose resource use left its usual range is a likelier cause
+// than one that looks the same as always.
+func TestResourceDeviationsCount(t *testing.T) {
+	in := LocalizeInput{Workload: cart, Candidates: []LocalizeCandidate{
+		{Workload: cart, Anomalous: []string{"log.new-error"}, ChangedBefore: -1},
+		{Workload: redis, Hops: 1, ChangedBefore: -1, Deviations: []watcher.Deviation{{Resource: "memory", Score: 9}}},
+		{Workload: catalog, Hops: 1, ChangedBefore: -1, Deviations: []watcher.Deviation{{Resource: "cpu", Score: 1}}},
+	}}
+	r, _ := ranker.Decide(ctx, in)
+	byName := map[string]float64{}
+	for _, it := range r.Items {
+		byName[it.Item.Workload.Name] = it.Item.P
+	}
+	if byName["redis-cart"] <= byName["productcatalogservice"] {
+		t.Fatalf("probabilities = %v", byName)
+	}
+}
+
 func TestTheBrainLocalizesWithOtherIncidentsEvidence(t *testing.T) {
 	b, l := newBrain(t)
 	rec := slot.LedgerRecorder{Ledger: l, Source: "/test"}

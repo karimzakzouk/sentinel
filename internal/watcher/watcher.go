@@ -37,7 +37,12 @@ type Watcher struct {
 	OnTick func(context.Context)
 	// Logs, when set, fetches logs that facts call for.
 	Logs *LogCollector
-	Log  *slog.Logger
+	// Metrics, when set, is polled every MetricsInterval for resource use.
+	Metrics         MetricsSource
+	MetricsInterval time.Duration
+	Log             *slog.Logger
+
+	metrics metricsState
 
 	mu          sync.Mutex
 	ns          map[string]*namespaceListers
@@ -170,6 +175,7 @@ func (w *Watcher) Run(ctx context.Context) error {
 			return nil
 		case <-tick.C:
 			now := time.Now().UTC()
+			w.pollMetrics(ctx, now)
 			for ns, l := range w.ns {
 				w.Detector.Observe(w.serviceFacts(ns, l, now)...)
 				pods, err := l.pods.List(labels.Everything())
@@ -181,6 +187,7 @@ func (w *Watcher) Run(ctx context.Context) error {
 					facts := StateFacts(p, workload, rev, now)
 					w.Detector.Observe(facts...)
 					w.requestLogs(ctx, p, facts)
+					w.Detector.Observe(MemoryFacts(p, w.podUsage(ns, p.Name), workload, rev, now)...)
 				}
 			}
 			w.sampleRollouts(ctx, now)
@@ -246,6 +253,77 @@ func (w *Watcher) Topology() *topology.Map {
 		}
 	}
 	return topology.NewMap(edges)
+}
+
+// pollMetrics reads resource use when the interval has passed: each pod's
+// latest usage, and each workload's totals into its history.
+func (w *Watcher) pollMetrics(ctx context.Context, now time.Time) {
+	m := &w.metrics
+	m.mu.Lock()
+	due := w.Metrics != nil && now.Sub(m.last) >= w.MetricsInterval
+	if due {
+		m.last = now
+	}
+	m.mu.Unlock()
+	if !due {
+		return
+	}
+	usage := map[string]map[string]ContainerUsage{}
+	totals := map[string][2]float64{}
+	for ns, l := range w.ns {
+		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		list, err := w.Metrics.Usage(ctx, ns)
+		cancel()
+		if err != nil {
+			w.Log.Debug("resource metrics unavailable", "namespace", ns, "error", err)
+			continue
+		}
+		for _, u := range list {
+			key := ns + "/" + u.Pod
+			if usage[key] == nil {
+				usage[key] = map[string]ContainerUsage{}
+			}
+			usage[key][u.Container] = u
+			pod, err := l.pods.Pods(ns).Get(u.Pod)
+			if err != nil {
+				continue
+			}
+			workload, _ := l.owners.Resolve(pod)
+			t := totals[workload.String()]
+			totals[workload.String()] = [2]float64{t[0] + u.CPU, t[1] + u.Memory}
+		}
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.usage = usage
+	if m.history == nil {
+		m.history = map[string]*usageHistory{}
+	}
+	for key, t := range totals {
+		h := m.history[key]
+		if h == nil {
+			h = &usageHistory{}
+			m.history[key] = h
+		}
+		h.add(t[0], t[1])
+	}
+}
+
+func (w *Watcher) podUsage(ns, pod string) map[string]ContainerUsage {
+	w.metrics.mu.Lock()
+	defer w.metrics.mu.Unlock()
+	return w.metrics.usage[ns+"/"+pod]
+}
+
+// Deviations reports how far a workload's latest resource use is from its
+// usual, once there is enough history.
+func (w *Watcher) Deviations(ref model.ObjectRef) []Deviation {
+	w.metrics.mu.Lock()
+	defer w.metrics.mu.Unlock()
+	if h := w.metrics.history[ref.String()]; h != nil {
+		return h.deviations()
+	}
+	return nil
 }
 
 // forget ends a deleted workload's episodes and rollout.

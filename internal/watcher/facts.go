@@ -37,7 +37,7 @@ const (
 // FactKinds lists every kind, in a stable order.
 var FactKinds = []FactKind{
 	FactOOMKilled, FactRestarted, FactProbeFailed, FactUnschedulable,
-	FactImagePullError, FactCrashLoop, FactConfigError, FactNotReady, FactNoEndpoints,
+	FactImagePullError, FactCrashLoop, FactConfigError, FactNotReady, FactNoEndpoints, FactMemoryNearLimit,
 }
 
 // Fact is one observation about a pod, attributed to the workload that owns it.

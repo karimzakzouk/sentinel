@@ -81,10 +81,16 @@ func newObserver(log *slog.Logger, cfg *config.Config, client kubernetes.Interfa
 		}
 	}
 	w := &watcher.Watcher{Client: client, Namespaces: cfg.Namespaces, Log: log, Detector: detector}
+	if _, err := client.Discovery().ServerResourcesForGroupVersion("metrics.k8s.io/v1beta1"); err == nil {
+		w.Metrics, w.MetricsInterval = watcher.APIMetrics{Client: client.CoreV1().RESTClient()}, 30*time.Second
+	} else {
+		log.Info("resource metrics are not served; metric signals are off", "error", err)
+	}
 	b := &brain.Brain{Ledger: l, Log: log, Classify: classify, Attribute: attribute, Decide: decide,
 		Revisions: w.NewestRevision, Lookback: time.Hour, Gap: d.IncidentGap.Duration, Localize: localize,
 		Dependents:   func(ref model.ObjectRef) []model.ObjectRef { return w.Topology().Dependents(ref) },
-		Dependencies: func(ref model.ObjectRef) []topology.Reach { return w.Topology().DependenciesWithHops(ref) }}
+		Dependencies: func(ref model.ObjectRef) []topology.Reach { return w.Topology().DependenciesWithHops(ref) },
+		Deviations:   w.Deviations}
 	w.OnTick = func(ctx context.Context) {
 		if err := b.Sweep(ctx); err != nil {
 			log.Error("could not resolve quiet incidents", "error", err)

@@ -64,7 +64,7 @@ func (d *Detector) Run(ctx context.Context) (*Report, error) {
 	rep.Cluster.Platform = detectPlatform(nodes, apis)
 	rep.Cluster.NetworkPlugin = detectNetworkPlugin(nodes, apis, rep.Cluster.Platform)
 
-	watchable, loggable := d.checkWatcherAccess(ctx, rep)
+	watchable, loggable, measurable := d.checkWatcherAccess(ctx, rep)
 	d.checkLeastPrivilege(ctx, rep)
 	actable := d.checkActorAccess(ctx, rep)
 	probes := d.runDryRunProbes(ctx, rep)
@@ -72,7 +72,7 @@ func (d *Detector) Run(ctx context.Context) (*Report, error) {
 	d.checkNetworkPolicy(rep, apis)
 	d.checkOwners(ctx, rep, apis, watchable)
 
-	d.deriveFeatures(rep, watchable, loggable, actable, probes, sandbox)
+	d.deriveFeatures(rep, access{watchable, loggable, measurable, actable}, probes, sandbox)
 	rep.Nodes = coverNodes(nodes, probes, len(watchable) > 0)
 	rep.sortChecks()
 	return rep, nil
@@ -278,11 +278,17 @@ func (d *Detector) checkOwners(ctx context.Context, rep *Report, apis apiSet, wa
 	}
 }
 
-func (d *Detector) deriveFeatures(rep *Report, watchable, loggable, actable []string, probes probeResults, sandbox []string) {
+// access lists the namespaces where each kind of access was found.
+type access struct {
+	watchable, loggable, measurable, actable []string
+}
+
+func (d *Detector) deriveFeatures(rep *Report, a access, probes probeResults, sandbox []string) {
 	status := func(id string) Status {
 		c, _ := rep.Check(id)
 		return c.Status
 	}
+	watchable, loggable, actable := a.watchable, a.loggable, a.actable
 	if len(watchable) > 0 {
 		rep.feature("detect.api", true, "Kubernetes API signals in %d namespace(s): %s", len(watchable), strings.Join(watchable, ", "))
 	} else {
@@ -293,7 +299,14 @@ func (d *Detector) deriveFeatures(rep *Report, watchable, loggable, actable []st
 	} else {
 		rep.feature("detect.logs", false, "Sentinel cannot read container logs in any allowed namespace")
 	}
-	rep.feature("detect.metrics", status("api.metrics") == Available, "%s", detail(rep, "api.metrics"))
+	switch {
+	case status("api.metrics") != Available:
+		rep.feature("detect.metrics", false, "%s", detail(rep, "api.metrics"))
+	case len(a.measurable) == 0:
+		rep.feature("detect.metrics", false, "Sentinel cannot read pod metrics in any allowed namespace")
+	default:
+		rep.feature("detect.metrics", true, "pod resource metrics in %d namespace(s): %s", len(a.measurable), strings.Join(a.measurable, ", "))
+	}
 	rep.feature("detect.node-agent", probes.nodeAgent == Available, "%s", detail(rep, "probe.node-agent"))
 	rep.feature("detect.ebpf", probes.ebpf == Available, "%s", detail(rep, "probe.ebpf"))
 
