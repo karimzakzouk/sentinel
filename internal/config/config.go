@@ -31,6 +31,7 @@ type Config struct {
 	Capabilities Capabilities           `json:"capabilities,omitempty"`
 	Detection    Detection              `json:"detection,omitempty"`
 	Logs         Logs                   `json:"logs,omitempty"`
+	UI           UI                     `json:"ui,omitempty"`
 	HealthAddr   string                 `json:"healthAddr,omitempty"`
 	Slots        map[string]slot.Config `json:"slots,omitempty"`
 }
@@ -70,6 +71,13 @@ type Logs struct {
 // On reports whether log evidence is enabled.
 func (l Logs) On() bool { return l.Enabled == nil || *l.Enabled }
 
+// UI configures the read-only web UI and API.
+type UI struct {
+	// Address to listen on. Keep it on loopback: kubectl port-forward reaches
+	// it, and nothing else should.
+	Address string `json:"address,omitempty"`
+}
+
 // Load reads, defaults and validates a config file. Unknown fields are
 // rejected so a typo cannot silently disable a setting.
 func Load(path string) (*Config, error) {
@@ -94,6 +102,9 @@ func (c *Config) setDefaults() {
 	}
 	if c.HealthAddr == "" {
 		c.HealthAddr = ":8081"
+	}
+	if c.UI.Address == "" {
+		c.UI.Address = "127.0.0.1:8090"
 	}
 	d := &c.Detection
 	if d.FalseAlarmsPerWeek == 0 {

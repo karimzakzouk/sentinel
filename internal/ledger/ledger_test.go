@@ -84,6 +84,31 @@ func TestProjectionKeepsLatestState(t *testing.T) {
 	}
 }
 
+func TestAnIncidentsHistoryAndTheLatestOfAType(t *testing.T) {
+	ctx := context.Background()
+	l, _ := openTemp(t)
+	a, b := model.Incident{ID: model.NewID(), Title: "a"}, model.Incident{ID: model.NewID(), Title: "b"}
+	sig := model.Signal{ID: model.NewID(), Type: "pod.crash-loop"}
+	if _, err := l.Append(ctx, incidentDraft(a, "opened"), incidentDraft(b, "opened"),
+		RecordDraft("/test", model.KindSignal, "observed", sig.ID, a.ID, sig),
+		Draft{Type: "sentinel.capability.reported", Source: "/test", Data: 1}); err != nil {
+		t.Fatal(err)
+	}
+	a.State = model.IncidentResolved
+	if _, err := l.Append(ctx, incidentDraft(a, "resolved"), Draft{Type: "sentinel.capability.reported", Source: "/test", Data: 2}); err != nil {
+		t.Fatal(err)
+	}
+	history, err := l.IncidentEvents(ctx, a.ID)
+	if err != nil || len(history) != 3 || history[0].Type != "sentinel.incident.opened" ||
+		history[1].Type != "sentinel.signal.observed" || history[2].Type != "sentinel.incident.resolved" {
+		t.Fatalf("history = %+v, %v", history, err)
+	}
+	latest, err := l.Latest(ctx, "sentinel.capability.reported", 1)
+	if err != nil || len(latest) != 1 || string(latest[0].Data) != "2" {
+		t.Fatalf("latest = %+v, %v", latest, err)
+	}
+}
+
 func TestRestartContinuesTheChain(t *testing.T) {
 	ctx := context.Background()
 	l, path := openTemp(t)
