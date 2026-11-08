@@ -83,26 +83,16 @@ func (p NetworkPolicyProbe) Run(ctx context.Context) Check {
 	}
 	target := net.JoinHostPort(ip, strconv.Itoa(probePort))
 
-	// A policy controller needs a moment to program rules for each new pod, so
-	// a failed control connection is retried with a fresh client.
-	controlStart := time.Now()
-	for attempt := 0; ; attempt++ {
-		ok, why, err := p.connect(ctx, fmt.Sprintf("%s-control-%d", id, attempt), target, labels)
-		if err != nil {
-			return Check{ID: NetworkPolicyCheckID, Status: Unknown, Detail: "control connection could not run: " + err.Error()}
-		}
-		if ok {
-			break
-		}
-		if time.Since(controlStart) > p.Settle {
-			return Check{ID: NetworkPolicyCheckID, Status: Unknown, Detail: fmt.Sprintf(
-				"the control connection kept failing for %s even though a policy allowed it (last error: %s), so pod networking itself is broken here", p.Settle, why)}
-		}
-		select {
-		case <-ctx.Done():
-			return Check{ID: NetworkPolicyCheckID, Status: Unknown, Detail: "probe cancelled: " + ctx.Err().Error()}
-		case <-time.After(p.Poll):
-		}
+	// Policy controllers add a new pod's address to their rules a few seconds
+	// after it starts, so the control client retries from the same pod. A fresh
+	// pod per retry would lose that race every time, as it did on k3s.
+	ok, why, err := p.connect(ctx, id+"-control", target, labels, retriesWithin(p.Settle))
+	switch {
+	case err != nil:
+		return Check{ID: NetworkPolicyCheckID, Status: Unknown, Detail: "control connection could not run: " + err.Error()}
+	case !ok:
+		return Check{ID: NetworkPolicyCheckID, Status: Unknown, Detail: fmt.Sprintf(
+			"the control connection kept failing for %s even though a policy allowed it (last error: %s), so pod networking itself is broken here", p.Settle, why)}
 	}
 
 	deny := &networkingv1.NetworkPolicy{
@@ -120,7 +110,9 @@ func (p NetworkPolicyProbe) Run(ctx context.Context) Check {
 	}
 	applied := time.Now()
 	for attempt := 0; ; attempt++ {
-		ok, _, err := p.connect(ctx, fmt.Sprintf("%s-test-%d", id, attempt), target, labels)
+		// Each test uses a fresh pod. A fresh pod rejected before its address is
+		// programmed still proves enforcement: plugins that ignore policy never reject.
+		ok, _, err := p.connect(ctx, fmt.Sprintf("%s-test-%d", id, attempt), target, labels, 1)
 		if err != nil {
 			return Check{ID: NetworkPolicyCheckID, Status: Unknown, Detail: "test connection could not run: " + err.Error()}
 		}
@@ -140,17 +132,26 @@ func (p NetworkPolicyProbe) Run(ctx context.Context) Check {
 	}
 }
 
-// connect runs a one-shot client pod and reports whether it reached target
-// and, when it did not, the client's own explanation.
-func (p NetworkPolicyProbe) connect(ctx context.Context, suffix, target string, labels map[string]string) (bool, string, error) {
+const connectInterval = 5 * time.Second
+
+func retriesWithin(d time.Duration) int {
+	return max(1, int(d/connectInterval))
+}
+
+// connect runs a client pod that tries to reach target up to attempts times,
+// and reports whether it did and, when it did not, the client's own explanation.
+func (p NetworkPolicyProbe) connect(ctx context.Context, suffix, target string, labels map[string]string, attempts int) (bool, string, error) {
 	client := probePod(p.Namespace, "sentinel-np-client-"+suffix)
 	client.Labels = mergeLabels(client.Labels, labels, map[string]string{"sentinel-probe-role": "client"})
 	client.Spec.SecurityContext = restrictedPodSecurity()
-	client.Spec.Containers[0].Args = []string{"connect", target, "--timeout=3s"}
+	client.Spec.Containers[0].Command = []string{"sh", "-c", fmt.Sprintf(
+		"for i in $(seq 1 %d); do /agnhost connect %s --timeout=3s && exit 0; [ \"$i\" -lt %d ] && sleep 2; done; exit 1",
+		attempts, target, attempts)}
+	client.Spec.Containers[0].Args = nil
 	if _, err := p.Client.CoreV1().Pods(p.Namespace).Create(ctx, client, metav1.CreateOptions{}); err != nil {
 		return false, "", err
 	}
-	deadline := time.Now().Add(90 * time.Second)
+	deadline := time.Now().Add(90*time.Second + time.Duration(attempts)*connectInterval)
 	for time.Now().Before(deadline) {
 		pod, err := p.Client.CoreV1().Pods(p.Namespace).Get(ctx, client.Name, metav1.GetOptions{})
 		if err != nil {
