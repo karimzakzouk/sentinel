@@ -8,6 +8,9 @@
 #   calico   always enforces NetworkPolicy.
 #   flannel  never enforces NetworkPolicy.
 #
+# KIND_NODE_IMAGE, when set, picks the node image and so the Kubernetes
+# version; kind's default is used otherwise.
+#
 # Safe to rerun: an existing cluster is reused.
 set -euo pipefail
 
@@ -35,7 +38,11 @@ fetch() {
 }
 
 if ! kind get clusters 2>/dev/null | grep -x "$name" >/dev/null; then
-  kind create cluster --name "$name" --config "$here/kind/$network.yaml" --wait 0s
+  image=()
+  if [ -n "${KIND_NODE_IMAGE:-}" ]; then
+    image=(--image "$KIND_NODE_IMAGE")
+  fi
+  kind create cluster --name "$name" --config "$here/kind/$network.yaml" --wait 0s "${image[@]}"
 fi
 ctx="kind-$name"
 

@@ -4,21 +4,32 @@ on:
   workflow_call:
     inputs:
       network:
-        description: kind network plugin, kindnet or calico
+        description: kind network plugin, kindnet, calico or flannel
         required: true
         type: string
+      node-image:
+        description: kind node image, which sets the Kubernetes version; empty for kind's default
+        required: false
+        type: string
+        default: ""
+      label:
+        description: suffix for the job and artifact names
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
 
 jobs:
   run:
-    name: ${{ inputs.network }}
+    name: ${{ inputs.network }}${{ inputs.label }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
       E2E_CLUSTER: sentinel-e2e
       E2E_NETWORK: ${{ inputs.network }}
+      KIND_NODE_IMAGE: ${{ inputs.node-image }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -38,6 +49,6 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
         with:
-          name: e2e-diagnostics-${{ inputs.network }}
+          name: e2e-diagnostics-${{ inputs.network }}${{ inputs.label }}
           path: e2e-diagnostics.txt
           retention-days: 7
