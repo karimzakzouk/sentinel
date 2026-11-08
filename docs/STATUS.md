@@ -6,16 +6,17 @@ Last updated: Monday 9 November 2026, 00:40 Cairo time (UTC+2).
 
 **Phase 0 (Foundations) is done and tagged `v2.0.0-alpha.0`.** Phase 1
 (Observe: the Watcher and the Brain in shadow mode) is under way. Slice 1
-(Kubernetes facts into explained incidents) is done; slice 2 (logs) is
-built and proven end to end. Sentinel records what it would do and changes
-nothing.
+(Kubernetes facts into explained incidents) and slice 2 (logs) are done:
+Sentinel now also catches a deploy whose pods stay up but start logging
+errors, which Kubernetes itself cannot see. It records what it would do and
+changes nothing.
 
 ## Phase 1 progress
 
 | Slice | State | Proof |
 |---|---|---|
 | 1. Kubernetes facts → signals → incidents | Done | Smoke pool 6 of 6; Online Boutique below; `TestBadImageScenario` in CI |
-| 2. Logs: evidence, redaction, new errors after a deploy | Built | `TestLeakedSecretsNeverReachTheLedger` in CI; frontend scenario below |
+| 2. Logs: evidence, redaction, new errors after a deploy | Done | `TestLeakedSecretsNeverReachTheLedger` in CI; the frontend scenario below |
 | 3. Metrics, dependency map, localization | Next | |
 | 4. Rate detectors | | |
 | 5. Shadow report, CLI, read-only UI | | |
@@ -40,9 +41,7 @@ and the action it would take.
 | Boutique: product catalog memory | missed | No: one OOM kill every two minutes never puts two in the one-minute window the development cluster uses (decision 27) |
 | Boutique: Redis scaled to zero | missed | Expected: the errors show in other services, not in Redis; slice 3's dependency map is for this |
 | Boutique: control | nothing | Yes |
-
-The scenario that needs logs (the frontend's catalog address misspelled: no
-pod fails, every page logs an error) is running; its result goes here next.
+| Boutique: frontend's catalog address misspelled (no pod fails; every page logs an error) | new errors after a deploy (0.997), blames `env:server` (0.93), roll back; the new pods' error attached as evidence | Yes, from logs alone: the new revision's error rate against the old one's, p = 1.2×10⁻⁷ |
 
 ## Things building found
 
