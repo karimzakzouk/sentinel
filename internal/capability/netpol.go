@@ -36,9 +36,12 @@ type NetworkPolicyProbe struct {
 
 const probePort = 8080
 
-// Run creates a server, checks a control connection succeeds, applies a
-// deny-all ingress policy and checks the same connection is then blocked.
-// Everything it creates is deleted before it returns.
+// Run proves enforcement in two steps. With a policy that allows traffic
+// between the probe's own pods, a control connection must succeed; once that
+// allow policy is replaced by a deny policy, the same connection must be
+// blocked. Policies only ever add allowances, so this works in a namespace
+// that already denies everything by default, and then tests that namespace's
+// real isolation. Everything the probe creates is deleted before it returns.
 func (p NetworkPolicyProbe) Run(ctx context.Context) Check {
 	if p.Settle == 0 {
 		p.Settle = 60 * time.Second
@@ -49,6 +52,20 @@ func (p NetworkPolicyProbe) Run(ctx context.Context) Check {
 	id := strings.ToLower(string(model.NewID())[24:])
 	labels := map[string]string{probeLabel: "sentinel-netpol-probe", "sentinel-probe-id": id}
 	defer p.cleanup(context.WithoutCancel(ctx), id)
+
+	ownPods := []networkingv1.NetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"sentinel-probe-id": id}}}}
+	allow := &networkingv1.NetworkPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "sentinel-np-allow-" + id, Namespace: p.Namespace, Labels: labels},
+		Spec: networkingv1.NetworkPolicySpec{
+			PodSelector: metav1.LabelSelector{MatchLabels: map[string]string{"sentinel-probe-id": id}},
+			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress, networkingv1.PolicyTypeEgress},
+			Ingress:     []networkingv1.NetworkPolicyIngressRule{{From: ownPods}},
+			Egress:      []networkingv1.NetworkPolicyEgressRule{{To: ownPods}},
+		},
+	}
+	if _, err := p.Client.NetworkingV1().NetworkPolicies(p.Namespace).Create(ctx, allow, metav1.CreateOptions{}); err != nil {
+		return Check{ID: NetworkPolicyCheckID, Status: Unknown, Detail: "could not create the allow policy: " + truncate(err.Error(), 200)}
+	}
 
 	server := probePod(p.Namespace, "sentinel-np-server-"+id)
 	server.Labels = mergeLabels(server.Labels, labels, map[string]string{"sentinel-probe-role": "server"})
@@ -71,18 +88,21 @@ func (p NetworkPolicyProbe) Run(ctx context.Context) Check {
 	case err != nil:
 		return Check{ID: NetworkPolicyCheckID, Status: Unknown, Detail: "control connection could not run: " + err.Error()}
 	case !ok:
-		return Check{ID: NetworkPolicyCheckID, Status: Unknown, Detail: "the control connection failed with no policy in place, so pod networking itself is broken here"}
+		return Check{ID: NetworkPolicyCheckID, Status: Unknown, Detail: "the control connection failed even though a policy allowed it, so pod networking itself is broken here"}
 	}
 
-	policy := &networkingv1.NetworkPolicy{
+	deny := &networkingv1.NetworkPolicy{
 		ObjectMeta: metav1.ObjectMeta{Name: "sentinel-np-deny-" + id, Namespace: p.Namespace, Labels: labels},
 		Spec: networkingv1.NetworkPolicySpec{
 			PodSelector: metav1.LabelSelector{MatchLabels: map[string]string{"sentinel-probe-id": id, "sentinel-probe-role": "server"}},
 			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress},
 		},
 	}
-	if _, err := p.Client.NetworkingV1().NetworkPolicies(p.Namespace).Create(ctx, policy, metav1.CreateOptions{}); err != nil {
+	if _, err := p.Client.NetworkingV1().NetworkPolicies(p.Namespace).Create(ctx, deny, metav1.CreateOptions{}); err != nil {
 		return Check{ID: NetworkPolicyCheckID, Status: Unknown, Detail: "could not create the deny policy: " + truncate(err.Error(), 200)}
+	}
+	if err := p.Client.NetworkingV1().NetworkPolicies(p.Namespace).Delete(ctx, allow.Name, metav1.DeleteOptions{}); err != nil {
+		return Check{ID: NetworkPolicyCheckID, Status: Unknown, Detail: "could not remove the allow policy: " + truncate(err.Error(), 200)}
 	}
 	applied := time.Now()
 	for attempt := 1; ; attempt++ {
@@ -92,11 +112,11 @@ func (p NetworkPolicyProbe) Run(ctx context.Context) Check {
 		}
 		if !ok {
 			return Check{ID: NetworkPolicyCheckID, Status: Available, Detail: fmt.Sprintf(
-				"enforced: a deny-all policy blocked traffic within %s, and the same connection succeeded before it", time.Since(applied).Round(time.Second))}
+				"enforced: traffic was blocked within %s of removing the allow policy, and got through while it existed", time.Since(applied).Round(time.Second))}
 		}
 		if time.Since(applied) > p.Settle {
 			return Check{ID: NetworkPolicyCheckID, Status: Unavailable, Detail: fmt.Sprintf(
-				"not enforced: traffic still got through %s after a deny-all policy; the network plugin ignores NetworkPolicy", p.Settle)}
+				"not enforced: traffic still got through %s after the allow policy was replaced by a deny policy; the network plugin ignores NetworkPolicy", p.Settle)}
 		}
 		select {
 		case <-ctx.Done():
@@ -166,7 +186,9 @@ func (p NetworkPolicyProbe) cleanup(ctx context.Context, id string) {
 			_ = p.Client.CoreV1().Pods(p.Namespace).Delete(ctx, pod.Name, metav1.DeleteOptions{GracePeriodSeconds: ptr.To(int64(0))})
 		}
 	}
-	_ = p.Client.NetworkingV1().NetworkPolicies(p.Namespace).Delete(ctx, "sentinel-np-deny-"+id, metav1.DeleteOptions{})
+	for _, name := range []string{"sentinel-np-allow-" + id, "sentinel-np-deny-" + id} {
+		_ = p.Client.NetworkingV1().NetworkPolicies(p.Namespace).Delete(ctx, name, metav1.DeleteOptions{})
+	}
 }
 
 func restrictedPodSecurity() *corev1.PodSecurityContext {
