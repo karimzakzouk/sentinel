@@ -1,0 +1,125 @@
+# Every write by the actor: only updates of existing Deployments and
+# StatefulSets (or their scale) in allowlisted namespaces.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: sentinel-fence-actor
+  labels:
+    {{- include "fence.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["*"]
+        apiVersions: ["*"]
+        operations: [CREATE, UPDATE, DELETE, CONNECT]
+        resources: ["*/*"]
+  matchConditions:
+    - name: is-sentinel-actor
+      expression: request.userInfo.username == "{{ include "fence.actorUser" . }}"
+  variables:
+    {{- include "fence.requestVariables" . | nindent 4 }}
+    - name: workload
+      expression: "request.resource.group == 'apps' && request.resource.resource in ['deployments', 'statefulsets']"
+  validations:
+    - expression: "request.resource.group in ['authorization.k8s.io', 'authentication.k8s.io'] || variables.requestNamespace in {{ include "fence.namespaces" . }}"
+      message: "Sentinel may act only in its allowlisted namespaces"
+      reason: Forbidden
+    - expression: "request.resource.group in ['authorization.k8s.io', 'authentication.k8s.io'] || (request.operation == 'UPDATE' && variables.workload && variables.subResource in ['', 'scale'])"
+      message: "Sentinel may only update existing Deployments and StatefulSets, or their scale"
+      reason: Forbidden
+    - expression: "variables.subResource != 'scale' || (object.spec.?replicas.orValue(0) >= {{ .Values.replicas.min }} && object.spec.?replicas.orValue(0) <= {{ .Values.replicas.max }})"
+      message: "replicas must stay between {{ .Values.replicas.min }} and {{ .Values.replicas.max }}"
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: sentinel-fence-actor
+  labels:
+    {{- include "fence.labels" . | nindent 4 }}
+spec:
+  policyName: sentinel-fence-actor
+  validationActions: [Deny]
+---
+# Deployment updates: replicas within bounds and the restart annotation; the
+# rest of the object must not change.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: sentinel-fence-actor-deployments
+  labels:
+    {{- include "fence.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [apps]
+        apiVersions: [v1]
+        operations: [UPDATE]
+        resources: [deployments]
+  matchConditions:
+    - name: is-sentinel-actor
+      expression: request.userInfo.username == "{{ include "fence.actorUser" . }}"
+  variables:
+    {{- include "fence.workloadVariables" . | nindent 4 }}
+  validations:
+    {{- include "fence.workloadValidations" . | nindent 4 }}
+    - expression: >-
+        object.spec.?strategy == oldObject.spec.?strategy &&
+        object.spec.?minReadySeconds == oldObject.spec.?minReadySeconds &&
+        object.spec.?revisionHistoryLimit == oldObject.spec.?revisionHistoryLimit &&
+        object.spec.?progressDeadlineSeconds == oldObject.spec.?progressDeadlineSeconds &&
+        object.spec.?paused == oldObject.spec.?paused
+      message: "Sentinel may not change a Deployment's rollout settings"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: sentinel-fence-actor-deployments
+  labels:
+    {{- include "fence.labels" . | nindent 4 }}
+spec:
+  policyName: sentinel-fence-actor-deployments
+  validationActions: [Deny]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: sentinel-fence-actor-statefulsets
+  labels:
+    {{- include "fence.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [apps]
+        apiVersions: [v1]
+        operations: [UPDATE]
+        resources: [statefulsets]
+  matchConditions:
+    - name: is-sentinel-actor
+      expression: request.userInfo.username == "{{ include "fence.actorUser" . }}"
+  variables:
+    {{- include "fence.workloadVariables" . | nindent 4 }}
+  validations:
+    {{- include "fence.workloadValidations" . | nindent 4 }}
+    - expression: >-
+        object.spec.serviceName == oldObject.spec.serviceName &&
+        object.spec.?podManagementPolicy == oldObject.spec.?podManagementPolicy &&
+        object.spec.?updateStrategy == oldObject.spec.?updateStrategy &&
+        object.spec.?revisionHistoryLimit == oldObject.spec.?revisionHistoryLimit &&
+        object.spec.?minReadySeconds == oldObject.spec.?minReadySeconds &&
+        object.spec.?volumeClaimTemplates == oldObject.spec.?volumeClaimTemplates &&
+        object.spec.?persistentVolumeClaimRetentionPolicy == oldObject.spec.?persistentVolumeClaimRetentionPolicy
+      message: "Sentinel may not change a StatefulSet's identity, storage or rollout settings"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: sentinel-fence-actor-statefulsets
+  labels:
+    {{- include "fence.labels" . | nindent 4 }}
+spec:
+  policyName: sentinel-fence-actor-statefulsets
+  validationActions: [Deny]

@@ -1,0 +1,35 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: sentinel-fence-controller
+  labels:
+    {{- include "fence.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["*"]
+        apiVersions: ["*"]
+        operations: [CREATE, UPDATE, DELETE, CONNECT]
+        resources: ["*/*"]
+  matchConditions:
+    - name: is-sentinel-controller
+      expression: request.userInfo.username == "{{ include "fence.controllerUser" . }}"
+  variables:
+    {{- include "fence.requestVariables" . | nindent 4 }}
+  validations:
+    - expression: >-
+        request.resource.group in ['authorization.k8s.io', 'authentication.k8s.io'] ||
+        (request.resource.resource == 'pods' && variables.subResource == '' && request.operation == 'CREATE' && variables.dryRun)
+      message: "Sentinel's controller may only run dry-run pod probes and access reviews; it never changes the cluster directly"
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: sentinel-fence-controller
+  labels:
+    {{- include "fence.labels" . | nindent 4 }}
+spec:
+  policyName: sentinel-fence-controller
+  validationActions: [Deny]

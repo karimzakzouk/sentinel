@@ -1,0 +1,21 @@
+# Install this chart as a cluster admin. Sentinel's own identities cannot
+# change admission policies, so they cannot lift the fence.
+
+# Sentinel's controller identity: may only run dry-run pod probes and access
+# reviews; every other write is rejected.
+controller:
+  namespace: sentinel
+  serviceAccount: sentinel
+
+# The identity that executes actions.
+actor:
+  namespace: sentinel-actor
+  serviceAccount: sentinel-actor
+
+# Namespaces the actor may change. Keep in sync with the sentinel chart's
+# watch.namespaces. Empty means the actor may change nothing.
+namespaces: []
+
+replicas:
+  min: 1
+  max: 20

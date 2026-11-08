@@ -1,0 +1,9 @@
+apiVersion: v2
+name: sentinel
+description: Sentinel, a self-hosted autonomous SRE for Kubernetes. Starts in observe mode.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.30.0-0"
+home: https://github.com/karimzakzouk/sentinel
+license: Apache-2.0
