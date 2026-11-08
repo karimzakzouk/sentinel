@@ -12,10 +12,11 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 observe=${OBSERVE_SECONDS:-60}
 
 settle() {
-  local opened resolved
+  local log opened resolved
   for _ in $(seq 1 60); do
-    opened=$(kubectl --context "$ctx" -n sentinel logs deploy/sentinel | grep -c '"msg":"incident opened"' || true)
-    resolved=$(kubectl --context "$ctx" -n sentinel logs deploy/sentinel | grep -c '"msg":"incident resolved"' || true)
+    log=$(kubectl --context "$ctx" -n sentinel logs deploy/sentinel)
+    opened=$(grep -c '"msg":"incident opened"' <<<"$log" || true)
+    resolved=$(grep -c '"msg":"incident resolved"' <<<"$log" || true)
     [ "$opened" -le "$resolved" ] && return
     sleep 5
   done
