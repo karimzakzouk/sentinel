@@ -1,0 +1,87 @@
+# Phase 1 plan: Observe
+
+The Watcher and the Brain run in shadow mode: they detect, group, explain and
+record what Sentinel *would* do, and change nothing. Phase 1 is built as six
+vertical slices. Each one works end to end, is scored against the scenario
+pool, and lands before the next starts.
+
+The design it implements is in `end-to-end.canvas.tsx` (Watcher and Brain
+tabs). Deviations get an entry in `docs/decisions.md`.
+
+## Slices
+
+### 1. Kubernetes facts → signals → incidents
+
+- **Collection**: informers for Pods, Deployments, ReplicaSets, StatefulSets
+  and events in the watched namespaces, with `managedFields` and unused spec
+  stripped before caching.
+- **Facts**: container terminations deduplicated by (pod UID, container,
+  restart count); waiting reasons (image pull, crash loop, config errors);
+  OOM kills; running-but-not-ready pods; scheduling and probe-failure events.
+- **Count baselines**: a Gamma–Poisson posterior predictive per workload and
+  fact type, with a prior pooled across workloads (empirical Bayes). A fact
+  becomes a signal with its tail probability; Benjamini–Hochberg controls
+  false discoveries across series. The only knob is the false-alarm budget.
+- **Change log**: rollouts (new ReplicaSet revisions, with what changed in the
+  template), scale changes and ConfigMap changes (hashes of values, never the
+  values), recorded in the Ledger.
+- **Incidents**: signals join an incident when they share a workload or are
+  close in time on connected workloads; the gap is learned, starting from a
+  prior.
+- **Brain v0**: `brain.classify` (fault class distribution from facts and
+  change evidence), `brain.attribute` (likelihood-ratio ranking of recent
+  changes: type prior, onset gap, share of failing pods on the new revision),
+  and a shadow decision: the action it would take, "do nothing", or
+  "escalate".
+- **Proof**: the smoke scenarios produce one incident each with the right
+  fault class and change; the controls and the pod kill produce no action.
+
+### 2. Logs
+
+- Previous and current logs fetched within a budget when a container
+  terminates, restarts or flips readiness.
+- Multiline assembly (Go, Java, Python, Node stack traces), two-pass
+  redaction (key rules, provider regexes, entropy, JWT/PEM checks) tested with
+  canary secrets, Drain-style templates, Sentry-style exception fingerprints.
+- Evidence records hold a redacted summary and a hash, never raw lines.
+- New error after deploy: a Poisson rate-ratio test of new pods against old.
+
+### 3. Metrics and localization
+
+- metrics.k8s.io when present (metrics-server is added to the test clusters).
+- Dependency map from configuration (service addresses in environment
+  variables and ConfigMaps) and from logs (hosts in connection errors).
+- `brain.localize`: BARO-style robust deviation scoring to retrieve suspects,
+  reranked on the dependency map, returned as a ranking with a confidence set.
+- **Proof**: Online Boutique's Redis scenario is localized to Redis, not to
+  where the errors appear.
+
+### 4. Rate detectors
+
+Seasonal decomposition with median/MAD residuals, SPOT/DSPOT tail
+probabilities, Benjamini–Hochberg across series, CUSUM persistence and a
+Mann–Kendall "went away" check; cold start from sibling replicas.
+
+### 5. Shadow report, CLI and read-only UI
+
+- `sentinel incidents` and `sentinel report shadow`.
+- A read-only incident timeline in a React and TypeScript UI built into the
+  binary. It listens on localhost inside the pod, so the only way in is
+  `kubectl port-forward`, which Kubernetes RBAC already guards; no login code
+  and nothing exposed on the network. Proper sign-in comes with UI v1.
+
+### 6. Scoring
+
+`harness score` runs the scenario pool, reads Sentinel's incidents from the
+Ledger export, and computes against the hidden ground truth: per-event
+detection precision and recall (no point adjustment), AC@1, AC@3 and Avg@5 for
+localization, change-attribution hit rate, and false alarms per service per
+week from the controls.
+
+## Gate
+
+- Detection precision and recall, and localization accuracy, on the
+  development fault pool (scored by `harness score`).
+- False alarms per service per week in a 72-hour noisy soak. This needs a
+  machine that can run for three days; until then, shorter soaks give an
+  estimate with its interval.
