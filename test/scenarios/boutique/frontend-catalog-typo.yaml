@@ -1,0 +1,15 @@
+id: boutique-frontend-catalog-typo
+title: A config change misspells the product catalog's address; no pod fails, but every page the frontend serves logs an error
+app: online-boutique
+fault:
+  kind: patch
+  target: {apiVersion: apps/v1, kind: Deployment, namespace: boutique, name: frontend}
+  patch:
+    type: strategic
+    content: '{"spec":{"template":{"spec":{"containers":[{"name":"server","env":[{"name":"PRODUCT_CATALOG_SERVICE_ADDR","value":"productcatalog:3550"}]}]}}}}'
+groundTruth:
+  faultClass: deploy.new-errors
+  rootCause: {apiVersion: apps/v1, kind: Deployment, namespace: boutique, name: frontend}
+  changeType: config
+  symptoms: [frontend.errors]
+  mitigation: rollout.undo

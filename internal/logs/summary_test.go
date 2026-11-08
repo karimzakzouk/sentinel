@@ -55,9 +55,12 @@ func TestSummariesAreBounded(t *testing.T) {
 	for i := range 200 {
 		log = append(log, fmt.Sprintf("distinct%c%c message number %d %s", 'a'+i%26, 'a'+i/26, i, strings.Repeat("x", 500)))
 	}
+	for i := range 40 {
+		log = append(log, fmt.Sprintf("failure%c%c in step %d", 'a'+i%26, 'a'+i/26, i))
+	}
 	s := Summarize(timestamped(log...), redact.New())
-	if len(s.Templates) != maxTemplates {
-		t.Fatalf("templates = %d, want %d", len(s.Templates), maxTemplates)
+	if len(s.Templates) != maxTemplates+maxErrorTemplates {
+		t.Fatalf("templates = %d, want %d frequent and %d more errors", len(s.Templates), maxTemplates, maxErrorTemplates)
 	}
 	for _, tpl := range s.Templates {
 		if len([]rune(tpl.Sample)) > maxSample+1 {
@@ -68,9 +71,10 @@ func TestSummariesAreBounded(t *testing.T) {
 
 func TestMessageAndLevel(t *testing.T) {
 	for line, want := range map[string]string{
-		`{"severity":"ERROR","message":"payment failed"}`:       "payment failed|error",
-		`{"level":"info","msg":"ok"}`:                           "ok|info",
-		`E1108 21:14:11.123456 1 controller.go:42] sync failed`: "E1108 21:14:11.123456 1 controller.go:42] sync failed|error",
+		`{"severity":"ERROR","message":"payment failed"}`:                                        "payment failed|error",
+		`{"level":"info","msg":"ok"}`:                                                            "ok|info",
+		`{"severity":"error","message":"request error","error":"rpc error: code = Unavailable"}`: "request error: rpc error: code = Unavailable|error",
+		`E1108 21:14:11.123456 1 controller.go:42] sync failed`:                                  "E1108 21:14:11.123456 1 controller.go:42] sync failed|error",
 		`plain text`:   "plain text|",
 		`{"no":"msg"}`: `{"no":"msg"}|`,
 	} {

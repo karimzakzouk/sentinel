@@ -40,6 +40,8 @@ func TestClassifierPicksTheMatchingClass(t *testing.T) {
 		{map[string]int{"pod.config-error": 10}, []string{"config"}, ClassConfigError},
 		{map[string]int{"pod.unschedulable": 10}, []string{"scale"}, ClassUnschedulable},
 		{map[string]int{"pod.crash-loop": 6, "pod.restarted": 6}, nil, ClassRuntimeCrash},
+		{map[string]int{"log.new-error": 40}, []string{"config"}, ClassNewErrors},
+		{map[string]int{"log.new-error": 40}, []string{"image"}, ClassNewErrors},
 	}
 	for _, tc := range cases {
 		if got := classify(t, tc.facts, tc.changes...).Top().Value; got != tc.want {

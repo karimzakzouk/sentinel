@@ -38,6 +38,7 @@ type Watcher struct {
 	mu          sync.Mutex
 	ns          map[string]*namespaceListers
 	eventCounts map[string]int32
+	rollouts    map[string]*rollout
 }
 
 type namespaceListers struct {
@@ -51,6 +52,14 @@ type namespaceListers struct {
 func (w *Watcher) Run(ctx context.Context) error {
 	w.ns = map[string]*namespaceListers{}
 	w.eventCounts = map[string]int32{}
+	w.rollouts = map[string]*rollout{}
+	if w.Logs != nil {
+		toBrain := w.Logs.OnEvidence
+		w.Logs.OnEvidence = func(ctx context.Context, ev LogEvidence) {
+			w.rolloutEvidence(ctx, ev)
+			toBrain(ctx, ev)
+		}
+	}
 	start := time.Now().UTC()
 	var synced []cache.InformerSynced
 	for _, ns := range w.Namespaces {
@@ -160,6 +169,7 @@ func (w *Watcher) Run(ctx context.Context) error {
 					w.requestLogs(ctx, p, facts)
 				}
 			}
+			w.sampleRollouts(ctx, now)
 			for _, d := range w.Detector.Advance(now) {
 				w.OnDetection(ctx, d)
 			}
@@ -182,6 +192,9 @@ func (w *Watcher) requestLogs(ctx context.Context, pod *corev1.Pod, facts []Fact
 func (w *Watcher) changes(ctx context.Context, cs []Change) {
 	for _, c := range cs {
 		w.OnChange(ctx, c)
+		if c.Kind == ChangeTemplate {
+			w.startRollout(ctx, c.Object, c.At)
+		}
 	}
 }
 
