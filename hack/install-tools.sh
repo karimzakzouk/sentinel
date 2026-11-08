@@ -52,7 +52,7 @@ if [ "$(helm version --short 2>/dev/null | cut -d+ -f1)" != "$HELM_VERSION" ]; t
 fi
 
 lint_version=${GOLANGCI_LINT_VERSION#v}
-if ! golangci-lint version 2>/dev/null | grep -q "version ${lint_version} "; then
+if ! golangci-lint version 2>/dev/null | grep "version ${lint_version} " >/dev/null; then
   base="https://github.com/golangci/golangci-lint/releases/download/${GOLANGCI_LINT_VERSION}"
   file="golangci-lint-${lint_version}-linux-${ARCH}.tar.gz"
   fetch "${base}/${file}" "$tmp/lint.tgz"
@@ -73,8 +73,8 @@ fi
 sudo usermod -aG docker "$(id -un)"
 
 go version
-kubectl version --client | head -1
+kubectl version --client
 kind version
 helm version --short
-golangci-lint version | head -1
+golangci-lint version
 dockerd --version

@@ -34,7 +34,7 @@ fetch() {
   echo "$3  $2" | sha256sum -c --quiet -
 }
 
-if ! kind get clusters 2>/dev/null | grep -qx "$name"; then
+if ! kind get clusters 2>/dev/null | grep -x "$name" >/dev/null; then
   kind create cluster --name "$name" --config "$here/kind/$network.yaml" --wait 0s
 fi
 ctx="kind-$name"
