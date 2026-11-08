@@ -90,5 +90,12 @@ func newObserver(log *slog.Logger, cfg *config.Config, client kubernetes.Interfa
 			log.Error("could not record a detection", "workload", det.Workload.String(), "error", err)
 		}
 	}
+	if cfg.Logs.On() {
+		w.Logs = watcher.NewLogCollector(client, log, func(ctx context.Context, ev watcher.LogEvidence) {
+			if err := b.OnEvidence(ctx, ev); err != nil {
+				log.Error("could not record log evidence", "workload", ev.Workload.String(), "pod", ev.Pod, "error", err)
+			}
+		})
+	}
 	return w, nil
 }

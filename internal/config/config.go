@@ -30,6 +30,7 @@ type Config struct {
 	Ledger       Ledger                 `json:"ledger"`
 	Capabilities Capabilities           `json:"capabilities,omitempty"`
 	Detection    Detection              `json:"detection,omitempty"`
+	Logs         Logs                   `json:"logs,omitempty"`
 	HealthAddr   string                 `json:"healthAddr,omitempty"`
 	Slots        map[string]slot.Config `json:"slots,omitempty"`
 }
@@ -58,6 +59,16 @@ type Detection struct {
 	// quiet; signals within it rejoin the same incident.
 	IncidentGap metav1.Duration `json:"incidentGap,omitempty"`
 }
+
+// Logs configures log evidence: container logs fetched, within a budget, when
+// a container crashes or a pod stays unready.
+type Logs struct {
+	// Enabled defaults to true.
+	Enabled *bool `json:"enabled,omitempty"`
+}
+
+// On reports whether log evidence is enabled.
+func (l Logs) On() bool { return l.Enabled == nil || *l.Enabled }
 
 // Load reads, defaults and validates a config file. Unknown fields are
 // rejected so a typo cannot silently disable a setting.

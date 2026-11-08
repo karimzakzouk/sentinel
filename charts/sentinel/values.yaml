@@ -41,6 +41,11 @@ detection:
   # How long an incident stays open after its signals go quiet.
   incidentGap: 5m
 
+# Container logs fetched when a container crashes or a pod stays unready,
+# 30 fetches a minute at most. Only redacted summaries are kept.
+logs:
+  enabled: true
+
 capabilities:
   interval: 10m
   # Dry-run probes create no objects. The sentinel-fence chart enforces that

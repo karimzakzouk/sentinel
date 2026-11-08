@@ -6,6 +6,7 @@
 package model
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -126,19 +127,25 @@ type Incident struct {
 	UpdatedAt   time.Time     `json:"updatedAt"`
 	Objects     []ObjectRef   `json:"objects,omitempty"`
 	SignalIDs   []ID          `json:"signalIds,omitempty"`
+	EvidenceIDs []ID          `json:"evidenceIds,omitempty"`
 }
 
 // Evidence is one piece of collected data attached to an incident. Only the
 // hash and a redacted summary live here; raw content stays out of the Ledger.
 type Evidence struct {
-	ID          ID        `json:"id"`
-	IncidentID  ID        `json:"incidentId"`
-	Source      string    `json:"source"`
-	Trust       Trust     `json:"trust"`
-	SHA256      string    `json:"sha256"`
-	Summary     string    `json:"summary"`
-	CollectedAt time.Time `json:"collectedAt"`
-	Redacted    bool      `json:"redacted"`
+	ID         ID     `json:"id"`
+	IncidentID ID     `json:"incidentId"`
+	Source     string `json:"source"`
+	// Object is what the evidence is about, such as a pod.
+	Object  ObjectRef `json:"object,omitzero"`
+	Trust   Trust     `json:"trust"`
+	SHA256  string    `json:"sha256"`
+	Summary string    `json:"summary"`
+	// Data is the structured, redacted content, such as a log's templates
+	// and exceptions.
+	Data        json.RawMessage `json:"data,omitempty"`
+	CollectedAt time.Time       `json:"collectedAt"`
+	Redacted    bool            `json:"redacted"`
 }
 
 // LikelihoodRatio is one readable factor in a hypothesis's score: how much

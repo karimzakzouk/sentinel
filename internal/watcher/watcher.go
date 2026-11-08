@@ -31,7 +31,9 @@ type Watcher struct {
 	OnDetection func(context.Context, Detection)
 	// OnTick runs after every tick's detections have been delivered.
 	OnTick func(context.Context)
-	Log    *slog.Logger
+	// Logs, when set, fetches logs that facts call for.
+	Logs *LogCollector
+	Log  *slog.Logger
 
 	mu          sync.Mutex
 	ns          map[string]*namespaceListers
@@ -62,7 +64,9 @@ func (w *Watcher) Run(ctx context.Context) error {
 			UpdateFunc: func(oldObj, newObj any) {
 				old, cur := oldObj.(*corev1.Pod), newObj.(*corev1.Pod)
 				workload, rev := l.owners.Resolve(cur)
-				w.Detector.Observe(TerminationFacts(old, cur, workload, rev, time.Now().UTC())...)
+				facts := TerminationFacts(old, cur, workload, rev, time.Now().UTC())
+				w.Detector.Observe(facts...)
+				w.requestLogs(ctx, cur, facts)
 			},
 		}); err != nil {
 			return err
@@ -151,7 +155,9 @@ func (w *Watcher) Run(ctx context.Context) error {
 				}
 				for _, p := range pods {
 					workload, rev := l.owners.Resolve(p)
-					w.Detector.Observe(StateFacts(p, workload, rev, now)...)
+					facts := StateFacts(p, workload, rev, now)
+					w.Detector.Observe(facts...)
+					w.requestLogs(ctx, p, facts)
 				}
 			}
 			for _, d := range w.Detector.Advance(now) {
@@ -161,6 +167,15 @@ func (w *Watcher) Run(ctx context.Context) error {
 				w.OnTick(ctx)
 			}
 		}
+	}
+}
+
+func (w *Watcher) requestLogs(ctx context.Context, pod *corev1.Pod, facts []Fact) {
+	if w.Logs == nil {
+		return
+	}
+	for _, r := range LogRequests(pod, facts) {
+		w.Logs.Request(ctx, r)
 	}
 }
 
