@@ -97,7 +97,14 @@ func StateFacts(pod *corev1.Pod, workload model.ObjectRef, revision string, now 
 			out = append(out, fact(FactUnschedulable, "", c.Message))
 		}
 	}
+	restarts := pod.Spec.RestartPolicy != corev1.RestartPolicyNever
 	for _, cs := range append(pod.Status.InitContainerStatuses, pod.Status.ContainerStatuses...) {
+		// During a restart back-off, recent Kubernetes versions report the
+		// container as terminated rather than waiting with CrashLoopBackOff.
+		if t := cs.State.Terminated; t != nil && restarts && t.ExitCode != 0 {
+			out = append(out, fact(FactCrashLoop, cs.Name, fmt.Sprintf("exited with code %d (%s), waiting to restart", t.ExitCode, t.Reason)))
+			continue
+		}
 		w := cs.State.Waiting
 		if w == nil {
 			continue

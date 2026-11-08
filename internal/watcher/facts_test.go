@@ -63,6 +63,15 @@ func TestStateFacts(t *testing.T) {
 			t.Errorf("%s: facts = %+v, want one %s", reason, facts, want)
 		}
 	}
+	exited := pod(corev1.ContainerStatus{Name: "web", State: corev1.ContainerState{
+		Terminated: &corev1.ContainerStateTerminated{Reason: "Error", ExitCode: 1}}})
+	if f := StateFacts(exited, web, "", t0); len(f) != 1 || f[0].Kind != FactCrashLoop {
+		t.Errorf("a container waiting out a restart back-off: facts = %+v, want one crash-loop", f)
+	}
+	exited.Spec.RestartPolicy = corev1.RestartPolicyNever
+	if f := StateFacts(exited, web, "", t0); len(f) != 0 {
+		t.Errorf("a container that will never restart is not crash-looping: %+v", f)
+	}
 	if f := StateFacts(pod(waiting("ContainerCreating")), web, "", t0); len(f) != 0 {
 		t.Errorf("a starting container produced facts: %+v", f)
 	}
