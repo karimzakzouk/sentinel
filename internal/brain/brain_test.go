@@ -1,9 +1,11 @@
 package brain
 
 import (
+	"encoding/json"
 	"io"
 	"log/slog"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -88,6 +90,86 @@ func TestBadImageRolloutBecomesAnExplainedIncident(t *testing.T) {
 	}
 	if n, err := l.Verify(ctx); err != nil || n == 0 {
 		t.Fatalf("ledger verify = %d, %v", n, err)
+	}
+}
+
+func topClass(t *testing.T, l *ledger.Ledger) model.Hypothesis {
+	t.Helper()
+	hyps, err := ledger.List[model.Hypothesis](ctx, l, model.KindHypothesis, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var top model.Hypothesis
+	for _, h := range hyps {
+		if h.Posterior > top.Posterior {
+			top = h
+		}
+	}
+	return top
+}
+
+// One OOM kill is not significant on its own, but it says what kind of crash
+// loop this is.
+func TestFactsBelowSignificanceInformTheClass(t *testing.T) {
+	b, l := newBrain(t)
+	det := watcher.Detection{ID: model.NewID(), Workload: web, Kind: watcher.FactCrashLoop, Count: 3, Onset: onset, At: onset,
+		Window: map[watcher.FactKind]int{watcher.FactCrashLoop: 3, watcher.FactOOMKilled: 1}}
+	if err := b.OnDetection(ctx, det); err != nil {
+		t.Fatal(err)
+	}
+	if top := topClass(t, l); top.FaultClass != ClassMemoryLimit {
+		t.Fatalf("top hypothesis = %s (%.2f), want %s", top.FaultClass, top.Posterior, ClassMemoryLimit)
+	}
+}
+
+// The image change and its revert behind an earlier, resolved incident must
+// not make a later crash loop look like an image problem.
+func TestChangesBeforeTheLastRecoveryDoNotShapeTheClass(t *testing.T) {
+	b, l := newBrain(t)
+	earlier := onset.Add(-20 * time.Minute)
+	for _, c := range []watcher.Change{
+		{ID: model.NewID(), Kind: watcher.ChangeTemplate, Object: web, Fields: []string{"image:web"}, At: earlier},
+		{ID: model.NewID(), Kind: watcher.ChangeTemplate, Object: web, Fields: []string{"image:web"}, At: earlier.Add(5 * time.Minute)},
+	} {
+		if err := b.OnChange(ctx, c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	first := watcher.Detection{ID: model.NewID(), Workload: web, Kind: watcher.FactImagePullError, Count: 4, Onset: earlier.Add(time.Minute), At: earlier.Add(time.Minute)}
+	b.Now = func() time.Time { return earlier.Add(time.Minute) }
+	if err := b.OnDetection(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	ended := first
+	ended.Ended = true
+	b.Now = func() time.Time { return earlier.Add(6 * time.Minute) }
+	if err := b.OnDetection(ctx, ended); err != nil {
+		t.Fatal(err)
+	}
+	b.Now = func() time.Time { return earlier.Add(6*time.Minute + b.Gap) }
+	if err := b.Sweep(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := b.OnChange(ctx, watcher.Change{ID: model.NewID(), Kind: watcher.ChangeTemplate, Object: web, Fields: []string{"args:web"}, At: onset.Add(-time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	b.Now = func() time.Time { return onset.Add(time.Minute) }
+	det := watcher.Detection{ID: model.NewID(), Workload: web, Kind: watcher.FactCrashLoop, Count: 3, Onset: onset, At: onset,
+		Window: map[watcher.FactKind]int{watcher.FactCrashLoop: 3, watcher.FactRestarted: 2}}
+	if err := b.OnDetection(ctx, det); err != nil {
+		t.Fatal(err)
+	}
+	recs, err := slot.Records(ctx, l, slot.BrainClassify)
+	if err != nil || len(recs) != 2 {
+		t.Fatalf("classify records = %d, %v; want 2", len(recs), err)
+	}
+	var in ClassifyInput
+	if err := json.Unmarshal(recs[1].Input, &in); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(in.ChangeFields, []string{"config"}) {
+		t.Fatalf("change fields = %v, want only the change since the last recovery", in.ChangeFields)
 	}
 }
 

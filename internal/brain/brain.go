@@ -40,6 +40,8 @@ type Brain struct {
 	mu      sync.Mutex
 	changes []watcher.Change
 	open    map[string]*incident
+	// resolvedAt holds when each workload's last incident resolved.
+	resolvedAt map[string]time.Time
 }
 
 type incident struct {
@@ -119,7 +121,10 @@ func (b *Brain) OnDetection(ctx context.Context, d watcher.Detection) error {
 		Attributes: map[string]string{"count": fmt.Sprint(d.Count), "alpha": fmt.Sprintf("%.3g", d.Alpha)},
 	}
 	inc.episodes[d.ID] = true
-	inc.facts[string(d.Kind)] += d.Count
+	inc.facts[string(d.Kind)] = max(inc.facts[string(d.Kind)], d.Count)
+	for kind, n := range d.Window {
+		inc.facts[string(kind)] = max(inc.facts[string(kind)], n)
+	}
 	for r, n := range d.Revisions {
 		inc.revisions[r] += n
 	}
@@ -154,6 +159,10 @@ func (b *Brain) Sweep(ctx context.Context) error {
 		inc.rec.State, inc.rec.UpdatedAt = model.IncidentResolved, now
 		drafts = append(drafts, ledger.RecordDraft(source, model.KindIncident, "resolved", inc.rec.ID, inc.rec.ID, inc.rec))
 		delete(b.open, key)
+		if b.resolvedAt == nil {
+			b.resolvedAt = map[string]time.Time{}
+		}
+		b.resolvedAt[key] = now
 		b.Log.Info("incident resolved", "incident", inc.rec.ID, "workload", key)
 	}
 	if len(drafts) == 0 {
@@ -180,6 +189,12 @@ func (b *Brain) assess(ctx context.Context, inc *incident, workload model.Object
 			}
 		}
 		candidates = append(candidates, CandidateChange{ID: c.ID, Kind: string(c.Kind), Object: c.Object, Fields: c.Fields, At: c.At, Actor: c.Actor})
+		// A change that was already in place when the workload last recovered
+		// says little about what kind of fault this is. It stays a candidate,
+		// and attribution's timing evidence weighs its age.
+		if !c.At.After(b.resolvedAt[workload.String()]) {
+			continue
+		}
 		for _, f := range c.Fields {
 			if g := FieldGroup(string(c.Kind), f); g != "other" && !seen[g] {
 				seen[g] = true
