@@ -248,6 +248,32 @@ func TestDetectPlatform(t *testing.T) {
 	}
 }
 
+func TestDetectNetworkPlugin(t *testing.T) {
+	annotated := func(annotations map[string]string) []corev1.Node {
+		return []corev1.Node{{ObjectMeta: metav1.ObjectMeta{Annotations: annotations}}}
+	}
+	empty := apiSet{has: map[string]bool{}}
+	calicoCRDs := apiSet{has: map[string]bool{"crd.projectcalico.org/networkpolicies": true}}
+	flannel := annotated(map[string]string{"flannel.alpha.coreos.com/backend-type": "host-gw"})
+	cases := []struct {
+		nodes    []corev1.Node
+		apis     apiSet
+		platform string
+		want     string
+	}{
+		{flannel, empty, "kind", "flannel"},
+		{flannel, calicoCRDs, "", "calico"}, // Canal
+		{annotated(map[string]string{"projectcalico.org/IPv4Address": "10.0.0.1/24"}), empty, "", "calico"},
+		{annotated(nil), empty, "kind", "kindnet (kind default, unless replaced)"},
+		{annotated(nil), empty, "eks", ""},
+	}
+	for _, tc := range cases {
+		if got := detectNetworkPlugin(tc.nodes, tc.apis, tc.platform); got != tc.want {
+			t.Errorf("detectNetworkPlugin(%v, %s) = %q, want %q", tc.nodes[0].Annotations, tc.platform, got, tc.want)
+		}
+	}
+}
+
 func TestNodeCoverage(t *testing.T) {
 	fargate := corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "fargate-1", Labels: map[string]string{"eks.amazonaws.com/compute-type": "fargate"}}}
 	old := corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "old-1"}, Status: corev1.NodeStatus{NodeInfo: corev1.NodeSystemInfo{KernelVersion: "4.14.0"}}}
