@@ -1,5 +1,6 @@
 GO ?= go
-VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+# v1 release tags still exist in this repository; v2 builds describe themselves from v2 tags only.
+VERSION ?= $(shell git describe --tags --match 'v2.*' --always --dirty 2>/dev/null || echo dev)
 IMAGE ?= sentinel:dev
 E2E_CLUSTER ?= sentinel-e2e
 LDFLAGS := -s -w -X github.com/karimzakzouk/sentinel/internal/version.Version=$(VERSION)
