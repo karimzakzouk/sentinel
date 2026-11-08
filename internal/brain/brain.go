@@ -42,6 +42,7 @@ type Brain struct {
 	open    map[string]*incident
 	// resolvedAt holds when each workload's last incident resolved.
 	resolvedAt map[string]time.Time
+	evidence   map[string][]*pendingEvidence
 }
 
 type incident struct {
@@ -131,10 +132,12 @@ func (b *Brain) OnDetection(ctx context.Context, d watcher.Detection) error {
 	inc.rec.SignalIDs = append(inc.rec.SignalIDs, sig.ID)
 	inc.rec.UpdatedAt = now
 
+	evidence := b.evidenceDrafts(inc, key)
 	drafts := []ledger.Draft{
 		ledger.RecordDraft(source, model.KindSignal, "observed", sig.ID, inc.rec.ID, sig),
 		ledger.RecordDraft(source, model.KindIncident, verb, inc.rec.ID, inc.rec.ID, inc.rec),
 	}
+	drafts = append(drafts, evidence...)
 	more, summary, err := b.assess(ctx, inc, d.Workload)
 	if err != nil {
 		b.Log.Error("assessment failed; the incident is recorded without it", "incident", inc.rec.ID, "error", err)
@@ -150,6 +153,7 @@ func (b *Brain) OnDetection(ctx context.Context, d watcher.Detection) error {
 func (b *Brain) Sweep(ctx context.Context) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	b.pruneEvidence()
 	now := b.now()
 	var drafts []ledger.Draft
 	for key, inc := range b.open {

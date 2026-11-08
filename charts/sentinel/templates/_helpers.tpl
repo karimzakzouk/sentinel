@@ -48,6 +48,8 @@ detection:
   tick: {{ .Values.detection.tick }}
   halfLife: {{ .Values.detection.halfLife }}
   incidentGap: {{ .Values.detection.incidentGap }}
+logs:
+  enabled: {{ .Values.logs.enabled }}
 healthAddr: ":8081"
 {{- end }}
 

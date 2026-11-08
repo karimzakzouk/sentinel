@@ -2,14 +2,17 @@ package brain
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/karimzakzouk/sentinel/internal/ledger"
+	"github.com/karimzakzouk/sentinel/internal/logs"
 	"github.com/karimzakzouk/sentinel/internal/model"
 	"github.com/karimzakzouk/sentinel/internal/slot"
 	"github.com/karimzakzouk/sentinel/internal/watcher"
@@ -170,6 +173,50 @@ func TestChangesBeforeTheLastRecoveryDoNotShapeTheClass(t *testing.T) {
 	}
 	if !slices.Equal(in.ChangeFields, []string{"config"}) {
 		t.Fatalf("change fields = %v, want only the change since the last recovery", in.ChangeFields)
+	}
+}
+
+func logEvidence(pod string, at time.Time) watcher.LogEvidence {
+	return watcher.LogEvidence{Workload: web, Pod: pod, Container: "web", Previous: true, Reason: "crash", CollectedAt: at,
+		Summary: logs.Summary{Lines: 3, SHA256: "abc", Templates: []logs.TemplateCount{
+			{Template: "Error: unknown flag: --no-such-flag", Count: 1, Error: true, Sample: "Error: unknown flag: --no-such-flag"},
+		}}}
+}
+
+func TestLogEvidenceJoinsTheWorkloadsIncident(t *testing.T) {
+	b, l := newBrain(t)
+	b.Now = func() time.Time { return onset }
+	if err := b.OnEvidence(ctx, logEvidence("web-old", onset.Add(-time.Hour))); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.OnEvidence(ctx, logEvidence("web-1", onset.Add(-30*time.Second))); err != nil {
+		t.Fatal(err)
+	}
+	if ev, _ := ledger.List[model.Evidence](ctx, l, model.KindEvidence, ""); len(ev) != 0 {
+		t.Fatalf("evidence reached the Ledger without an incident: %+v", ev)
+	}
+	det := watcher.Detection{ID: model.NewID(), Workload: web, Kind: watcher.FactCrashLoop, Count: 3, Onset: onset, At: onset}
+	if err := b.OnDetection(ctx, det); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.OnEvidence(ctx, logEvidence("web-2", onset.Add(time.Minute))); err != nil {
+		t.Fatal(err)
+	}
+
+	evidence, _ := ledger.List[model.Evidence](ctx, l, model.KindEvidence, "")
+	var pods []string
+	for _, e := range evidence {
+		pods = append(pods, e.Object.Name)
+		if e.Trust != model.TrustUntrusted || !e.Redacted || !strings.Contains(e.Summary, "unknown flag") {
+			t.Errorf("evidence = %+v", e)
+		}
+	}
+	if fmt.Sprint(pods) != "[web-1 web-2]" {
+		t.Fatalf("evidence from %v, want web-1 (just before the incident) and web-2 (during it)", pods)
+	}
+	incidents, _ := ledger.List[model.Incident](ctx, l, model.KindIncident, "")
+	if len(incidents) != 1 || len(incidents[0].EvidenceIDs) != 2 {
+		t.Fatalf("incident = %+v", incidents)
 	}
 }
 
