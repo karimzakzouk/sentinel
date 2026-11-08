@@ -2,6 +2,8 @@ package brain
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -69,20 +71,69 @@ func (b *Brain) liveEvidence(key string) []*pendingEvidence {
 }
 
 // evidenceDrafts records the workload's evidence that belongs to the
-// incident and has not joined it yet. Callers hold b.mu.
+// incident and has not joined it yet. Uninformative samples and repeats of
+// content the incident already holds (a crash loop's every crash prints the
+// same lines) are left out. Callers hold b.mu.
 func (b *Brain) evidenceDrafts(inc *incident, key string) []ledger.Draft {
 	var drafts []ledger.Draft
 	for _, p := range b.evidence[key] {
-		if p.attachedTo == inc.rec.ID || p.ev.CollectedAt.Before(inc.rec.OpenedAt.Add(-evidenceLead)) {
+		if p.attachedTo == inc.rec.ID || p.ev.CollectedAt.Before(inc.rec.OpenedAt.Add(-evidenceLead)) || !informative(p.ev) {
 			continue
 		}
-		e := evidenceRecord(inc.rec.ID, p.ev)
 		p.attachedTo = inc.rec.ID
+		digest := contentDigest(p.ev)
+		if inc.evidenceDigests[digest] {
+			continue
+		}
+		if inc.evidenceDigests == nil {
+			inc.evidenceDigests = map[string]bool{}
+		}
+		inc.evidenceDigests[digest] = true
+		e := evidenceRecord(inc.rec.ID, p.ev)
 		inc.rec.EvidenceIDs = append(inc.rec.EvidenceIDs, e.ID)
 		drafts = append(drafts, ledger.RecordDraft(source, model.KindEvidence, "attached", e.ID, inc.rec.ID, e))
 		b.Log.Info("evidence attached", "incident", inc.rec.ID, "workload", key, "source", e.Source, "pod", p.ev.Pod, "summary", e.Summary)
 	}
 	return drafts
+}
+
+// informative reports evidence worth recording: the logs of a crash or an
+// unready pod, or a rollout sample that holds errors.
+func informative(ev watcher.LogEvidence) bool {
+	if ev.Summary.Lines == 0 {
+		return false
+	}
+	if ev.Reason == "crash" || ev.Reason == "not-ready" || len(ev.Summary.Exceptions) > 0 {
+		return true
+	}
+	for _, t := range ev.Summary.Templates {
+		if t.Error {
+			return true
+		}
+	}
+	return false
+}
+
+// contentDigest identifies what a log says, whichever pod said it.
+func contentDigest(ev watcher.LogEvidence) string {
+	type tpl struct {
+		T string
+		N int
+	}
+	content := struct {
+		Container, Reason string
+		Templates         []tpl
+		Exceptions        []tpl
+	}{Container: ev.Container, Reason: ev.Reason}
+	for _, t := range ev.Summary.Templates {
+		content.Templates = append(content.Templates, tpl{t.Template, t.Count})
+	}
+	for _, e := range ev.Summary.Exceptions {
+		content.Exceptions = append(content.Exceptions, tpl{e.Fingerprint, e.Count})
+	}
+	b, _ := json.Marshal(content)
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
 }
 
 // pruneEvidence drops expired evidence. Callers hold b.mu.
