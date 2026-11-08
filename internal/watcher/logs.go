@@ -173,6 +173,8 @@ func (c *LogCollector) fetch(ctx context.Context, r LogRequest) {
 		}
 		ev.Exposure = ev.CollectedAt.Sub(start).Seconds()
 	}
+	c.Log.Debug("logs fetched", "pod", r.Namespace+"/"+r.Pod, "container", r.Container, "reason", r.Reason,
+		"previous", r.Previous, "lines", s.Lines, "bytes", len(raw), "truncated", ev.Truncated, "exposureSeconds", ev.Exposure)
 	c.OnEvidence(ctx, ev)
 }
 

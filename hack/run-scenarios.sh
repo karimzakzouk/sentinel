@@ -23,13 +23,24 @@ settle() {
   echo "incidents still open after 5 minutes" >&2
 }
 
+# An interrupted run still reverts its fault: a fault left in place would
+# become the "before" state the next run restores.
+run=""
+revert() {
+  if [ -n "$run" ]; then
+    "$root/bin/harness" --context "$ctx" revert --run "$root/$run"
+    run=""
+  fi
+}
+trap 'revert; exit 130' INT TERM
+
 for scenario in "$@"; do
   settle
   start=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   out=$("$root/bin/harness" --context "$ctx" inject --scenario "$scenario" --out "$root/test/results")
   run=$(grep -o 'test/results/[^ ]*\.json' <<<"$out" || true)
   sleep "$observe"
-  [ -n "$run" ] && "$root/bin/harness" --context "$ctx" revert --run "$root/$run"
+  revert
   echo "== $(basename "$scenario" .yaml)"
   kubectl --context "$ctx" -n sentinel logs deploy/sentinel --since-time="$start" |
     python3 -c '
