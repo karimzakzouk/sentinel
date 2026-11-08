@@ -5,7 +5,7 @@ IMAGE ?= sentinel:dev
 E2E_CLUSTER ?= sentinel-e2e
 LDFLAGS := -s -w -X github.com/karimzakzouk/sentinel/internal/version.Version=$(VERSION)
 
-.PHONY: all build test lint fmt generate verify image helm-lint e2e-up e2e e2e-down tidy
+.PHONY: all build test lint fmt vuln generate verify image helm-lint scenarios e2e-up e2e e2e-down tidy
 
 all: build
 
@@ -16,10 +16,16 @@ test:
 	$(GO) test -race -count=1 ./...
 
 lint:
-	golangci-lint run ./...
+	golangci-lint run --build-tags e2e ./...
 
 fmt:
 	golangci-lint fmt ./...
+
+vuln:
+	$(GO) tool govulncheck ./...
+
+scenarios:
+	$(GO) run ./cmd/harness validate test/scenarios/*/*.yaml
 
 generate:
 	$(GO) tool controller-gen object paths=./api/...
