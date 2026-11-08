@@ -243,6 +243,25 @@ func TestOnlyNewInformativeEvidenceIsRecorded(t *testing.T) {
 	}
 }
 
+func TestAnIncidentNamesTheWorkloadsThatDependOnIt(t *testing.T) {
+	b, l := newBrain(t)
+	front := model.ObjectRef{Group: "apps", Kind: "Deployment", Namespace: "shop", Name: "frontend"}
+	b.Dependents = func(ref model.ObjectRef) []model.ObjectRef {
+		if ref == web {
+			return []model.ObjectRef{front}
+		}
+		return nil
+	}
+	det := watcher.Detection{ID: model.NewID(), Workload: web, Kind: watcher.FactNoEndpoints, Count: 3, Onset: onset, At: onset}
+	if err := b.OnDetection(ctx, det); err != nil {
+		t.Fatal(err)
+	}
+	incidents, _ := ledger.List[model.Incident](ctx, l, model.KindIncident, "")
+	if len(incidents) != 1 || len(incidents[0].Impacted) != 1 || incidents[0].Impacted[0] != front {
+		t.Fatalf("incident = %+v", incidents)
+	}
+}
+
 func TestAnUnexplainedCrashLoopIsEscalatedNotRolledBack(t *testing.T) {
 	b, l := newBrain(t)
 	det := watcher.Detection{ID: model.NewID(), Workload: web, Kind: watcher.FactCrashLoop, Count: 5, Onset: onset, At: onset}

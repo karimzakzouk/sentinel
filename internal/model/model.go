@@ -126,8 +126,11 @@ type Incident struct {
 	OpenedAt    time.Time     `json:"openedAt"`
 	UpdatedAt   time.Time     `json:"updatedAt"`
 	Objects     []ObjectRef   `json:"objects,omitempty"`
-	SignalIDs   []ID          `json:"signalIds,omitempty"`
-	EvidenceIDs []ID          `json:"evidenceIds,omitempty"`
+	// Impacted are the workloads that depend on the incident's objects,
+	// directly or through others.
+	Impacted    []ObjectRef `json:"impacted,omitempty"`
+	SignalIDs   []ID        `json:"signalIds,omitempty"`
+	EvidenceIDs []ID        `json:"evidenceIds,omitempty"`
 }
 
 // Evidence is one piece of collected data attached to an incident. Only the
