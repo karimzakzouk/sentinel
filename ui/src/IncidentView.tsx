@@ -8,6 +8,7 @@ import {
   type Hypothesis,
   type Incident,
   type LedgerEvent,
+  type ObjectRef,
   type Signal,
 } from "./api";
 import {
@@ -379,6 +380,47 @@ function TimelineEvent({ event }: { event: LedgerEvent }) {
   }
 }
 
+// Traffic shows what the workload served and called in the last hour, as
+// traffic capture saw it; nothing where capture is not installed.
+function Traffic({ target }: { target: ObjectRef }) {
+  const traffic = usePoll(() => api.traffic(target), [workload(target)], 15_000);
+  if (traffic.error || !traffic.data) return null;
+  const list = traffic.data;
+  const errors = list.filter((r) => (r.status ?? 0) >= 500).length;
+  return (
+    <section className="card" style={{ marginBottom: 16 }}>
+      <h2>Traffic</h2>
+      {list.length === 0 ? (
+        <p className="note">
+          No request recorded in the last hour. Capture keeps requests only where the namespace&apos;s policy turns it on.
+        </p>
+      ) : (
+        <>
+          <p className="note">
+            The last {list.length} requests it served or made in the last hour{errors ? `, ${errors} with a server error` : ""}: methods,
+            paths, statuses and timings, never bodies.
+          </p>
+          <table className="traffic">
+            <tbody>
+              {list.slice(0, 30).map((r, i) => (
+                <tr key={i} className={(r.status ?? 0) >= 500 ? "bad" : undefined}>
+                  <td className="muted">{clock(r.at)}</td>
+                  <td>{r.served ? "served" : "called"}</td>
+                  <td className="mono">
+                    {r.method} {r.served ? r.path : `${r.host ?? ""}${r.port ? ":" + r.port : ""}${r.path}`}
+                  </td>
+                  <td className="mono">{r.status || "no answer"}</td>
+                  <td className="muted">{(r.duration / 1e6).toFixed(r.duration < 1e7 ? 1 : 0)} ms</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+    </section>
+  );
+}
+
 export function IncidentView({ id, onOpen }: { id: string; onOpen: (id: string) => void }) {
   const detail = usePoll(() => api.incident(id), [id]);
   if (detail.error && !detail.data) return <div className="error-banner">{detail.error}</div>;
@@ -531,6 +573,8 @@ export function IncidentView({ id, onOpen }: { id: string; onOpen: (id: string) 
           ) : null}
         </section>
       )}
+
+      {incident.objects?.[0] && <Traffic target={incident.objects[0]} />}
 
       <section className="card">
         <h2>Timeline</h2>

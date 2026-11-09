@@ -211,6 +211,20 @@ export interface Evidence {
   data?: { reason?: string; container?: string; summary?: LogSummary };
 }
 
+// CapturedRequest is one request a workload served, or one call it made,
+// as traffic capture saw it: never a body or a header.
+export interface CapturedRequest {
+  served: boolean;
+  method: string;
+  path: string;
+  route?: string;
+  host?: string;
+  port?: number;
+  status?: number;
+  duration: number;
+  at: string;
+}
+
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(path, { headers: { Accept: "application/json" } });
   if (!res.ok) {
@@ -301,4 +315,8 @@ export const api = {
   actions: () => get<{ actions: ActionSummary[] | null }>("/api/actions").then((r) => r.actions ?? []),
   trackRecords: () => get<{ trackRecords: TrackRecord[] | null }>("/api/trackrecords").then((r) => r.trackRecords ?? []),
   experiments: () => get<{ experiments: Experiment[] | null }>("/api/experiments").then((r) => r.experiments ?? []),
+  traffic: (ref: ObjectRef) =>
+    get<{ requests: CapturedRequest[] }>(
+      `/api/traffic/${encodeURIComponent(ref.namespace ?? "")}/${encodeURIComponent(ref.kind)}/${encodeURIComponent(ref.name)}`,
+    ).then((r) => r.requests),
 };
