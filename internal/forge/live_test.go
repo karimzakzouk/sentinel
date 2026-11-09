@@ -4,18 +4,19 @@ package forge_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/go-git/go-billy/v5/memfs"
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 	"github.com/go-git/go-git/v5/storage/memory"
-	"github.com/go-git/go-billy/v5/memfs"
 
 	"github.com/karimzakzouk/sentinel/internal/forge"
 )
@@ -101,7 +102,7 @@ func TestLiveForge(t *testing.T) {
 		t.Fatalf("Get = %+v, %v", got, err)
 	}
 	if err := repo.FetchContext(ctx, &git.FetchOptions{Auth: auth, RefSpecs: []config.RefSpec{"refs/heads/main:refs/remotes/origin/main"}}); err != nil &&
-		err != git.NoErrAlreadyUpToDate {
+		!errors.Is(err, git.NoErrAlreadyUpToDate) {
 		t.Fatalf("fetch main: %v", err)
 	}
 	head, err := repo.Reference("refs/remotes/origin/main", true)
