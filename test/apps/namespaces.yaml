@@ -18,3 +18,12 @@ metadata:
   name: e2e-gitops
   labels:
     pod-security.kubernetes.io/enforce: baseline
+---
+# The GitOps acting session's workloads, which Argo CD and Flux deliver
+# (test/apps/delivery.yaml); some run as root, as in e2e-gitops.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: e2e-delivery
+  labels:
+    pod-security.kubernetes.io/enforce: baseline

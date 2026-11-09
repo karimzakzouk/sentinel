@@ -1,5 +1,5 @@
 watch:
-  namespaces: [e2e-smoke, boutique, e2e-gitops]
+  namespaces: [e2e-smoke, boutique, e2e-gitops, e2e-delivery]
 actor:
   enabled: true
 lab:

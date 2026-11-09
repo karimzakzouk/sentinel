@@ -1,0 +1,81 @@
+# The GitOps acting session's workloads in e2e-delivery: podinfo through a
+# Flux Kustomization and through a Flux HelmRelease, and the guestbook
+# through an Argo CD Application, all syncing on their own; and the policy
+# that lets Sentinel roll them back through their owners. hack/delivery-up.sh
+# applies it; test/scenarios/delivery holds the faults.
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: delivery-podinfo
+  namespace: flux-system
+spec:
+  url: https://github.com/stefanprodan/podinfo
+  interval: 10m
+  ref: {tag: "6.17.0"}
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: delivery-podinfo
+  namespace: flux-system
+spec:
+  sourceRef: {kind: GitRepository, name: delivery-podinfo}
+  path: ./kustomize
+  targetNamespace: e2e-delivery
+  prune: true
+  interval: 1m
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata:
+  name: delivery-podinfo-charts
+  namespace: flux-system
+spec:
+  url: https://stefanprodan.github.io/podinfo
+  interval: 10m
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: delivery-podinfo-helm
+  namespace: flux-system
+spec:
+  interval: 1m
+  releaseName: delivery-podinfo-helm
+  targetNamespace: e2e-delivery
+  chart:
+    spec:
+      chart: podinfo
+      version: "6.17.0"
+      sourceRef: {kind: HelmRepository, name: delivery-podinfo-charts}
+  # Helm marks an upgrade done once applied, and does not roll failed ones
+  # back itself, which would leave nothing for Sentinel to do.
+  upgrade: {disableWait: true}
+  values: {replicaCount: 1}
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: delivery-guestbook
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/argoproj/argocd-example-apps
+    targetRevision: master
+    path: kustomize-guestbook
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: e2e-delivery
+  syncPolicy:
+    automated: {prune: true, selfHeal: true}
+---
+apiVersion: sentinel.karimzakzouk.github.io/v1alpha1
+kind: SentinelPolicy
+metadata:
+  name: delivery
+  namespace: e2e-delivery
+spec:
+  autonomy:
+    - {action: argocd.rollback, level: autonomous}
+    - {action: flux.rollback, level: autonomous}
