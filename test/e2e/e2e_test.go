@@ -995,7 +995,8 @@ func TestAssistModeRollsBackABadImage(t *testing.T) {
 	revertAndRecover(t, in, client, run)
 }
 
-// With a policy that holds rollbacks for approval, Sentinel asks and waits;
+// With a policy that lets rollbacks run on their own once their track
+// record has earned it, a first rollback waits for a person, saying why;
 // once a person approves, the actor rolls back and records who approved.
 func TestAnApprovedRollbackRunsAndNamesItsApprover(t *testing.T) {
 	ctx := context.Background()
@@ -1007,7 +1008,8 @@ func TestAnApprovedRollbackRunsAndNamesItsApprover(t *testing.T) {
 	policy := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "sentinel.karimzakzouk.github.io/v1alpha1", "kind": "SentinelPolicy",
 		"metadata": map[string]any{"name": "e2e-approve", "namespace": smokeNS},
-		"spec":     map[string]any{"autonomy": []any{map[string]any{"action": "rollout.undo", "level": "approve"}}},
+		// Autonomous, but earned: with no track record yet, a person approves.
+		"spec": map[string]any{"autonomy": []any{map[string]any{"action": "rollout.undo", "level": "autonomous", "earned": true}}},
 	}}
 	if _, err := admin.Resource(policies).Namespace(smokeNS).Create(ctx, policy, metav1.CreateOptions{}); err != nil {
 		t.Fatal(err)
@@ -1039,7 +1041,11 @@ func TestAnApprovedRollbackRunsAndNamesItsApprover(t *testing.T) {
 		for _, u := range list.Items {
 			phase, _, _ := unstructured.NestedString(u.Object, "status", "phase")
 			action, _, _ := unstructured.NestedString(u.Object, "spec", "action")
+			msg, _, _ := unstructured.NestedString(u.Object, "status", "message")
 			if action == "rollout.undo" && phase == "Pending" && u.GetCreationTimestamp().After(run.InjectedAt.Add(-time.Second)) {
+				if !strings.HasPrefix(msg, "waiting for a person to approve it: ") {
+					return false, fmt.Errorf("the request waits, but not for its track record: %s", msg)
+				}
 				name = u.GetName()
 				return true, nil
 			}
