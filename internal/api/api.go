@@ -48,6 +48,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/incidents", s.incidents)
 	mux.HandleFunc("GET /api/incidents/{id}", s.incident)
 	mux.HandleFunc("GET /api/capabilities", s.capabilities)
+	mux.HandleFunc("GET /api/actions", s.actions)
 	mux.HandleFunc("GET /api/", func(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusNotFound, errors.New("no such API route"))
 	})
@@ -129,6 +130,44 @@ func (s *Server) incidents(w http.ResponseWriter, r *http.Request) {
 		incidents = incidents[:maxIncidents]
 	}
 	writeJSON(w, map[string]any{"incidents": incidents})
+}
+
+// ActionSummary is an action with its first and latest recorded steps.
+type ActionSummary struct {
+	Action model.Action `json:"action"`
+	// Stage is the latest step, such as requested, executed or verified.
+	Stage string    `json:"stage"`
+	Since time.Time `json:"since"`
+	At    time.Time `json:"at"`
+}
+
+// maxActionEvents bounds the action steps the actions list reads.
+const maxActionEvents = 5000
+
+// actions lists every action Sentinel proposed or took, newest first.
+func (s *Server) actions(w http.ResponseWriter, r *http.Request) {
+	events, err := s.Ledger.LatestOfTypes(r.Context(), "sentinel.action.", maxActionEvents)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	var out []ActionSummary
+	index := map[model.ID]int{}
+	for _, e := range events {
+		i, seen := index[e.EntityID]
+		if !seen {
+			var a model.Action
+			if err := json.Unmarshal(e.Data, &a); err != nil {
+				writeError(w, http.StatusInternalServerError, err)
+				return
+			}
+			index[e.EntityID] = len(out)
+			out = append(out, ActionSummary{Action: a, Stage: strings.TrimPrefix(e.Type, "sentinel.action."), Since: e.Time, At: e.Time})
+			continue
+		}
+		out[i].Since = e.Time
+	}
+	writeJSON(w, map[string]any{"actions": out})
 }
 
 // IncidentDetail is an incident and everything recorded about it, in order.
