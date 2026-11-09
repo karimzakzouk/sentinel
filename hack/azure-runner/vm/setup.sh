@@ -47,7 +47,13 @@ echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/microsoft.gpg] https://package
   >/etc/apt/sources.list.d/azure-cli.list
 # Unattended security upgrades must not restart Docker or the runner under a job.
 put /etc/needrestart/conf.d/90-ci-runner.conf 0644 <<<"\$nrconf{restart} = 'l';" || true
-apt_get update
+# Unlike the dpkg lock, the package list lock is not waited for, and on a new
+# VM apt-daily may be holding it.
+for attempt in 1 2 3 4 5 6; do
+  apt_get update && break
+  ((attempt < 6)) || exit 1
+  sleep 20
+done
 apt_get -y --with-new-pkgs upgrade
 apt_get -y install ca-certificates curl git make jq unzip zstd gnupg build-essential \
   docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin azure-cli
@@ -141,7 +147,8 @@ echo "--- installed"
 docker --version
 echo "azure-cli $(az version --query '"azure-cli"' -o tsv 2>/dev/null)"
 git --version
-echo "runner $("$runner_dir/bin/Runner.Listener" --version)"
+# Run by root, it would create _diag/ owned by root, where the runner cannot log.
+echo "runner $(runuser -u runner -- "$runner_dir/bin/Runner.Listener" --version)"
 uname -r
 sysctl fs.inotify.max_user_instances fs.inotify.max_user_watches \
   net.bridge.bridge-nf-call-iptables net.bridge.bridge-nf-call-ip6tables

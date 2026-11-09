@@ -1,7 +1,9 @@
 # Settings and helpers shared by the hack/azure-runner scripts; source it.
 # Each setting may be overridden from the environment.
 RG=${RG:-sentinel-ci}
-LOCATION=${LOCATION:-eastus}
+LOCATION=${LOCATION:-austriaeast}
+# VM sizes to try, in order of preference. See README.md for why these.
+SIZES=${SIZES:-Standard_B4as_v2}
 VM=${VM:-sentinel-azure-1}
 REPO=${REPO:-karimzakzouk/sentinel}
 RUNNER_NAME=${RUNNER_NAME:-sentinel-azure-1}
@@ -12,10 +14,11 @@ export AZURE_CORE_COLLECT_TELEMETRY=false AZURE_CORE_ONLY_SHOW_ERRORS=true
 # vm_run SCRIPT [VARIABLE...] runs vm/SCRIPT as root on the VM through
 # `az vm run-command invoke`, with the rest of vm/ beside it and the named
 # variables of this shell exported to it. Their values travel in the request
-# body, never on a command line, and the copy of the request on the VM is
-# deleted. It prints the end of the script's output (run-command keeps 4 KB;
-# the whole of it goes to /var/log/azure-runner/ on the VM) and fails when
-# the script does.
+# body, never on a command line, and the plain-text copy of the request on
+# the VM is deleted; the run-command extension keeps an encrypted one that
+# root can decrypt. It prints the end of the script's output (run-command
+# keeps 4 KB; the whole of it goes to /var/log/azure-runner/ on the VM) and
+# fails when the script does.
 vm_run() {
   local script=$1 name file payload out
   shift
