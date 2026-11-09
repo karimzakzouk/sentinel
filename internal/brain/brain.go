@@ -116,7 +116,8 @@ func (b *Brain) now() time.Time {
 // Restore takes back the incidents left open when the controller last
 // stopped. Their episodes ended with the old process, so each starts quiet:
 // it resolves after the gap unless its workloads' trouble returns, and then
-// joins it.
+// joins it. A workload has one open incident; older ones left open on it,
+// by versions that did not take incidents back, are resolved.
 func (b *Brain) Restore(ctx context.Context) (int, error) {
 	incidents, err := ledger.List[model.Incident](ctx, b.Ledger, model.KindIncident, "")
 	if err != nil {
@@ -127,23 +128,39 @@ func (b *Brain) Restore(ctx context.Context) (int, error) {
 	if b.open == nil {
 		b.open, b.route = map[string]*incident{}, map[string]*incident{}
 	}
-	restored := 0
+	var open []model.Incident
 	for _, rec := range incidents {
-		if rec.MergedInto != "" || rec.State == model.IncidentResolved || rec.State == model.IncidentClosed || len(rec.Objects) == 0 {
+		if rec.MergedInto == "" && rec.State != model.IncidentResolved && rec.State != model.IncidentClosed && len(rec.Objects) > 0 {
+			open = append(open, rec)
+		}
+	}
+	sort.SliceStable(open, func(i, j int) bool { return open[i].OpenedAt.After(open[j].OpenedAt) })
+	now := b.now()
+	var drafts []ledger.Draft
+	for _, rec := range open {
+		if b.open[rec.Objects[0].String()] != nil {
+			rec.State, rec.UpdatedAt = model.IncidentResolved, now
+			drafts = append(drafts, ledger.RecordDraft(source, model.KindIncident, "resolved", rec.ID, rec.ID, rec))
 			continue
 		}
 		inc := &incident{rec: rec, primary: rec.Objects[0], episodes: map[model.ID]bool{}, facts: map[string]int{},
-			revisions: map[string]int{}, symptomFacts: map[string]map[string]int{}, quietSince: b.now()}
+			revisions: map[string]int{}, symptomFacts: map[string]map[string]int{}, quietSince: now}
 		if rec.Assessment != nil {
 			inc.lastAction = rec.Assessment.Decision
 		}
 		b.open[inc.primary.String()] = inc
 		for _, o := range rec.Objects {
-			b.route[o.String()] = inc
+			if b.route[o.String()] == nil {
+				b.route[o.String()] = inc
+			}
 		}
-		restored++
 	}
-	return restored, nil
+	if len(drafts) > 0 {
+		if _, err := b.Ledger.Append(ctx, drafts...); err != nil {
+			return 0, err
+		}
+	}
+	return len(open) - len(drafts), nil
 }
 
 // OnChange records a change and keeps it as a candidate cause.

@@ -302,6 +302,38 @@ func TestIncidentsSurviveARestart(t *testing.T) {
 	}
 }
 
+// Versions that did not take incidents back left several open on one
+// workload; a restart keeps the newest and resolves the others.
+func TestARestartResolvesDuplicatesLeftOpen(t *testing.T) {
+	_, l := newBrain(t)
+	var drafts []ledger.Draft
+	for i, opened := range []time.Time{onset, onset.Add(time.Hour), onset.Add(30 * time.Minute)} {
+		rec := model.Incident{ID: model.NewID(), State: model.IncidentOpen, OpenedAt: opened, UpdatedAt: opened,
+			Objects: []model.ObjectRef{web}, Title: fmt.Sprint("left open ", i)}
+		drafts = append(drafts, ledger.RecordDraft(source, model.KindIncident, "opened", rec.ID, rec.ID, rec))
+	}
+	if _, err := l.Append(ctx, drafts...); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := newBrain(t)
+	b.Ledger = l
+	if n, err := b.Restore(ctx); err != nil || n != 1 {
+		t.Fatalf("restored %d, %v; want the newest only", n, err)
+	}
+	open := 0
+	for _, inc := range incidents(t, l) {
+		if inc.State == model.IncidentOpen {
+			open++
+			if !inc.OpenedAt.Equal(onset.Add(time.Hour)) {
+				t.Fatalf("kept the incident opened at %v, want the newest", inc.OpenedAt)
+			}
+		}
+	}
+	if open != 1 {
+		t.Fatalf("%d incidents still open on one workload", open)
+	}
+}
+
 // errorSample is a minute of a pod's logs holding the given error templates,
 // each once, besides its routine requests.
 func errorSample(pod string, at time.Time, errs ...string) watcher.LogEvidence {
