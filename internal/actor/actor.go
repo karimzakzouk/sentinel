@@ -94,11 +94,11 @@ func (a *Actor) Handle(ctx context.Context, req *v1alpha1.ActionRequest) (v1alph
 	case t.APIVersion != "apps/v1" || t.Kind != "Deployment" && t.Kind != "StatefulSet":
 		return v1alpha1.ActionRejected, fmt.Sprintf("no contract covers a %s/%s", t.APIVersion, t.Kind)
 	}
-	level, err := a.autonomy(ctx, req.Namespace, req.Spec.Action)
+	policies, err := a.policies(ctx, req.Namespace)
 	if err != nil {
 		return v1alpha1.ActionFailed, fmt.Sprintf("could not read the namespace's policy: %v", err)
 	}
-	if level != v1alpha1.AutonomyAutonomous {
+	if level := policy.Autonomy(policies, req.Spec.Action); level != v1alpha1.AutonomyAutonomous {
 		return v1alpha1.ActionRejected, fmt.Sprintf("the namespace's policy holds %s at %s", req.Spec.Action, level)
 	}
 	var run func(context.Context, *v1alpha1.ActionRequest, bool) (string, error)
@@ -106,7 +106,10 @@ func (a *Actor) Handle(ctx context.Context, req *v1alpha1.ActionRequest) (v1alph
 	case ActionRolloutUndo:
 		run = a.rolloutUndo
 	case ActionScale:
-		run = a.scale
+		maxRemoval := policy.MaxCapacityRemoval(policies)
+		run = func(ctx context.Context, req *v1alpha1.ActionRequest, dryRun bool) (string, error) {
+			return a.scale(ctx, req, maxRemoval, dryRun)
+		}
 	default:
 		return v1alpha1.ActionRejected, fmt.Sprintf("no contract for %s yet", req.Spec.Action)
 	}
@@ -149,20 +152,20 @@ func (a *Actor) spend(namespace string, now time.Time) bool {
 	return true
 }
 
-// autonomy reads the namespace's policies afresh, so a policy lowered a
+// policies reads the namespace's policies afresh, so a policy lowered a
 // moment ago holds.
-func (a *Actor) autonomy(ctx context.Context, namespace, action string) (v1alpha1.AutonomyLevel, error) {
+func (a *Actor) policies(ctx context.Context, namespace string) ([]v1alpha1.SentinelPolicy, error) {
 	list, err := a.Dynamic.Resource(PoliciesResource).Namespace(namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	policies := make([]v1alpha1.SentinelPolicy, len(list.Items))
 	for i, item := range list.Items {
 		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(item.Object, &policies[i]); err != nil {
-			return "", err
+			return nil, err
 		}
 	}
-	return policy.Autonomy(policies, action), nil
+	return policies, nil
 }
 
 func writeOptions(dryRun bool) metav1.UpdateOptions {
@@ -247,8 +250,8 @@ func previousTemplate(dep *appsv1.Deployment, rss []appsv1.ReplicaSet, fromHash 
 }
 
 // scale sets a workload's replicas, if they are still what the request
-// expected.
-func (a *Actor) scale(ctx context.Context, req *v1alpha1.ActionRequest, dryRun bool) (string, error) {
+// expected and it takes away no more than maxRemoval percent of them.
+func (a *Actor) scale(ctx context.Context, req *v1alpha1.ActionRequest, maxRemoval int32, dryRun bool) (string, error) {
 	t := req.Spec.Target
 	want, err := strconv.ParseInt(req.Spec.Params[ParamReplicas], 10, 32)
 	if err != nil || want < 0 {
@@ -268,6 +271,10 @@ func (a *Actor) scale(ctx context.Context, req *v1alpha1.ActionRequest, dryRun b
 	}
 	if int64(sc.Spec.Replicas) != from {
 		return "", fmt.Errorf("%s changed since the decision: %d replicas, not %d", t.Name, sc.Spec.Replicas, from)
+	}
+	if want < from && (from-want)*100 > int64(maxRemoval)*from {
+		return "", fmt.Errorf("scaling %s from %d to %d replicas would take away %d%% of its capacity; the namespace's policy allows %d%%",
+			t.Name, from, want, (from-want)*100/from, maxRemoval)
 	}
 	next := &autoscalingv1.Scale{ObjectMeta: sc.ObjectMeta, Spec: autoscalingv1.ScaleSpec{Replicas: int32(want)}}
 	if _, err := update(ctx, t.Name, next, writeOptions(dryRun)); err != nil {
