@@ -1,23 +1,28 @@
 # Status
 
-Last updated: Monday 9 November 2026, 02:40 Cairo time (UTC+2).
+Last updated: Monday 9 November 2026, 03:45 Cairo time (UTC+2).
 
 ## Where things stand
 
 **Phase 0 (Foundations) is done and tagged `v2.0.0-alpha.0`.** Phase 1
-(Observe: the Watcher and the Brain in shadow mode) has all six slices
-built at least in their core, and the first scored session on the
-development pool got every fault right (below). What the gate still needs is
-the 72-hour soak, and the rest of slice 4 waits on what the soak shows.
-Sentinel records what it would do and changes nothing.
+(Observe) has all six slices built at least in their core; its gate still
+needs the 72-hour soak. **Phase 2 (Act) is under way:** where a namespace's
+SentinelPolicy allows it, Sentinel now stops the bleeding itself. In the
+scored pool it rolled back or restored every fault, each verified, a
+median of 69 seconds after the fault appeared, with no wrong action
+(below). Without a policy it still only records what it would do.
 
 To look at it on a cluster where it runs:
 
 - `kubectl -n sentinel port-forward deploy/sentinel 8090`, then open
   <http://localhost:8090>: incidents, why Sentinel blames what it blames,
-  what it would do, and what it can do on this cluster.
+  what it did or would do, every action it took, and what it can do on
+  this cluster.
 - `kubectl -n sentinel exec deploy/sentinel -- /sentinel incidents`, and
   `... /sentinel report shadow --since 24h` for what it would have done.
+- To let it act in a namespace, a namespace admin creates a SentinelPolicy
+  (for example `rollout.undo` and `scale` at `autonomous`, or at `approve`,
+  then `sentinel approve NAMESPACE/REQUEST` for each one).
 
 ## Phase 1 progress
 
@@ -28,9 +33,48 @@ To look at it on a cluster where it runs:
 | 3. Metrics, dependency map, localization | Done | The Redis and product-catalog memory scenarios below |
 | 4. Rate detectors | Error rates done; seasonal detectors wait for the soak | In the Redis scenario, the cart service's and the frontend's errors join Redis's incident |
 | 5. Shadow report, CLI, read-only UI | Done | `TestTheUIAnswersThroughPortForward` in CI |
-| 6. Scoring (`harness score`) | Done | The session below |
+| 6. Scoring (`harness score`) | Done | The sessions below |
 
-## Scored session
+## Phase 2 progress
+
+| Slice | State | Proof |
+|---|---|---|
+| 1. Act where a policy allows: the actor, requests, verification | Done | The acting session below; `TestAssistModeRollsBackABadImage` in CI |
+| 2. Guards | Budget, kill switch, capacity cap, breaker done | Unit tests; the fence test in CI |
+| 3. Approval and veto | Done, notifications to come | `TestAnApprovedRollbackRunsAndNamesItsApprover`; the fence refuses an approval in someone else's name |
+| 4. Owner adapters (Argo CD, Flux, Helm) | Not started; GitOps-managed workloads are left to people (decision 43) | |
+| 5. Track records and autonomy | Not started | |
+
+## Acting session
+
+The same twelve scenarios, with a SentinelPolicy allowing rollbacks and
+replica restores in both namespaces. Sentinel detected each fault, asked
+its actor, which undid the blamed change, and verified that the incident's
+signals cleared:
+
+| Scenario | Detected | Sentinel did | Recovered (fault to verified) |
+|---|---|---|---|
+| Smoke: bad image | 7s | rolled back | 1m7s |
+| Smoke: memory limit too low | 32s | rolled back | 1m32s |
+| Smoke: crash on start | 9s | rolled back | 1m9s |
+| Smoke: bad readiness probe | 2s | rolled back | 1m7s |
+| Smoke: a pod deleted (heals itself) | nothing, rightly | nothing | |
+| Smoke: control | nothing, rightly | nothing | |
+| Boutique: cart image missing | 4s | rolled back | 1m4s |
+| Boutique: product catalog memory | 39s | rolled back | 1m44s |
+| Boutique: currency service crashes | 0s | rolled back | 59s |
+| Boutique: Redis scaled to zero | 9s | restored the replicas | 1m44s |
+| Boutique: frontend's catalog address misspelled | 1m4s | rolled back | 1m9s |
+| Boutique: control | nothing, rightly | nothing | |
+
+9 of 9 faults acted on and verified, no wrong action, no false alarm. One
+thing scoring caught: right after the product catalog's rollback, Sentinel
+weighed its own rollback as a possible cause and its decision turned to
+"escalate"; its own actions are no longer candidate causes. Recovery time
+includes the minute the development cluster's detection window takes to
+empty, which is when verification can tell the signals have ended.
+
+## Scored session (observe only)
 
 Twelve scenarios on the development cluster (kind, Kubernetes 1.37,
 Flannel, Online Boutique and a smoke app), each injected, watched for 150
@@ -98,6 +142,9 @@ Full reasoning in [decisions.md](decisions.md).
 
 ## Next
 
+- **Phase 2:** Slack or GitHub notices for escalations and approvals; the
+  Argo CD and Flux adapters, with both installed in the test clusters;
+  track records.
 - **Soak.** A long run with the scenario pool's controls and background
   traffic, to measure false alarms per service per week, the error-rate
   detector's especially. Shorter runs on the development cluster first; the
