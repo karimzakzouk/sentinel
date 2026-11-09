@@ -1,0 +1,124 @@
+# A front that calls a backend, for the Lab to copy: it names the backend by
+# short and full name, reads a ConfigMap and a Secret, and names an address
+# outside the cluster. The Secret's value is a canary that must never
+# appear in a Lab.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: front-config
+  namespace: e2e-smoke
+data:
+  mode: production
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: front-secrets
+  namespace: e2e-smoke
+stringData:
+  token: canary-7f3a9c1e-never-in-a-lab
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: e2e-smoke
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: backend}
+  template:
+    metadata:
+      labels: {app: backend}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: backend
+          image: registry.k8s.io/e2e-test-images/agnhost:2.61
+          args: [netexec, --http-port=8080]
+          ports:
+            - containerPort: 8080
+          readinessProbe:
+            httpGet: {path: /healthz, port: 8080}
+            periodSeconds: 2
+          resources:
+            requests: {cpu: 10m, memory: 16Mi}
+            limits: {memory: 64Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+  namespace: e2e-smoke
+spec:
+  selector: {app: backend}
+  ports:
+    - port: 8080
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: front
+  namespace: e2e-smoke
+spec:
+  replicas: 2
+  selector:
+    matchLabels: {app: front}
+  template:
+    metadata:
+      labels: {app: front}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: front
+          image: registry.k8s.io/e2e-test-images/agnhost:2.61
+          args: [netexec, --http-port=8080]
+          env:
+            - name: BACKEND_ADDR
+              value: backend:8080
+            - name: BACKEND_URL
+              value: http://backend.e2e-smoke.svc.cluster.local:8080
+            - name: PAYMENTS_URL
+              value: https://api.payments.example
+            - name: MODE
+              valueFrom:
+                configMapKeyRef: {name: front-config, key: mode}
+            - name: API_TOKEN
+              valueFrom:
+                secretKeyRef: {name: front-secrets, key: token}
+          ports:
+            - containerPort: 8080
+          readinessProbe:
+            httpGet: {path: /healthz, port: 8080}
+            periodSeconds: 2
+          resources:
+            requests: {cpu: 10m, memory: 16Mi}
+            limits: {memory: 64Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: front
+  namespace: e2e-smoke
+spec:
+  selector: {app: front}
+  ports:
+    - port: 8080
+      targetPort: 8080

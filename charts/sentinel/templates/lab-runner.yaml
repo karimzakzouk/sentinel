@@ -26,6 +26,7 @@ data:
   config.yaml: |
     pool: {{ toJson $pool }}
     twins: {{ toJson .Values.watch.namespaces }}
+    clusterDomain: {{ .Values.lab.clusterDomain }}
     healthAddr: ":8081"
 ---
 apiVersion: apps/v1
@@ -122,9 +123,9 @@ spec:
         - port: 443
         - port: 6443
 ---
-# The matrix's destinations: every node's address, and the Services, pods
-# and endpoints of the API server, cluster DNS and the watched namespaces,
-# read only where those live.
+# The matrix's destinations: every node's address, the API server's and
+# cluster DNS's Services and endpoints, and the watched namespaces' Services
+# and pods, read only where those live.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -157,12 +158,12 @@ metadata:
     {{- $labels | nindent 4 }}
 rules:
   - apiGroups: [""]
-    resources: [services, pods]
+    resources: [services]
     verbs: [get, list]
   - apiGroups: [discovery.k8s.io]
     resources: [endpointslices]
     verbs: [list]
-{{- range concat (list "default" "kube-system") .Values.watch.namespaces }}
+{{- range list "default" "kube-system" }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -179,8 +180,46 @@ subjects:
   - {{ toJson $lab }}
 {{- end }}
 ---
-# Running experiments: probe pods, the echo service, the seal's policy, and
-# the experiments' status, in the pool only.
+# What the Lab copies from a watched namespace, and probes there: workloads
+# and their revisions, Services, ConfigMaps and pods. Never Secrets.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Release.Name }}-lab-twin
+  labels:
+    {{- $labels | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [services, pods]
+    verbs: [get, list]
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [get]
+  - apiGroups: [apps]
+    resources: [deployments, statefulsets]
+    verbs: [list]
+  - apiGroups: [apps]
+    resources: [replicasets, controllerrevisions]
+    verbs: [get]
+{{- range .Values.watch.namespaces }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $.Release.Name }}-lab-twin
+  namespace: {{ . }}
+  labels:
+    {{- $labels | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $.Release.Name }}-lab-twin
+subjects:
+  - {{ toJson $lab }}
+{{- end }}
+---
+# Running experiments: probe pods, worlds and their DNS, the seal's policy,
+# and the experiments' status, in the pool only.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -197,6 +236,9 @@ rules:
   - apiGroups: [""]
     resources: [services]
     verbs: [get, list, create, delete]
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [get, list, create, delete, deletecollection]
   - apiGroups: [networking.k8s.io]
     resources: [networkpolicies]
     verbs: [get, list, create, delete]

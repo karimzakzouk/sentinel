@@ -38,6 +38,7 @@ import (
 	"github.com/karimzakzouk/sentinel/internal/harness"
 	"github.com/karimzakzouk/sentinel/internal/kube"
 	"github.com/karimzakzouk/sentinel/internal/lab"
+	"github.com/karimzakzouk/sentinel/internal/model"
 )
 
 const (
@@ -263,7 +264,7 @@ func TestTheLabSealHoldsOnlyWherePolicyIsEnforced(t *testing.T) {
 	t.Cleanup(func() {
 		_ = client.NetworkingV1().NetworkPolicies(labNS).Delete(ctx, "lab-internal", metav1.DeleteOptions{})
 	})
-	results, err := p.Prove(ctx, labNS)
+	results, err := p.Prove(ctx, labNS, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -354,13 +355,25 @@ func strictEgress() bool {
 // for its verdict.
 func runExperiment(t *testing.T, name string) (v1alpha1.ExperimentPhase, string) {
 	t.Helper()
+	phase, msg, _ := runExperimentOn(t, name, nil)
+	return phase, msg
+}
+
+// runExperimentOn runs an Experiment in the Lab namespace: a reproduction
+// of workload, or a prove when workload is nil. It returns the verdict and
+// the fidelity list.
+func runExperimentOn(t *testing.T, name string, workload map[string]any) (v1alpha1.ExperimentPhase, string, []string) {
+	t.Helper()
 	ctx := context.Background()
 	exps := dynamicAs(t, "").Resource(lab.ExperimentsResource).Namespace(labNS)
 	_ = exps.Delete(ctx, name, metav1.DeleteOptions{})
+	spec := map[string]any{"incidentId": "e2e", "purpose": "prove", "labNamespace": labNS}
+	if workload != nil {
+		spec["purpose"], spec["workload"] = "reproduce", workload
+	}
 	exp := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "sentinel.karimzakzouk.github.io/v1alpha1", "kind": "Experiment",
-		"metadata": map[string]any{"name": name, "namespace": labNS},
-		"spec":     map[string]any{"incidentId": "e2e", "purpose": "prove", "labNamespace": labNS},
+		"metadata": map[string]any{"name": name, "namespace": labNS}, "spec": spec,
 	}}
 	if _, err := exps.Create(ctx, exp, metav1.CreateOptions{}); err != nil {
 		t.Fatal(err)
@@ -368,18 +381,121 @@ func runExperiment(t *testing.T, name string) (v1alpha1.ExperimentPhase, string)
 	t.Cleanup(func() { _ = exps.Delete(ctx, name, metav1.DeleteOptions{}) })
 	var phase v1alpha1.ExperimentPhase
 	var msg string
-	eventually(t, 8*time.Minute, "experiment "+name+" to finish", func() (bool, error) {
+	var fidelity []string
+	eventually(t, 12*time.Minute, "experiment "+name+" to finish", func() (bool, error) {
 		u, err := exps.Get(ctx, name, metav1.GetOptions{})
 		if err != nil {
 			return false, err
 		}
 		p, _, _ := unstructured.NestedString(u.Object, "status", "phase")
 		msg, _, _ = unstructured.NestedString(u.Object, "status", "message")
+		fidelity, _, _ = unstructured.NestedStringSlice(u.Object, "status", "fidelity")
 		phase = v1alpha1.ExperimentPhase(p)
 		return phase == lab.PhasePassed || phase == lab.PhaseFailed || phase == lab.PhaseNotSure || phase == lab.PhaseAborted, nil
 	})
 	t.Logf("%s: %s: %s", name, phase, msg)
-	return phase, msg
+	return phase, msg, fidelity
+}
+
+// The two-tier front's world, built directly as the Lab's identity: the
+// front and the backend it calls are copied into a sealed namespace with a
+// Lab DNS. The copies
+// answer by their production names, the API server's name resolves to
+// nothing, and production's Secret appears nowhere in the Lab. This runs
+// on any cluster; where policy is enforced, the reproduction test below
+// also proves the seal with the world up.
+func TestTheLabBuildsAWorkloadsStatelessWorld(t *testing.T) {
+	ctx := context.Background()
+	client, admin := clientAs(t, labUser), clientAs(t, "")
+	ref := model.ObjectRef{Group: "apps", Kind: "Deployment", Namespace: smokeNS, Name: "front"}
+	world, err := lab.ReadWorld(ctx, client, smokeNS, ref, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := lab.Synthesize(world, ref, labNS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var copied []string
+	for _, w := range plan.Workloads {
+		copied = append(copied, w.Name)
+	}
+	if !slices.Equal(copied, []string{"front", "backend"}) {
+		t.Fatalf("copied %v; want the front and the backend it calls", copied)
+	}
+	for _, want := range []string{"runs one replica instead of 2", "API_TOKEN holds a placeholder instead of secret front-secrets",
+		"names api.payments.example, which is outside the Lab"} {
+		if !slices.ContainsFunc(plan.Fidelity, func(f string) bool { return strings.Contains(f, want) }) {
+			t.Errorf("the fidelity list lacks %q: %v", want, plan.Fidelity)
+		}
+	}
+	p := &lab.Prover{Client: client, Twins: []string{smokeNS}, Timeout: 3 * time.Minute}
+	if err := p.Clean(ctx, labNS); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Seal(ctx, labNS); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = p.Clean(ctx, labNS)
+		_ = client.NetworkingV1().NetworkPolicies(labNS).Delete(ctx, "lab-internal", metav1.DeleteOptions{})
+	})
+	built, err := p.Build(ctx, labNS, smokeNS, "cluster.local", plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for w, state := range built.States {
+		if state != "ready" {
+			t.Fatalf("the copy of %s is %s", w, state)
+		}
+	}
+	pods, err := admin.CoreV1().Pods(labNS).List(ctx, metav1.ListOptions{LabelSelector: lab.Label})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ := json.Marshal(pods); strings.Contains(string(raw), "canary-") {
+		t.Fatal("production's Secret reached the Lab")
+	}
+	probes := lab.WorldProbes(built.Services, smokeNS, "cluster.local")
+	results, err := p.Prove(ctx, labNS, &lab.Inside{Probes: probes, DNS: lab.DNSConfig(built.DNS, smokeNS, "cluster.local")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range results[len(results)-len(probes):] {
+		t.Logf("%-45s %-48s allowed=%-5v reached=%v", r.Name, r.Address, r.Allowed, r.Reached)
+		if r.Allowed != r.Reached {
+			t.Errorf("%s: allowed=%v but reached=%v", r.Name, r.Allowed, r.Reached)
+		}
+	}
+	if log, err := p.DNSLog(ctx, labNS); err == nil {
+		t.Logf("names the world asked for that the Lab does not provide: %v",
+			lab.Unresolved(log, lab.DNSConfig(built.DNS, smokeNS, "cluster.local").Searches, []string{"kubernetes.default.svc.cluster.local"}))
+	}
+}
+
+// A reproduction through the Lab: it proves the seal, copies the front's
+// world, proves the seal again with the world up, and reports how the copy
+// differs from production. It only means something where the Lab runs.
+func TestALabReproductionRunsTheWorldBehindAProvenSeal(t *testing.T) {
+	enforced := capability.NetworkPolicyProbe{Client: clientAs(t, ""), Namespace: labNS, Settle: 30 * time.Second}.Run(context.Background())
+	if enforced.Status != capability.Available {
+		t.Skipf("the Lab refuses this cluster (%s); TestALabExperimentRunsOnlyBehindAProvenSeal covers that", enforced.Detail)
+	}
+	phase, msg, fidelity := runExperimentOn(t, "reproduce-front",
+		map[string]any{"apiVersion": "apps/v1", "kind": "Deployment", "namespace": smokeNS, "name": "front"})
+	if phase == lab.PhaseFailed && strings.Contains(msg, "the seal leaks outside the cluster") && !strictEgress() {
+		t.Skipf("this network plugin lets pods reach addresses outside the cluster, and the Lab refuses it: %s", msg)
+	}
+	if phase != lab.PhaseNotSure || !strings.Contains(msg, "the world ran sealed (front ready; backend ready)") {
+		t.Fatalf("the reproduction ended %s: %s", phase, msg)
+	}
+	if !slices.ContainsFunc(fidelity, func(f string) bool { return strings.Contains(f, "API_TOKEN holds a placeholder") }) {
+		t.Fatalf("the fidelity list lacks the secret placeholder: %v", fidelity)
+	}
+	pods, err := clientAs(t, "").CoreV1().Pods(labNS).List(context.Background(), metav1.ListOptions{LabelSelector: lab.Label})
+	if err != nil || len(pods.Items) != 0 {
+		t.Fatalf("the world outlived its experiment: %d pods (%v)", len(pods.Items), err)
+	}
 }
 
 func TestFenceBlocksForbiddenWrites(t *testing.T) {
@@ -453,11 +569,11 @@ func TestFenceBlocksForbiddenWrites(t *testing.T) {
 		}
 	}
 	labClient := clientAs(t, labUser)
-	labPod := func(ns, image string, token bool) func() error {
+	labPod := func(ns, image string, token bool, volumes ...corev1.Volume) func() error {
 		return func() error {
 			pod := &corev1.Pod{
 				ObjectMeta: metav1.ObjectMeta{Name: "fence-test", Namespace: ns},
-				Spec: corev1.PodSpec{AutomountServiceAccountToken: ptr.To(token),
+				Spec: corev1.PodSpec{AutomountServiceAccountToken: ptr.To(token), Volumes: volumes,
 					SecurityContext: &corev1.PodSecurityContext{RunAsNonRoot: ptr.To(true), RunAsUser: ptr.To(int64(65532)),
 						SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}},
 					Containers: []corev1.Container{{Name: "c", Image: image, SecurityContext: &corev1.SecurityContext{
@@ -483,8 +599,10 @@ func TestFenceBlocksForbiddenWrites(t *testing.T) {
 		allowed, fence bool
 	}{
 		{"lab starts a probe pod", labPod(labNS, capability.ProbeImage, false), true, false},
-		{"lab starts a pod with another image", labPod(labNS, "registry.k8s.io/pause:3.10", false), false, true},
+		{"lab starts a copy of a production pod", labPod(labNS, "registry.k8s.io/pause:3.10", false), true, false},
 		{"lab starts a pod that carries a token", labPod(labNS, capability.ProbeImage, true), false, true},
+		{"lab starts a pod that mounts a secret", labPod(labNS, capability.ProbeImage, false, corev1.Volume{Name: "s",
+			VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: "front-secrets"}}}), false, true},
 		{"lab starts a pod outside its pool", labPod(smokeNS, capability.ProbeImage, false), false, false},
 		{"lab seals its namespace", labPolicy(networkingv1.NetworkPolicyPeer{PodSelector: &metav1.LabelSelector{}}), true, false},
 		{"lab opens its seal to an address", labPolicy(networkingv1.NetworkPolicyPeer{IPBlock: &networkingv1.IPBlock{CIDR: "0.0.0.0/0"}}), false, true},
