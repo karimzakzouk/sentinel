@@ -91,6 +91,11 @@ jobs:
       E2E_RUN: ${{ inputs.run }}
       E2E_SKIP: ${{ inputs.skip }}
     steps:
+      # A cluster with Argo CD and Gitea, their images and the test build
+      # outgrew a hosted runner's free disk; it holds toolchains no job uses.
+      - name: Free disk space
+        if: ${{ !inputs.self-hosted }}
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
