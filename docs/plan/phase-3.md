@@ -111,6 +111,14 @@ The CI proof uses a small two-tier app beside the smoke workloads; GitHub's
 runners are too small for a second Online Boutique, which waits for the
 self-hosted runner.
 
+**Built** (decisions 50 and 51): reading, synthesis, the Lab DNS and the
+world's build, with the matrix run before the world starts and again with
+it running, each copied Service by its production name as a control. The
+Lab runs the flow for `reproduce` Experiments and ends them NOT SURE with
+the world's states and fidelity list until slice 3 judges. Still open: the
+controller creating Experiments from incidents, and Online Boutique's
+frontend on the self-hosted runner.
+
 ### 3. Reproduce and judge
 
 Run the baseline (the failing revision) twice to learn the noise (A/A);
