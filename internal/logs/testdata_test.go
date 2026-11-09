@@ -63,4 +63,14 @@ Node.js v20.11.1`
 	loggedJavaTrace = `2026-11-08 21:14:11.123 ERROR 1 --- [main] o.s.boot.SpringApplication : Application run failed
 	at org.springframework.boot.SpringApplication.run(SpringApplication.java:320)
 	at com.example.shop.App.main(App.java:10)`
+
+	// Online Boutique's cart service with Redis gone, as .NET's console
+	// logger writes it: the level and category, then the message indented.
+	dotnetConsoleTrace = `info: Grpc.AspNetCore.Server.ServerCallHandler[7]
+      Error status code 'FailedPrecondition' with detail 'Can't access cart storage. StackExchange.Redis.RedisConnectionException: The message timed out in the backlog attempting to send because no connection became available, command=HMGET, timeout: 5000'
+       ---> StackExchange.Redis.RedisConnectionException: It was not possible to connect to the redis server(s). ConnectTimeout
+         --- End of inner exception stack trace ---
+         at Microsoft.Extensions.Caching.StackExchangeRedis.RedisCache.GetAndRefreshAsync(String key, Boolean getData, CancellationToken token)
+         at Microsoft.Extensions.Caching.StackExchangeRedis.RedisCache.GetAsync(String key, CancellationToken token)
+         at cartservice.cartstore.RedisCartStore.GetCartAsync(String userId) in /app/cartstore/RedisCartStore.cs:line 90' raised.`
 )

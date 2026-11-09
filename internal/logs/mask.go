@@ -45,6 +45,9 @@ func maskToken(tok string) string {
 	if core == "" {
 		return tok
 	}
+	if i := strings.Index(core, "://"); i > 0 && isScheme(core[:i]) {
+		return tok[:start] + core[:i+3] + maskURL(core[i+3:]) + tok[end:]
+	}
 	// key=value and key:value keep their key.
 	if i := strings.IndexAny(core, "=:"); i > 0 && i < len(core)-1 && !looksLikeTime(core) && !looksLikeIP(core) {
 		return tok[:start] + core[:i+1] + maskToken(core[i+1:]) + tok[end:]
@@ -172,6 +175,52 @@ func isUUID(s string) bool {
 		}
 	}
 	return true
+}
+
+func isScheme(s string) bool {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		letter := c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
+		later := i > 0 && (c >= '0' && c <= '9' || c == '+' || c == '-' || c == '.')
+		if !letter && !later {
+			return false
+		}
+	}
+	return s != ""
+}
+
+// maskURL masks what follows a URL's scheme: an address host and the port,
+// values in the path, and query values. Host names are words and stay.
+func maskURL(s string) string {
+	authority, rest := s, ""
+	if i := strings.IndexAny(s, "/?#"); i >= 0 {
+		authority, rest = s[:i], s[i:]
+	}
+	if m, ok := maskBracketedIP(authority); ok {
+		authority = m
+	} else if looksLikeIP(authority) {
+		authority = MaskIP
+	} else if host, port, ok := strings.Cut(authority, ":"); ok && isNumber(port) {
+		authority = host + ":" + MaskNumber
+	}
+	path, query, hasQuery := strings.Cut(rest, "?")
+	parts := strings.Split(path, "/")
+	for i, p := range parts {
+		if m := maskCore(p); m != "" {
+			parts[i] = m
+		}
+	}
+	out := authority + strings.Join(parts, "/")
+	if hasQuery {
+		pairs := strings.Split(query, "&")
+		for i, kv := range pairs {
+			if k, v, ok := strings.Cut(kv, "="); ok && v != "" {
+				pairs[i] = k + "=<*>"
+			}
+		}
+		out += "?" + strings.Join(pairs, "&")
+	}
+	return out
 }
 
 // maskBracketedIP masks an IPv6 address in brackets, with its port if any,
