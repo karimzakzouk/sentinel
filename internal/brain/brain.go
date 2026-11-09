@@ -371,11 +371,21 @@ func (b *Brain) OnDetection(ctx context.Context, d watcher.Detection) error {
 	return nil
 }
 
+// ownFaults are signals no dependency can cause: they come from a
+// workload's own image, configuration references or scheduling.
+var ownFaults = []watcher.FactKind{watcher.FactImagePullError, watcher.FactConfigError, watcher.FactUnschedulable}
+
+// ownFault reports whether a workload's facts include one of its own
+// faults, which keeps its incident its own.
+func ownFault(facts map[string]int) bool {
+	return slices.ContainsFunc(ownFaults, func(k watcher.FactKind) bool { return facts[string(k)] > 0 })
+}
+
 // upstreamIncident returns the open incident of a workload that d's workload
 // depends on, if localization ranks that workload as the likelier cause of
 // d's symptoms. Callers hold b.mu.
 func (b *Brain) upstreamIncident(ctx context.Context, d watcher.Detection) *incident {
-	if b.Dependencies == nil || b.Localize == nil {
+	if b.Dependencies == nil || b.Localize == nil || ownFault(detectionFacts(d)) {
 		return nil
 	}
 	troubled := false
@@ -406,7 +416,7 @@ func (b *Brain) absorbDependents(ctx context.Context, inc *incident) []ledger.Dr
 	var drafts []ledger.Draft
 	for _, dep := range b.Dependents(inc.primary) {
 		other := b.open[dep.String()]
-		if other == nil || other == inc {
+		if other == nil || other == inc || ownFault(other.facts) {
 			continue
 		}
 		ranking, err := b.Localize.Decide(ctx, b.rootCauseInput(other.primary, other.facts, other.rec.OpenedAt))

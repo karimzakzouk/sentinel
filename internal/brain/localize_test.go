@@ -203,3 +203,32 @@ func TestAnIndependentFaultKeepsItsOwnIncident(t *testing.T) {
 		t.Fatalf("incidents = %d, want two independent ones", len(got))
 	}
 }
+
+// No dependency can make a workload's image fail to pull, even one whose
+// own image fails to pull after a change of its own, and whatever the
+// ranking says: the dependent's incident stays its own, both ways round.
+func TestAnOwnFaultNeverJoinsADependencysIncident(t *testing.T) {
+	for _, first := range []string{"dependency", "dependent"} {
+		t.Run(first+" first", func(t *testing.T) {
+			b, l := newGroupingBrain(t)
+			if err := b.OnChange(ctx, watcher.Change{ID: model.NewID(), Kind: watcher.ChangeTemplate, Object: redis,
+				Fields: []string{"image:redis"}, At: onset.Add(-30 * time.Second)}); err != nil {
+				t.Fatal(err)
+			}
+			redisBad := watcher.Detection{ID: model.NewID(), Workload: redis, Kind: watcher.FactImagePullError, Count: 10,
+				Onset: onset, At: onset}
+			cartBad := watcher.Detection{ID: model.NewID(), Workload: cart, Kind: watcher.FactNoEndpoints, Count: 3,
+				Window: map[watcher.FactKind]int{watcher.FactImagePullError: 4}, Onset: onset.Add(time.Minute), At: onset.Add(time.Minute)}
+			if first == "dependent" {
+				cartBad.Onset, cartBad.At = onset.Add(-time.Minute), onset.Add(-time.Minute)
+				detect(t, b, cartBad, redisBad)
+			} else {
+				detect(t, b, redisBad, cartBad)
+			}
+			got := incidents(t, l)
+			if len(got) != 2 || got[0].State != model.IncidentOpen || got[1].State != model.IncidentOpen {
+				t.Fatalf("incidents = %+v, want two open ones", got)
+			}
+		})
+	}
+}
