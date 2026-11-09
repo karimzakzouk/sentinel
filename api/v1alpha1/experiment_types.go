@@ -7,6 +7,7 @@ import (
 // ExperimentSpec describes one sealed Lab run. It cannot be changed after creation.
 //
 // +kubebuilder:validation:XValidation:rule="self == oldSelf",message="spec is immutable"
+// +kubebuilder:validation:XValidation:rule="self.purpose == 'prove' || has(self.workload)",message="every purpose but prove names a workload"
 type ExperimentSpec struct {
 	// IncidentID links the experiment to its incident in the Ledger.
 	// +kubebuilder:validation:MinLength=1
@@ -18,6 +19,15 @@ type ExperimentSpec struct {
 	// LabNamespace is a namespace from the pool created at install.
 	// +kubebuilder:validation:MinLength=1
 	LabNamespace string `json:"labNamespace"`
+	// Workload is the production workload the experiment copies into the
+	// Lab, with its dependencies.
+	// +optional
+	Workload *TargetRef `json:"workload,omitempty"`
+	// Revision is the workload's failing revision: a Deployment's
+	// ReplicaSet or a StatefulSet's ControllerRevision. Empty means its
+	// current template.
+	// +optional
+	Revision string `json:"revision,omitempty"`
 	// Candidate identifies the fix under test.
 	// +optional
 	Candidate string `json:"candidate,omitempty"`
@@ -52,6 +62,10 @@ type ExperimentStatus struct {
 	Runs int32 `json:"runs,omitempty"`
 	// +optional
 	Message string `json:"message,omitempty"`
+	// Fidelity lists every way the Lab's copy differs from production.
+	// +optional
+	// +listType=atomic
+	Fidelity []string `json:"fidelity,omitempty"`
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 	// +optional

@@ -97,10 +97,39 @@ spec:
                 - verify-fix
                 - verify-config
                 type: string
+              revision:
+                description: |-
+                  Revision is the workload's failing revision: a Deployment's
+                  ReplicaSet or a StatefulSet's ControllerRevision. Empty means its
+                  current template.
+                type: string
               timeout:
                 default: 30m
                 description: Timeout caps the experiment's wall-clock time.
                 type: string
+              workload:
+                description: |-
+                  Workload is the production workload the experiment copies into the
+                  Lab, with its dependencies.
+                properties:
+                  apiVersion:
+                    minLength: 1
+                    type: string
+                  kind:
+                    minLength: 1
+                    type: string
+                  name:
+                    minLength: 1
+                    type: string
+                  namespace:
+                    minLength: 1
+                    type: string
+                required:
+                - apiVersion
+                - kind
+                - name
+                - namespace
+                type: object
             required:
             - incidentId
             - labNamespace
@@ -109,6 +138,8 @@ spec:
             x-kubernetes-validations:
             - message: spec is immutable
               rule: self == oldSelf
+            - message: every purpose but prove names a workload
+              rule: self.purpose == 'prove' || has(self.workload)
           status:
             description: ExperimentStatus is written by the Lab.
             properties:
@@ -171,6 +202,13 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              fidelity:
+                description: Fidelity lists every way the Lab's copy differs from
+                  production.
+                items:
+                  type: string
+                type: array
+                x-kubernetes-list-type: atomic
               message:
                 type: string
               observedGeneration:
