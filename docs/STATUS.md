@@ -68,7 +68,7 @@ To look at it on a cluster where it runs:
 
 | Slice | State | Proof |
 |---|---|---|
-| 1. Restore a bad value through Git | Built for an image set in the files a Flux Kustomization or an Argo CD Application deploys (decisions 67 to 70): the Fixer finds the file or images entry that set it, opens a one-line pull request, follows it until the owner has applied it, and Sentinel checks that it held. Resuming the owner stays a person's (decision 69). Proven through Flux; Argo CD's end-to-end test is next | `TestTheFixerProposesTheFixInGit`, on the development cluster: a bad image committed to the Gitea repository Flux deploys from, Sentinel's rollback, pull request #1 changing line 17 of `deployment.yaml` with its comment kept, merged, the Kustomization resumed, and "fix held", 3 minutes after the proposal. Unit tests render overlays with images entries, plain manifests, owners' name prefixes, and the abstentions |
+| 1. Restore a bad value through Git | Built for an image set in the files a Flux Kustomization or an Argo CD Application deploys (decisions 67 to 70): the Fixer finds the file or images entry that set it, opens a one-line pull request, follows it until the owner has applied it, and Sentinel checks that it held. Resuming the owner stays a person's (decision 69). Proven through Flux and Argo CD | `TestTheFixerProposesTheFixInGit` and `TestTheFixerProposesTheFixInGitThroughArgoCD`, on the development cluster: a bad image committed to the Gitea repository the owner deploys from, Sentinel's rollback, a pull request changing line 17 of `deployment.yaml` with its comment kept, merged, the owner resumed, and "fix held", about 3 minutes after the proposal; each test takes 4 minutes 20 seconds. Unit tests render overlays with images entries, plain manifests, owners' name prefixes, and the abstentions |
 | 2. Partial reverts | Not started | |
 | 3. Values of their own | Not started | |
 | 4. Code incidents | Not started | |
@@ -213,10 +213,9 @@ Full reasoning in [decisions.md](decisions.md).
   gate` workflow: races with known answers, and Online Boutique's frontend
   sealed under Calico); a config value reverted as a second candidate;
   slice 4's datastores and replay.
-- **Phase 4 (Fixer)**, planned in [phase-4.md](plan/phase-4.md): slice 1's
-  Argo CD end-to-end test, then partial reverts of a culprit commit. The
-  Gitea now in the test cluster will also let the parent-Kustomization test
-  use a real parent.
+- **Phase 4 (Fixer)**, planned in [phase-4.md](plan/phase-4.md): slice 2,
+  partial reverts of a culprit commit. The Gitea now in the test cluster
+  will also let the parent-Kustomization test use a real parent.
 - **Soak.** A long run with the scenario pool's controls and background
   traffic, to measure false alarms per service per week, the error-rate
   detector's especially. Shorter runs on the development cluster first; the
