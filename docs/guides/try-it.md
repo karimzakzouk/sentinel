@@ -1,6 +1,6 @@
 # Try it: watch Sentinel explain a fault, then fix it
 
-This walks through what phases 1 and 2 built, on a kind cluster, in about
+This walks through what phases 1 to 3 built, on a kind cluster, in about
 half an hour. Run it on a machine with at least 4 CPUs and 12 GB of memory
 (a cloud VM or the CUFE server), not a laptop: the cluster, Online Boutique
 and its load generator need the room.
