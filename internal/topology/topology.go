@@ -4,8 +4,10 @@
 package topology
 
 import (
+	"net"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -100,6 +102,86 @@ func hosts(value string) []string {
 		}
 	}
 	return out
+}
+
+// ExternalHosts returns the hosts a pod template's literal configuration
+// names that are not among services, Services of namespace ns: values that
+// are plainly addresses (with a scheme, a port, or a domain), sorted.
+func ExternalHosts(template corev1.PodTemplateSpec, ns string, services map[string]bool) []string {
+	seen := map[string]bool{}
+	var out []string
+	consider := func(value string) {
+		for _, item := range strings.FieldsFunc(value, func(r rune) bool { return r == ',' || r == ';' || r == ' ' }) {
+			host, ok := address(item)
+			if !ok || seen[host] {
+				continue
+			}
+			if name := serviceName(host, ns); name != "" && services[name] {
+				continue
+			}
+			seen[host] = true
+			out = append(out, host)
+		}
+	}
+	for _, c := range append(template.Spec.InitContainers, template.Spec.Containers...) {
+		for _, e := range c.Env {
+			consider(e.Value)
+		}
+		for _, a := range append(c.Command, c.Args...) {
+			if _, v, ok := strings.Cut(a, "="); ok {
+				consider(v)
+			} else {
+				consider(a)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// address returns the host of an item that is plainly a network address.
+func address(item string) (string, bool) {
+	if strings.Contains(item, "://") {
+		u, err := url.Parse(item)
+		if err != nil || u.Hostname() == "" {
+			return "", false
+		}
+		return strings.ToLower(u.Hostname()), validHost(strings.ToLower(u.Hostname()))
+	}
+	host := item
+	if i := strings.LastIndexByte(host, '@'); i >= 0 {
+		host = host[i+1:]
+	}
+	if strings.ContainsAny(host, "/") {
+		return "", false
+	}
+	h, port, err := net.SplitHostPort(host)
+	switch {
+	case err == nil:
+		if _, perr := strconv.ParseUint(port, 10, 16); perr != nil {
+			return "", false
+		}
+		host = h
+	case !strings.Contains(host, "."):
+		return "", false
+	}
+	host = strings.ToLower(host)
+	return host, validHost(host)
+}
+
+// validHost accepts an IP address, or a DNS name whose last label is not
+// all digits, which rules out version numbers.
+func validHost(host string) bool {
+	if net.ParseIP(host) != nil {
+		return true
+	}
+	labels := strings.Split(host, ".")
+	for _, l := range labels {
+		if l == "" || len(l) > 63 || strings.Trim(l, "abcdefghijklmnopqrstuvwxyz0123456789-") != "" || l[0] == '-' || l[len(l)-1] == '-' {
+			return false
+		}
+	}
+	return strings.Trim(labels[len(labels)-1], "0123456789") != ""
 }
 
 // serviceName returns the Service a host names in namespace ns: the host
