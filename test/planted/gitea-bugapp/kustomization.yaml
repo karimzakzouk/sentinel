@@ -1,0 +1,5 @@
+# The repository person/bugapp in the test Gitea starts with these files:
+# a service whose environment a commit can break, for the Fixer to restore.
+resources:
+  - deployment.yaml
+  - service.yaml
