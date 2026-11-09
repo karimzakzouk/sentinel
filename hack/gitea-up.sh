@@ -35,7 +35,7 @@ if [ -z "$person" ] || ! api "http://127.0.0.1:$port/api/v1/user" >/dev/null 2>&
   gitea admin user create --username person --password "$(secret)" --email person@example.com --admin --must-change-password=false
   gitea admin user create --username sentinel --password "$(secret)" --email sentinel@example.com --must-change-password=false
   person=$(gitea admin user generate-access-token --username person --token-name e2e --scopes write:repository,write:user --raw)
-  bot=$(gitea admin user generate-access-token --username sentinel --token-name fixer --scopes write:repository --raw)
+  bot=$(gitea admin user generate-access-token --username sentinel --token-name fixer --scopes write:repository,write:issue --raw)
   k -n gitea create secret generic gitea-person --from-literal=token="$person" --dry-run=client -o yaml | k apply -f -
   k create namespace sentinel --dry-run=client -o yaml | k apply -f -
   k -n sentinel create secret generic sentinel-fixer-forge --from-literal=token="$bot" --dry-run=client -o yaml | k apply -f -

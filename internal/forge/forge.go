@@ -8,6 +8,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -325,6 +326,22 @@ func (p serverPR) pull() PullRequest {
 	return out
 }
 
+// StatusError is a forge's refusal, with its HTTP status.
+type StatusError struct {
+	Code int
+	What string
+}
+
+func (e *StatusError) Error() string { return e.What }
+
+// Refused reports whether a forge turned a request down for what it asked,
+// as for a token without the permission it needs, so that asking again
+// changes nothing.
+func Refused(err error) bool {
+	var s *StatusError
+	return errors.As(err, &s) && s.Code >= 400 && s.Code < 500 && s.Code != http.StatusTooManyRequests
+}
+
 func (c *Client) call(ctx context.Context, method, path string, in, out any) error {
 	var body io.Reader
 	if in != nil {
@@ -365,7 +382,7 @@ func (c *Client) call(ctx context.Context, method, path string, in, out any) err
 		return err
 	}
 	if resp.StatusCode/100 != 2 {
-		return fmt.Errorf("%s %s: %s: %s", method, path, resp.Status, strings.TrimSpace(string(data)))
+		return &StatusError{Code: resp.StatusCode, What: fmt.Sprintf("%s %s: %s: %s", method, path, resp.Status, strings.TrimSpace(string(data)))}
 	}
 	if out == nil || len(bytes.TrimSpace(data)) == 0 {
 		return nil

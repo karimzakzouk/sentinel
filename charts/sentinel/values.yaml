@@ -109,7 +109,11 @@ fixer:
     api: ""
     # A Secret in the release namespace holding the forge token, and the
     # user Git pushes as: by default sentinel, oauth2 on GitLab, and
-    # x-token-auth, which Bitbucket's access tokens require.
+    # x-token-auth, which Bitbucket's access tokens require. The token
+    # pushes branches, opens, comments on and merges pull requests: on
+    # GitHub, contents and pull requests write; on Gitea, write:repository
+    # and write:issue; on GitLab, api and write_repository; on Bitbucket,
+    # repository and pull request write.
     secretName: ""
     key: token
     user: ""
