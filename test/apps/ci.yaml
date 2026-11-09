@@ -1,0 +1,46 @@
+# A registry standing in for a customer's, which hack/ci.sh pushes the test
+# images it builds to. Its address is fixed, 10.96.200.200:5000, so images
+# are named the same inside the cluster, where the Fixer reads their labels
+# over plain HTTP, and on the nodes, where hack/ci.sh loads them; kind's
+# nodes would not pull from a registry without TLS.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ci
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: registry
+  namespace: ci
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: registry}
+  template:
+    metadata:
+      labels: {app: registry}
+    spec:
+      containers:
+        - name: registry
+          image: registry:2
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 5000
+          readinessProbe:
+            httpGet: {path: /v2/, port: 5000}
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {memory: 256Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: registry
+  namespace: ci
+spec:
+  clusterIP: 10.96.200.200
+  selector: {app: registry}
+  ports:
+    - port: 5000
+      targetPort: 5000

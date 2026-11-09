@@ -1,0 +1,29 @@
+id: git-release-crash
+title: A release of shop builds its catalog into a nil map, so it panics as it starts, and Flux deploys it
+app: git
+fault:
+  kind: release
+  target: {apiVersion: kustomize.toolkit.fluxcd.io/v1, kind: Kustomization, namespace: flux-system, name: git-shop}
+  release:
+    source:
+      repository: person/shop-src
+      path: catalog.go
+      old: "items := make(map[string]item, len(defaults))"
+      new: "var items map[string]item"
+      message: Declare the catalog where it is filled
+    deploy: {repository: person/delivery, path: shop/deployment.yaml}
+    image: 10.96.200.200:5000/shop
+groundTruth:
+  faultClass: deploy.crash-on-start
+  rootCause: {apiVersion: apps/v1, kind: Deployment, namespace: e2e-delivery, name: git-shop}
+  changeType: image
+  symptoms: [pod.crash-loop]
+  mitigation: rollout.undo
+  # The fix that holds the rollback pins the image back; the fix to the
+  # code puts load back as it was, in person/shop-src.
+  fix: {path: shop/deployment.yaml, line: 22}
+manifest:
+  condition: crash-loop
+  namespace: e2e-delivery
+  selector: app=shop
+  timeout: 4m

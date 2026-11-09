@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -47,6 +48,9 @@ func newRoot() *cobra.Command {
 		"for commit faults, the Gitea API's base URL, such as http://127.0.0.1:13000/api/v1")
 	root.PersistentFlags().StringVar(&fo.secret, "forge-token-secret", "gitea/gitea-person",
 		"for commit faults, NAMESPACE/NAME of the Secret holding the token of the person who owns the repositories")
+	root.PersistentFlags().StringVar(&fo.build, "build", os.Getenv("HARNESS_BUILD"),
+		"for release faults, the command that builds a commit as the source's pipeline would, such as hack/ci.sh build; "+
+			"it is given the repository and the commit and prints the image tag last")
 
 	validate := &cobra.Command{
 		Use:   "validate SCENARIO...",
@@ -196,8 +200,9 @@ right. Incidents during control runs are false alarms.`,
 	return root
 }
 
-// forgeOptions say where commit faults go, and whose token commits them.
-type forgeOptions struct{ api, secret string }
+// forgeOptions say where commit faults go, whose token commits them, and
+// what builds a release.
+type forgeOptions struct{ api, secret, build string }
 
 func newInjector(ctx context.Context, kf kube.Flags, fo forgeOptions) (*harness.Injector, error) {
 	cfg, err := kf.RESTConfig(version.UserAgent("harness"))
@@ -224,6 +229,21 @@ func newInjector(ctx context.Context, kf kube.Flags, fo forgeOptions) (*harness.
 			return nil, fmt.Errorf("the forge token: %w", err)
 		}
 		in.Forge = &harness.Forge{API: fo.api, Token: string(secret.Data["token"]), HTTP: &http.Client{Timeout: time.Minute}}
+	}
+	if args := strings.Fields(fo.build); len(args) > 0 {
+		in.Build = func(ctx context.Context, repository, revision string) (string, error) {
+			cmd := exec.CommandContext(ctx, args[0], append(args[1:], repository, revision)...) //nolint:gosec // the operator's own build command
+			cmd.Stderr = os.Stderr
+			out, err := cmd.Output()
+			if err != nil {
+				return "", err
+			}
+			lines := strings.Fields(string(out))
+			if len(lines) == 0 {
+				return "", fmt.Errorf("%s printed no image tag", fo.build)
+			}
+			return lines[len(lines)-1], nil
+		}
 	}
 	return in, nil
 }

@@ -36,11 +36,18 @@ func (f *Forge) file(ctx context.Context, repo, branch, path string) (string, st
 	return string(content), out.SHA, err
 }
 
-// put commits a file's new content to a branch, over the blob hash read.
-func (f *Forge) put(ctx context.Context, repo, branch, path, content, sha, message string) error {
-	return f.call(ctx, http.MethodPut, "/repos/"+repo+"/contents/"+path, map[string]string{
+// put commits a file's new content to a branch, over the blob hash read,
+// and returns the commit.
+func (f *Forge) put(ctx context.Context, repo, branch, path, content, sha, message string) (string, error) {
+	var out struct {
+		Commit struct {
+			SHA string `json:"sha"`
+		} `json:"commit"`
+	}
+	err := f.call(ctx, http.MethodPut, "/repos/"+repo+"/contents/"+path, map[string]string{
 		"content": base64.StdEncoding.EncodeToString([]byte(content)), "sha": sha, "message": message, "branch": branch,
-	}, nil)
+	}, &out)
+	return out.Commit.SHA, err
 }
 
 // merge merges a pull request.
@@ -79,7 +86,7 @@ func (f *Forge) call(ctx context.Context, method, path string, in, out any) erro
 	if res.StatusCode/100 != 2 {
 		return fmt.Errorf("%s %s: %s: %s", method, path, res.Status, strings.TrimSpace(string(data)))
 	}
-	if out == nil {
+	if out == nil || len(bytes.TrimSpace(data)) == 0 {
 		return nil
 	}
 	return json.Unmarshal(data, out)

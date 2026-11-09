@@ -1,10 +1,12 @@
 package harness
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -52,8 +54,64 @@ func (in *Injector) commit(ctx context.Context, s *Scenario, run *Run) error {
 		message = s.Title
 	}
 	run.InjectedAt = in.now()
-	if err := in.Forge.put(ctx, c.Repository, branch, c.Path, strings.Replace(content, c.Old, c.New, 1), sha, message); err != nil {
+	if _, err := in.Forge.put(ctx, c.Repository, branch, c.Path, strings.Replace(content, c.Old, c.New, 1), sha, message); err != nil {
 		return fmt.Errorf("commit %s: %w", c.Path, err)
+	}
+	return in.refresh(ctx, s.Fault.Target)
+}
+
+// released is a release fault's files as they were.
+type released struct {
+	Source committed `json:"source"`
+	Deploy committed `json:"deploy"`
+}
+
+// release injects a release fault: the person commits the code change to
+// the source repository, the build command builds that commit as the
+// source's pipeline would, and the person moves the deploy file's image
+// tag to the build and asks the owner to apply it now. The run starts
+// with the deploy commit, which is what changes the cluster.
+func (in *Injector) release(ctx context.Context, s *Scenario, run *Run) error {
+	if in.Forge == nil || in.Build == nil {
+		return errors.New("a release fault needs the forge and a build command: give the harness --forge-api and --build")
+	}
+	r := s.Fault.Release
+	src := committed{Repository: r.Source.Repository, Branch: cmp.Or(r.Source.Branch, "main"), Path: r.Source.Path}
+	dep := committed{Repository: r.Deploy.Repository, Branch: cmp.Or(r.Deploy.Branch, "main"), Path: r.Deploy.Path}
+	var srcSHA, depSHA string
+	var err error
+	if src.Content, srcSHA, err = in.Forge.file(ctx, src.Repository, src.Branch, src.Path); err != nil {
+		return fmt.Errorf("read %s: %w", src.Path, err)
+	}
+	if !strings.Contains(src.Content, r.Source.Old) {
+		return fmt.Errorf("%s in %s does not contain %q", src.Path, src.Repository, r.Source.Old)
+	}
+	if dep.Content, depSHA, err = in.Forge.file(ctx, dep.Repository, dep.Branch, dep.Path); err != nil {
+		return fmt.Errorf("read %s: %w", dep.Path, err)
+	}
+	current := regexp.MustCompile(regexp.QuoteMeta(r.Image) + `:[\w][\w.-]*`).FindString(dep.Content)
+	if current == "" {
+		return fmt.Errorf("%s in %s names no tag of %s", dep.Path, dep.Repository, r.Image)
+	}
+	if run.Before, err = json.Marshal(released{Source: src, Deploy: dep}); err != nil {
+		return err
+	}
+	rev, err := in.Forge.put(ctx, src.Repository, src.Branch, src.Path, strings.Replace(src.Content, r.Source.Old, r.Source.New, 1), srcSHA,
+		cmp.Or(r.Source.Message, s.Title))
+	switch {
+	case err != nil:
+		return fmt.Errorf("commit %s: %w", src.Path, err)
+	case rev == "":
+		return fmt.Errorf("the forge did not say which commit it made of %s", src.Path)
+	}
+	tag, err := in.Build(ctx, src.Repository, rev)
+	if err != nil {
+		return fmt.Errorf("build %s at %s: %w", src.Repository, rev, err)
+	}
+	run.InjectedAt = in.now()
+	if _, err := in.Forge.put(ctx, dep.Repository, dep.Branch, dep.Path, strings.Replace(dep.Content, current, r.Image+":"+tag, 1), depSHA,
+		"Release "+tag); err != nil {
+		return fmt.Errorf("commit %s: %w", dep.Path, err)
 	}
 	return in.refresh(ctx, s.Fault.Target)
 }
@@ -100,11 +158,60 @@ func (in *Injector) revertCommit(ctx context.Context, run *Run) error {
 	if err := json.Unmarshal(run.Before, &was); err != nil {
 		return fmt.Errorf("decode the file as it was: %w", err)
 	}
+	did, err := in.revertFile(ctx, run, was)
+	if err != nil {
+		return err
+	}
+	run.Reverted = strings.Join(did, "; ")
+	t := in.now()
+	run.RevertedAt = &t
+	return nil
+}
+
+// revertRelease undoes a release fault: the deploy file as a commit
+// fault's, then the source file put back. Sentinel's fix to the code, if
+// it proposed one, stays open for a person to read.
+func (in *Injector) revertRelease(ctx context.Context, run *Run) error {
+	if in.Forge == nil {
+		return errors.New("reverting a release fault needs the forge: give the harness --forge-api, as hack/run-scenarios.sh does")
+	}
+	var was released
+	if err := json.Unmarshal(run.Before, &was); err != nil {
+		return fmt.Errorf("decode the files as they were: %w", err)
+	}
+	did, err := in.revertFile(ctx, run, was.Deploy)
+	if err != nil {
+		return err
+	}
+	content, sha, err := in.Forge.file(ctx, was.Source.Repository, was.Source.Branch, was.Source.Path)
+	if err != nil {
+		return err
+	}
+	if content != was.Source.Content {
+		if _, err := in.Forge.put(ctx, was.Source.Repository, was.Source.Branch, was.Source.Path, was.Source.Content, sha,
+			"Put "+was.Source.Path+" back as it was"); err != nil {
+			return err
+		}
+		did = append(did, "put "+was.Source.Path+" back in "+was.Source.Repository)
+	}
+	run.Reverted = strings.Join(did, "; ")
+	t := in.now()
+	run.RevertedAt = &t
+	return nil
+}
+
+// revertFile puts one file a GitOps owner deploys from back as it was, as
+// the person who owns it would. If Sentinel proposed a fix, the person
+// merges it, waits for it to reach the owner's source, resumes the owner
+// as Sentinel says and waits for the owner to apply it. Whatever happened,
+// the file ends as it was and the owner resumed, so the next run starts
+// clean. It returns what the person did.
+func (in *Injector) revertFile(ctx context.Context, run *Run, was committed) ([]string, error) {
 	var did []string
 	fix, err := in.awaitFix(ctx, run, "Proposed", "Merged", "Ready", "Abstained", "Failed")
 	switch {
 	case err != nil:
-		return err
+		return nil, err
 	case fix == nil:
 		did = append(did, "Sentinel proposed no fix")
 	case fix.Status.Phase == "Abstained" || fix.Status.Phase == "Failed":
@@ -112,57 +219,54 @@ func (in *Injector) revertCommit(ctx context.Context, run *Run) error {
 	default:
 		if fix.Status.Phase == "Proposed" {
 			if err := in.Forge.merge(ctx, was.Repository, int(fix.Status.Number)); err != nil {
-				return fmt.Errorf("merge Sentinel's fix: %w", err)
+				return nil, fmt.Errorf("merge Sentinel's fix: %w", err)
 			}
 			did = append(did, fmt.Sprintf("merged Sentinel's fix #%d", fix.Status.Number))
 		} else {
 			did = append(did, fmt.Sprintf("Sentinel merged its fix #%d itself", fix.Status.Number))
 		}
 		if err := in.refresh(ctx, run.Target); err != nil {
-			return err
+			return nil, err
 		}
 		if ready, err := in.awaitFix(ctx, run, "Ready"); err != nil {
-			return err
+			return nil, err
 		} else if ready == nil {
 			did = append(did, "it did not reach the owner's source")
 			break
 		}
 		said, err := in.resumeOwner(ctx, run.Target)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		did = append(did, said)
 		if err := in.refresh(ctx, run.Target); err != nil {
-			return err
+			return nil, err
 		}
 		if applied, err := in.awaitFix(ctx, run, "Applied"); err != nil {
-			return err
+			return nil, err
 		} else if applied == nil {
 			did = append(did, "the owner did not apply it")
 		}
 	}
 	content, sha, err := in.Forge.file(ctx, was.Repository, was.Branch, was.Path)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if content != was.Content {
-		if err := in.Forge.put(ctx, was.Repository, was.Branch, was.Path, was.Content, sha, "Put "+was.Path+" back as it was"); err != nil {
-			return err
+		if _, err := in.Forge.put(ctx, was.Repository, was.Branch, was.Path, was.Content, sha, "Put "+was.Path+" back as it was"); err != nil {
+			return nil, err
 		}
 		did = append(did, "put "+was.Path+" back")
 	}
 	if said, err := in.resumeOwner(ctx, run.Target); err == nil {
 		did = append(did, said)
 	} else if !strings.Contains(err.Error(), "carries no note") {
-		return err
+		return nil, err
 	}
 	if err := in.refresh(ctx, run.Target); err != nil {
-		return err
+		return nil, err
 	}
-	run.Reverted = strings.Join(did, "; ")
-	t := in.now()
-	run.RevertedAt = &t
-	return nil
+	return did, nil
 }
 
 // resumeOwner resumes the owner as a person does with sentinel resume.

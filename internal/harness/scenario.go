@@ -34,6 +34,11 @@ const (
 	// FaultCommit commits a change to the repository a GitOps owner, the
 	// fault's target, deploys from.
 	FaultCommit FaultKind = "commit"
+	// FaultRelease releases a change to a workload's code: committed to
+	// its source repository, built by the source's pipeline (the
+	// harness's build command stands in for it), and the image tag in the
+	// repository the owner deploys from moved to the build.
+	FaultRelease FaultKind = "release"
 	// FaultNone injects nothing. Controls measure false alarms.
 	FaultNone FaultKind = "none"
 )
@@ -45,6 +50,22 @@ type Fault struct {
 	Patch    *Patch    `json:"patch,omitempty"`
 	Selector string    `json:"selector,omitempty"`
 	Commit   *Commit   `json:"commit,omitempty"`
+	Release  *Release  `json:"release,omitempty"`
+}
+
+// Release is a change to a workload's code, and the file that names the
+// workload's image in the repository its owner deploys from.
+type Release struct {
+	// Source is the code change, committed to the source repository.
+	Source Commit `json:"source"`
+	// Deploy is the file whose image tag moves to the build.
+	Deploy struct {
+		Repository string `json:"repository"`
+		Branch     string `json:"branch,omitempty"`
+		Path       string `json:"path"`
+	} `json:"deploy"`
+	// Image is the image's repository, without a tag, as Deploy names it.
+	Image string `json:"image"`
 }
 
 // Commit replaces Old with New in one file of a forge repository, on the
@@ -161,8 +182,17 @@ func (s *Scenario) Validate() error {
 		if c := f.Commit; c == nil || c.Repository == "" || c.Path == "" || c.Old == "" || c.New == "" || c.Old == c.New {
 			errs = append(errs, errors.New("a commit fault needs a repository, a path, and old and new text that differ"))
 		}
-		if (f.Target.Kind != "Kustomization" && f.Target.Kind != "Application") || f.Target.Namespace == "" || f.Target.Name == "" {
+		if !gitOps(f.Target) {
 			errs = append(errs, errors.New("a commit fault's target is the Flux Kustomization or Argo CD Application that deploys it"))
+		}
+	case FaultRelease:
+		r := f.Release
+		if r == nil || r.Source.Repository == "" || r.Source.Path == "" || r.Source.Old == "" || r.Source.Old == r.Source.New ||
+			r.Deploy.Repository == "" || r.Deploy.Path == "" || r.Image == "" {
+			errs = append(errs, errors.New("a release fault needs a source change, the deploy file and the image it names"))
+		}
+		if !gitOps(f.Target) {
+			errs = append(errs, errors.New("a release fault's target is the Flux Kustomization or Argo CD Application that deploys it"))
 		}
 	case FaultNone:
 		if s.Manifest.Condition != ConditionNone {
@@ -184,4 +214,9 @@ func (s *Scenario) Validate() error {
 		errs = append(errs, fmt.Errorf("unknown manifestation condition %q", s.Manifest.Condition))
 	}
 	return errors.Join(errs...)
+}
+
+// gitOps reports whether a target is an owner that deploys from Git.
+func gitOps(t Target) bool {
+	return (t.Kind == "Kustomization" || t.Kind == "Application") && t.Namespace != "" && t.Name != ""
 }
