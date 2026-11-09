@@ -31,6 +31,9 @@ const (
 	FaultPatch FaultKind = "patch"
 	// FaultDeletePods deletes the pods matching a selector.
 	FaultDeletePods FaultKind = "delete-pods"
+	// FaultCommit commits a change to the repository a GitOps owner, the
+	// fault's target, deploys from.
+	FaultCommit FaultKind = "commit"
 	// FaultNone injects nothing. Controls measure false alarms.
 	FaultNone FaultKind = "none"
 )
@@ -41,6 +44,20 @@ type Fault struct {
 	Target   Target    `json:"target,omitempty"`
 	Patch    *Patch    `json:"patch,omitempty"`
 	Selector string    `json:"selector,omitempty"`
+	Commit   *Commit   `json:"commit,omitempty"`
+}
+
+// Commit replaces Old with New in one file of a forge repository, on the
+// branch the fault's target, a Flux Kustomization or an Argo CD
+// Application, deploys.
+type Commit struct {
+	// Repository is OWNER/NAME on the forge.
+	Repository string `json:"repository"`
+	Branch     string `json:"branch,omitempty"`
+	Path       string `json:"path"`
+	Old        string `json:"old"`
+	New        string `json:"new"`
+	Message    string `json:"message,omitempty"`
 }
 
 // Target names a Kubernetes object.
@@ -64,6 +81,17 @@ type GroundTruth struct {
 	ChangeType string   `json:"changeType"`
 	Symptoms   []string `json:"symptoms,omitempty"`
 	Mitigation string   `json:"mitigation"`
+	// Fix is what a right fix at the source does, for a fault delivered
+	// through Git.
+	Fix *FixTruth `json:"fix,omitempty"`
+}
+
+// FixTruth is where a right fix changes the source, file and line, or that
+// the right thing is to propose none.
+type FixTruth struct {
+	Path    string `json:"path,omitempty"`
+	Line    int    `json:"line,omitempty"`
+	Abstain bool   `json:"abstain,omitempty"`
 }
 
 // Condition is an observable effect that shows a fault took hold.
@@ -129,12 +157,22 @@ func (s *Scenario) Validate() error {
 		if f.Selector == "" || f.Target.Namespace == "" {
 			errs = append(errs, errors.New("a delete-pods fault needs a selector and target.namespace"))
 		}
+	case FaultCommit:
+		if c := f.Commit; c == nil || c.Repository == "" || c.Path == "" || c.Old == "" || c.New == "" || c.Old == c.New {
+			errs = append(errs, errors.New("a commit fault needs a repository, a path, and old and new text that differ"))
+		}
+		if (f.Target.Kind != "Kustomization" && f.Target.Kind != "Application") || f.Target.Namespace == "" || f.Target.Name == "" {
+			errs = append(errs, errors.New("a commit fault's target is the Flux Kustomization or Argo CD Application that deploys it"))
+		}
 	case FaultNone:
 		if s.Manifest.Condition != ConditionNone {
 			errs = append(errs, errors.New("a control scenario cannot expect a manifestation"))
 		}
 	default:
 		errs = append(errs, fmt.Errorf("unknown fault kind %q", f.Kind))
+	}
+	if fx := s.GroundTruth.Fix; fx != nil && fx.Abstain == (fx.Path != "") {
+		errs = append(errs, errors.New("groundTruth.fix names a path and line, or abstain, not both"))
 	}
 	switch s.Manifest.Condition {
 	case ConditionNone:

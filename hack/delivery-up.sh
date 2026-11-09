@@ -11,7 +11,14 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 
 kubectl --context "$ctx" apply -f "$root/test/apps/namespaces.yaml"
 kubectl --context "$ctx" apply -f "$root/test/apps/delivery.yaml"
-for d in podinfo delivery-podinfo-helm kustomize-guestbook-ui; do
+deployments=(podinfo delivery-podinfo-helm kustomize-guestbook-ui)
+# With the test Gitea (E2E_GITEA=1), podinfo from its repository too, for
+# the scenarios that commit there.
+if kubectl --context "$ctx" get namespace gitea >/dev/null 2>&1; then
+  kubectl --context "$ctx" apply -f "$root/test/apps/git-delivery.yaml"
+  deployments+=(git-podinfo)
+fi
+for d in "${deployments[@]}"; do
   # Each appears once its owner has synced.
   for _ in $(seq 60); do
     kubectl --context "$ctx" -n e2e-delivery get deployment "$d" >/dev/null 2>&1 && break

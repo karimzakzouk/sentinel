@@ -1,0 +1,27 @@
+# podinfo deployed by Flux from the test Gitea's repository person/delivery
+# (hack/gitea-up.sh) into e2e-delivery, as git-podinfo: the workload the
+# scenarios in test/scenarios/git break by committing to that repository.
+# The delivery SentinelPolicy in test/apps/delivery.yaml lets Sentinel roll
+# it back through Flux; hack/delivery-up.sh applies this when Gitea runs.
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: git-delivery
+  namespace: flux-system
+spec:
+  url: http://gitea-http.gitea.svc:3000/person/delivery.git
+  interval: 1m
+  ref: {branch: main}
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: git-podinfo
+  namespace: flux-system
+spec:
+  sourceRef: {kind: GitRepository, name: git-delivery}
+  path: ./
+  targetNamespace: e2e-delivery
+  namePrefix: git-
+  prune: true
+  interval: 1m

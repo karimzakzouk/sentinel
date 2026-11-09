@@ -133,6 +133,53 @@ func TestScoreActions(t *testing.T) {
 	}
 }
 
+// With fixes, the scorer says what became of each fault delivered through
+// Git: a fix at the line the ground truth names that held, a fix elsewhere
+// that did not, and an abstention where abstaining was right.
+func TestScoreFixes(t *testing.T) {
+	gt := func(fix FixTruth) GroundTruth {
+		return GroundTruth{FaultClass: "deploy.bad-image", RootCause: target("web"), Mitigation: "rollout.undo", Fix: &fix}
+	}
+	runs := []*Run{
+		run("held", 0, gt(FixTruth{Path: "deployment.yaml", Line: 17}), FaultCommit),
+		run("elsewhere", 10*time.Minute, gt(FixTruth{Path: "deployment.yaml", Line: 17}), FaultCommit),
+		run("on-the-owner", 20*time.Minute, gt(FixTruth{Abstain: true}), FaultCommit),
+	}
+	ranked := &model.Assessment{RootCauses: []model.RankedObject{{Object: ref("web"), P: 0.9, InSet: true}}}
+	incidents, err := ReadIncidents(export(t,
+		IncidentVersion{At: t0.Add(30 * time.Second), Verb: "opened", Incident: incident("i1", []model.ObjectRef{ref("web")}, ranked)},
+		IncidentVersion{At: t0.Add(10*time.Minute + 30*time.Second), Verb: "opened", Incident: incident("i2", []model.ObjectRef{ref("web")}, ranked)},
+		IncidentVersion{At: t0.Add(20*time.Minute + 30*time.Second), Verb: "opened", Incident: incident("i3", []model.ObjectRef{ref("web")}, ranked)},
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	step := func(phase, change string) model.Fix {
+		f := model.Fix{Phase: phase}
+		if change != "" {
+			f.Change = []string{change}
+		}
+		return f
+	}
+	fixes := map[model.ID][]model.Fix{
+		"i1": {step("Requested", ""), step("Proposed", "deployment.yaml:17: web's image a -> b"), step("Applied", "deployment.yaml:17: web's image a -> b"),
+			step("Held", "deployment.yaml:17: web's image a -> b")},
+		"i2": {step("Proposed", "kustomization.yaml:4: web's image a -> b"), step("NotHeld", "kustomization.yaml:4: web's image a -> b")},
+		"i3": {step("Requested", ""), step("Abstained", "")},
+	}
+	rep := Score(runs, incidents, ScoreOptions{Grace: 2 * time.Minute, Fixes: fixes})
+	if rep.FixRuns != 3 || rep.FixesProposed != 2 || rep.FixesRight != 1 || rep.FixesHeld != 1 || rep.FixesNotHeld != 1 ||
+		rep.RightAbstentions != 1 || rep.WrongAbstentions != 0 {
+		t.Fatalf("fix runs %d, proposed %d, right %d, held %d, not held %d, right abstentions %d, wrong %d",
+			rep.FixRuns, rep.FixesProposed, rep.FixesRight, rep.FixesHeld, rep.FixesNotHeld, rep.RightAbstentions, rep.WrongAbstentions)
+	}
+	var md strings.Builder
+	if err := rep.WriteMarkdown(&md); err != nil || !strings.Contains(md.String(), "held at deployment.yaml:17 ✓") ||
+		!strings.Contains(md.String(), "notheld at kustomization.yaml:4 ✗") || !strings.Contains(md.String(), "| Fixes that held once merged | 1 of 2 |") {
+		t.Fatalf("markdown:\n%s", md.String())
+	}
+}
+
 // Runs follow each other closely: the next fault's incident opens within a
 // control's grace period, and belongs to the fault. A fault that heals
 // itself, like a deleted pod its Deployment replaces, is quiet when right.
