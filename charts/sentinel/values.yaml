@@ -56,6 +56,14 @@ logs:
   # Between the tick and the window; 0s turns sampling off.
   sampleInterval: 1m
 
+# Where Sentinel tells people what it needs from them or did: approvals,
+# escalations, and actions that cleared an incident. Name a Secret holding a
+# Slack incoming webhook URL; without one, notices stay in the UI.
+notify:
+  slack:
+    secretName: ""
+    key: webhook-url
+
 capabilities:
   interval: 10m
   # Dry-run probes create no objects. The sentinel-fence chart enforces that
