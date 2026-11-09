@@ -39,6 +39,9 @@ type Probe struct {
 	Name    string `json:"name"`
 	Address string `json:"address"`
 	Allowed bool   `json:"allowed"`
+	// Outside marks a destination beyond the cluster, which some network
+	// plugins leave out of egress policy.
+	Outside bool `json:"outside,omitempty"`
 }
 
 // Result is what the prober found.
@@ -85,9 +88,9 @@ func (p *Prover) Matrix(ctx context.Context, ns string, echo *corev1.Pod, echoSe
 	probes := []Probe{
 		{Name: "echo service", Address: hostPort(echoService.Spec.ClusterIP, 8080), Allowed: true},
 		{Name: "echo pod", Address: hostPort(echo.Status.PodIP, 8080), Allowed: true},
-		{Name: "cloud metadata", Address: "169.254.169.254:80"},
-		{Name: "Azure metadata", Address: "168.63.129.16:80"},
-		{Name: "internet by IP", Address: "1.1.1.1:443"},
+		{Name: "cloud metadata", Address: "169.254.169.254:80", Outside: true},
+		{Name: "Azure metadata", Address: "168.63.129.16:80", Outside: true},
+		{Name: "internet by IP", Address: "1.1.1.1:443", Outside: true},
 	}
 	if svc, err := p.Client.CoreV1().Services("default").Get(ctx, "kubernetes", metav1.GetOptions{}); err == nil {
 		probes = append(probes, Probe{Name: "API server service", Address: hostPort(svc.Spec.ClusterIP, 443)})
@@ -257,14 +260,19 @@ func labPod(ns, name string, args []string, command []string) *corev1.Pod {
 	}
 }
 
-// proberPod tries each probe once, three seconds each, and writes one line
-// per probe to its termination message.
+// proberPod tries each forbidden destination once and each control up to
+// ten times, since a new Service can take a moment to answer, three
+// seconds a try, and writes one line per probe to its termination message.
 func proberPod(ns string, probes []Probe) *corev1.Pod {
 	var script strings.Builder
 	script.WriteString("set +e; : > /dev/termination-log\n")
 	for i, pr := range probes {
-		fmt.Fprintf(&script, "if /agnhost connect %s --timeout=3s >/dev/null 2>&1; then echo 'reached %d' >> /dev/termination-log; "+
-			"else echo 'refused %d' >> /dev/termination-log; fi\n", pr.Address, i, i)
+		tries := 1
+		if pr.Allowed {
+			tries = 10
+		}
+		fmt.Fprintf(&script, "r=refused; for t in $(seq %d); do if /agnhost connect %s --timeout=3s >/dev/null 2>&1; then r=reached; break; fi; "+
+			"[ \"$t\" -lt %d ] && sleep 1; done; echo \"$r %d\" >> /dev/termination-log\n", tries, pr.Address, tries, i)
 	}
 	return labPod(ns, "lab-prober", nil, []string{"sh", "-c", script.String()})
 }

@@ -50,3 +50,28 @@ func TestTheLabRefusesBeforeItStartsAnything(t *testing.T) {
 		})
 	}
 }
+
+func TestTheSealVerdictSaysWhereItLeaks(t *testing.T) {
+	r := func(name string, allowed, outside, reached bool) Result {
+		return Result{Probe: Probe{Name: name, Allowed: allowed, Outside: outside}, Reached: reached}
+	}
+	control := r("echo service", true, false, true)
+	cases := map[string]struct {
+		results []Result
+		phase   v1alpha1.ExperimentPhase
+		says    string
+	}{
+		"sealed":             {[]Result{control, r("cluster DNS", false, false, false), r("cloud metadata", false, true, false)}, PhasePassed, "sealed: 2 forbidden destinations refused"},
+		"leaks inside":       {[]Result{control, r("cluster DNS", false, false, true), r("cloud metadata", false, true, true)}, PhaseFailed, "the seal leaks to cluster DNS, and outside the cluster to cloud metadata"},
+		"leaks only outside": {[]Result{control, r("cluster DNS", false, false, false), r("cloud metadata", false, true, true)}, PhaseFailed, "the seal leaks outside the cluster to cloud metadata: the network plugin lets pods reach them"},
+		"a silent control":   {[]Result{r("echo service", true, false, false), r("cluster DNS", false, false, false)}, PhaseNotSure, "the positive controls did not answer (echo service)"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			phase, msg, sealed := sealVerdict(tc.results)
+			if phase != tc.phase || !strings.Contains(msg, tc.says) || sealed != (tc.phase == PhasePassed) {
+				t.Fatalf("%s, %q, sealed=%v; want %s saying %q", phase, msg, sealed, tc.phase, tc.says)
+			}
+		})
+	}
+}
