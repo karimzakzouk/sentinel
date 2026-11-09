@@ -2,6 +2,7 @@ package brain
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -400,5 +401,77 @@ func TestACellsStandingSaysWhyItHasNotEarnedAutonomy(t *testing.T) {
 	}
 	if earned, why := b.standing(key); !earned || why != "" {
 		t.Fatalf("after 28 straight: %v, %q", earned, why)
+	}
+}
+
+// A person who puts back the revision Sentinel rolled away from reverts the
+// rollback: it counts against the cell, opens the breaker and is told.
+// Sentinel's own change, or a person's new revision, does not.
+func TestAPersonsRevertCountsAgainstTheRollback(t *testing.T) {
+	b, l := newBrain(t)
+	b.Act = &fakeRequester{allow: true}
+	newest := "new"
+	b.Revisions = func(model.ObjectRef) string { return newest }
+	var notices []notify.Notice
+	b.Notify = func(_ context.Context, n notify.Notice) { notices = append(notices, n) }
+	det := badDeploy(t, b)
+	inc := incidents(t, l)[0]
+	if err := b.OnActionOutcome(ctx, ActionOutcome{IncidentID: inc.ID, Phase: "Succeeded", Message: "rolled web back"}); err != nil {
+		t.Fatal(err)
+	}
+	det.Ended, det.At = true, onset.Add(2*time.Minute)
+	if err := b.OnDetection(ctx, det); err != nil {
+		t.Fatal(err)
+	}
+	change := func(actor string, at time.Duration) {
+		t.Helper()
+		if err := b.OnChange(ctx, watcher.Change{ID: model.NewID(), Kind: watcher.ChangeTemplate, Object: web,
+			Fields: []string{"image:web"}, At: onset.Add(at), Actor: actor}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sweep := func(at time.Duration) {
+		t.Helper()
+		b.Now = func() time.Time { return onset.Add(at) }
+		if err := b.Sweep(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reverted := func() bool {
+		events, err := l.Events(ctx, 0, 100000)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return slices.ContainsFunc(events, func(e ledger.Event) bool { return e.Type == "sentinel.action.reverted" })
+	}
+
+	newest = "old"
+	change(model.ActorFieldManager, 2*time.Minute)
+	sweep(3 * time.Minute)
+	change("kubectl-client-side-apply", 10*time.Minute)
+	newest = "newer"
+	sweep(11 * time.Minute)
+	if reverted() {
+		t.Fatal("Sentinel's own rollback, then a person's new revision, counted as a revert")
+	}
+	change("kubectl-client-side-apply", 20*time.Minute)
+	newest = "new"
+	sweep(21 * time.Minute)
+	if !reverted() {
+		t.Fatal("putting back the revision Sentinel rolled away from was not counted")
+	}
+	key := model.TrackKey{Action: ActionRolloutUndo, FaultClass: ClassBadImage, Service: web.String()}
+	if rec := b.tracks[key]; rec == nil || rec.Alpha != 2 || rec.Beta != 2 {
+		t.Fatalf("track record %+v; want the verified rollback and the revert", rec)
+	}
+	if b.breakerUntil(ActionRolloutUndo, web).IsZero() {
+		t.Fatal("the breaker did not open")
+	}
+	if len(notices) == 0 || !strings.Contains(notices[len(notices)-1].Title, "was reverted by kubectl-client-side-apply") {
+		t.Fatalf("notices = %+v", notices)
+	}
+	sweep(22 * time.Minute)
+	if rec := b.tracks[key]; rec.Beta != 2 {
+		t.Fatalf("the revert counted %v times", rec.Beta-1)
 	}
 }

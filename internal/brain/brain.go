@@ -96,6 +96,11 @@ type Brain struct {
 	breakers map[string]time.Time
 	// tracks hold every cell's track record.
 	tracks map[model.TrackKey]*model.TrackRecord
+	// rollbacks are the rollbacks Sentinel carried out in the last day,
+	// which a person may yet revert; lastTemplate is each workload's last
+	// template change.
+	rollbacks    []rollback
+	lastTemplate map[string]watcher.Change
 }
 
 type incident struct {
@@ -252,6 +257,12 @@ func (b *Brain) OnChange(ctx context.Context, c watcher.Change) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.changes = append(b.changes, c)
+	if c.Kind == watcher.ChangeTemplate {
+		if b.lastTemplate == nil {
+			b.lastTemplate = map[string]watcher.Change{}
+		}
+		b.lastTemplate[c.Object.String()] = c
+	}
 	cutoff := b.now().Add(-b.Lookback)
 	kept := b.changes[:0]
 	for _, ch := range b.changes {
@@ -453,7 +464,7 @@ func (b *Brain) Sweep(ctx context.Context) error {
 	defer b.mu.Unlock()
 	b.pruneEvidence()
 	now := b.now()
-	var drafts []ledger.Draft
+	drafts := b.reverts(ctx, now)
 	for key, inc := range b.open {
 		drafts = append(drafts, b.verify(inc)...)
 		if inc.quietSince.IsZero() || now.Sub(inc.quietSince) < b.Gap {

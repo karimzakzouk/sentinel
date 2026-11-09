@@ -1,8 +1,10 @@
 package brain
 
 import (
+	"cmp"
 	"context"
 	"fmt"
+	"maps"
 	"strings"
 	"time"
 
@@ -155,6 +157,10 @@ func (b *Brain) OnActionOutcome(ctx context.Context, o ActionOutcome) error {
 			o.Message+"\nApprove with `sentinel approve "+o.Request+"`, or veto with `sentinel veto "+o.Request+"`.")
 	case "Succeeded":
 		inc.actedAt = b.now()
+		if from := a.Params[argFromTemplateHash]; a.Type == ActionRolloutUndo && from != "" {
+			b.rollbacks = append(b.rollbacks, rollback{action: *a, incident: inc.rec.ID, from: from, at: inc.actedAt,
+				key: model.TrackKey{Action: a.Type, FaultClass: inc.rec.Assessment.Class, Service: inc.primary.String()}})
+		}
 	default:
 		a.State, step = model.ActionFailed, "failed"
 		inc.verdict = true
@@ -338,4 +344,52 @@ func labVerdictWord(phase string) string {
 		return "it does not fix the failure"
 	}
 	return "not sure"
+}
+
+// revertWindow is how long after a rollback a person's undoing of it counts
+// against the rollback.
+const revertWindow = 24 * time.Hour
+
+// rollback is a rollback Sentinel carried out: its cell, and the revision it
+// rolled away from.
+type rollback struct {
+	key      model.TrackKey
+	action   model.Action
+	incident model.ID
+	from     string
+	at       time.Time
+}
+
+// reverts finds rollbacks a person undid: within a day, the workload's newest
+// revision is again the one Sentinel rolled away from, and its template was
+// last changed by someone else. Each counts against its cell, opens its
+// breaker and is told. Callers hold b.mu.
+func (b *Brain) reverts(ctx context.Context, now time.Time) []ledger.Draft {
+	var drafts []ledger.Draft
+	kept := b.rollbacks[:0]
+	for _, r := range b.rollbacks {
+		target := r.action.Target
+		last, changed := b.lastTemplate[target.String()]
+		switch {
+		case now.Sub(r.at) > revertWindow:
+			continue
+		case !changed || !last.At.After(r.at) || last.Actor == model.ActorFieldManager || b.revision(target) != r.from:
+			kept = append(kept, r)
+			continue
+		}
+		a := r.action
+		a.Params = maps.Clone(a.Params)
+		a.Params["revertedBy"] = cmp.Or(last.Actor, "someone")
+		drafts = append(drafts, ledger.RecordDraft(source, model.KindAction, "reverted", a.ID, r.incident, a),
+			b.track(r.key, false, r.incident, now))
+		b.trip(&a, now)
+		b.Log.Warn("a person reverted Sentinel's rollback", "incident", r.incident, "target", target.String(), "by", a.Params["revertedBy"])
+		if b.Notify != nil {
+			b.Notify(ctx, notify.Notice{Kind: notify.KindEscalation, Incident: r.incident, Workload: target,
+				Title:  "Sentinel's rollback of " + target.String() + " was reverted by " + a.Params["revertedBy"],
+				Detail: "Sentinel counts it against rolling back this workload for this fault, and will not roll it back on its own for a day."})
+		}
+	}
+	b.rollbacks = kept
+	return drafts
 }
