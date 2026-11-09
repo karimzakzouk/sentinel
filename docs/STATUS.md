@@ -164,8 +164,8 @@ Nothing blocks Phase 1. When you have time:
 
 - **Click Save on the Environment card** if it is still there. It makes
   future cloud agents start with the toolchain ready.
-- **Look at the UI** (above) and the [phase-0 guide](guides/phase-0.md);
-  say what reads badly.
+- **Try it** with [the guide](guides/try-it.md), on a VM rather than your
+  laptop, and say what reads badly in the UI.
 
 Needed later:
 
