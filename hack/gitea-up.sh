@@ -18,9 +18,11 @@ secret() { head -c 24 /dev/urandom | base64 | tr -d '/+='; }
 k apply -f "$root/test/apps/gitea.yaml"
 k -n gitea rollout status deployment/gitea --timeout 5m
 
-k -n gitea port-forward svc/gitea-http "$port:3000" >/dev/null 2>&1 &
+# kubectl itself in the background, not the k function, so $! is kubectl's.
+kubectl --context "$ctx" -n gitea port-forward svc/gitea-http "$port:3000" >/dev/null 2>&1 &
 pf=$!
-trap 'kill $pf 2>/dev/null' EXIT
+# The trap's status would be the script's: the port-forward may be gone.
+trap 'kill $pf 2>/dev/null || true' EXIT
 for _ in $(seq 30); do
   curl -fsS "http://127.0.0.1:$port/api/healthz" >/dev/null 2>&1 && break
   sleep 1
