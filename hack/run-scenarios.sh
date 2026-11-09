@@ -11,13 +11,14 @@ ctx="kind-${E2E_CLUSTER:-sentinel-e2e}"
 root=$(cd "$(dirname "$0")/.." && pwd)
 observe=${OBSERVE_SECONDS:-60}
 
+# settle waits until Sentinel has no open incident. It asks the Ledger:
+# counting log lines misses incidents a restarted controller took back.
 settle() {
-  local log opened resolved
+  local open
   for _ in $(seq 1 60); do
-    log=$(kubectl --context "$ctx" -n sentinel logs deploy/sentinel)
-    opened=$(grep -c '"msg":"incident opened"' <<<"$log" || true)
-    resolved=$(grep -c '"msg":"incident resolved"' <<<"$log" || true)
-    [ "$opened" -le "$resolved" ] && return
+    open=$(kubectl --context "$ctx" -n sentinel exec deploy/sentinel -- /sentinel incidents --since 24h |
+      awk 'NR > 1 && $4 == "open"' | wc -l)
+    [ "$open" -eq 0 ] && return
     sleep 5
   done
   echo "incidents still open after 5 minutes" >&2
