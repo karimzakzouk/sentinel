@@ -37,6 +37,13 @@ port-forward, which Kubernetes RBAC guards, is the way in. Three pages:
 
 The header says **Observe mode** until a policy lets Sentinel act.
 
+**Sign in** (top right) with a token for your own Kubernetes identity, for
+example `kubectl create token NAME -n NAMESPACE` for a service account. The
+console then shows **Policies**, where you set what Sentinel may do in each
+namespace, and buttons to approve or veto what it asks for and to resume
+what it paused. Every change is made as you, with your permissions; the
+cluster refuses what they do not allow.
+
 ## 3. Break something, with Sentinel only watching
 
 ```bash

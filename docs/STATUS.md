@@ -1,6 +1,6 @@
 # Status
 
-Last updated: Monday 9 November 2026, 19:45 Cairo time (UTC+2).
+Last updated: Tuesday 10 November 2026, 00:15 Cairo time (UTC+2).
 
 ## Where things stand
 
@@ -13,9 +13,18 @@ median of 69 seconds after the fault appeared, with no wrong action
 (below). Through Argo CD and Flux it first pauses the owner that would
 undo the rollback: in the GitOps session, a median of 66 seconds from fault
 to verified recovery. Without a policy it still only records what it would
-do. **Phase 4 (Fix) has started:** after such a rollback, Sentinel now
-proposes the one-line change that makes it hold in Git, as a pull request,
-and checks that it held once a person has merged it and resumed the owner.
+do. **Phase 4 (Fix) has four of its five slices built:** after such a
+rollback, Sentinel proposes the change that makes it hold in Git, as a pull
+request, and checks that it held once it is merged and the owner resumed.
+It finds the value in a manifest, an images entry or a kustomization's
+patch, fixes only the value the fault is blamed on when one commit changed
+several, proposes a memory limit learned from healthy use rather than the
+old one, and merges its own fix where a policy grants it and its record has
+earned it. Code fixes are the slice left. **Phase 5 (Extend and harden) has
+started:** four more fault classes, a Merkle tree over the Ledger, standby
+replicas for the actor, the Lab and the Fixer, and a console in the UI
+where a person signs in as themselves to approve, veto, resume and set
+policies.
 
 To look at it on a cluster where it runs:
 
@@ -25,6 +34,10 @@ To look at it on a cluster where it runs:
   this cluster.
 - `kubectl -n sentinel exec deploy/sentinel -- /sentinel incidents`, and
   `... /sentinel report shadow --since 24h` for what it would have done.
+- Sign in to the console with your own Kubernetes token (the **Sign in**
+  button, for example a token from `kubectl create token`): approve or veto
+  what Sentinel asks for, resume what it paused, and set a namespace's
+  policy, all as yourself.
 - To let it act in a namespace, a namespace admin creates a SentinelPolicy
   (for example `rollout.undo` and `scale` at `autonomous`, or at `approve`,
   then `sentinel approve NAMESPACE/REQUEST` for each one). For workloads
@@ -62,17 +75,28 @@ To look at it on a cluster where it runs:
 | 2. Synthesize the stateless world | The world built and proven: synthesis, the Lab DNS (decision 51), production's images under the fence's bounds (decision 50), the seal proven before the world starts and again with it running; Online Boutique's frontend and the ten services it calls ran in a Lab on the development cluster, every copy ready within 95 seconds and answering by its production name, once copies were fitted to Pod Security `restricted` (decision 59) | `TestTheLabBuildsAWorkloadsStatelessWorld`, as the Lab's identity: a front and the backend it calls answer by their production names, the API server's name resolves to nothing, and a canary Secret never reaches the Lab. `TestALabReproductionRunsTheWorldBehindAProvenSeal` in CI's enforcing clusters |
 | 3. Reproduce and judge | Races and verdicts built (decisions 52 and 53): reproduce and verify-fix Experiments, the previous revision as the first candidate, a deletion control. The gate's repetitions passed on the self-hosted runner under Calico | `TestTheLabTellsAFixFromTheFailure` on the development cluster: against a front that crashes as it starts, its previous revision passed after 15 blocks (15 of 15 against 0 of 15), the deletion control failed. Through the Lab in CI, on Calico and Cilium: "the previous revision front-9964bb8bd fixes it: it worked in 15 of 15 runs where the failing revision failed in 15 of 15", and a healthy front's failure "did not reproduce"; kindnet and Flannel were refused. Unit simulations: 3.4% false PASS at the null's edge for α = 5%. The `Lab gate` workflow's first round, on the development cluster: the fix passed in 15 blocks, a revision that still crashes and a deletion-style candidate failed in 3, and a flaky revision raced against itself ran out of its 60 blocks, NOT SURE. The `Lab gate` workflow on the self-hosted runner, Calico, 10 races of each kind at α = 5%: a fix passed 10 of 10 (median 15 blocks); a revision that still crashes and a deletion that does nothing failed 10 of 10 (3 blocks); a flaky revision against itself failed 7 and was NOT SURE 3 (51 blocks). No false PASS in 30 races that must not pass. Beside it, Online Boutique's frontend and the ten services it calls were copied into a sealed world, every copy ready and every name the world asked for provided |
 | Verified rollbacks | The controller asks the Lab about each proposed rollback (decision 54); the verdict joins the incident and its notices; at `lab-verified` it carries the rollback out (decision 57) | On the development cluster a bad image on `web` opened an incident, the controller asked the Lab, and the Lab, refusing a cluster without enforcement, answered NOT SURE within 35 seconds; the verdict shows on the incident page. In CI on Calico and Cilium, a request at `lab-verified` waited while the Lab raced a crashing revision of the front against its predecessor (15 of 15 against 15 of 15), then the actor rolled the front back, approved by the Lab |
-| 4. Datastores and replay | Not started | |
+| 4. Datastores and replay | Part built: datastores run empty in the Lab with production's engine and version (decision 78), each secret key has its own placeholder, so a name looked up from one says which secret the world lacks, and a second candidate, the failing revision with its configuration reverted, is raced beside the previous revision (decision 77). Replay, fakes of outside services and the Lab's certificate authority wait for traffic capture | Unit tests; the race and the Lab's end-to-end tests run on the self-hosted runner, which the soak holds until Thursday |
 
 ## Phase 4 progress
 
 | Slice | State | Proof |
 |---|---|---|
-| 1. Restore a bad value through Git | Built for an image, a command, arguments and environment values set in the files a Flux Kustomization or an Argo CD Application deploys (decisions 67 to 70 and 72): the Fixer finds the file or images entry that set it, opens a one-line pull request, follows it until the owner has applied it, and Sentinel checks that it held. Resuming the owner stays a person's (decision 69). Proven through Flux and Argo CD, and scored (below) | `TestTheFixerProposesTheFixInGit` and `TestTheFixerProposesTheFixInGitThroughArgoCD`, in CI and on the development cluster: a bad image committed to the Gitea repository the owner deploys from, Sentinel's rollback, a pull request changing line 17 of `deployment.yaml` with its comment kept, merged, the owner resumed, and "fix held", about 3 minutes after the proposal. The Git scenario session below. Unit tests render overlays with images entries, plain manifests, owners' name prefixes, and the abstentions |
-| 2. Partial reverts | Not started | |
-| 3. Values of their own | Not started | |
-| 4. Code incidents | Not started | |
-| 5. Delivery tiers | Not started | |
+| 1. Restore a bad value through Git | Built for an image, a command, arguments and environment values set in the files a Flux Kustomization or an Argo CD Application deploys (decisions 67 to 70 and 72), and in a kustomization's patches (decision 73): the Fixer finds the file, images entry or patch that set it, opens a pull request, follows it until the owner has applied it, and Sentinel checks that it held. Resuming the owner stays a person's (decision 69). Proven through Flux and Argo CD, and scored (below) | `TestTheFixerProposesTheFixInGit` and `TestTheFixerProposesTheFixInGitThroughArgoCD`, in CI and on the development cluster: a bad image committed to the Gitea repository the owner deploys from, Sentinel's rollback, a pull request changing line 17 of `deployment.yaml` with its comment kept, merged, the owner resumed, and "fix held", about 3 minutes after the proposal. The Git scenario session below. Unit tests render overlays with images entries, plain manifests, owners' name prefixes, and the abstentions |
+| 2. Partial reverts | Built (decision 74): of several values a revision changed, the one the fault class blames is fixed and the rest stay, said in the pull request | The pool's bad tag beside a greeting (below): the tag fixed, the greeting kept; unit tests for every class |
+| 3. Values of their own | Built for memory limits (decision 75): a limit learned from healthy use, never above the one that held. The Lab racing it before the pull request is next | Unit tests; the pool's memory-limit scenario (below) |
+| 4. Code incidents | Part built: for a crash a new image brought, the Fixer resolves the commits both images were built from, by labels and a tag or version that agree, and proposes the crash's function back as it was, in the image's source, Go first; then finds the image the source's pipeline builds from it. The Lab racing that image is next | `TestACrashInCodeGetsAFixInItsSource`: a pull request to the source puts the crashing function back and keeps the commit's other change, and the built image is found; unit tests of the resolution and the frames |
+| 5. Delivery tiers | Built (decision 76): `fix.merge` at `autonomous`, earned by the record of fixes that held; the Fixer checks the grant before it merges | Unit tests of the grant, the record and the merge on Gitea and GitHub |
+
+## Phase 5 progress
+
+| Item | State | Proof |
+|---|---|---|
+| More incident classes | Node isolation, DNS failure, certificate expiry and refused connections (decision 79) | Unit tests; a deploy's errors that mention a name still roll back |
+| Merkle audit log | Done (decision 80) | Matches RFC 6962's test vectors; proofs checked for every tree up to 33 events |
+| High availability | Standby replicas for the actor, the Lab and the Fixer (decision 81) | On the development cluster with two of each: one Lease holder each, the fence allowed the Leases, a standby took over a second after the holder was deleted |
+| Console | Sign in with your own token; approve, veto, resume, set policies, as yourself (decision 82) | Unit tests of sign-in, the person's own approval, refusals from another page; on the development cluster a real token signed in, the cluster refused what it may not see, and a bad token got 401 |
+| Fingerprints | fp2 for logged exceptions (decision 84) | One Redis outage logged with two messages is one exception |
+| Traffic capture, own faker, single sign-on, mined fix patterns | Not started | |
 
 ## Acting session
 
@@ -148,6 +172,34 @@ Detection, class, root cause and decision right every time, every fault
 rolled back and verified, no wrong action; both fixes at the right line, and
 both held; no fix that did not hold, no abstention where a fix was right.
 
+### Planted-bug pool
+
+Three test apps of our own in the same Gitea repository, each deployed by
+its own Flux Kustomization (`test/apps/gitea-delivery`): echo, agnhost's
+netexec on the port its environment names, which exits on a port that is not
+a number; patched, whose port a kustomization's patch sets; images, whose
+tag an images entry sets. Five scenarios break them, and all eight Git
+scenarios were scored together on Monday night (`hack/score.sh`):
+
+| Scenario | Sentinel did | Fix |
+|---|---|---|
+| A commit sets echo's port to `eighty` | crash-on-start, rolled back, verified after 1m7s | `echo/deployment.yaml:28` set back, merged, held ✓ |
+| One commit sets a tag that does not exist and changes the greeting | bad image, rolled back, verified after 1m6s | `echo/deployment.yaml:22`, the tag only; the greeting stayed ✓ |
+| A commit sets the port in patched's kustomization patch | rolled back, verified after 1m6s | `patched/kustomization.yaml:10`, in the patch ✓ |
+| A commit sets a bad tag in images' images entry | rolled back, verified after 1m5s | `images/kustomization.yaml:7` ✓ |
+| A commit cuts echo's memory to 6Mi | memory limit, rolled back, verified after 1m32s | `echo/deployment.yaml:34` set to 15Mi, learned from what echo used ✓ |
+| The three podinfo scenarios above | each rolled back and verified | the two fixes held, the owner's image rightly left alone ✓ |
+
+Of twelve runs: 12 detected, every class, root cause and culprit right, 8
+acted on and all verified, a median of 1m6s from fault to recovery, no
+wrong action; 7 fixes proposed, all at the right file and line, all held;
+one abstention, right. The four runs that did not act were stopped by
+Sentinel's own limits, which the session found in itself (below): a
+scenario that set the same revision as another, which Sentinel will not
+roll back a third time in a day, and refusals by the hourly budget, which
+locked the workload for a day. With the scenario's tag made its own and
+decision 83, both ran clean.
+
 ### Planted-bug app (`bugapp`)
 
 podinfo shrugs off bad environment values, so a small service of our own
@@ -215,6 +267,21 @@ minutes later, instead of opening incidents of their own.
 
 ## Things building found
 
+- **A refusal by the hourly budget locked a workload for a day.** The Git
+  pool's session ran seven rollbacks in one namespace within an hour; the
+  budget refused the next two, and each refusal opened the 24-hour breaker
+  on its workload, and opened it again when the controller restarted.
+  The budget says how often Sentinel acts, nothing against the action
+  (decision 83).
+- **Two scenarios set the same revision.** The owner's bad image used the
+  same tag as the bad image committed to Git, so Kustomize rendered the same
+  template: Sentinel had rolled that revision back twice that day and would
+  not a third time (decision 65), as designed. Each scenario now sets a
+  value of its own.
+- **A redeploy with the same image tag does not restart the controller**
+  when its pod template is unchanged; the workers' templates changed and
+  they restarted. Restart it by hand after loading a new `sentinel:dev`.
+
 - **Kubernetes 1.37 shows a crash loop differently.** A crashing container
   spends its back-off as "terminated", not "CrashLoopBackOff". Sentinel
   handles both, and CI also runs the end-to-end suite on Kubernetes 1.34.
@@ -257,29 +324,28 @@ Full reasoning in [decisions.md](decisions.md).
 
 ## Next
 
-- **Phase 3:** a config value reverted as a second candidate, and slice 4's
-  datastores and replay. The gate's repetitions passed (above).
-- **Phase 4 (Fixer)**, planned in [phase-4.md](plan/phase-4.md): test apps
-  of our own with planted bugs, for faults podinfo shrugs off (it ignores bad
-  environment values) and later for code fixes; values set by a
-  kustomization's patch; slice 2's partial reverts. The Gitea now in the test
-  cluster will also let the parent-Kustomization test use a real parent.
-- **Soak.** A long run with the scenario pool's controls and background
-  traffic, to measure false alarms per service per week, the error-rate
-  detector's especially. Shorter runs on the development cluster first; the
-  gate's 72 hours run on the self-hosted runner. The first short run, with
-  production settings: 1 hour 36 minutes, no incidents, through a new
-  two-tier app deployed into a watched namespace and the Lab's worlds and
-  races running beside it. It ended when the controller was redeployed. The
-  72-hour soak's first attempt stopped as it started, on a results directory
-  a fresh checkout does not have; the second has been watching since Monday
-  17:21 Cairo time and ends on Thursday at about the same time.
-- **The rest of slice 4,** shaped by the soak: seasonal baselines (SPOT on
-  decomposed residuals) if daily cycles cause false alarms, and dependency
-  edges from connection errors in logs.
-- **Smaller items:** exception fingerprints of logged .NET exceptions
-  split one error into several (a fingerprint version 2), and baselines are
-  relearned after every restart (decision 35).
+- **Code fixes (Phase 4 slice 4), the rest:** the Fixer already proposes,
+  for a crash a new image brought, the crashing function back as it was in
+  the image's source, and finds the image the source's pipeline builds from
+  that commit. Left: the Lab racing that image against the failing one and
+  saying on the pull request whether it fixes the crash; a test pipeline
+  next to Gitea (a registry and a builder) that plays a customer's; a Go
+  test app with a planted bug in code; then Python and JavaScript.
+- **Traffic capture:** an optional agent, off until a namespace turns it on
+  (in the console or its SentinelPolicy), recording request details, and
+  bodies only for services named, redacted; then Lab replay, fakes of
+  outside services from what they answered, and the Lab's certificate
+  authority for copies that serve TLS. Sentinel works as now without it.
+- **The console:** single sign-on where the cluster has it, and capture's
+  switch per namespace.
+- **GitLab and Bitbucket** in the Fixer, beside GitHub and Gitea.
+- **Phase 3:** the Lab racing a learned memory limit before its pull
+  request opens.
+- **After the soak ends on Thursday:** its report, the network-plugin
+  matrix and the Lab's end-to-end tests on the runner, and whether daily
+  cycles call for seasonal baselines.
+- **Smaller items:** baselines are relearned after every restart (decision
+  35); dependency edges from connection errors in logs.
 
 ## Blocked or flaky on the development VM
 
@@ -292,19 +358,25 @@ Full reasoning in [decisions.md](decisions.md).
 
 ## Waiting on you
 
-Nothing blocks Phase 1. When you have time:
+Nothing blocks the work. When you have time:
 
 - **Click Save on the Environment card** if it is still there. It makes
   future cloud agents start with the toolchain ready.
 - **Try it** with [the guide](guides/try-it.md), on a VM rather than your
-  laptop, and say what reads badly in the UI.
+  laptop, and say what reads badly in the UI; sign in to the console with
+  a token for your own identity.
+
+Settled with you on Monday night: fixes to code are built by the source's
+own pipeline, which a test pipeline next to Gitea plays in our tests; traffic
+capture is built, off until a namespace turns it on; the console acts as
+the person signed in.
 
 Needed later:
 
 | When | What |
 |---|---|
-| Phase 1 gate | The 72-hour soak itself, running on the self-hosted runner (decision 58) |
-| Phase 6 and 7 | A fresh, empty, private GitHub organization and a GitHub App, so outside reviewers and the demo see the Fixer's pull requests on GitHub; until then the Fixer works against test apps with planted bugs on the test cluster's own Git server, which keeps everything private |
+| Phase 1 gate | The 72-hour soak itself, running on the self-hosted runner until Thursday (decision 58) |
+| Phase 6 and 7 | A fresh, empty, private GitHub organization and a GitHub App, so outside reviewers and the demo see the Fixer's pull requests on GitHub |
 | Phase 6 | Azure for Students credits (managed-cluster run) and outside human evaluators |
 
 ## How to check
