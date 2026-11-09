@@ -83,7 +83,7 @@ exists az network public-ip show -g "$RG" -n "$VM-ip" ||
     --version IPv4 -o none
 exists az network nic show -g "$RG" -n "$VM-nic" ||
   az network nic create -g "$RG" -n "$VM-nic" -l "$LOCATION" --vnet-name "$RG-vnet" --subnet runners \
-    --public-ip-address "$VM-ip" --nsg "$VM-nsg" --accelerated-networking true -o none
+    --public-ip-address "$VM-ip" --network-security-group "$VM-nsg" --accelerated-networking true -o none
 
 step "vm"
 if ! exists az vm show -g "$RG" -n "$VM"; then
