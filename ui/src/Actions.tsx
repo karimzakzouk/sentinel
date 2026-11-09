@@ -5,7 +5,10 @@ import { usePoll } from "./usePoll";
 function Row({ s, onOpen }: { s: ActionSummary; onOpen: (id: string) => void }) {
   const a = s.action;
   const stage = actionStages[`sentinel.action.${s.stage}`];
-  const detail = a.params?.verification ?? a.params?.result ?? a.params?.breaker ?? a.params?.reason;
+  const detail =
+    s.stage === "reverted"
+      ? `reverted by ${a.params?.revertedBy}`
+      : (a.params?.verification ?? a.params?.result ?? a.params?.breaker ?? a.params?.reason);
   return (
     <tr>
       <td title={`first recorded ${clock(s.since)}`}>{ago(s.at)}</td>
