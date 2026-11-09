@@ -39,9 +39,15 @@ function Header({ summary }: { summary?: Summary }) {
         </span>
       )}
       <div className="spacer" />
-      <span className="pill accent" title="Sentinel records what it would do and changes nothing">
-        <span className="dot" /> Observe mode
-      </span>
+      {summary?.mode === "assist" ? (
+        <span className="pill amber" title="A SentinelPolicy lets Sentinel run reversible actions on its own; elsewhere it only records them">
+          <span className="dot" /> Acting where a policy allows
+        </span>
+      ) : (
+        <span className="pill accent" title="Sentinel records what it would do and changes nothing">
+          <span className="dot" /> Observe mode
+        </span>
+      )}
       {summary && (
         <span
           className="pill green"

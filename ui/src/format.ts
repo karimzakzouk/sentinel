@@ -24,6 +24,16 @@ const actions: Record<string, { label: string; verb: string }> = {
 export const classLabel = (c?: string) => (c && classes[c]?.label) || c || "Unclassified";
 export const classMeaning = (c?: string) => (c && classes[c]?.meaning) || "";
 export const actionLabel = (a?: string) => (a && actions[a]?.label) || a || "";
+export const actionVerb = (a?: string) => (a && actions[a]?.verb) || a || "";
+
+// What became of an action Sentinel asked the actor for, by Ledger event.
+export const actionStages: Record<string, { title: string; pill: string; tone: string }> = {
+  "sentinel.action.requested": { title: "Asked the actor to", pill: "requested", tone: "accent" },
+  "sentinel.action.executed": { title: "The actor did it", pill: "done, verifying", tone: "accent" },
+  "sentinel.action.failed": { title: "The actor did not act", pill: "not done", tone: "red" },
+  "sentinel.action.verified": { title: "Verified", pill: "done and verified", tone: "green" },
+  "sentinel.action.unverified": { title: "Not verified", pill: "left to people", tone: "red" },
+};
 
 export const workload = (o?: ObjectRef) => (o ? (o.namespace ? `${o.namespace}/${o.name}` : o.name) : "");
 

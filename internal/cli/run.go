@@ -15,8 +15,10 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 
+	"github.com/karimzakzouk/sentinel/internal/act"
 	"github.com/karimzakzouk/sentinel/internal/api"
 	"github.com/karimzakzouk/sentinel/internal/capability"
 	"github.com/karimzakzouk/sentinel/internal/config"
@@ -44,20 +46,28 @@ func newRunCmd(kf *kube.Flags) *cobra.Command {
 				}
 			}
 			log := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
-			client, err := kf.Clientset(version.UserAgent("controller"))
+			rc, err := kf.RESTConfig(version.UserAgent("controller"))
+			if err != nil {
+				return err
+			}
+			client, err := kubernetes.NewForConfig(rc)
+			if err != nil {
+				return err
+			}
+			dyn, err := dynamic.NewForConfig(rc)
 			if err != nil {
 				return err
 			}
 			ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGTERM, os.Interrupt)
 			defer stop()
-			return runController(ctx, log, cfg, client)
+			return runController(ctx, log, cfg, client, dyn)
 		},
 	}
 	cmd.Flags().StringVar(&configPath, "config", "/etc/sentinel/config.yaml", "path to the controller config file")
 	return cmd
 }
 
-func runController(ctx context.Context, log *slog.Logger, cfg *config.Config, client kubernetes.Interface) error {
+func runController(ctx context.Context, log *slog.Logger, cfg *config.Config, client kubernetes.Interface, dyn dynamic.Interface) error {
 	l, err := ledger.Open(ctx, cfg.Ledger.Path)
 	if err != nil {
 		return err
@@ -75,8 +85,10 @@ func runController(ctx context.Context, log *slog.Logger, cfg *config.Config, cl
 
 	var ready atomic.Bool
 	srv := &http.Server{Addr: cfg.HealthAddr, Handler: healthHandler(&ready), ReadHeaderTimeout: 5 * time.Second}
+	var acting atomic.Pointer[act.Requests]
 	ui := &http.Server{Addr: cfg.UI.Address, ReadHeaderTimeout: 5 * time.Second, Handler: (&api.Server{
 		Ledger: l, Version: version.Get().Version, Verified: api.Verification{Events: n, At: time.Now().UTC()}, UI: webui.Handler(),
+		Acting: func() bool { r := acting.Load(); return r != nil && r.Acting() },
 	}).Handler()}
 	serveErr := make(chan error, 2)
 	go func() { serveErr <- srv.ListenAndServe() }()
@@ -89,10 +101,11 @@ func runController(ctx context.Context, log *slog.Logger, cfg *config.Config, cl
 		_ = ui.Shutdown(shutdownCtx)
 	}()
 
-	w, err := newObserver(log, cfg, client, l)
+	w, requests, err := newObserver(ctx, log, cfg, client, dyn, l)
 	if err != nil {
 		return err
 	}
+	acting.Store(requests)
 	watchErr := make(chan error, 1)
 	go func() { watchErr <- w.Run(ctx) }()
 

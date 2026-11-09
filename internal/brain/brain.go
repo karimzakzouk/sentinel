@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"maps"
 	"math"
 	"slices"
 	"sort"
@@ -26,9 +27,18 @@ const ChangeEventType = "sentinel.change.observed"
 // test may still report: it reads the new pods one and three minutes in.
 const newErrorTest = 4 * time.Minute
 
+// Requester asks the actor for an action when the target namespace's policy
+// lets Sentinel run it on its own, and reports whether it asked.
+type Requester interface {
+	Request(ctx context.Context, a model.Action, reason string) (bool, error)
+}
+
+// verifyWithin is how long an action has to clear its incident's signals.
+const verifyWithin = 10 * time.Minute
+
 // Brain groups detections into incidents, explains them and records what it
-// would do. In observe mode it never acts: every action it chooses is
-// recorded as a shadow action.
+// would do. Without a Requester, or where no policy allows an action, it
+// never acts: every action it chooses is recorded as a shadow action.
 type Brain struct {
 	Ledger    *ledger.Ledger
 	Log       *slog.Logger
@@ -53,6 +63,9 @@ type Brain struct {
 	// quiet, so a fault that pauses (a crash loop's back-off, for one) stays
 	// one incident.
 	Gap time.Duration
+	// Act, when set, asks the actor for the reversible actions policies
+	// allow; their outcomes come back through OnActionOutcome.
+	Act Requester
 	Now func() time.Time
 
 	mu      sync.Mutex
@@ -85,6 +98,11 @@ type incident struct {
 	// sampleErrors holds the errors, by workload and template, that attached
 	// error samples have shown.
 	sampleErrors map[string]bool
+	// action is the action Sentinel asked the actor for; actedAt is when the
+	// actor reported it done, and verdict is set once it is verified or not.
+	action  *model.Action
+	actedAt time.Time
+	verdict bool
 }
 
 // factsOf returns the facts an incident holds for one of its workloads.
@@ -378,6 +396,7 @@ func (b *Brain) Sweep(ctx context.Context) error {
 	now := b.now()
 	var drafts []ledger.Draft
 	for key, inc := range b.open {
+		drafts = append(drafts, b.verify(inc)...)
 		if inc.quietSince.IsZero() || now.Sub(inc.quietSince) < b.Gap {
 			continue
 		}
@@ -482,7 +501,20 @@ func (b *Brain) assess(ctx context.Context, inc *incident, workload model.Object
 		a := model.Action{ID: model.NewID(), IncidentID: inc.rec.ID, Type: decision.Action, Target: decision.Target,
 			Params: map[string]string{"reason": decision.Reason}, Owner: "kubernetes", State: model.ActionProposed,
 			Reversible: slices.Contains(ReversibleActions, decision.Action), DecidedBy: b.Decide.Champion(), Shadow: true}
-		drafts = append(drafts, ledger.RecordDraft(source, model.KindAction, "proposed", a.ID, inc.rec.ID, a))
+		verb := "proposed"
+		if args := actionArgs(decision.Action, top, b.revision(workload)); b.Act != nil && inc.action == nil && args != nil {
+			requested, err := b.Act.Request(ctx, model.Action{ID: a.ID, IncidentID: a.IncidentID, Type: a.Type, Target: a.Target,
+				Params: args}, decision.Reason)
+			switch {
+			case err != nil:
+				b.Log.Error("could not ask the actor for an action", "incident", inc.rec.ID, "action", a.Type, "error", err)
+			case requested:
+				maps.Copy(a.Params, args)
+				a.Shadow, a.State, verb = false, model.ActionExecuting, "requested"
+				inc.action = &a
+			}
+		}
+		drafts = append(drafts, ledger.RecordDraft(source, model.KindAction, verb, a.ID, inc.rec.ID, a))
 	}
 	inc.lastAction = decision.Action
 

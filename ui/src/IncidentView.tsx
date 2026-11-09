@@ -8,7 +8,7 @@ import {
   type LedgerEvent,
   type Signal,
 } from "./api";
-import { actionLabel, ago, classLabel, clock, duration, isOpen, pct, reading, workload } from "./format";
+import { actionLabel, actionStages, actionVerb, ago, classLabel, clock, duration, isOpen, pct, reading, workload } from "./format";
 import { usePoll } from "./usePoll";
 
 const signalLabels: Record<string, string> = {
@@ -171,8 +171,23 @@ function TimelineEvent({ event }: { event: LedgerEvent }) {
         </li>
       );
     }
-    default:
-      return null;
+    default: {
+      const stage = actionStages[event.type];
+      if (!stage) return null;
+      const a = event.data as Action;
+      const said = event.type === "sentinel.action.requested" ? a.params?.reason : (a.params?.verification ?? a.params?.result);
+      return (
+        <li className="event action">
+          {when}
+          <div className="what">
+            {stage.title}
+            {event.type === "sentinel.action.requested" && ` ${actionVerb(a.type)} ${workload(a.target)}`}{" "}
+            <span className={`pill ${stage.tone}`}>{stage.pill}</span>
+          </div>
+          {said && <div className="detail">{said}</div>}
+        </li>
+      );
+    }
   }
 }
 
@@ -183,7 +198,9 @@ export function IncidentView({ id, onOpen }: { id: string; onOpen: (id: string) 
   const { incident, events } = detail.data;
   const a = incident.assessment;
   const hypotheses = latestHypotheses(events);
-  const action = lastOf<Action>(events, "sentinel.action.proposed");
+  const action = lastOf<Action>(events, "sentinel.action.proposed") ?? lastOf<Action>(events, "sentinel.action.requested");
+  const stageEvent = [...events].reverse().find((e) => actionStages[e.type]);
+  const stage = stageEvent && actionStages[stageEvent.type];
   const factors = hypotheses[0]?.ratios ?? [];
   const symptoms = incident.objects?.slice(1) ?? [];
 
@@ -214,12 +231,16 @@ export function IncidentView({ id, onOpen }: { id: string; onOpen: (id: string) 
           <p className="reading">{reading(incident)}</p>
         </section>
         <section className="card">
-          <h2>What it would do</h2>
+          <h2>{stage ? "What it did" : "What it would do"}</h2>
           {a ? (
             <>
               <div className="decision">
-                {actionLabel(a.decision)}
-                {a.decision !== "none" && <span className="pill amber">Observe mode: recorded, not done</span>}
+                {actionLabel(stage ? (stageEvent?.data as Action).type : a.decision)}
+                {stage ? (
+                  <span className={`pill ${stage.tone}`}>{stage.pill}</span>
+                ) : (
+                  a.decision !== "none" && <span className="pill amber">Observe mode: recorded, not done</span>
+                )}
               </div>
               {action?.params?.reason && <p className="note">{action.params.reason}</p>}
             </>
