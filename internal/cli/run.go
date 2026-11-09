@@ -87,24 +87,8 @@ func runController(ctx context.Context, log *slog.Logger, cfg *config.Config, cl
 	go checkpoints(ctx, log, l, time.Hour)
 
 	var ready atomic.Bool
-	srv := &http.Server{Addr: cfg.HealthAddr, Handler: healthHandler(&ready), ReadHeaderTimeout: 5 * time.Second}
 	var acting atomic.Pointer[act.Requests]
-	ui := &http.Server{Addr: cfg.UI.Address, ReadHeaderTimeout: 5 * time.Second, Handler: (&api.Server{
-		Ledger: l, Version: version.Get().Version, Verified: api.Verification{Events: n, At: time.Now().UTC()}, UI: webui.Handler(),
-		Acting:  func() bool { r := acting.Load(); return r != nil && r.Acting() },
-		Console: console,
-	}).Handler()}
 	serveErr := make(chan error, 3)
-	go func() { serveErr <- srv.ListenAndServe() }()
-	go func() { serveErr <- ui.ListenAndServe() }()
-	log.Info("UI listening", "address", cfg.UI.Address)
-	defer func() {
-		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-		defer cancel()
-		_ = srv.Shutdown(shutdownCtx)
-		_ = ui.Shutdown(shutdownCtx)
-	}()
-
 	var captured *capture.Store
 	if cfg.Capture.Address != "" {
 		token, err := os.ReadFile(cfg.Capture.TokenFile)
@@ -123,6 +107,26 @@ func runController(ctx context.Context, log *slog.Logger, cfg *config.Config, cl
 			_ = rx.Shutdown(shutdownCtx)
 		}()
 	}
+
+	srv := &http.Server{Addr: cfg.HealthAddr, Handler: healthHandler(&ready), ReadHeaderTimeout: 5 * time.Second}
+	apiServer := &api.Server{
+		Ledger: l, Version: version.Get().Version, Verified: api.Verification{Events: n, At: time.Now().UTC()}, UI: webui.Handler(),
+		Acting:  func() bool { r := acting.Load(); return r != nil && r.Acting() },
+		Console: console,
+	}
+	if captured != nil {
+		apiServer.Requests = captured.Recent
+	}
+	ui := &http.Server{Addr: cfg.UI.Address, ReadHeaderTimeout: 5 * time.Second, Handler: apiServer.Handler()}
+	go func() { serveErr <- srv.ListenAndServe() }()
+	go func() { serveErr <- ui.ListenAndServe() }()
+	log.Info("UI listening", "address", cfg.UI.Address)
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(shutdownCtx)
+		_ = ui.Shutdown(shutdownCtx)
+	}()
 
 	w, requests, err := newObserver(ctx, log, cfg, client, dyn, l, captured)
 	if err != nil {

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/karimzakzouk/sentinel/internal/capability"
+	"github.com/karimzakzouk/sentinel/internal/capture"
 	"github.com/karimzakzouk/sentinel/internal/ledger"
 	"github.com/karimzakzouk/sentinel/internal/model"
 	"github.com/karimzakzouk/sentinel/internal/stats"
@@ -35,6 +36,9 @@ type Server struct {
 	// Console, when set, lets a person signed in with their own token act
 	// through the UI.
 	Console *Console
+	// Requests, when traffic capture is on, returns what a workload served
+	// and called since a time.
+	Requests func(workload model.ObjectRef, since time.Time) []capture.Request
 }
 
 // Verification is a completed check of the Ledger's hash chain.
@@ -57,6 +61,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/actions", s.actions)
 	mux.HandleFunc("GET /api/trackrecords", s.trackRecords)
 	mux.HandleFunc("GET /api/experiments", s.experiments)
+	mux.HandleFunc("GET /api/traffic/{namespace}/{kind}/{name}", s.traffic)
 	if s.Console != nil {
 		s.Console.routes(mux)
 	}
@@ -324,4 +329,25 @@ func secure(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// maxRequests bounds the requests listed for a workload.
+const maxRequests = 200
+
+// traffic lists what a workload served and called in the last hour,
+// newest first, when traffic capture is on.
+func (s *Server) traffic(w http.ResponseWriter, r *http.Request) {
+	if s.Requests == nil {
+		writeError(w, http.StatusNotFound, errors.New("traffic capture is not installed"))
+		return
+	}
+	kind := r.PathValue("kind")
+	if kind != "Deployment" && kind != "StatefulSet" && kind != "DaemonSet" {
+		writeError(w, http.StatusBadRequest, errors.New("kind is Deployment, StatefulSet or DaemonSet"))
+		return
+	}
+	ref := model.ObjectRef{Group: "apps", Kind: kind, Namespace: r.PathValue("namespace"), Name: r.PathValue("name")}
+	got := s.Requests(ref, time.Now().Add(-time.Hour))
+	slices.Reverse(got)
+	writeJSON(w, map[string]any{"requests": append([]capture.Request{}, got[:min(len(got), maxRequests)]...)})
 }

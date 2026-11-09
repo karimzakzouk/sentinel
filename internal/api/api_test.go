@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/karimzakzouk/sentinel/internal/capability"
+	"github.com/karimzakzouk/sentinel/internal/capture"
 	"github.com/karimzakzouk/sentinel/internal/ledger"
 	"github.com/karimzakzouk/sentinel/internal/model"
 )
@@ -189,5 +190,33 @@ func TestSecurityHeaders(t *testing.T) {
 		if res.Header().Get(h) == "" {
 			t.Errorf("missing %s", h)
 		}
+	}
+}
+
+// A workload's captured requests are listed newest first, and say so when
+// capture is not installed.
+func TestAWorkloadsRequestsAreListedNewestFirst(t *testing.T) {
+	s, _, _ := newServer(t)
+	if res := get(t, s, "localhost:8090", "/api/traffic/shop/Deployment/cart", nil); res.Code != http.StatusNotFound {
+		t.Fatalf("without capture: %d", res.Code)
+	}
+	cart := model.ObjectRef{Group: "apps", Kind: "Deployment", Namespace: "shop", Name: "cart"}
+	s.Requests = func(ref model.ObjectRef, _ time.Time) []capture.Request {
+		if ref != cart {
+			return nil
+		}
+		return []capture.Request{{Served: true, Method: "GET", Path: "/a"}, {Served: true, Method: "GET", Path: "/b"}}
+	}
+	var out struct{ Requests []capture.Request }
+	if res := get(t, s, "localhost:8090", "/api/traffic/shop/Deployment/cart", &out); res.Code != http.StatusOK ||
+		len(out.Requests) != 2 || out.Requests[0].Path != "/b" {
+		t.Fatalf("requests %d %+v", res.Code, out.Requests)
+	}
+	if res := get(t, s, "localhost:8090", "/api/traffic/shop/Pod/cart", nil); res.Code != http.StatusBadRequest {
+		t.Fatalf("a pod: %d", res.Code)
+	}
+	if res := get(t, s, "localhost:8090", "/api/traffic/shop/Deployment/other", nil); res.Code != http.StatusOK ||
+		!json.Valid(res.Body.Bytes()) || string(res.Body.Bytes()) == "" || res.Body.String() == `{"requests":null}`+"\n" {
+		t.Fatalf("none: %d %s", res.Code, res.Body.String())
 	}
 }
