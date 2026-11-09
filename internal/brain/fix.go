@@ -2,11 +2,13 @@ package brain
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"time"
 
 	"github.com/karimzakzouk/sentinel/internal/learn"
 	"github.com/karimzakzouk/sentinel/internal/ledger"
+	"github.com/karimzakzouk/sentinel/internal/logs"
 	"github.com/karimzakzouk/sentinel/internal/model"
 	"github.com/karimzakzouk/sentinel/internal/notify"
 )
@@ -30,6 +32,15 @@ type FixRequest struct {
 	MemoryLimits map[string]string
 	// Merge lets the Fixer merge the fix itself.
 	Merge bool
+	// Crash is the stack the workload crashed with, from its logs, when
+	// they held one: the application's own functions, innermost first.
+	Crash *Crash
+}
+
+// Crash is a parsed crash stack.
+type Crash struct {
+	Language string
+	Frames   []string
 }
 
 // ActionFixMerge is the policy action that lets the Fixer merge its own
@@ -84,6 +95,7 @@ func (b *Brain) askFix(ctx context.Context, inc *incident, a *model.Action) []le
 			}
 		}
 	}
+	r.Crash = b.crashOf(ctx, inc.rec.ID, a.Target)
 	why := ""
 	if b.MergePolicy != nil {
 		if level, gated := b.MergePolicy(a.Target.Namespace); level == model.AutonomyAutonomous {
@@ -161,6 +173,42 @@ func (b *Brain) OnFixUpdate(ctx context.Context, u FixUpdate) error {
 	_, err = b.Ledger.Append(ctx, append([]ledger.Draft{ledger.RecordDraft(source, model.KindFix, strings.ToLower(u.Phase), f.ID, u.IncidentID, *f)},
 		drafts...)...)
 	return err
+}
+
+// crashOf is the newest crash stack, with the application's own frames,
+// in the logs of the workload the incident holds as evidence.
+func (b *Brain) crashOf(ctx context.Context, incident model.ID, target model.ObjectRef) *Crash {
+	records, err := ledger.List[model.Evidence](ctx, b.Ledger, model.KindEvidence, incident)
+	if err != nil {
+		return nil
+	}
+	var newest *Crash
+	var at time.Time
+	for _, e := range records {
+		if len(e.Data) == 0 || e.CollectedAt.Before(at) {
+			continue
+		}
+		var data struct {
+			Workload model.ObjectRef `json:"workload"`
+			Summary  logs.Summary    `json:"summary"`
+		}
+		if json.Unmarshal(e.Data, &data) != nil || data.Workload.Kind != target.Kind || data.Workload.Namespace != target.Namespace ||
+			data.Workload.Name != target.Name {
+			continue
+		}
+		for _, ex := range data.Summary.Exceptions {
+			var frames []string
+			for _, f := range ex.Frames {
+				if f.InApp {
+					frames = append(frames, f.Function)
+				}
+			}
+			if len(frames) > 0 {
+				newest, at = &Crash{Language: ex.Language, Frames: frames}, e.CollectedAt
+			}
+		}
+	}
+	return newest
 }
 
 // fixTrack is the cell of a fix's track record.

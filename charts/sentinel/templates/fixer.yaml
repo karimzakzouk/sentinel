@@ -10,6 +10,11 @@ author:
   email: {{ .Values.fixer.author.email | quote }}
 argocdNamespace: {{ .Values.owners.argocd.namespace }}
 healthAddr: ":8081"
+{{- if .Values.fixer.code.enabled }}
+code:
+  insecureRegistries: {{ toJson .Values.fixer.code.insecureRegistries }}
+  platform: {{ .Values.fixer.code.platform | quote }}
+{{- end }}
 {{- include "sentinel.leaderElection" (dict "values" .Values.fixer "namespace" .Release.Namespace "name" "sentinel-fixer") }}
 {{- end }}
 {{- if .Values.fixer.enabled }}
@@ -153,6 +158,16 @@ spec:
         - port: 443
         - port: 6443
         - port: {{ $port }}
+        {{- if .Values.fixer.code.enabled }}
+        {{- range .Values.fixer.code.insecureRegistries }}
+        {{- $hostPort := splitList ":" . }}
+        {{- if eq (len $hostPort) 2 }}
+        - port: {{ index $hostPort 1 | int }}
+        {{- else }}
+        - port: 80
+        {{- end }}
+        {{- end }}
+        {{- end }}
 ---
 # Working on Fixes: reading them and writing their status, in the release
 # namespace only.

@@ -85,6 +85,15 @@ owners:
 fixer:
   enabled: false
   replicas: 1
+  # Fixes to a failing image's code, beside the fix that pins the image back:
+  # the Fixer reads images' labels from their registries, finds the commit a
+  # crash's function changed in, and proposes it back as it was; the
+  # source's own pipeline builds the fix. Registries reached over plain
+  # HTTP, as host:port, are listed as insecure.
+  code:
+    enabled: false
+    insecureRegistries: []
+    platform: amd64
   forge:
     # The forge's address, which its repositories' clone URLs start with
     # (https://github.com, or a Gitea server's root URL), and its API's base
