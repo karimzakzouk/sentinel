@@ -1,12 +1,15 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/spf13/cobra"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
@@ -45,42 +48,65 @@ func newResumeCmd(kf *kube.Flags) *cobra.Command {
 			}
 			switch args[0] {
 			case "flux":
-				return resumeFlux(cmd, dyn, actor.KustomizationsResource, "Kustomization", ns, name)
+				return resumeFlux(cmd.Context(), cmd.OutOrStdout(), dyn, actor.KustomizationsResource, "Kustomization", ns, name)
 			case "helmrelease":
-				return resumeFlux(cmd, dyn, actor.HelmReleasesResource, "HelmRelease", ns, name)
+				return resumeFlux(cmd.Context(), cmd.OutOrStdout(), dyn, actor.HelmReleasesResource, "HelmRelease", ns, name)
 			}
-			apps := dyn.Resource(actor.ApplicationsResource).Namespace(ns)
-			app, err := apps.Get(cmd.Context(), name, metav1.GetOptions{})
-			if err != nil {
-				return err
-			}
-			was := app.GetAnnotations()[actor.AnnotationPausedSync]
-			if was == "" {
-				return fmt.Errorf("%s carries no note of a pause by Sentinel", args[1])
-			}
-			var automated map[string]any
-			if err := json.Unmarshal([]byte(was), &automated); err != nil {
-				return fmt.Errorf("the note of what Sentinel paused is unreadable: %w", err)
-			}
-			patch, err := json.Marshal(map[string]any{
-				"metadata": map[string]any{"annotations": map[string]any{actor.AnnotationPausedSync: nil}},
-				"spec":     map[string]any{"syncPolicy": map[string]any{"automated": automated}},
-			})
-			if err != nil {
-				return err
-			}
-			if _, err := apps.Patch(cmd.Context(), name, types.MergePatchType, patch, metav1.PatchOptions{FieldManager: "sentinel-cli"}); err != nil {
-				return err
-			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "resumed %s's automated sync as it was: %s\n", args[1], was)
-			return err
+			return resumeArgoCD(cmd.Context(), cmd.OutOrStdout(), dyn, ns, name)
 		},
 	}
 }
 
-func resumeFlux(cmd *cobra.Command, dyn dynamic.Interface, resource schema.GroupVersionResource, kind, ns, name string) error {
+// resumeArgoCD restores an Application's automated sync as Sentinel's note
+// recorded it. An ApplicationSet drops annotations it does not set, the note
+// among them, so an Application one generates is resumed without a note to
+// the automated sync its ApplicationSet's template sets.
+func resumeArgoCD(ctx context.Context, out io.Writer, dyn dynamic.Interface, ns, name string) error {
+	apps := dyn.Resource(actor.ApplicationsResource).Namespace(ns)
+	app, err := apps.Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return err
+	}
+	var automated map[string]any
+	how := "as it was"
+	if was := app.GetAnnotations()[actor.AnnotationPausedSync]; was != "" {
+		if err := json.Unmarshal([]byte(was), &automated); err != nil {
+			return fmt.Errorf("the note of what Sentinel paused is unreadable: %w", err)
+		}
+	} else if set, ok := actor.ApplicationSetOf(app.GetOwnerReferences()); ok {
+		s, err := dyn.Resource(actor.ApplicationSetsResource).Namespace(ns).Get(ctx, set, metav1.GetOptions{})
+		if err != nil {
+			return fmt.Errorf("the ApplicationSet %s/%s that generates the Application: %w", ns, set, err)
+		}
+		m, found, err := unstructured.NestedMap(s.Object, "spec", "template", "spec", "syncPolicy", "automated")
+		if err != nil || !found {
+			return fmt.Errorf("the ApplicationSet %s/%s's template sets no automated sync Sentinel can restore; resume it in Argo CD", ns, set)
+		}
+		automated, how = m, "as the ApplicationSet "+ns+"/"+set+" sets it"
+	} else {
+		return fmt.Errorf("%s/%s carries no note of a pause by Sentinel", ns, name)
+	}
+	patch, err := json.Marshal(map[string]any{
+		"metadata": map[string]any{"annotations": map[string]any{actor.AnnotationPausedSync: nil}},
+		"spec":     map[string]any{"syncPolicy": map[string]any{"automated": automated}},
+	})
+	if err != nil {
+		return err
+	}
+	if _, err := apps.Patch(ctx, name, types.MergePatchType, patch, metav1.PatchOptions{FieldManager: "sentinel-cli"}); err != nil {
+		return err
+	}
+	shown, err := json.Marshal(automated)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(out, "resumed %s/%s's automated sync %s: %s\n", ns, name, how, shown)
+	return err
+}
+
+func resumeFlux(ctx context.Context, out io.Writer, dyn dynamic.Interface, resource schema.GroupVersionResource, kind, ns, name string) error {
 	ks := dyn.Resource(resource).Namespace(ns)
-	k, err := ks.Get(cmd.Context(), name, metav1.GetOptions{})
+	k, err := ks.Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		return err
 	}
@@ -88,9 +114,9 @@ func resumeFlux(cmd *cobra.Command, dyn dynamic.Interface, resource schema.Group
 		return fmt.Errorf("%s/%s carries no note of a pause by Sentinel", ns, name)
 	}
 	patch := []byte(`{"metadata":{"annotations":{"` + actor.AnnotationPausedSync + `":null}},"spec":{"suspend":false}}`)
-	if _, err := ks.Patch(cmd.Context(), name, types.MergePatchType, patch, metav1.PatchOptions{FieldManager: "sentinel-cli"}); err != nil {
+	if _, err := ks.Patch(ctx, name, types.MergePatchType, patch, metav1.PatchOptions{FieldManager: "sentinel-cli"}); err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(cmd.OutOrStdout(), "resumed the Flux %s %s/%s\n", kind, ns, name)
+	_, err = fmt.Fprintf(out, "resumed the Flux %s %s/%s\n", kind, ns, name)
 	return err
 }

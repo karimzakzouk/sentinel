@@ -108,11 +108,14 @@ With `E2E_ARGOCD=1`, `go test -tags e2e ./test/e2e/ -run TestArgoCD -v` deploys
 Argo CD's guestbook with automated sync, delivers a bad image through it,
 and shows Sentinel pause the Application's sync and roll back; Argo CD then
 reports the Application out of sync instead of undoing the rollback. Fix
-Git, then `bin/sentinel resume argocd argocd/<application>`. Flux works the
-same way with `E2E_FLUX=1` and `-run TestFlux`, for a Kustomization
+Git, then `bin/sentinel resume argocd argocd/<application>`. An Application
+an ApplicationSet generates is paused only if the ApplicationSet ignores
+differences in `/spec/syncPolicy`, and resumes as its template says. Flux
+works the same way with `E2E_FLUX=1` and `-run TestFlux`, for a Kustomization
 (`bin/sentinel resume flux flux-system/<kustomization>`) and a HelmRelease
 (`bin/sentinel resume helmrelease flux-system/<release>`); a HelmRelease that
-rolls failed upgrades back itself is left to helm-controller.
+rolls failed upgrades back itself is left to helm-controller, and a
+Kustomization whose parent sets its `spec.suspend` to people.
 
 ## 8. Ask the Lab
 
