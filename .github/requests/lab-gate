@@ -2,3 +2,4 @@
 # self-hosted runner, as "Run workflow" does; races is how many rounds of
 # its four races to run (about 30 minutes a round).
 races: 10
+requested: 2026-11-09, the first run of the gate
