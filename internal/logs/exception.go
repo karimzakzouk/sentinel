@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"path"
+	"regexp"
 	"strings"
 )
 
@@ -30,8 +31,9 @@ type Frame struct {
 
 // FingerprintVersion names the fingerprint algorithm. Changing what goes
 // into a fingerprint requires a new version, or old and new occurrences of
-// one error would stop grouping.
-const FingerprintVersion = "fp1"
+// one error would stop grouping. Version 2 names a logged exception by the
+// types its message names rather than the message.
+const FingerprintVersion = "fp2"
 
 const maxFrames = 20
 
@@ -275,7 +277,10 @@ func dotnetChain(e *Exception, lines []string) {
 }
 
 // parseLogged handles an entry's message followed by frames, as loggers
-// print an exception they caught. The masked message stands for the type.
+// print an exception they caught. A message varies with what failed, the
+// command or the timeout it names, so the exception types it names stand
+// for it, and the masked message only when it names none and nothing
+// under it does.
 func parseLogged(lines []string) Exception {
 	var e Exception
 	if second := strings.TrimLeft(lines[1], " \t"); strings.HasPrefix(second, "---> ") ||
@@ -285,6 +290,20 @@ func parseLogged(lines []string) Exception {
 	} else {
 		e = parseJava(lines[1:])
 	}
-	e.Types = append([]string{Mask(lines[0])}, e.Types...)
+	named := typeNames.FindAllString(lines[0], -1)
+	if len(named) == 0 && len(e.Types) == 0 {
+		named = []string{Mask(lines[0])}
+	}
+	var types []string
+	for _, t := range append(named, e.Types...) {
+		if len(types) == 0 || types[len(types)-1] != t {
+			types = append(types, t)
+		}
+	}
+	e.Types = types
 	return e
 }
+
+// typeNames finds exception types in a message: a name ending in
+// Exception, or a qualified one ending in Error, as java.lang.OutOfMemoryError.
+var typeNames = regexp.MustCompile(`\b(?:[A-Za-z_]\w*\.)+[A-Z]\w*(?:Exception|Error)\b|\b[A-Z]\w*Exception\b`)
