@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	authenticationv1 "k8s.io/api/authentication/v1"
@@ -194,6 +195,23 @@ func TestActorAndProvenNetworkPolicyEnableActAndLab(t *testing.T) {
 	rep := run(t, c, Options{Namespaces: []string{"shop"}, LabNamespace: "sentinel-lab-0", ActorUser: actor, NetworkPolicy: proven})
 	wantFeature(t, rep, "act", true)
 	wantFeature(t, rep, "lab", true)
+}
+
+// Traffic capture is a feature like any other: off where it is not
+// installed, and not claimed until its agent's requests arrive.
+func TestCaptureIsOnOnlyWhileItsAgentSendsRequests(t *testing.T) {
+	c := newCluster(t, kindNode("n1"))
+	c.allow(WatcherRules("shop")...)
+	if f := wantFeature(t, run(t, c, Options{Namespaces: []string{"shop"}}), "capture", false); !strings.Contains(f.Reason, "not installed") {
+		t.Fatalf("capture reason = %q", f.Reason)
+	}
+	var last time.Time
+	seen := func() time.Time { return last }
+	if f := wantFeature(t, run(t, c, Options{Namespaces: []string{"shop"}, CaptureSeen: seen}), "capture", false); !strings.Contains(f.Reason, "no request") {
+		t.Fatalf("capture reason = %q", f.Reason)
+	}
+	last = time.Now()
+	wantFeature(t, run(t, c, Options{Namespaces: []string{"shop"}, CaptureSeen: seen}), "capture", true)
 }
 
 func TestRunRefusesWithoutNamespaces(t *testing.T) {

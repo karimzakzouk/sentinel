@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -21,6 +22,7 @@ import (
 	"github.com/karimzakzouk/sentinel/internal/act"
 	"github.com/karimzakzouk/sentinel/internal/api"
 	"github.com/karimzakzouk/sentinel/internal/capability"
+	"github.com/karimzakzouk/sentinel/internal/capture"
 	"github.com/karimzakzouk/sentinel/internal/config"
 	"github.com/karimzakzouk/sentinel/internal/kube"
 	"github.com/karimzakzouk/sentinel/internal/ledger"
@@ -92,7 +94,7 @@ func runController(ctx context.Context, log *slog.Logger, cfg *config.Config, cl
 		Acting:  func() bool { r := acting.Load(); return r != nil && r.Acting() },
 		Console: console,
 	}).Handler()}
-	serveErr := make(chan error, 2)
+	serveErr := make(chan error, 3)
 	go func() { serveErr <- srv.ListenAndServe() }()
 	go func() { serveErr <- ui.ListenAndServe() }()
 	log.Info("UI listening", "address", cfg.UI.Address)
@@ -102,6 +104,25 @@ func runController(ctx context.Context, log *slog.Logger, cfg *config.Config, cl
 		_ = srv.Shutdown(shutdownCtx)
 		_ = ui.Shutdown(shutdownCtx)
 	}()
+
+	var captured *capture.Store
+	if cfg.Capture.Address != "" {
+		token, err := os.ReadFile(cfg.Capture.TokenFile)
+		if err != nil {
+			return fmt.Errorf("capture token: %w", err)
+		}
+		captured = &capture.Store{Enabled: func(ns string) bool { r := acting.Load(); return r != nil && r.Capture(ns) }}
+		rx := &http.Server{Addr: cfg.Capture.Address, ReadHeaderTimeout: 5 * time.Second, Handler: &capture.Receiver{
+			Store: captured, Token: strings.TrimSpace(string(token)), Log: log,
+		}}
+		go func() { serveErr <- rx.ListenAndServe() }()
+		log.Info("receiving traffic capture", "address", cfg.Capture.Address)
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer cancel()
+			_ = rx.Shutdown(shutdownCtx)
+		}()
+	}
 
 	w, requests, err := newObserver(ctx, log, cfg, client, dyn, l)
 	if err != nil {
@@ -114,6 +135,9 @@ func runController(ctx context.Context, log *slog.Logger, cfg *config.Config, cl
 	detector := &capability.Detector{Client: client, Options: capability.Options{
 		Namespaces: cfg.Namespaces, AgentNamespace: cfg.AgentNamespace, ActorUser: cfg.ActorUser,
 	}}
+	if captured != nil {
+		detector.Options.CaptureSeen = captured.LastSeen
+	}
 	var last [sha256.Size]byte
 	tick := time.NewTicker(cfg.Capabilities.Interval.Duration)
 	defer tick.Stop()

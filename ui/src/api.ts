@@ -257,6 +257,7 @@ export interface PolicySpec {
   autonomy?: AutonomyRule[];
   budgets?: { falseAlarmsPerWeek?: number; alphaPercent?: number; maxCapacityRemovalPercent?: number };
   quietPeriodAfterHumanEdit?: string;
+  capture?: { requests?: boolean };
 }
 
 export interface Policy {

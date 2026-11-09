@@ -82,6 +82,14 @@ function PolicyCard({ policy, onSaved }: { policy: Policy; onSaved: () => void }
           onRemove={() => setRules(rules.filter((_, j) => j !== i))}
         />
       ))}
+      <label className="check capture" title="What traffic capture's agent sees of this namespace's requests, kept so the Lab can replay reads">
+        <input
+          type="checkbox"
+          checked={!!spec.capture?.requests}
+          onChange={(e) => setSpec({ ...spec, capture: e.target.checked ? { requests: true } : undefined })}
+        />
+        Record request details: method, route, status and timing, never bodies. Needs traffic capture installed.
+      </label>
       <div className="policy-actions">
         <button
           className="btn"

@@ -115,6 +115,18 @@ spec:
                     minimum: 0
                     type: integer
                 type: object
+              capture:
+                description: |-
+                  Capture turns traffic capture on for the namespace, where its agent
+                  is installed.
+                properties:
+                  requests:
+                    description: |-
+                      Requests keeps the method, route, status and timing of the requests
+                      its workloads serve and make, never a body or a header, so the Lab
+                      can replay reads and stand in for what they call.
+                    type: boolean
+                type: object
               criticalSelector:
                 description: CriticalSelector marks tier-0 workloads, which are held
                   to stricter rules.

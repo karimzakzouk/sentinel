@@ -40,6 +40,7 @@ func TestLoadRejectsUnsafeOrAmbiguousConfig(t *testing.T) {
 		"samples under a tick":  "namespaces: [a]\nledger: {path: /l.db}\nlogs: {sampleInterval: 5s}\n",
 		"samples over a window": "namespaces: [a]\nledger: {path: /l.db}\nlogs: {sampleInterval: 10m}\n",
 		"negative warm-up":      "namespaces: [a]\nledger: {path: /l.db}\ndetection: {warmUp: -1m}\n",
+		"capture without token": "namespaces: [a]\nledger: {path: /l.db}\ncapture: {address: ':4318'}\n",
 	}
 	for name, content := range cases {
 		if _, err := Load(write(t, content)); err == nil {

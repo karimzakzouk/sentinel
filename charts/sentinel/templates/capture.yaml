@@ -1,0 +1,219 @@
+{{- if .Values.capture.enabled }}
+{{- $token := "" }}
+{{- with lookup "v1" "Secret" .Release.Namespace "sentinel-capture-token" }}
+{{- $token = index .data "token" | b64dec }}
+{{- end }}
+{{- if not $token }}
+{{- $token = randAlphaNum 40 }}
+{{- end }}
+# Traffic capture's agent sees every process on its node, so it runs in a
+# namespace of its own that allows privileged pods, and sends Sentinel only
+# what it saw of watched namespaces' HTTP requests.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Values.capture.namespace }}
+  labels:
+    {{- include "sentinel.labels" . | nindent 4 }}
+    pod-security.kubernetes.io/enforce: privileged
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sentinel-capture
+  namespace: {{ .Values.capture.namespace }}
+  labels:
+    {{- include "sentinel.labels" . | nindent 4 }}
+automountServiceAccountToken: true
+---
+# Reads only, to name the pods and workloads behind the processes it sees.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: sentinel-capture
+  labels:
+    {{- include "sentinel.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [apps]
+    resources: [replicasets]
+    verbs: [list, watch]
+  - apiGroups: [""]
+    resources: [pods, services, nodes]
+    verbs: [list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: sentinel-capture
+  labels:
+    {{- include "sentinel.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: sentinel-capture
+subjects:
+  - kind: ServiceAccount
+    name: sentinel-capture
+    namespace: {{ .Values.capture.namespace }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: sentinel-capture-token
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "sentinel.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  token: {{ $token | quote }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: sentinel-capture-token
+  namespace: {{ .Values.capture.namespace }}
+  labels:
+    {{- include "sentinel.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  headers: {{ printf "Authorization=Bearer %s" $token | quote }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sentinel-capture
+  namespace: {{ .Values.capture.namespace }}
+  labels:
+    {{- include "sentinel.labels" . | nindent 4 }}
+data:
+  obi.yaml: |
+    {{- include "sentinel.captureConfig" . | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: sentinel-capture
+  namespace: {{ .Values.capture.namespace }}
+  labels:
+    {{- include "sentinel.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sentinel-capture
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: sentinel-capture
+        app.kubernetes.io/instance: {{ .Release.Name }}
+      annotations:
+        checksum/config: {{ include "sentinel.captureConfig" . | sha256sum | trunc 16 }}
+        checksum/token: {{ $token | sha256sum | trunc 16 }}
+    spec:
+      serviceAccountName: sentinel-capture
+      # To see the processes of every pod on the node.
+      hostPID: true
+      enableServiceLinks: false
+      containers:
+        - name: agent
+          image: {{ .Values.capture.image }}
+          terminationMessagePolicy: FallbackToLogsOnError
+          env:
+            - name: OTEL_EBPF_CONFIG_PATH
+              value: /etc/obi/obi.yaml
+            - name: OTEL_EBPF_KUBE_METADATA_ENABLE
+              value: "true"
+            - name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+              value: http://sentinel-capture.{{ .Release.Namespace }}.svc:4318/v1/traces
+            - name: OTEL_EXPORTER_OTLP_TRACES_PROTOCOL
+              value: http/json
+            - name: OTEL_EXPORTER_OTLP_HEADERS
+              valueFrom:
+                secretKeyRef:
+                  name: sentinel-capture-token
+                  key: headers
+          resources:
+            {{- toYaml .Values.capture.resources | nindent 12 }}
+          securityContext:
+            runAsUser: 0
+            readOnlyRootFilesystem: true
+            capabilities:
+              # What eBPF needs to load its probes and read the processes'
+              # executables and sockets; not privileged.
+              add: [BPF, SYS_PTRACE, NET_RAW, CHECKPOINT_RESTORE, DAC_READ_SEARCH, PERFMON]
+              drop: [ALL]
+          volumeMounts:
+            - name: config
+              mountPath: /etc/obi
+              readOnly: true
+            - name: run
+              mountPath: /var/run/obi
+            - name: cgroup
+              mountPath: /sys/fs/cgroup
+            - name: tracefs
+              mountPath: /sys/kernel/tracing
+      tolerations:
+        - effect: NoSchedule
+          operator: Exists
+        - effect: NoExecute
+          operator: Exists
+      volumes:
+        - name: config
+          configMap:
+            name: sentinel-capture
+        - name: run
+          emptyDir: {}
+        - name: cgroup
+          hostPath:
+            path: /sys/fs/cgroup
+        - name: tracefs
+          hostPath:
+            path: /sys/kernel/tracing
+            type: Directory
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sentinel-capture
+  namespace: {{ .Values.capture.namespace }}
+  labels:
+    {{- include "sentinel.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: sentinel-capture
+  policyTypes: [Ingress, Egress]
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - ports:
+        - port: 443
+        - port: 6443
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Release.Namespace }}
+          podSelector:
+            matchLabels:
+              {{- include "sentinel.selectorLabels" . | nindent 14 }}
+      ports:
+        - port: 4318
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sentinel-capture
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "sentinel.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "sentinel.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: otlp
+      port: 4318
+      targetPort: capture
+{{- end }}

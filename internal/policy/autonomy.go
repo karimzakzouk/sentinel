@@ -79,3 +79,14 @@ func BudgetSpent(message string) bool {
 	_, err := fmt.Sscanf(message, budgetSpent, &n)
 	return err == nil && BudgetSpentMessage(n) == message
 }
+
+// Capture reports whether a namespace's policies turn traffic capture on:
+// any one that does.
+func Capture(policies []v1alpha1.SentinelPolicy) bool {
+	for _, p := range policies {
+		if p.Spec.Capture != nil && p.Spec.Capture.Requests {
+			return true
+		}
+	}
+	return false
+}
