@@ -1,0 +1,37 @@
+# The Fixer's changes go to Git as pull requests, which people merge; in the
+# cluster it may only report how a Fix went, in its own namespace.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: sentinel-fence-fixer
+  labels:
+    {{- include "fence.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["*"]
+        apiVersions: ["*"]
+        operations: [CREATE, UPDATE, DELETE, CONNECT]
+        resources: ["*/*"]
+  matchConditions:
+    - name: is-sentinel-fixer
+      expression: request.userInfo.username == "system:serviceaccount:{{ .Values.fixer.namespace }}:{{ .Values.fixer.serviceAccount }}"
+  variables:
+    {{- include "fence.requestVariables" . | nindent 4 }}
+  validations:
+    - expression: >-
+        request.resource.group == 'sentinel.karimzakzouk.github.io' && request.resource.resource == 'fixes' &&
+        variables.subResource == 'status' && request.operation == 'UPDATE' && variables.requestNamespace == '{{ .Values.fixer.namespace }}'
+      message: "Sentinel's Fixer may only report on Fixes; it never changes the cluster"
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: sentinel-fence-fixer
+  labels:
+    {{- include "fence.labels" . | nindent 4 }}
+spec:
+  policyName: sentinel-fence-fixer
+  validationActions: [Deny]

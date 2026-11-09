@@ -38,6 +38,9 @@ labNamespaces: {{ include "sentinel.labNamespaces" . }}
 {{- if .Values.lab.enabled }}
 verifyRollbacks: {{ .Values.lab.verifyRollbacks }}
 {{- end }}
+{{- if .Values.fixer.enabled }}
+fixerNamespace: {{ .Release.Namespace }}
+{{- end }}
 {{- if .Values.actor.enabled }}
 actorUser: system:serviceaccount:{{ .Values.actor.namespace }}:{{ .Values.actor.serviceAccount }}
 {{- end }}

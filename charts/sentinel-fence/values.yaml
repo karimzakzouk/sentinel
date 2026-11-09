@@ -28,6 +28,12 @@ argocdNamespace: ""
 # rollback; empty means it may not.
 fluxNamespaces: []
 
+# The Fixer's identity, which may only report on Fixes in its namespace:
+# its changes go to Git as pull requests, never to the cluster.
+fixer:
+  namespace: sentinel
+  serviceAccount: sentinel-fixer
+
 # The Lab's identity and its pool of namespaces; empty means the Lab may
 # change nothing.
 lab:
