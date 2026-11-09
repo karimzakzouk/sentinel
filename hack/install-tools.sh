@@ -13,13 +13,16 @@ ARCH=amd64
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-fetch() { curl -fsSL --retry 3 -o "$2" "$1"; }
+fetch() { curl -fsSL --retry 5 --retry-delay 2 -o "$2" "$1"; }
+# Checksums come through the same retries: GitHub's release downloads answer
+# 504 now and then.
+get() { curl -fsSL --retry 5 --retry-delay 2 "$1"; }
 verify() { echo "$1  $2" | sha256sum -c --quiet -; }
 
 # CI provides Go through actions/setup-go; anywhere else, install it.
 if [ "$(go env GOVERSION 2>/dev/null)" != "go${GO_VERSION}" ]; then
   go_file="go${GO_VERSION}.linux-${ARCH}.tar.gz"
-  go_sum=$(curl -fsSL 'https://go.dev/dl/?mode=json&include=all' |
+  go_sum=$(get 'https://go.dev/dl/?mode=json&include=all' |
     jq -r --arg f "$go_file" '.[].files[] | select(.filename == $f) | .sha256')
   fetch "https://go.dev/dl/${go_file}" "$tmp/go.tgz"
   verify "$go_sum" "$tmp/go.tgz"
@@ -32,21 +35,21 @@ fi
 if [ "$(kubectl version --client -o json 2>/dev/null | jq -r .clientVersion.gitVersion)" != "$KUBECTL_VERSION" ]; then
   url="https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${ARCH}/kubectl"
   fetch "$url" "$tmp/kubectl"
-  verify "$(curl -fsSL "${url}.sha256")" "$tmp/kubectl"
+  verify "$(get "${url}.sha256")" "$tmp/kubectl"
   sudo install -m 0755 "$tmp/kubectl" /usr/local/bin/kubectl
 fi
 
 if [ "$(kind version 2>/dev/null | awk '{print $2}')" != "$KIND_VERSION" ]; then
   url="https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-${ARCH}"
   fetch "$url" "$tmp/kind"
-  verify "$(curl -fsSL "${url}.sha256sum" | awk '{print $1}')" "$tmp/kind"
+  verify "$(get "${url}.sha256sum" | awk '{print $1}')" "$tmp/kind"
   sudo install -m 0755 "$tmp/kind" /usr/local/bin/kind
 fi
 
 if [ "$(helm version --short 2>/dev/null | cut -d+ -f1)" != "$HELM_VERSION" ]; then
   url="https://get.helm.sh/helm-${HELM_VERSION}-linux-${ARCH}.tar.gz"
   fetch "$url" "$tmp/helm.tgz"
-  verify "$(curl -fsSL "${url}.sha256sum" | awk '{print $1}')" "$tmp/helm.tgz"
+  verify "$(get "${url}.sha256sum" | awk '{print $1}')" "$tmp/helm.tgz"
   tar -C "$tmp" -xzf "$tmp/helm.tgz"
   sudo install -m 0755 "$tmp/linux-${ARCH}/helm" /usr/local/bin/helm
 fi
@@ -56,7 +59,7 @@ if ! golangci-lint version 2>/dev/null | grep "version ${lint_version} " >/dev/n
   base="https://github.com/golangci/golangci-lint/releases/download/${GOLANGCI_LINT_VERSION}"
   file="golangci-lint-${lint_version}-linux-${ARCH}.tar.gz"
   fetch "${base}/${file}" "$tmp/lint.tgz"
-  verify "$(curl -fsSL "${base}/golangci-lint-${lint_version}-checksums.txt" | awk -v f="$file" '$2 == f {print $1}')" "$tmp/lint.tgz"
+  verify "$(get "${base}/golangci-lint-${lint_version}-checksums.txt" | awk -v f="$file" '$2 == f {print $1}')" "$tmp/lint.tgz"
   tar -C "$tmp" -xzf "$tmp/lint.tgz"
   sudo install -m 0755 "$tmp/golangci-lint-${lint_version}-linux-${ARCH}/golangci-lint" /usr/local/bin/golangci-lint
 fi
