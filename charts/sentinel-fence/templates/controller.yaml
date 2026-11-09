@@ -25,8 +25,10 @@ spec:
          variables.subResource == '' && request.operation == 'CREATE' && variables.requestNamespace in {{ include "fence.namespaces" . }}) ||
         (request.resource.group == 'sentinel.karimzakzouk.github.io' && request.resource.resource == 'experiments' &&
          variables.subResource == '' && request.operation == 'CREATE' && variables.requestNamespace in {{ toJson .Values.lab.pool | replace "\"" "'" }} &&
-         object.spec.purpose in ['verify-fix', 'reproduce'] && object.spec.labNamespace == variables.requestNamespace)
-      message: "Sentinel's controller may only run dry-run pod probes and access reviews, ask the actor for actions and ask the Lab to verify them; it never changes the cluster directly"
+         object.spec.purpose in ['verify-fix', 'reproduce'] && object.spec.labNamespace == variables.requestNamespace) ||
+        (request.resource.group == 'sentinel.karimzakzouk.github.io' && request.resource.resource == 'fixes' &&
+         variables.subResource == '' && request.operation == 'CREATE' && variables.requestNamespace == '{{ .Values.fixer.namespace }}')
+      message: "Sentinel's controller may only run dry-run pod probes and access reviews, ask the actor for actions, ask the Lab to verify them and ask the Fixer for fixes; it never changes the cluster directly"
       reason: Forbidden
 ---
 apiVersion: admissionregistration.k8s.io/v1

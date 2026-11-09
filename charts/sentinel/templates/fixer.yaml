@@ -1,0 +1,259 @@
+{{- define "sentinel.fixerConfig" -}}
+namespace: {{ .Release.Namespace }}
+forge:
+  web: {{ .Values.fixer.forge.web | quote }}
+  api: {{ .Values.fixer.forge.api | quote }}
+  tokenFile: /var/run/sentinel-fixer/token
+  user: {{ .Values.fixer.forge.user | quote }}
+author:
+  name: {{ .Values.fixer.author.name | quote }}
+  email: {{ .Values.fixer.author.email | quote }}
+argocdNamespace: {{ .Values.owners.argocd.namespace }}
+healthAddr: ":8081"
+{{- end }}
+{{- if .Values.fixer.enabled }}
+{{- if or (not .Values.fixer.forge.web) (not .Values.fixer.forge.api) (not .Values.fixer.forge.secretName) }}
+{{- fail "fixer.forge.web, fixer.forge.api and fixer.forge.secretName must name the forge the Fixer proposes changes on, and the Secret holding its token" }}
+{{- end }}
+{{- $labels := include "sentinel.labels" . }}
+{{- $fixer := dict "kind" "ServiceAccount" "name" "sentinel-fixer" "namespace" .Release.Namespace }}
+{{- $forge := urlParse .Values.fixer.forge.web }}
+{{- $port := ternary "443" "80" (eq $forge.scheme "https") }}
+{{- if contains ":" $forge.host }}
+{{- $port = last (splitList ":" $forge.host) }}
+{{- end }}
+# The Fixer proposes, as a pull request on the forge, the change that makes a
+# verified rollback hold in Git. It acts as its own identity and holds the
+# forge token; it reads workloads and their GitOps owners, and writes only
+# the status of Fixes.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sentinel-fixer
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- $labels | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sentinel-fixer-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- $labels | nindent 4 }}
+data:
+  config.yaml: |
+    {{- include "sentinel.fixerConfig" . | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sentinel-fixer
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- $labels | nindent 4 }}
+    app.kubernetes.io/component: fixer
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sentinel-fixer
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include "sentinel.fixerConfig" . | sha256sum | trunc 16 }}
+      labels:
+        app.kubernetes.io/name: sentinel-fixer
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      serviceAccountName: sentinel-fixer
+      automountServiceAccountToken: true
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: fixer
+          image: {{ include "sentinel.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: [fixer, --config, /etc/sentinel-fixer/config.yaml]
+          ports:
+            - name: health
+              containerPort: 8081
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              # A checkout is held in memory, at most 64 MiB of files.
+              memory: 384Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: config
+              mountPath: /etc/sentinel-fixer
+              readOnly: true
+            - name: token
+              mountPath: /var/run/sentinel-fixer
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: sentinel-fixer-config
+        - name: token
+          secret:
+            secretName: {{ .Values.fixer.forge.secretName }}
+            items:
+              - key: {{ .Values.fixer.forge.key }}
+                path: token
+---
+# The Fixer talks to the API server, DNS and the forge only.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sentinel-fixer
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- $labels | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: sentinel-fixer
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - ports:
+        - port: 8081
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - ports:
+        - port: 443
+        - port: 6443
+        - port: {{ $port }}
+---
+# Working on Fixes: reading them and writing their status, in the release
+# namespace only.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Release.Name }}-fixer-run
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- $labels | nindent 4 }}
+rules:
+  - apiGroups: [sentinel.karimzakzouk.github.io]
+    resources: [fixes]
+    verbs: [get, list, watch]
+  - apiGroups: [sentinel.karimzakzouk.github.io]
+    resources: [fixes/status]
+    verbs: [update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Release.Name }}-fixer-run
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- $labels | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ .Release.Name }}-fixer-run
+subjects:
+  - {{ toJson $fixer }}
+---
+# A rolled-back workload and the revision it was rolled back from, in the
+# watched namespaces.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Release.Name }}-fixer-workloads
+  labels:
+    {{- $labels | nindent 4 }}
+rules:
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [get]
+  - apiGroups: [apps]
+    resources: [replicasets]
+    verbs: [list]
+{{- range .Values.watch.namespaces }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $.Release.Name }}-fixer-workloads
+  namespace: {{ . }}
+  labels:
+    {{- $labels | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $.Release.Name }}-fixer-workloads
+subjects:
+  - {{ toJson $fixer }}
+{{- end }}
+---
+# The owners that deploy a workload and their sources, by name, where they
+# live.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Release.Name }}-fixer-owners
+  labels:
+    {{- $labels | nindent 4 }}
+rules:
+  - apiGroups: [kustomize.toolkit.fluxcd.io]
+    resources: [kustomizations]
+    verbs: [get]
+  - apiGroups: [source.toolkit.fluxcd.io]
+    resources: [gitrepositories]
+    verbs: [get]
+  - apiGroups: [argoproj.io]
+    resources: [applications]
+    verbs: [get]
+{{- $owners := list }}
+{{- if .Values.owners.flux.enabled }}
+{{- $owners = concat $owners .Values.owners.flux.namespaces }}
+{{- end }}
+{{- if .Values.owners.argocd.enabled }}
+{{- $owners = append $owners .Values.owners.argocd.namespace }}
+{{- end }}
+{{- range uniq $owners }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $.Release.Name }}-fixer-owners
+  namespace: {{ . }}
+  labels:
+    {{- $labels | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $.Release.Name }}-fixer-owners
+subjects:
+  - {{ toJson $fixer }}
+{{- end }}
+{{- end }}

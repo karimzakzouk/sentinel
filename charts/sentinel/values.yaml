@@ -72,6 +72,29 @@ owners:
     enabled: false
     namespaces: [flux-system]
 
+# The Fixer proposes, as a pull request, the change that makes a verified
+# rollback through Argo CD or Flux hold in Git, and follows it until the
+# owner has applied it; a person merges it and resumes the owner. It runs
+# as its own identity and holds the forge token, which the controller never
+# sees. Off by default; the owners above must be on for it to find sources.
+fixer:
+  enabled: false
+  forge:
+    # The forge's address, which its repositories' clone URLs start with
+    # (https://github.com, or a Gitea server's root URL), and its API's base
+    # URL (https://api.github.com, or the Gitea root URL with /api/v1).
+    web: ""
+    api: ""
+    # A Secret in the release namespace holding the forge token, and the
+    # user Git pushes as.
+    secretName: ""
+    key: token
+    user: sentinel
+  # The author of the Fixer's commits.
+  author:
+    name: Sentinel
+    email: sentinel@localhost
+
 # Where Sentinel tells people what it needs from them or did: approvals,
 # escalations, and actions that cleared an incident. Name a Secret holding a
 # Slack incoming webhook URL; without one, notices stay in the UI.
