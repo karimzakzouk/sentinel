@@ -99,7 +99,8 @@ func newActor(t *testing.T, replicas int32, policies ...*v1alpha1.SentinelPolicy
 	}})
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
 		map[schema.GroupVersionResource]string{PoliciesResource: "SentinelPolicyList", RequestsResource: "ActionRequestList",
-			ApplicationsResource: "ApplicationList", ApplicationSetsResource: "ApplicationSetList", KustomizationsResource: "KustomizationList"}, objects...)
+			ApplicationsResource: "ApplicationList", ApplicationSetsResource: "ApplicationSetList", KustomizationsResource: "KustomizationList",
+			ExperimentsResource: "ExperimentList"}, objects...)
 	dyn.PrependReactor("patch", "*", func(action k8stesting.Action) (bool, runtime.Object, error) {
 		if p, ok := action.(k8stesting.PatchActionImpl); ok && len(p.PatchOptions.DryRun) > 0 {
 			return true, &unstructured.Unstructured{Object: map[string]any{}}, nil
@@ -486,5 +487,57 @@ func TestTheStrictestPolicyWins(t *testing.T) {
 	}())
 	if phase, msg := a.Handle(ctx, request(ActionRolloutUndo, map[string]string{ParamFromTemplateHash: "bbb"})); phase != v1alpha1.ActionRejected {
 		t.Fatalf("%s: %s", phase, msg)
+	}
+}
+
+// At lab-verified the Lab stands in for a person, but only with a passing
+// verdict on exactly this rollback; anything less waits for a person.
+func TestTheLabMayStandInForAnApprover(t *testing.T) {
+	undo := map[string]string{ParamFromTemplateHash: "bbb"}
+	verdict := func(ns, incident, revision string, phase v1alpha1.ExperimentPhase) *unstructured.Unstructured {
+		u, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&v1alpha1.Experiment{
+			TypeMeta:   metav1.TypeMeta{APIVersion: v1alpha1.GroupVersion.String(), Kind: "Experiment"},
+			ObjectMeta: metav1.ObjectMeta{Name: "verify", Namespace: ns},
+			Spec: v1alpha1.ExperimentSpec{IncidentID: incident, Purpose: "verify-fix", LabNamespace: ns, Revision: revision,
+				Workload: &v1alpha1.TargetRef{APIVersion: "apps/v1", Kind: "Deployment", Namespace: "shop", Name: "web"}},
+			Status: v1alpha1.ExperimentStatus{Phase: phase, Message: "the Lab's message"},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return &unstructured.Unstructured{Object: u}
+	}
+	cases := map[string]struct {
+		exp        *unstructured.Unstructured
+		ref, who   string
+		want       v1alpha1.ActionPhase
+		why, actor string
+	}{
+		"verified":                  {verdict("lab-0", "inc-1", "web-bbb", "Passed"), "lab-0/verify", "", v1alpha1.ActionSucceeded, "revision 2 to revision 1", "the Lab, lab-0/verify"},
+		"still verifying":           {verdict("lab-0", "inc-1", "web-bbb", "Running"), "lab-0/verify", "", v1alpha1.ActionPending, "the Lab is still verifying it", ""},
+		"not verified":              {verdict("lab-0", "inc-1", "web-bbb", "NotSure"), "lab-0/verify", "", v1alpha1.ActionPending, "the Lab did not verify it (NotSure", ""},
+		"not verified but approved": {verdict("lab-0", "inc-1", "web-bbb", "Failed"), "lab-0/verify", "alice", v1alpha1.ActionSucceeded, "revision 2 to revision 1", "alice"},
+		"another revision":          {verdict("lab-0", "inc-1", "web-aaa", "Passed"), "lab-0/verify", "", v1alpha1.ActionPending, "another revision", ""},
+		"another incident":          {verdict("lab-0", "inc-2", "web-bbb", "Passed"), "lab-0/verify", "", v1alpha1.ActionPending, "about something else", ""},
+		"outside the Lab":           {verdict("shop", "inc-1", "web-bbb", "Passed"), "shop/verify", "", v1alpha1.ActionPending, "no Experiment of the Lab's", ""},
+		"never asked":               {verdict("lab-0", "inc-1", "web-bbb", "Passed"), "", "", v1alpha1.ActionPending, "the Lab was not asked", ""},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			a, _, _ := newActor(t, 3, sentinelPolicy(v1alpha1.AutonomyLabVerified, ActionRolloutUndo))
+			a.LabNamespaces = []string{"lab-0"}
+			if _, err := a.Dynamic.Resource(ExperimentsResource).Namespace(tc.exp.GetNamespace()).Create(ctx, tc.exp, metav1.CreateOptions{}); err != nil {
+				t.Fatal(err)
+			}
+			req := request(ActionRolloutUndo, undo)
+			req.Annotations = map[string]string{AnnotationExperiment: tc.ref}
+			if tc.who != "" {
+				req.Annotations[AnnotationApprovedBy] = tc.who
+			}
+			phase, msg := a.Handle(ctx, req)
+			if phase != tc.want || !strings.Contains(msg, tc.why) || req.Status.ApprovedBy != tc.actor {
+				t.Fatalf("%s: %s (approved by %q); want %s mentioning %q, approved by %q", phase, msg, req.Status.ApprovedBy, tc.want, tc.why, tc.actor)
+			}
+		})
 	}
 }
