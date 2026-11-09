@@ -27,14 +27,85 @@ const AnnotationPausedSync = "sentinel.karimzakzouk.github.io/paused-sync"
 // ApplicationsResource is Argo CD's Application.
 var ApplicationsResource = schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applications"}
 
+// ActionFluxRollback suspends the Flux Kustomization that applies a
+// Deployment, then rolls the Deployment back as rollout.undo does.
+const ActionFluxRollback = "flux.rollback"
+
+// KustomizationsResource is Flux's Kustomization.
+var KustomizationsResource = schema.GroupVersionResource{Group: "kustomize.toolkit.fluxcd.io", Version: "v1", Resource: "kustomizations"}
+
 // RollbackAction names the request for rolling a workload back: through its
 // owner when one keeps it in sync, plain otherwise. A policy allows each
-// separately, so pausing a GitOps owner is a choice of its own.
+// separately, so pausing a GitOps owner is a choice of its own. A Flux
+// HelmRelease has no adapter yet: helm-controller may roll back a failed
+// upgrade itself, and two rollbacks would race.
 func RollbackAction(meta metav1.ObjectMeta) string {
-	if reconciler(meta) == "Argo CD" {
+	switch {
+	case reconciler(meta) == "Argo CD":
 		return ActionArgoCDRollback
+	case fluxKustomization(meta) != "":
+		return ActionFluxRollback
 	}
 	return ActionRolloutUndo
+}
+
+// fluxKustomization returns namespace/name of the Flux Kustomization that
+// applies a workload, from the labels kustomize-controller sets.
+func fluxKustomization(meta metav1.ObjectMeta) string {
+	name, ns := meta.Labels["kustomize.toolkit.fluxcd.io/name"], meta.Labels["kustomize.toolkit.fluxcd.io/namespace"]
+	if name == "" || ns == "" {
+		return ""
+	}
+	return ns + "/" + name
+}
+
+// pauseFlux suspends the Kustomization that applies a workload and notes it.
+// When a parent Kustomization sets the child's spec.suspend, it would
+// resume the child at its next reconcile, so the actor refuses.
+func (a *Actor) pauseFlux(ctx context.Context, meta metav1.ObjectMeta, dryRun bool) (string, error) {
+	ns, name, ok := strings.Cut(fluxKustomization(meta), "/")
+	if !ok {
+		return "", fmt.Errorf("%s has no Flux Kustomization labels", meta.Name)
+	}
+	ks := a.Dynamic.Resource(KustomizationsResource).Namespace(ns)
+	k, err := ks.Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return "", fmt.Errorf("the Flux Kustomization %s/%s: %w", ns, name, err)
+	}
+	for _, f := range k.GetManagedFields() {
+		if f.Manager != FieldManager && f.FieldsV1 != nil && strings.Contains(f.FieldsV1.GetRawString(), `"f:suspend"`) {
+			return "", fmt.Errorf("%s sets the Flux Kustomization %s/%s's spec.suspend and would resume it; Sentinel leaves it to people",
+				f.Manager, ns, name)
+		}
+	}
+	if suspended, _, _ := unstructuredBool(k.Object, "spec", "suspend"); suspended {
+		return fmt.Sprintf("the Flux Kustomization %s/%s was already suspended", ns, name), nil
+	}
+	patch, err := json.Marshal(map[string]any{
+		"metadata": map[string]any{"annotations": map[string]string{AnnotationPausedSync: "suspended"}},
+		"spec":     map[string]any{"suspend": true},
+	})
+	if err != nil {
+		return "", err
+	}
+	opts := metav1.PatchOptions{FieldManager: FieldManager}
+	if dryRun {
+		opts.DryRun = []string{metav1.DryRunAll}
+	}
+	if _, err := ks.Patch(ctx, name, types.MergePatchType, patch, opts); err != nil {
+		return "", fmt.Errorf("suspend the Flux Kustomization %s/%s: %w", ns, name, err)
+	}
+	return fmt.Sprintf("suspended the Flux Kustomization %s/%s; once Git is fixed, resume it with "+
+		"`sentinel resume flux %s/%s`", ns, name, ns, name), nil
+}
+
+func unstructuredBool(obj map[string]any, path ...string) (bool, bool, error) {
+	parent, found, err := unstructuredMap(obj, path[:len(path)-1]...)
+	if !found || err != nil {
+		return false, found, err
+	}
+	b, ok := parent[path[len(path)-1]].(bool)
+	return b, ok, nil
 }
 
 // argoApplication returns the namespace and name of the Argo CD Application

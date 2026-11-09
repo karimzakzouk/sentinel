@@ -5,7 +5,8 @@
 #   E2E_CLUSTER=sentinel-e2e E2E_NETWORK=kindnet IMAGE=sentinel:dev hack/e2e-up.sh
 #
 # E2E_ARGOCD=1 also installs Argo CD (the core install, without its UI) and
-# lets the actor pause its Applications. Safe to rerun.
+# lets the actor pause its Applications; E2E_FLUX=1 installs Flux and lets
+# the actor suspend its Kustomizations. Safe to rerun.
 set -euo pipefail
 
 cluster=${E2E_CLUSTER:-sentinel-e2e}
@@ -33,15 +34,22 @@ if [ -n "${E2E_ARGOCD:-}" ]; then
   kubectl --context "$ctx" -n argocd rollout status deployment/argocd-repo-server --timeout 5m
   argocd=(--set owners.argocd.enabled=true)
 fi
+flux=()
+if [ -n "${E2E_FLUX:-}" ]; then
+  kubectl --context "$ctx" apply -f https://github.com/fluxcd/flux2/releases/download/v2.10.0/install.yaml
+  kubectl --context "$ctx" -n flux-system rollout status deployment/source-controller --timeout 5m
+  kubectl --context "$ctx" -n flux-system rollout status deployment/kustomize-controller --timeout 5m
+  flux=(--set owners.flux.enabled=true)
+fi
 
 helm --kube-context "$ctx" upgrade --install sentinel-crds "$root/charts/sentinel-crds" --wait
 helm --kube-context "$ctx" upgrade --install sentinel "$root/charts/sentinel" \
   --namespace sentinel --create-namespace \
   -f "$root/test/e2e/values-sentinel.yaml" \
-  --set image.repository="${image%:*}" --set image.tag="${image##*:}" --set image.pullPolicy=Never "${argocd[@]}" \
+  --set image.repository="${image%:*}" --set image.tag="${image##*:}" --set image.pullPolicy=Never "${argocd[@]}" "${flux[@]}" \
   --wait --timeout 5m
 helm --kube-context "$ctx" upgrade --install sentinel-fence "$root/charts/sentinel-fence" \
-  -f "$root/test/e2e/values-fence.yaml" ${E2E_ARGOCD:+--set argocdNamespace=argocd} --wait
+  -f "$root/test/e2e/values-fence.yaml" ${E2E_ARGOCD:+--set argocdNamespace=argocd} ${E2E_FLUX:+--set fluxNamespaces=\{flux-system\}} --wait
 
 kubectl --context "$ctx" apply -f "$root/test/apps/smoke.yaml"
 kubectl --context "$ctx" -n e2e-smoke rollout status deployment/web --timeout 3m

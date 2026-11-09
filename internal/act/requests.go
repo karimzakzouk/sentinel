@@ -114,7 +114,7 @@ func (r *Requests) Acting() bool {
 	namespaces := slices.Collect(maps.Keys(r.policies))
 	r.mu.Unlock()
 	for _, ns := range namespaces {
-		for _, action := range []string{actor.ActionRolloutUndo, actor.ActionArgoCDRollback, actor.ActionScale} {
+		for _, action := range []string{actor.ActionRolloutUndo, actor.ActionArgoCDRollback, actor.ActionFluxRollback, actor.ActionScale} {
 			if r.Autonomy(ns, action) == v1alpha1.AutonomyAutonomous {
 				return true
 			}

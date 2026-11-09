@@ -1,6 +1,6 @@
-# Runs the owner adapters' end-to-end tests: Argo CD is installed in the
-# kind cluster, an Application deploys a public example, and Sentinel rolls
-# back a bad image through it. It runs when the adapters change, weekly, and
+# Runs the owner adapters' end-to-end tests: Argo CD or Flux is installed
+# in a kind cluster, deploys a public example, and Sentinel rolls back a bad
+# image delivered through it. It runs when the adapters change, weekly, and
 # on demand, so the main suite stays fast.
 name: E2E owners
 
@@ -13,6 +13,7 @@ on:
       - charts/sentinel/templates/rbac.yaml
       - charts/sentinel-fence/**
       - test/e2e/argocd_test.go
+      - test/e2e/flux_test.go
       - test/apps/argocd-project.yaml
       - hack/e2e-up.sh
       - .github/workflows/e2e-owners.yml
@@ -37,3 +38,11 @@ jobs:
       label: -argocd
       argocd: true
       run: TestArgoCD
+  flux:
+    name: Flux
+    uses: ./.github/workflows/e2e-run.yml
+    with:
+      network: kindnet
+      label: -flux
+      flux: true
+      run: TestFlux

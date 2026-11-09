@@ -192,3 +192,37 @@ subjects:
     name: {{ .Values.actor.serviceAccount }}
     namespace: {{ .Values.actor.namespace }}
 {{- end }}
+{{- if and .Values.actor.enabled .Values.owners.flux.enabled }}
+{{- range .Values.owners.flux.namespaces }}
+---
+# Suspending the Flux Kustomization that applies a workload before a
+# rollback; the fence allows that change and no other.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $.Release.Name }}-act-flux
+  namespace: {{ . }}
+  labels:
+    {{- $labels | nindent 4 }}
+rules:
+  - apiGroups: [kustomize.toolkit.fluxcd.io]
+    resources: [kustomizations]
+    verbs: [get, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $.Release.Name }}-act-flux
+  namespace: {{ . }}
+  labels:
+    {{- $labels | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $.Release.Name }}-act-flux
+subjects:
+  - kind: ServiceAccount
+    name: {{ $.Values.actor.serviceAccount }}
+    namespace: {{ $.Values.actor.namespace }}
+{{- end }}
+{{- end }}
