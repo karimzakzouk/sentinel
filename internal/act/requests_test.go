@@ -71,7 +71,8 @@ func rollback() model.Action {
 
 func TestARequestNeedsAPolicyThatAllowsIt(t *testing.T) {
 	ctx := context.Background()
-	for level, want := range map[v1alpha1.AutonomyLevel]bool{v1alpha1.AutonomyApprove: false, v1alpha1.AutonomyAutonomous: true} {
+	for level, want := range map[v1alpha1.AutonomyLevel]bool{v1alpha1.AutonomyRecommend: false, v1alpha1.AutonomyApprove: true,
+		v1alpha1.AutonomyActUnlessVetoed: true, v1alpha1.AutonomyAutonomous: true} {
 		r, _ := newRequests(t, policyAt(t, level))
 		asked, err := r.Request(ctx, rollback(), "a bad image")
 		if err != nil || asked != want {

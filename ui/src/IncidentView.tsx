@@ -185,6 +185,15 @@ function TimelineEvent({ event }: { event: LedgerEvent }) {
             <span className={`pill ${stage.tone}`}>{stage.pill}</span>
           </div>
           {said && <div className="detail">{said}</div>}
+          {event.type === "sentinel.action.awaiting" && a.params?.request && (
+            <div className="detail">
+              Approve with <code>sentinel approve {a.params.request}</code>, or veto with{" "}
+              <code>sentinel veto {a.params.request}</code>.
+            </div>
+          )}
+          {event.type === "sentinel.action.executed" && a.params?.approvedBy && (
+            <div className="detail">Approved by {a.params.approvedBy}.</div>
+          )}
         </li>
       );
     }

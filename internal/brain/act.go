@@ -68,9 +68,13 @@ func (b *Brain) trip(a *model.Action, from time.Time) {
 // ActionOutcome is what the actor did with a request.
 type ActionOutcome struct {
 	IncidentID model.ID
-	// Phase is the request's final phase, such as Succeeded or Rejected.
-	Phase   string
-	Message string
+	// Request names the request, as namespace/name.
+	Request string
+	// Phase is the request's final phase, such as Succeeded or Rejected, or
+	// Pending while it waits for a person.
+	Phase      string
+	Message    string
+	ApprovedBy string
 }
 
 // OnActionOutcome records what the actor did with the incident's action. A
@@ -90,10 +94,19 @@ func (b *Brain) OnActionOutcome(ctx context.Context, o ActionOutcome) error {
 	}
 	a := inc.action
 	a.Params["result"] = o.Message
+	if o.Request != "" {
+		a.Params["request"] = o.Request
+	}
+	if o.ApprovedBy != "" {
+		a.Params["approvedBy"] = o.ApprovedBy
+	}
 	verb := "executed"
-	if o.Phase == "Succeeded" {
+	switch o.Phase {
+	case "Pending":
+		verb = "awaiting"
+	case "Succeeded":
 		inc.actedAt = b.now()
-	} else {
+	default:
 		a.State, verb = model.ActionFailed, "failed"
 		inc.verdict = true
 		b.Log.Warn("the actor did not run the action; escalating", "incident", inc.rec.ID, "action", a.Type,

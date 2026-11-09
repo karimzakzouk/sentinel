@@ -158,7 +158,9 @@ func TestRequestsTheActorRefuses(t *testing.T) {
 	}{
 		"no policy": {nil, nil, v1alpha1.ActionRejected, "observe"},
 		"policy needs a person": {[]*v1alpha1.SentinelPolicy{sentinelPolicy(v1alpha1.AutonomyApprove, ActionRolloutUndo)}, nil,
-			v1alpha1.ActionRejected, "approve"},
+			v1alpha1.ActionPending, "approve"},
+		"policy only recommends": {[]*v1alpha1.SentinelPolicy{sentinelPolicy(v1alpha1.AutonomyRecommend, ActionRolloutUndo)}, nil,
+			v1alpha1.ActionRejected, "recommend"},
 		"kill switch": {[]*v1alpha1.SentinelPolicy{sentinelPolicy(v1alpha1.AutonomyAutonomous, ActionRolloutUndo)},
 			func(a *Actor, _ *v1alpha1.ActionRequest) { a.Disabled = func() bool { return true } }, v1alpha1.ActionRejected, "kill switch"},
 		"expired": {[]*v1alpha1.SentinelPolicy{sentinelPolicy(v1alpha1.AutonomyAutonomous, ActionRolloutUndo)},
@@ -240,6 +242,47 @@ func TestScaleTakesAwayNoMoreCapacityThanThePolicyAllows(t *testing.T) {
 	}
 	if phase, msg := a.Handle(ctx, request(ActionScale, map[string]string{ParamReplicas: "4", ParamFromReplicas: "5"})); phase != v1alpha1.ActionSucceeded {
 		t.Fatalf("taking away one of five: %s: %s", phase, msg)
+	}
+}
+
+func TestPeopleApproveAndVeto(t *testing.T) {
+	undo := map[string]string{ParamFromTemplateHash: "bbb"}
+	annotated := func(key, who string) *v1alpha1.ActionRequest {
+		r := request(ActionRolloutUndo, undo)
+		r.Annotations = map[string]string{key: who}
+		r.CreationTimestamp = metav1.NewTime(t0.Add(-time.Minute))
+		return r
+	}
+	cases := map[string]struct {
+		level v1alpha1.AutonomyLevel
+		req   *v1alpha1.ActionRequest
+		want  v1alpha1.ActionPhase
+		why   string
+	}{
+		"approved":                 {v1alpha1.AutonomyApprove, annotated(AnnotationApprovedBy, "alice"), v1alpha1.ActionSucceeded, "revision 2 to revision 1"},
+		"approved by Sentinel":     {v1alpha1.AutonomyApprove, annotated(AnnotationApprovedBy, "system:serviceaccount:sentinel:sentinel"), v1alpha1.ActionRejected, "its own"},
+		"vetoed":                   {v1alpha1.AutonomyAutonomous, annotated(AnnotationVetoedBy, "bob"), v1alpha1.ActionRejected, "vetoed by bob"},
+		"within the veto window":   {v1alpha1.AutonomyActUnlessVetoed, annotated("other", "x"), v1alpha1.ActionPending, "unless someone vetoes"},
+		"vetoed within the window": {v1alpha1.AutonomyActUnlessVetoed, annotated(AnnotationVetoedBy, "bob"), v1alpha1.ActionRejected, "vetoed"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			a, _, _ := newActor(t, 3, sentinelPolicy(tc.level, ActionRolloutUndo))
+			a.Self = []string{"system:serviceaccount:sentinel:sentinel", "system:serviceaccount:sentinel-actor:sentinel-actor"}
+			phase, msg := a.Handle(ctx, tc.req)
+			if phase != tc.want || !strings.Contains(msg, tc.why) {
+				t.Fatalf("%s: %s; want %s mentioning %q", phase, msg, tc.want, tc.why)
+			}
+			if name == "approved" && tc.req.Status.ApprovedBy != "alice" {
+				t.Fatalf("approvedBy = %q", tc.req.Status.ApprovedBy)
+			}
+		})
+	}
+	a, _, _ := newActor(t, 3, sentinelPolicy(v1alpha1.AutonomyActUnlessVetoed, ActionRolloutUndo))
+	late := annotated("other", "x")
+	late.CreationTimestamp = metav1.NewTime(t0.Add(-VetoWindow - time.Second))
+	if phase, msg := a.Handle(ctx, late); phase != v1alpha1.ActionSucceeded {
+		t.Fatalf("after the veto window: %s: %s", phase, msg)
 	}
 }
 

@@ -165,6 +165,29 @@ func TestAFailedActionOpensItsBreaker(t *testing.T) {
 	}
 }
 
+// A request waiting for a person is not a failure; once approved and run,
+// the action records who approved it.
+func TestAnActionWaitsForItsApprover(t *testing.T) {
+	b, l := newBrain(t)
+	b.Act = &fakeRequester{allow: true}
+	badDeploy(t, b)
+	inc := incidents(t, l)[0]
+	waiting := ActionOutcome{IncidentID: inc.ID, Request: "shop/sentinel-1-rollout-undo", Phase: "Pending", Message: "waiting for a person to approve it"}
+	if err := b.OnActionOutcome(ctx, waiting); err != nil {
+		t.Fatal(err)
+	}
+	if a := actionOf(t, l); a.State != model.ActionExecuting || a.Params["request"] != waiting.Request || len(b.breakers) != 0 {
+		t.Fatalf("action = %+v, breakers %v; want it still in hand, with its request named", a, b.breakers)
+	}
+	done := ActionOutcome{IncidentID: inc.ID, Request: waiting.Request, Phase: "Succeeded", Message: "rolled web back", ApprovedBy: "alice"}
+	if err := b.OnActionOutcome(ctx, done); err != nil {
+		t.Fatal(err)
+	}
+	if a := actionOf(t, l); a.Params["approvedBy"] != "alice" || a.Params["result"] != "rolled web back" {
+		t.Fatalf("action = %+v", a)
+	}
+}
+
 func TestScaleRestoreArgsComeFromTheChange(t *testing.T) {
 	args := actionArgs(ActionScaleRestore, &RankedChange{Change: CandidateChange{Kind: string(watcher.ChangeScale),
 		Fields: []string{"replicas:3->0"}}}, "")
