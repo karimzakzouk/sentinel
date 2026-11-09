@@ -51,6 +51,14 @@ func TestClassifierPicksTheMatchingClass(t *testing.T) {
 		// A deploy's new errors raise the error rate too; the test of the
 		// revisions still names the class.
 		{map[string]int{"log.new-error": 40, "log.errors": 300}, []string{"config"}, ClassNewErrors},
+		{map[string]int{"node.not-ready": 4, "pod.not-ready": 4}, nil, ClassNodeIsolation},
+		{map[string]int{"log.errors": 60, "dns.failure": 60}, nil, ClassDNSFailure},
+		{map[string]int{"log.errors": 30, "cert.expiring": 30, "pod.probe-failed": 5}, nil, ClassCertExpiry},
+		{map[string]int{"log.errors": 90, "dependency.connect-error": 90}, nil, ClassDependencyFailure},
+		// What errors are about does not hide the deploy that caused them,
+		// which a rollback undoes.
+		{map[string]int{"log.new-error": 40, "log.errors": 60, "dns.failure": 60}, []string{"config"}, ClassNewErrors},
+		{map[string]int{"pod.crash-loop": 9, "pod.restarted": 3, "dependency.connect-error": 3}, []string{"config"}, ClassCrashOnStart},
 	}
 	for _, tc := range cases {
 		if got := classify(t, tc.facts, tc.changes...).Top().Value; got != tc.want {

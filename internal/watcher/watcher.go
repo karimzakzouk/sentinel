@@ -53,6 +53,7 @@ type Watcher struct {
 	request func(context.Context, LogRequest) bool
 
 	mu          sync.Mutex
+	nodes       corelisters.NodeLister
 	ns          map[string]*namespaceListers
 	eventCounts map[string]int32
 	rollouts    map[string]*rollout
@@ -89,6 +90,11 @@ func (w *Watcher) Run(ctx context.Context) error {
 	}
 	start := time.Now().UTC()
 	var synced []cache.InformerSynced
+	nodeFactory := informers.NewSharedInformerFactoryWithOptions(w.Client, 0, informers.WithTransform(Transform))
+	nodes := nodeFactory.Core().V1().Nodes()
+	w.nodes = nodes.Lister()
+	synced = append(synced, nodes.Informer().HasSynced)
+	nodeFactory.Start(ctx.Done())
 	for _, ns := range w.Namespaces {
 		f := informers.NewSharedInformerFactoryWithOptions(w.Client, 0, informers.WithNamespace(ns), informers.WithTransform(Transform))
 		pods, rs, deps, sts := f.Core().V1().Pods(), f.Apps().V1().ReplicaSets(), f.Apps().V1().Deployments(), f.Apps().V1().StatefulSets()
@@ -188,6 +194,7 @@ func (w *Watcher) Run(ctx context.Context) error {
 		case <-tick.C:
 			now := time.Now().UTC()
 			w.pollMetrics(ctx, now)
+			sick := w.nodeProblems()
 			for ns, l := range w.ns {
 				w.Detector.Observe(w.serviceFacts(ns, l, now)...)
 				pods, err := l.pods.List(labels.Everything())
@@ -197,6 +204,9 @@ func (w *Watcher) Run(ctx context.Context) error {
 				for _, p := range pods {
 					workload, rev := l.owners.Resolve(p)
 					facts := StateFacts(p, workload, rev, now)
+					if problem := sick[p.Spec.NodeName]; problem != "" && p.DeletionTimestamp == nil {
+						facts = append(facts, Fact{Kind: FactNodeNotReady, Workload: workload, Pod: p.Name, Revision: rev, At: now, Detail: problem})
+					}
 					w.Detector.Observe(facts...)
 					w.requestLogs(ctx, p, facts)
 					w.Detector.Observe(MemoryFacts(p, w.podUsage(ns, p.Name), workload, rev, now)...)
@@ -212,6 +222,25 @@ func (w *Watcher) Run(ctx context.Context) error {
 			}
 		}
 	}
+}
+
+// nodeProblems maps each node that cannot run its pods to what keeps it
+// from them.
+func (w *Watcher) nodeProblems() map[string]string {
+	out := map[string]string{}
+	if w.nodes == nil {
+		return out
+	}
+	nodes, err := w.nodes.List(labels.Everything())
+	if err != nil {
+		return out
+	}
+	for _, n := range nodes {
+		if p := NodeProblem(n); p != "" {
+			out[n.Name] = p
+		}
+	}
+	return out
 }
 
 // serviceFacts reports the namespace's Services that have lost every ready

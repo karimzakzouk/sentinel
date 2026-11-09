@@ -103,12 +103,37 @@ func (b *Brain) evidenceDrafts(inc *incident, key string) []ledger.Draft {
 			}
 			inc.evidenceDigests[digest] = true
 		}
+		b.noteSignals(inc, key, p.ev)
 		e := evidenceRecord(inc.rec.ID, p.ev)
 		inc.rec.EvidenceIDs = append(inc.rec.EvidenceIDs, e.ID)
 		drafts = append(drafts, ledger.RecordDraft(source, model.KindEvidence, "attached", e.ID, inc.rec.ID, e))
 		b.Log.Info("evidence attached", "incident", inc.rec.ID, "workload", key, "source", e.Source, "pod", p.ev.Pod, "summary", e.Summary)
 	}
 	return drafts
+}
+
+// noteSignals adds to the incident's facts of the evidence's workload the
+// signals its logs carry, a DNS failure or a refused connection, for the
+// next assessment to weigh: what the errors are about, which their count
+// alone does not say. Callers hold b.mu.
+func (b *Brain) noteSignals(inc *incident, key string, ev watcher.LogEvidence) {
+	found := map[string]int{}
+	for _, t := range ev.Summary.Templates {
+		if kind, ok := watcher.SignalKind(t.Template); ok {
+			found[string(kind)] += t.Count
+		}
+	}
+	if len(found) == 0 {
+		return
+	}
+	facts := inc.facts
+	if key != inc.primary.String() {
+		if inc.symptomFacts[key] == nil {
+			inc.symptomFacts[key] = map[string]int{}
+		}
+		facts = inc.symptomFacts[key]
+	}
+	mergeFacts(facts, found)
 }
 
 // sampled reports logs read from pods that were up: error samples and the
