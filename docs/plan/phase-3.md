@@ -133,6 +133,50 @@ pool's crash-on-start and bad-config faults, the previous revision passes,
 the failing one fails, and the A/A run's false-PASS rate is at most α over
 a few hundred repetitions on the self-hosted runner.
 
+**Design.**
+
+- **A run.** One copy of the target in its world, started fresh, with the
+  world's other copies kept up across runs. The oracle reads the copy's
+  outcome after a fixed window. It succeeds if the copy became ready, did
+  not restart, and answers through its Service. It fails if it never got
+  ready, restarted, or does not answer.
+- **A block.** The baseline (the failing revision) and one candidate start
+  together, in random order, so each pair shares conditions. Several
+  blocks run at once, within the Lab's quota.
+- **Three e-processes per candidate**, each a product of bets that is a
+  nonnegative supermartingale under its null, so by Ville's inequality its
+  level holds whenever the Lab stops:
+  - *better*: over discordant blocks only, against "the candidate is no
+    better than the baseline" (a win at most half the time);
+  - *works*: over the candidate's own runs, against "it succeeds at most
+    three times in four";
+  - *fails*: over the same runs, against "it succeeds at least three times
+    in four".
+
+  Bets follow the Kelly fraction of a smoothed running estimate, clipped,
+  and depend only on past runs.
+- **Verdicts.** PASS needs both *better* and *works* to reach K/α. Both
+  must reject, so the chance of passing a non-fix stays at most α/K
+  without another correction. FAIL needs *fails* to reach K/α. NOT SURE
+  comes at the run budget, or when the controls say the oracle cannot
+  tell.
+- **Controls.**
+  - The failing revision raced against itself (A/A) must not PASS.
+  - A deletion control (the target's containers replaced by a process
+    that only sleeps) must not PASS either; if it does, the oracle cannot
+    tell a fix from a disabled feature, and every verdict is NOT SURE.
+- **Candidates.** The previous revision's template, read from the
+  workload's own revision history, is the first. A config value reverted
+  is next.
+- **Proof.** The two parts check different things:
+  - Unit simulations bound each e-process's false rejection at α over
+    ten thousand sequences at the null's edge.
+  - CI's enforcing clusters run the two-tier front with a crash-on-start
+    revision: the previous revision must PASS, the A/A and deletion
+    controls must not.
+  - The few hundred repetitions of the gate wait for the self-hosted
+    runner.
+
 ### 4. Datastores and replay
 
 Throwaway Redis and Postgres seeded from what the failing requests read;
