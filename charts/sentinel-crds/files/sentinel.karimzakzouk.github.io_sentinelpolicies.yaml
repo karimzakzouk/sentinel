@@ -68,6 +68,7 @@ spec:
                       - observe
                       - recommend
                       - approve
+                      - lab-verified
                       - act-unless-vetoed
                       - autonomous
                       type: string
