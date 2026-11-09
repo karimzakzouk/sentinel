@@ -22,18 +22,21 @@ plan orders it into vertical slices, each proven before the next starts.
 ## Where it can run
 
 The Lab refuses to run without proven NetworkPolicy enforcement. On
-GitHub's runners kindnet enforces it; on the development VM neither
-kindnet nor Calico can (decision 11), and Flannel never does. Slice 0 is
-therefore a local cluster with Cilium, whose eBPF datapath needs neither
-ipset nor NFQUEUE. The statistics suites of slice 3 need the bigger
-self-hosted runner listed in `docs/STATUS.md`.
+GitHub's runners kindnet enforces it, and CI also proves Calico and Cilium;
+on the development VM no plugin can (decisions 11 and 46): its kernel lacks
+what kindnet, Calico and Cilium each need, and Flannel never enforces. Lab
+work is therefore tested in CI until the self-hosted runner listed in
+`docs/STATUS.md` arrives, which the statistics suites of slice 3 need
+anyway.
 
 ## Slices
 
 ### 0. An enforcing development cluster
 
-A kind cluster with Cilium in place of kindnet. **Proof**: the capability
-report's active probe says enforced on the development VM.
+Tried first, and not possible on the development VM (decision 46). Until
+the self-hosted runner arrives, Lab tests run in CI's kindnet and Cilium
+clusters. **Proof**: the network plugins workflow's Cilium job finds
+enforcement.
 
 ### 1. Seal and prove
 
