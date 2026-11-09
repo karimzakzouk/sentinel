@@ -1,0 +1,157 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.23.0
+  name: fixes.sentinel.karimzakzouk.github.io
+spec:
+  group: sentinel.karimzakzouk.github.io
+  names:
+    categories:
+    - sentinel
+    kind: Fix
+    listKind: FixList
+    plural: fixes
+    singular: fix
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.workload.name
+      name: Workload
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.pullRequest
+      name: Pull request
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Fix is the Fixer's proposal for one incident.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              FixSpec asks the Fixer to make an incident's mitigation hold at its
+              source: to propose, as a pull request to the repository the workload's
+              GitOps owner deploys from, the change that undoes the blamed change. It
+              cannot be changed after creation.
+            properties:
+              fromRevision:
+                description: |-
+                  FromRevision is the pod template hash of the revision the workload
+                  was rolled back from, whose template holds the bad values.
+                minLength: 1
+                type: string
+              incidentId:
+                description: IncidentID links the fix to its incident in the Ledger.
+                minLength: 1
+                type: string
+              workload:
+                description: Workload is the workload the mitigation rolled back.
+                properties:
+                  apiVersion:
+                    minLength: 1
+                    type: string
+                  kind:
+                    minLength: 1
+                    type: string
+                  name:
+                    minLength: 1
+                    type: string
+                  namespace:
+                    minLength: 1
+                    type: string
+                required:
+                - apiVersion
+                - kind
+                - name
+                - namespace
+                type: object
+            required:
+            - fromRevision
+            - incidentId
+            - workload
+            type: object
+            x-kubernetes-validations:
+            - message: spec is immutable
+              rule: self == oldSelf
+          status:
+            description: FixStatus is written by the Fixer.
+            properties:
+              branch:
+                type: string
+              change:
+                description: Change says, per line changed, file:line and the change.
+                items:
+                  type: string
+                type: array
+                x-kubernetes-list-type: atomic
+              mergeCommit:
+                description: MergeCommit is the commit that merged the pull request.
+                type: string
+              message:
+                type: string
+              number:
+                format: int32
+                type: integer
+              observedGeneration:
+                format: int64
+                type: integer
+              owner:
+                description: Owner is what deploys the workload, as Kind namespace/name.
+                type: string
+              phase:
+                description: |-
+                  FixPhase is a step in a fix's lifecycle: Proposed once its pull request
+                  is open, Merged once someone merged it, Ready once the owner's source
+                  holds the merge, so the owner can be resumed; Declined when the pull
+                  request was closed unmerged, Abstained when the Fixer would not propose
+                  a change, saying why.
+                enum:
+                - Pending
+                - Proposed
+                - Merged
+                - Ready
+                - Declined
+                - Abstained
+                - Failed
+                type: string
+              pullRequest:
+                description: PullRequest is the pull request's URL, and Number its
+                  number.
+                type: string
+              repository:
+                description: |-
+                  Repository is the clone URL of the owner's source, and Branch the
+                  branch it deploys.
+                type: string
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

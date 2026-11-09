@@ -386,7 +386,7 @@ func (a *Actor) fluxRollback(ctx context.Context, req *v1alpha1.ActionRequest, d
 	if err != nil {
 		return "", err
 	}
-	if fluxKustomization(dep.ObjectMeta) == "" && fluxHelmRelease(dep.ObjectMeta) == "" {
+	if FluxKustomization(dep.ObjectMeta) == "" && FluxHelmRelease(dep.ObjectMeta) == "" {
 		return "", fmt.Errorf("%s is not applied by a Flux Kustomization or HelmRelease", dep.Name)
 	}
 	paused, err := a.pauseFlux(ctx, dep.ObjectMeta, dryRun)

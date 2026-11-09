@@ -26,6 +26,7 @@ func addKnownTypes(s *runtime.Scheme) error {
 		&SentinelPolicy{}, &SentinelPolicyList{},
 		&ActionRequest{}, &ActionRequestList{},
 		&Experiment{}, &ExperimentList{},
+		&Fix{}, &FixList{},
 	)
 	metav1.AddToGroupVersion(s, GroupVersion)
 	return nil

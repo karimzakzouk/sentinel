@@ -45,15 +45,15 @@ func RollbackAction(meta metav1.ObjectMeta) string {
 	switch {
 	case reconciler(meta) == "Argo CD":
 		return ActionArgoCDRollback
-	case fluxKustomization(meta) != "", fluxHelmRelease(meta) != "":
+	case FluxKustomization(meta) != "", FluxHelmRelease(meta) != "":
 		return ActionFluxRollback
 	}
 	return ActionRolloutUndo
 }
 
-// fluxHelmRelease returns namespace/name of the Flux HelmRelease that
+// FluxHelmRelease returns namespace/name of the Flux HelmRelease that
 // renders a workload, from the labels helm-controller sets.
-func fluxHelmRelease(meta metav1.ObjectMeta) string {
+func FluxHelmRelease(meta metav1.ObjectMeta) string {
 	name, ns := meta.Labels["helm.toolkit.fluxcd.io/name"], meta.Labels["helm.toolkit.fluxcd.io/namespace"]
 	if name == "" || ns == "" {
 		return ""
@@ -61,9 +61,9 @@ func fluxHelmRelease(meta metav1.ObjectMeta) string {
 	return ns + "/" + name
 }
 
-// fluxKustomization returns namespace/name of the Flux Kustomization that
+// FluxKustomization returns namespace/name of the Flux Kustomization that
 // applies a workload, from the labels kustomize-controller sets.
-func fluxKustomization(meta metav1.ObjectMeta) string {
+func FluxKustomization(meta metav1.ObjectMeta) string {
 	name, ns := meta.Labels["kustomize.toolkit.fluxcd.io/name"], meta.Labels["kustomize.toolkit.fluxcd.io/namespace"]
 	if name == "" || ns == "" {
 		return ""
@@ -77,9 +77,9 @@ func fluxKustomization(meta metav1.ObjectMeta) string {
 // next reconcile, so the actor refuses. So it does when helm-controller rolls
 // a failed upgrade back itself: two rollbacks would race.
 func (a *Actor) pauseFlux(ctx context.Context, meta metav1.ObjectMeta, dryRun bool) (string, error) {
-	kind, resource, ref := "Kustomization", KustomizationsResource, fluxKustomization(meta)
+	kind, resource, ref := "Kustomization", KustomizationsResource, FluxKustomization(meta)
 	if ref == "" {
-		kind, resource, ref = "HelmRelease", HelmReleasesResource, fluxHelmRelease(meta)
+		kind, resource, ref = "HelmRelease", HelmReleasesResource, FluxHelmRelease(meta)
 	}
 	ns, name, ok := strings.Cut(ref, "/")
 	if !ok {
@@ -134,11 +134,11 @@ func unstructuredBool(obj map[string]any, path ...string) (bool, bool, error) {
 	return b, ok, nil
 }
 
-// argoApplication returns the namespace and name of the Argo CD Application
+// ArgoApplication returns the namespace and name of the Argo CD Application
 // that tracks a workload, from its tracking annotation
 // ("app:group/Kind:namespace/name", with "namespace_app" when Applications
 // live outside Argo CD's own namespace).
-func argoApplication(meta metav1.ObjectMeta, argoNamespace string) (string, string, bool) {
+func ArgoApplication(meta metav1.ObjectMeta, argoNamespace string) (string, string, bool) {
 	id := meta.Annotations["argocd.argoproj.io/tracking-id"]
 	app, _, ok := strings.Cut(id, ":")
 	if !ok || app == "" {
@@ -153,7 +153,7 @@ func argoApplication(meta metav1.ObjectMeta, argoNamespace string) (string, stri
 // pauseArgoCD removes the Application's automated sync and records it in an
 // annotation. An Application that does not sync on its own is left as is.
 func (a *Actor) pauseArgoCD(ctx context.Context, meta metav1.ObjectMeta, dryRun bool) (string, error) {
-	ns, name, ok := argoApplication(meta, a.ArgoCDNamespace)
+	ns, name, ok := ArgoApplication(meta, a.ArgoCDNamespace)
 	if !ok {
 		return "", fmt.Errorf("%s has no Argo CD tracking annotation", meta.Name)
 	}
