@@ -106,6 +106,9 @@ type Brain struct {
 	breakers map[string]time.Time
 	// tracks hold every cell's track record.
 	tracks map[model.TrackKey]*model.TrackRecord
+	// codeLab holds fixes to code whose built image the Lab was too busy
+	// to race; the sweep asks again.
+	codeLab map[model.ID]model.Fix
 	// rollbacks are the rollbacks Sentinel carried out in the last day,
 	// which a person may yet revert; lastTemplate is each workload's last
 	// template change, and troubledAt when the Watcher last detected
@@ -497,6 +500,9 @@ func (b *Brain) Sweep(ctx context.Context) error {
 	b.pruneEvidence()
 	now := b.now()
 	drafts := append(b.reverts(ctx, now), b.holds(ctx, now)...)
+	for _, f := range b.codeLab {
+		drafts = append(drafts, b.askCodeLab(ctx, &f, f.Code.Image)...)
+	}
 	for key, inc := range b.open {
 		drafts = append(drafts, b.verify(inc)...)
 		if inc.quietSince.IsZero() || now.Sub(inc.quietSince) < b.Gap {

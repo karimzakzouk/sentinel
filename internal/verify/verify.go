@@ -87,10 +87,20 @@ func (l *Lab) Start(ctx context.Context) error {
 // not when every Lab namespace is busy, so the Brain asks again. Asking
 // twice for one incident is asking once.
 func (l *Lab) Verify(ctx context.Context, incident model.ID, target model.ObjectRef, revision string) (string, bool, error) {
+	return l.ask(ctx, ExperimentName(incident), incident, target, revision, "")
+}
+
+// VerifyImage asks the Lab whether image, a fix to the failing revision's
+// code that its source's pipeline built, fixes the incident: the failing
+// revision raced with that image in place of its own.
+func (l *Lab) VerifyImage(ctx context.Context, incident model.ID, target model.ObjectRef, revision, image string) (string, bool, error) {
+	return l.ask(ctx, CodeExperimentName(incident), incident, target, revision, image)
+}
+
+func (l *Lab) ask(ctx context.Context, name string, incident model.ID, target model.ObjectRef, revision, image string) (string, bool, error) {
 	if !slices.Contains(l.Watched, target.Namespace) {
 		return "", false, nil
 	}
-	name := ExperimentName(incident)
 	ns, busy := l.place(name)
 	switch {
 	case ns != "" && !busy:
@@ -101,7 +111,7 @@ func (l *Lab) Verify(ctx context.Context, incident model.ID, target model.Object
 	exp := &v1alpha1.Experiment{
 		TypeMeta:   metav1.TypeMeta{APIVersion: v1alpha1.GroupVersion.String(), Kind: "Experiment"},
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
-		Spec: v1alpha1.ExperimentSpec{IncidentID: string(incident), Purpose: "verify-fix", LabNamespace: ns, Revision: revision,
+		Spec: v1alpha1.ExperimentSpec{IncidentID: string(incident), Purpose: "verify-fix", LabNamespace: ns, Revision: revision, Candidate: image,
 			Workload: &v1alpha1.TargetRef{APIVersion: "apps/v1", Kind: target.Kind, Namespace: target.Namespace, Name: target.Name}},
 	}
 	obj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(exp)
@@ -113,7 +123,11 @@ func (l *Lab) Verify(ctx context.Context, incident model.ID, target model.Object
 	if err != nil && !apierrors.IsAlreadyExists(err) {
 		return "", false, err
 	}
-	l.Log.Info("asked the Lab to verify a rollback", "incident", incident, "target", target.String(), "revision", revision, "lab", ns)
+	what := "a rollback"
+	if image != "" {
+		what = "a fix to the code, built as " + image
+	}
+	l.Log.Info("asked the Lab to verify "+what, "incident", incident, "target", target.String(), "revision", revision, "lab", ns)
 	return ns + "/" + name, true, nil
 }
 
@@ -175,4 +189,10 @@ func (l *Lab) observe(ctx context.Context, obj any) {
 func ExperimentName(incident model.ID) string {
 	id := strings.ReplaceAll(string(incident), "-", "")
 	return "sentinel-" + id[max(0, len(id)-12):] + "-verify"
+}
+
+// CodeExperimentName is the one Experiment per incident that races a fix
+// to the failing image's code.
+func CodeExperimentName(incident model.ID) string {
+	return strings.TrimSuffix(ExperimentName(incident), "-verify") + "-code"
 }

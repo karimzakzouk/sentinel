@@ -72,6 +72,27 @@ function FixDetail({ fix, type, brief }: { fix: Fix; type: string; brief?: boole
             ))}
         </span>
       );
+    case "sentinel.fix.code": {
+      const c = fix.code;
+      if (!c) return null;
+      const link = webLink(c.pullRequest);
+      return (
+        <span className="detail">
+          {link ? (
+            <a href={link} target="_blank" rel="noreferrer noopener">
+              {brief ? "the pull request to the code" : c.pullRequest}
+            </a>
+          ) : null}
+          {!brief && c.change?.map((line) => (
+            <span key={line} className="mono change-line">
+              {line}
+            </span>
+          ))}
+          {c.verdict ? ` The Lab: ${c.verdict}.` : c.image ? ` Built as ${c.image}; the Lab races it.` : ""}
+          {!brief && c.message && <span className="muted"> {c.message}</span>}
+        </span>
+      );
+    }
     case "sentinel.fix.ready":
       return (
         <span className="detail">

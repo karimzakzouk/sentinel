@@ -192,6 +192,11 @@ spec:
                     type: string
                   revision:
                     type: string
+                  verdict:
+                    description: |-
+                      Verdict is the Lab's on that image raced against the failing one:
+                      Passed, Failed or NotSure.
+                    type: string
                 type: object
               mergeCommit:
                 description: MergeCommit is the commit that merged the pull request.

@@ -81,6 +81,10 @@ type CodeFix struct {
 	Commit string `json:"commit,omitempty"`
 	// +optional
 	Image string `json:"image,omitempty"`
+	// Verdict is the Lab's on that image raced against the failing one:
+	// Passed, Failed or NotSure.
+	// +optional
+	Verdict string `json:"verdict,omitempty"`
 	// Message says why there is no code fix, or how it stands.
 	// +optional
 	Message string `json:"message,omitempty"`

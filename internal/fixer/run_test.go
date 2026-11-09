@@ -40,6 +40,7 @@ type forgeServer struct {
 	mu         sync.Mutex
 	opened     map[string]string
 	openedCode map[string]string
+	comments   []string
 	merged     string
 }
 
@@ -59,6 +60,14 @@ func newForge(t *testing.T, root string) *forgeServer {
 		defer f.mu.Unlock()
 		_ = json.NewDecoder(r.Body).Decode(&f.opened)
 		_, _ = io.WriteString(w, `{"number": 1, "html_url": "`+f.URL+`/sentinel/delivery/pulls/1", "state": "open"}`)
+	})
+	mux.HandleFunc("POST /api/v1/repos/sentinel/shop/issues/2/comments", func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		var c map[string]string
+		_ = json.NewDecoder(r.Body).Decode(&c)
+		f.comments = append(f.comments, c["body"])
+		_, _ = io.WriteString(w, `{"id": 1}`)
 	})
 	mux.HandleFunc("POST /api/v1/repos/sentinel/shop/pulls", func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()

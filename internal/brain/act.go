@@ -367,11 +367,23 @@ func (b *Brain) OnLabVerdict(ctx context.Context, v LabVerdict) error {
 	if err != nil {
 		return err
 	}
+	id := model.ExperimentID(v.IncidentID)
+	code := strings.HasSuffix(v.Experiment, "-code")
+	if code {
+		id = codeExperimentID(v.IncidentID)
+	}
 	var e *model.Experiment
 	for i := range records {
-		if records[i].ID == model.ExperimentID(v.IncidentID) {
+		if records[i].ID == id {
 			e = &records[i]
 		}
+	}
+	if e != nil && code {
+		e.Lab, e.Phase, e.Message, e.Runs, e.Fidelity = v.Experiment, v.Phase, v.Message, v.Runs, v.Fidelity
+		b.Log.Info("the Lab judged a fix to the code", "incident", v.IncidentID, "phase", v.Phase, "message", v.Message, "runs", v.Runs)
+		b.tell(ctx, notify.KindApproval, v.IncidentID, e.Target, "The Lab on the fix to "+e.Target.String()+"'s code: "+labVerdictWord(v.Phase), v.Message)
+		_, err = b.Ledger.Append(ctx, ledger.RecordDraft(source, model.KindExperiment, strings.ToLower(v.Phase), e.ID, v.IncidentID, *e))
+		return err
 	}
 	if e == nil {
 		b.Log.Info("a Lab verdict arrived for an experiment Sentinel did not ask for", "experiment", v.Experiment, "phase", v.Phase)

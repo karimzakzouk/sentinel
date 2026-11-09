@@ -195,3 +195,68 @@ func TestTheFixerIsToldTheCrash(t *testing.T) {
 		t.Fatalf("crash %+v", c)
 	}
 }
+
+// fakeImageLab answers image races, or is busy once.
+type fakeImageLab struct {
+	fakeVerifierNone
+	busy  int
+	asked []string
+}
+
+type fakeVerifierNone struct{}
+
+func (fakeVerifierNone) Verify(context.Context, model.ID, model.ObjectRef, string) (string, bool, error) {
+	return "", false, nil
+}
+
+func (l *fakeImageLab) VerifyImage(_ context.Context, _ model.ID, _ model.ObjectRef, revision, image string) (string, bool, error) {
+	if l.busy > 0 {
+		l.busy--
+		return "", false, nil
+	}
+	l.asked = append(l.asked, revision+" "+image)
+	return "sentinel-lab-0/sentinel-x-code", true, nil
+}
+
+// A fix to the code is told to people when its pull request opens; once
+// its image is built, the Lab is asked to race it, again after a sweep if
+// the Lab was busy; its verdict reaches people too.
+func TestAFixToTheCodeIsRacedOnceBuilt(t *testing.T) {
+	b, l := newBrain(t)
+	lab := &fakeImageLab{busy: 1}
+	b.Lab = lab
+	var notices []notify.Notice
+	b.Notify = func(_ context.Context, n notify.Notice) { notices = append(notices, n) }
+	f := model.Fix{ID: model.FixID("inc-1"), IncidentID: "inc-1", Target: web, FromRevision: "bad", Phase: "Proposed"}
+	if _, err := l.Append(ctx, ledger.RecordDraft(source, model.KindFix, "proposed", f.ID, "inc-1", f)); err != nil {
+		t.Fatal(err)
+	}
+	update := func(code model.FixCode) {
+		t.Helper()
+		if err := b.OnFixUpdate(ctx, FixUpdate{IncidentID: "inc-1", Phase: "Proposed", Code: &code}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	update(model.FixCode{PullRequest: "http://forge/shop/pulls/2", Change: []string{"cart/store.go:3: Get put back"}})
+	if len(notices) != 1 || !strings.Contains(notices[0].Title, "a fix to "+web.String()+"'s code") {
+		t.Fatalf("notices %+v", notices)
+	}
+	update(model.FixCode{PullRequest: "http://forge/shop/pulls/2", Image: "registry.test/shop:3f2a9c1"})
+	if len(lab.asked) != 0 {
+		t.Fatal("asked a busy Lab")
+	}
+	if err := b.Sweep(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(lab.asked) != 1 || lab.asked[0] != web.Name+"-bad registry.test/shop:3f2a9c1" {
+		t.Fatalf("asked %v", lab.asked)
+	}
+	if err := b.OnLabVerdict(ctx, LabVerdict{IncidentID: "inc-1", Experiment: "sentinel-lab-0/sentinel-x-code", Phase: "Passed",
+		Message: "the image fixes it"}); err != nil {
+		t.Fatal(err)
+	}
+	last := notices[len(notices)-1]
+	if !strings.Contains(last.Title, "The Lab on the fix to "+web.String()+"'s code: it fixes the failure") {
+		t.Fatalf("last notice %+v", last)
+	}
+}

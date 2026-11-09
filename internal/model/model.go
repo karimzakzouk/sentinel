@@ -307,6 +307,21 @@ type Fix struct {
 	// Merge says the Fixer was let merge it itself.
 	FaultClass string `json:"faultClass,omitempty"`
 	Merge      bool   `json:"merge,omitempty"`
+	// Code is the fix proposed to the failing image's code, when there is
+	// one, and how it stands.
+	Code *FixCode `json:"code,omitempty"`
+}
+
+// FixCode is a fix to a failing image's code: its pull request to the
+// image's source, the image the source's pipeline built from it, and the
+// Lab's verdict on that image.
+type FixCode struct {
+	PullRequest string   `json:"pullRequest,omitempty"`
+	Function    string   `json:"function,omitempty"`
+	Change      []string `json:"change,omitempty"`
+	Image       string   `json:"image,omitempty"`
+	Verdict     string   `json:"verdict,omitempty"`
+	Message     string   `json:"message,omitempty"`
 }
 
 // FixID is the one fix per incident.

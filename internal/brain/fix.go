@@ -60,6 +60,15 @@ type FixUpdate struct {
 	PullRequest string
 	MergeCommit string
 	Change      []string
+	// Code is how the fix to the failing image's code stands, when the
+	// Fixer looked for one.
+	Code *model.FixCode
+}
+
+// ImageVerifier asks the Lab whether an image, a fix to a failing
+// revision's code that its source's pipeline built, fixes an incident.
+type ImageVerifier interface {
+	VerifyImage(ctx context.Context, incident model.ID, target model.ObjectRef, revision, image string) (string, bool, error)
 }
 
 // holdSettle is how long after its owner applied a fix Sentinel checks that
@@ -134,18 +143,26 @@ func (b *Brain) OnFixUpdate(ctx context.Context, u FixUpdate) error {
 			f = &records[i]
 		}
 	}
-	switch {
-	case f == nil:
+	if f == nil {
 		b.Log.Info("the Fixer reported on a fix Sentinel did not ask for", "fix", u.Fix, "phase", u.Phase)
 		return nil
-	case f.Phase == u.Phase || f.Phase == "Held" || f.Phase == "NotHeld":
-		return nil
+	}
+	var drafts []ledger.Draft
+	codeChanged := u.Code != nil && (f.Code == nil || !sameCode(*f.Code, *u.Code))
+	if codeChanged {
+		drafts = append(drafts, b.onCode(ctx, f, u)...)
+	}
+	if f.Phase == u.Phase || f.Phase == "Held" || f.Phase == "NotHeld" {
+		if !codeChanged {
+			return nil
+		}
+		_, err := b.Ledger.Append(ctx, append([]ledger.Draft{ledger.RecordDraft(source, model.KindFix, "code", f.ID, u.IncidentID, *f)}, drafts...)...)
+		return err
 	}
 	f.Phase, f.Message, f.Owner, f.Resume, f.Repository = u.Phase, u.Message, u.Owner, u.Resume, u.Repository
 	f.PullRequest, f.MergeCommit, f.Change = u.PullRequest, u.MergeCommit, u.Change
 	b.Log.Info("fix "+strings.ToLower(u.Phase), "incident", u.IncidentID, "target", f.Target.String(), "pullRequest", u.PullRequest, "message", u.Message)
 	target := f.Target.String()
-	var drafts []ledger.Draft
 	resume := "resume it with `" + u.Resume + "`"
 	if u.Resume == "" {
 		resume = "resume what Sentinel paused"
@@ -174,6 +191,59 @@ func (b *Brain) OnFixUpdate(ctx context.Context, u FixUpdate) error {
 		drafts...)...)
 	return err
 }
+
+func sameCode(a, b model.FixCode) bool {
+	return a.PullRequest == b.PullRequest && a.Image == b.Image && a.Verdict == b.Verdict && a.Message == b.Message
+}
+
+// onCode records a step of the fix to the failing image's code and tells
+// people what it needs: a review of its pull request; once the source's
+// pipeline has built it, the Lab is asked to race the image. Callers hold
+// b.mu.
+func (b *Brain) onCode(ctx context.Context, f *model.Fix, u FixUpdate) []ledger.Draft {
+	prev, now := f.Code, u.Code
+	f.Code = now
+	target := f.Target.String()
+	var drafts []ledger.Draft
+	switch {
+	case now.PullRequest != "" && (prev == nil || prev.PullRequest == ""):
+		b.tell(ctx, notify.KindApproval, u.IncidentID, f.Target, "Sentinel proposes a fix to "+target+"'s code: "+now.PullRequest,
+			strings.Join(now.Change, "\n")+"\nOnce your pipeline builds it, the Lab races it against the failing image.")
+	case now.Image != "" && (prev == nil || prev.Image == ""):
+		drafts = append(drafts, b.askCodeLab(ctx, f, now.Image)...)
+	}
+	b.Log.Info("fix to the code", "incident", u.IncidentID, "target", target, "pullRequest", now.PullRequest, "image", now.Image,
+		"verdict", now.Verdict, "message", now.Message)
+	return drafts
+}
+
+// askCodeLab asks the Lab, once, whether the image built from the fix to
+// the code fixes the incident; when every Lab namespace is busy, the sweep
+// asks again. Callers hold b.mu.
+func (b *Brain) askCodeLab(ctx context.Context, f *model.Fix, image string) []ledger.Draft {
+	iv, ok := b.Lab.(ImageVerifier)
+	if !ok {
+		return nil
+	}
+	revision := f.Target.Name + "-" + f.FromRevision
+	experiment, asked, err := iv.VerifyImage(ctx, f.IncidentID, f.Target, revision, image)
+	if err != nil || !asked {
+		if err != nil {
+			b.Log.Error("could not ask the Lab about a fix to the code", "incident", f.IncidentID, "error", err)
+		}
+		if b.codeLab == nil {
+			b.codeLab = map[model.ID]model.Fix{}
+		}
+		b.codeLab[f.IncidentID] = *f
+		return nil
+	}
+	delete(b.codeLab, f.IncidentID)
+	e := model.Experiment{ID: codeExperimentID(f.IncidentID), IncidentID: f.IncidentID, Purpose: "verify-code", Target: f.Target,
+		Revision: revision, Lab: experiment, Phase: "Requested"}
+	return []ledger.Draft{ledger.RecordDraft(source, model.KindExperiment, "requested", e.ID, f.IncidentID, e)}
+}
+
+func codeExperimentID(incident model.ID) model.ID { return model.ExperimentID(incident) + "/code" }
 
 // crashOf is the newest crash stack, with the application's own frames,
 // in the logs of the workload the incident holds as evidence.

@@ -43,14 +43,14 @@ type Fixes struct {
 	OnUpdate  func(context.Context, Update)
 
 	mu        sync.Mutex
-	delivered map[string]v1alpha1.FixPhase
+	delivered map[string]string
 }
 
 // Start runs an informer on the Fixer's Fixes and returns once its cache
 // has synced. Every phase is passed on once per run of the controller,
 // those reached while it was down included; the Brain ignores repeats.
 func (f *Fixes) Start(ctx context.Context) error {
-	f.delivered = map[string]v1alpha1.FixPhase{}
+	f.delivered = map[string]string{}
 	factory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(f.Dynamic, 0, f.Namespace, nil)
 	inf := factory.ForResource(FixesResource).Informer()
 	if _, err := inf.AddEventHandler(cache.ResourceEventHandlerFuncs{
@@ -106,9 +106,14 @@ func (f *Fixes) observe(ctx context.Context, obj any) {
 		return
 	}
 	key := fix.Namespace + "/" + fix.Name
+	// A step is the phase, and how the fix to the code stands.
+	step := string(fix.Status.Phase)
+	if c := fix.Status.Code; c != nil {
+		step += "|" + c.PullRequest + "|" + c.Image + "|" + c.Verdict + "|" + c.Message
+	}
 	f.mu.Lock()
-	seen := f.delivered[key] == fix.Status.Phase
-	f.delivered[key] = fix.Status.Phase
+	seen := f.delivered[key] == step
+	f.delivered[key] = step
 	f.mu.Unlock()
 	if seen {
 		return

@@ -174,7 +174,18 @@ func (l *Lab) handle(ctx context.Context, exp *v1alpha1.Experiment) Verdict {
 	fidelity := slices.Clone(plan.Fidelity)
 	var variants []Variant
 	var candidates, controls []string
-	if exp.Spec.Purpose == "verify-fix" {
+	if exp.Spec.Purpose == "verify-fix" && exp.Spec.Candidate != "" {
+		// A fix to the failing image's code, built by its source's
+		// pipeline: the failing revision with that image instead.
+		pod, err := ImageCandidate(baseline, exp.Spec.Candidate)
+		if err != nil {
+			return Verdict{Phase: PhaseNotSure, Message: "the Lab has no fix to try: " + err.Error(), Fidelity: fidelity}
+		}
+		fidelity = append(fidelity, "the candidate image "+exp.Spec.Candidate+" is not pinned to a digest")
+		variants = []Variant{{Name: "image " + exp.Spec.Candidate, Slug: "img", Pod: pod},
+			{Name: "deletion control", Slug: "del", Pod: DeletionControl(baseline)}}
+		candidates, controls = []string{variants[0].Name}, []string{variants[1].Name}
+	} else if exp.Spec.Purpose == "verify-fix" {
 		pod, revision, notes, err := l.candidate(ctx, world, ref, exp.Spec.Revision, ns)
 		if err != nil {
 			return Verdict{Phase: PhaseNotSure, Message: "the Lab has no fix to try: " + err.Error(), Fidelity: fidelity}
