@@ -1,0 +1,39 @@
+# Runs the owner adapters' end-to-end tests: Argo CD is installed in the
+# kind cluster, an Application deploys a public example, and Sentinel rolls
+# back a bad image through it. It runs when the adapters change, weekly, and
+# on demand, so the main suite stays fast.
+name: E2E owners
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - internal/actor/**
+      - internal/act/**
+      - charts/sentinel/templates/rbac.yaml
+      - charts/sentinel-fence/**
+      - test/e2e/argocd_test.go
+      - test/apps/argocd-project.yaml
+      - hack/e2e-up.sh
+      - .github/workflows/e2e-owners.yml
+      - .github/workflows/e2e-run.yml
+  schedule:
+    - cron: "17 4 * * 4"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-owners-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  argocd:
+    name: Argo CD
+    uses: ./.github/workflows/e2e-run.yml
+    with:
+      network: kindnet
+      label: -argocd
+      argocd: true
+      run: TestArgoCD
