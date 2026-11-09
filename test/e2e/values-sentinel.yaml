@@ -5,6 +5,9 @@ actor:
 lab:
   enabled: true
   poolSize: 1
+  # The tests drive the Lab themselves; the controller's own experiments
+  # would share its one namespace with them.
+  verifyRollbacks: false
 logLevel: debug
 capabilities:
   interval: 1m

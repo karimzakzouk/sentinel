@@ -35,6 +35,9 @@ app.kubernetes.io/component: controller
 namespaces: {{ toJson .Values.watch.namespaces }}
 agentNamespace: {{ .Release.Namespace }}
 labNamespaces: {{ include "sentinel.labNamespaces" . }}
+{{- if .Values.lab.enabled }}
+verifyRollbacks: {{ .Values.lab.verifyRollbacks }}
+{{- end }}
 {{- if .Values.actor.enabled }}
 actorUser: system:serviceaccount:{{ .Values.actor.namespace }}:{{ .Values.actor.serviceAccount }}
 {{- end }}
