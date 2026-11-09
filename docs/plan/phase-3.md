@@ -54,6 +54,16 @@ again at teardown. A TTL reaper returns namespaces the Experiment did not.
 every positive one answers, and one where a deliberately missing policy
 makes the Experiment fail closed.
 
+**Built** (decisions 47 and 48): the seal (`lab-internal` on top of the
+install's default-deny), the matrix from the live cluster with positive
+controls, and the Experiment lifecycle for a new `prove` purpose, run by
+the Lab as its own fenced identity after the active probe proves
+enforcement. The fail-closed proof uses an extra allow-all policy rather
+than a missing one: policies add up, so it opens the seal without a test
+hook in the Lab. The per-Lab DNS, the teardown re-check and the reaper
+move to slice 2, which first starts workloads that need names and outlive
+a probe.
+
 ### 2. Synthesize the stateless world
 
 Freeze the failing pod's template by digest; replace its service account
