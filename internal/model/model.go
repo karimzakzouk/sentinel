@@ -283,31 +283,30 @@ func (v Verdict) Validate() error {
 	return errors.Join(errs...)
 }
 
-// FixState is a step in a fix's delivery.
-type FixState string
-
-const (
-	FixProposed  FixState = "proposed"
-	FixVerified  FixState = "verified"
-	FixRejected  FixState = "rejected"
-	FixPROpen    FixState = "pr-open"
-	FixMerged    FixState = "merged"
-	FixRolledOut FixState = "rolled-out"
-	FixReverted  FixState = "reverted"
-)
-
-// Fix is a config or code change that addresses an incident's cause.
+// Fix is the change at the source the controller asked the Fixer for, to
+// make an incident's mitigation hold, and how far it got: the Fix
+// resource's phase (Requested until the Fixer answers), then Held or
+// NotHeld once the owner has applied it and Sentinel has checked the
+// workload.
 type Fix struct {
-	ID          ID       `json:"id"`
-	IncidentID  ID       `json:"incidentId"`
-	Kind        string   `json:"kind"`
-	Repository  string   `json:"repository,omitempty"`
-	BaseCommit  string   `json:"baseCommit,omitempty"`
-	PatchSHA256 string   `json:"patchSha256,omitempty"`
-	VerdictID   ID       `json:"verdictId,omitempty"`
-	PullRequest string   `json:"pullRequest,omitempty"`
-	State       FixState `json:"state"`
+	ID         ID        `json:"id"`
+	IncidentID ID        `json:"incidentId"`
+	Target     ObjectRef `json:"target"`
+	// FromRevision is the pod template hash the workload was rolled back
+	// from.
+	FromRevision string   `json:"fromRevision,omitempty"`
+	Phase        string   `json:"phase"`
+	Message      string   `json:"message,omitempty"`
+	Owner        string   `json:"owner,omitempty"`
+	Resume       string   `json:"resume,omitempty"`
+	Repository   string   `json:"repository,omitempty"`
+	Change       []string `json:"change,omitempty"`
+	PullRequest  string   `json:"pullRequest,omitempty"`
+	MergeCommit  string   `json:"mergeCommit,omitempty"`
 }
+
+// FixID is the one fix per incident.
+func FixID(incident ID) ID { return "fix/" + incident }
 
 // AutonomyLevel is one rung of the per-namespace autonomy ladder.
 type AutonomyLevel string

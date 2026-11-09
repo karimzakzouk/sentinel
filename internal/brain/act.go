@@ -211,6 +211,9 @@ func (b *Brain) verify(inc *incident) []ledger.Draft {
 		key := model.TrackKey{Action: a.Type, FaultClass: inc.rec.Assessment.Class, Service: inc.primary.String()}
 		drafts = append(drafts, b.track(key, a.State == model.ActionVerified, inc.rec.ID, now))
 	}
+	if a.State == model.ActionVerified {
+		drafts = append(drafts, b.askFix(context.Background(), inc, a)...)
+	}
 	return drafts
 }
 

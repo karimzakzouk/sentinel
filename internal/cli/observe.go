@@ -14,6 +14,7 @@ import (
 	"github.com/karimzakzouk/sentinel/internal/act"
 	"github.com/karimzakzouk/sentinel/internal/brain"
 	"github.com/karimzakzouk/sentinel/internal/config"
+	"github.com/karimzakzouk/sentinel/internal/fixes"
 	"github.com/karimzakzouk/sentinel/internal/ledger"
 	"github.com/karimzakzouk/sentinel/internal/model"
 	"github.com/karimzakzouk/sentinel/internal/notify"
@@ -163,6 +164,23 @@ func newObserver(ctx context.Context, log *slog.Logger, cfg *config.Config, clie
 		} else {
 			b.Lab = lab
 			log.Info("the Lab verifies proposed rollbacks", "pool", cfg.LabNamespaces)
+		}
+	}
+	if cfg.FixerNamespace != "" && dyn != nil {
+		f := &fixes.Fixes{Dynamic: dyn, Namespace: cfg.FixerNamespace, Log: log,
+			OnUpdate: func(ctx context.Context, u fixes.Update) {
+				s := u.Status
+				if err := b.OnFixUpdate(ctx, brain.FixUpdate{IncidentID: u.IncidentID, Fix: u.Name, Phase: string(s.Phase), Message: s.Message,
+					Owner: s.Owner, Resume: s.Resume, Repository: s.Repository, PullRequest: s.PullRequest, MergeCommit: s.MergeCommit,
+					Change: s.Change}); err != nil {
+					log.Error("could not record the Fixer's step", "fix", u.Name, "error", err)
+				}
+			}}
+		if err := f.Start(ctx); err != nil {
+			log.Warn("the Fixer does not make rollbacks hold at their source", "reason", err)
+		} else {
+			b.Fixer = f
+			log.Info("the Fixer makes verified rollbacks hold at their source", "namespace", cfg.FixerNamespace)
 		}
 	}
 	w.OnTick = func(ctx context.Context) {
