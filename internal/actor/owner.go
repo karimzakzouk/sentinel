@@ -65,6 +65,11 @@ func (a *Actor) pauseArgoCD(ctx context.Context, meta metav1.ObjectMeta, dryRun 
 	if err != nil {
 		return "", fmt.Errorf("the Argo CD Application %s/%s: %w", ns, name, err)
 	}
+	if set, ok := applicationSet(app.GetOwnerReferences()); ok {
+		if err := a.applicationSetKeepsPause(ctx, ns, set); err != nil {
+			return "", err
+		}
+	}
 	automated, found, _ := unstructuredMap(app.Object, "spec", "syncPolicy", "automated")
 	if !found {
 		return fmt.Sprintf("Argo CD Application %s/%s does not sync on its own", ns, name), nil
@@ -89,6 +94,49 @@ func (a *Actor) pauseArgoCD(ctx context.Context, meta metav1.ObjectMeta, dryRun 
 	}
 	return fmt.Sprintf("paused Argo CD Application %s/%s's automated sync; once Git is fixed, resume it with "+
 		"`sentinel resume argocd %s/%s`", ns, name, ns, name), nil
+}
+
+// ApplicationSetsResource is Argo CD's ApplicationSet.
+var ApplicationSetsResource = schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applicationsets"}
+
+func applicationSet(owners []metav1.OwnerReference) (string, bool) {
+	for _, o := range owners {
+		if o.Kind == "ApplicationSet" && strings.HasPrefix(o.APIVersion, "argoproj.io/") {
+			return o.Name, true
+		}
+	}
+	return "", false
+}
+
+// applicationSetKeepsPause checks that the ApplicationSet generating an
+// Application leaves its sync policy alone; otherwise it would write the
+// automated sync back and the rollback would be undone.
+func (a *Actor) applicationSetKeepsPause(ctx context.Context, ns, name string) error {
+	set, err := a.Dynamic.Resource(ApplicationSetsResource).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("the ApplicationSet %s/%s that generates the Application: %w", ns, name, err)
+	}
+	ignored, _, _ := unstructuredSlice(set.Object, "spec", "ignoreApplicationDifferences")
+	for _, rule := range ignored {
+		r, _ := rule.(map[string]any)
+		pointers, _ := r["jsonPointers"].([]any)
+		for _, p := range pointers {
+			if s, _ := p.(string); s == "/spec/syncPolicy" || s == "/spec/syncPolicy/automated" {
+				return nil
+			}
+		}
+	}
+	return fmt.Errorf("the ApplicationSet %s/%s generates the Application and would restore its automated sync; "+
+		"Sentinel leaves it to people unless the ApplicationSet ignores differences in /spec/syncPolicy", ns, name)
+}
+
+func unstructuredSlice(obj map[string]any, path ...string) ([]any, bool, error) {
+	parent, found, err := unstructuredMap(obj, path[:len(path)-1]...)
+	if !found || err != nil {
+		return nil, found, err
+	}
+	s, ok := parent[path[len(path)-1]].([]any)
+	return s, ok, nil
 }
 
 func unstructuredMap(obj map[string]any, path ...string) (map[string]any, bool, error) {
