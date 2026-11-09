@@ -42,7 +42,10 @@ type Console struct {
 	Namespaces []string
 	// SessionTTL is how long a sign-in lasts; 8 hours when zero.
 	SessionTTL time.Duration
-	Now        func() time.Time
+	// OIDC, when set, signs people in through the cluster's identity
+	// provider as well as with a token.
+	OIDC *OIDC
+	Now  func() time.Time
 
 	mu       sync.Mutex
 	sessions map[string]*session
@@ -87,6 +90,11 @@ func (c *Console) routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/session", c.signIn)
 	mux.HandleFunc("GET /api/session", c.whoami)
 	mux.HandleFunc("DELETE /api/session", c.signOut)
+	mux.HandleFunc("GET /api/session/sso", c.sso)
+	if c.OIDC != nil {
+		mux.HandleFunc("GET "+oidcPath, c.oidcStart)
+		mux.HandleFunc("GET "+oidcPath+"/callback", c.oidcCallback)
+	}
 	mux.HandleFunc("POST /api/requests/{namespace}/{name}/{decision}", c.write(c.decide))
 	mux.HandleFunc("POST /api/resume", c.write(c.resume))
 	mux.HandleFunc("GET /api/policies", c.read(c.policies))
@@ -108,27 +116,40 @@ func (c *Console) signIn(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "give a token", http.StatusBadRequest)
 		return
 	}
-	token := strings.TrimSpace(in.Token)
+	s, status, why := c.begin(w, r, strings.TrimSpace(in.Token), time.Time{})
+	if s == nil {
+		http.Error(w, why, status)
+		return
+	}
+	writeJSON(w, map[string]any{"user": s.user, "groups": s.groups})
+}
+
+// begin checks a token by asking the API server who it belongs to, as
+// itself, and starts a session for that person, until the session's time
+// or until, if sooner. It returns the session, or the status and reason
+// it does not start.
+func (c *Console) begin(w http.ResponseWriter, r *http.Request, token string, until time.Time) (*session, int, string) {
 	k, _, err := c.Clients(token)
 	if err != nil {
-		http.Error(w, "could not use the token", http.StatusBadRequest)
-		return
+		return nil, http.StatusBadRequest, "could not use the token"
 	}
 	review, err := k.AuthenticationV1().SelfSubjectReviews().Create(r.Context(), &authenticationv1.SelfSubjectReview{}, metav1.CreateOptions{})
 	if err != nil || review.Status.UserInfo.Username == "" {
-		http.Error(w, "the cluster does not accept that token", http.StatusUnauthorized)
-		return
+		return nil, http.StatusUnauthorized, "the cluster does not accept that token"
 	}
 	id := make([]byte, 32)
 	if _, err := rand.Read(id); err != nil {
-		http.Error(w, "could not start a session", http.StatusInternalServerError)
-		return
+		return nil, http.StatusInternalServerError, "could not start a session"
 	}
 	ttl := c.SessionTTL
 	if ttl == 0 {
 		ttl = 8 * time.Hour
 	}
-	s := &session{token: token, user: review.Status.UserInfo.Username, groups: review.Status.UserInfo.Groups, expires: c.now().Add(ttl)}
+	expires := c.now().Add(ttl)
+	if !until.IsZero() && until.Before(expires) {
+		expires = until
+	}
+	s := &session{token: token, user: review.Status.UserInfo.Username, groups: review.Status.UserInfo.Groups, expires: expires}
 	key := hex.EncodeToString(id)
 	c.mu.Lock()
 	if c.sessions == nil {
@@ -149,8 +170,13 @@ func (c *Console) signIn(w http.ResponseWriter, r *http.Request) {
 	// Secure only where the page came over TLS: through kubectl port-forward
 	// it is http://localhost, where some browsers drop Secure cookies.
 	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: key, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, //nolint:gosec // Secure follows the page's scheme, above
-		Secure: r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https", Expires: s.expires})
-	writeJSON(w, map[string]any{"user": s.user, "groups": s.groups})
+		Secure: overTLS(r), Expires: s.expires})
+	return s, http.StatusOK, ""
+}
+
+// overTLS reports whether the page came over TLS.
+func overTLS(r *http.Request) bool {
+	return r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
 }
 
 func (c *Console) whoami(w http.ResponseWriter, r *http.Request) {
@@ -169,7 +195,7 @@ func (c *Console) signOut(w http.ResponseWriter, r *http.Request) {
 		c.mu.Unlock()
 	}
 	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteStrictMode, //nolint:gosec // clears the cookie; nothing to protect
-		Secure: r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"})
+		Secure: overTLS(r)})
 	w.WriteHeader(http.StatusNoContent)
 }
 

@@ -63,6 +63,19 @@ capture:
   address: ":4318"
   tokenFile: /etc/sentinel-capture/token
 {{- end }}
+{{- with .Values.console.oidc }}
+{{- if .issuer }}
+ui:
+  oidc:
+    issuer: {{ .issuer | quote }}
+    clientID: {{ .clientID | quote }}
+    {{- if .clientSecret.secretName }}
+    clientSecretFile: /etc/sentinel-oidc/{{ .clientSecret.key }}
+    {{- end }}
+    redirectURL: {{ .redirectURL | quote }}
+    scopes: {{ toJson .scopes }}
+{{- end }}
+{{- end }}
 healthAddr: ":8081"
 {{- end }}
 

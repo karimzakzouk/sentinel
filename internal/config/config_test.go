@@ -41,6 +41,9 @@ func TestLoadRejectsUnsafeOrAmbiguousConfig(t *testing.T) {
 		"samples over a window": "namespaces: [a]\nledger: {path: /l.db}\nlogs: {sampleInterval: 10m}\n",
 		"negative warm-up":      "namespaces: [a]\nledger: {path: /l.db}\ndetection: {warmUp: -1m}\n",
 		"capture without token": "namespaces: [a]\nledger: {path: /l.db}\ncapture: {address: ':4318'}\n",
+		"oidc over http":        "namespaces: [a]\nledger: {path: /l.db}\nui: {oidc: {issuer: 'http://idp.example', clientID: s, redirectURL: 'http://localhost:8090/api/session/oidc/callback'}}\n",
+		"oidc without a client": "namespaces: [a]\nledger: {path: /l.db}\nui: {oidc: {issuer: 'https://idp.example', redirectURL: 'http://localhost:8090/api/session/oidc/callback'}}\n",
+		"oidc elsewhere":        "namespaces: [a]\nledger: {path: /l.db}\nui: {oidc: {issuer: 'https://idp.example', clientID: s, redirectURL: 'http://localhost:8090/'}}\n",
 	}
 	for name, content := range cases {
 		if _, err := Load(write(t, content)); err == nil {

@@ -295,8 +295,16 @@ async function whoami(): Promise<Me | null | undefined> {
   return (await res.json()) as Me;
 }
 
+// sso is the identity provider the console signs people in through, null
+// when it signs them in only with a token.
+async function sso(): Promise<{ provider: string; start: string } | null> {
+  const res = await fetch("/api/session/sso", { headers: { Accept: "application/json" } });
+  return res.ok ? ((await res.json()) as { provider: string; start: string }) : null;
+}
+
 export const api = {
   whoami,
+  sso,
   signIn: (token: string) => send<Me>("POST", "/api/session", { token }),
   signOut: () => send<void>("DELETE", "/api/session"),
   decide: (request: string, decision: "approve" | "veto") => {

@@ -47,6 +47,10 @@ export function SignIn({ onClose }: { onClose: () => void }) {
   const [token, setToken] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [provider, setProvider] = useState<{ provider: string; start: string } | null>(null);
+  useEffect(() => {
+    api.sso().then(setProvider, () => setProvider(null));
+  }, []);
   const submit = async () => {
     setBusy(true);
     setError("");
@@ -67,9 +71,16 @@ export function SignIn({ onClose }: { onClose: () => void }) {
           Use a token for your own Kubernetes identity. Everything you do here is done as you, with your permissions, as
           kubectl would; Sentinel's own account never makes these changes.
         </p>
+        {provider && (
+          <p>
+            <a className="btn primary" href={provider.start}>
+              Sign in with {provider.provider}
+            </a>
+          </p>
+        )}
         <p className="muted">
-          For example <code>kubectl create token NAME -n NAMESPACE</code> for a service account, or the token your single
-          sign-on gives you.
+          {provider ? "Or paste a token, for example " : "For example "}
+          <code>kubectl create token NAME -n NAMESPACE</code> for a service account, or the token your single sign-on gives you.
         </p>
         <textarea
           className="field mono"

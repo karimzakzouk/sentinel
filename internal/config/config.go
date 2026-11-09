@@ -6,8 +6,10 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -94,11 +96,29 @@ func (l Logs) SampleEvery() time.Duration {
 // On reports whether log evidence is enabled.
 func (l Logs) On() bool { return l.Enabled == nil || *l.Enabled }
 
-// UI configures the read-only web UI and API.
+// UI configures the web UI, its API and the console.
 type UI struct {
 	// Address to listen on. Keep it on loopback: kubectl port-forward reaches
 	// it, and nothing else should.
 	Address string `json:"address,omitempty"`
+	// OIDC, when its issuer is set, signs people in to the console through
+	// the identity provider the cluster's API server trusts.
+	OIDC OIDC `json:"oidc,omitempty"`
+}
+
+// OIDC names the console's client at the identity provider.
+type OIDC struct {
+	// Issuer is the provider's issuer URL, as the API server's
+	// authentication configuration names it.
+	Issuer string `json:"issuer,omitempty"`
+	// ClientID is the client the API server accepts ID tokens for.
+	ClientID string `json:"clientID,omitempty"`
+	// ClientSecretFile holds the client's secret, if it has one.
+	ClientSecretFile string `json:"clientSecretFile,omitempty"`
+	// RedirectURL is the console's address as people open it, followed by
+	// /api/session/oidc/callback.
+	RedirectURL string   `json:"redirectURL,omitempty"`
+	Scopes      []string `json:"scopes,omitempty"`
 }
 
 // Capture configures the receiver for traffic capture's agent.
@@ -205,6 +225,20 @@ func (c *Config) Validate() error {
 	if d.Tick.Duration < time.Second || d.Window.Duration < 2*d.Tick.Duration || d.HalfLife.Duration < d.Window.Duration {
 		errs = append(errs, fmt.Errorf("detection needs tick >= 1s, window >= 2 ticks and halfLife >= window (got %s, %s, %s)",
 			d.Tick.Duration, d.Window.Duration, d.HalfLife.Duration))
+	}
+	if o := c.UI.OIDC; o.Issuer != "" || o.ClientID != "" {
+		issuer, err := url.Parse(o.Issuer)
+		loopback := err == nil && (issuer.Hostname() == "localhost" || issuer.Hostname() == "127.0.0.1")
+		switch {
+		case err != nil || issuer.Host == "" || issuer.Scheme != "https" && !loopback:
+			errs = append(errs, fmt.Errorf("ui.oidc.issuer %q must be an https URL, as the API server's is", o.Issuer))
+		case o.ClientID == "":
+			errs = append(errs, errors.New("ui.oidc.clientID is empty: name the client the API server accepts ID tokens for"))
+		case !strings.HasSuffix(o.RedirectURL, "/api/session/oidc/callback"):
+			errs = append(errs, fmt.Errorf("ui.oidc.redirectURL %q must end in /api/session/oidc/callback", o.RedirectURL))
+		case o.ClientSecretFile != "" && !filepath.IsAbs(o.ClientSecretFile):
+			errs = append(errs, fmt.Errorf("ui.oidc.clientSecretFile %q must be an absolute path", o.ClientSecretFile))
+		}
 	}
 	if c.Capture.Address != "" && !filepath.IsAbs(c.Capture.TokenFile) {
 		errs = append(errs, fmt.Errorf("capture.tokenFile %q must be an absolute path when capture.address is set", c.Capture.TokenFile))
