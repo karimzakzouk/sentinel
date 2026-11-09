@@ -104,6 +104,26 @@ func TestSummarizeDotnetConsoleErrors(t *testing.T) {
 	}
 }
 
+// One error logged with messages that differ in what failed, the command
+// and the wording of the timeout, is one exception.
+func TestALoggedExceptionIsOneWhateverItsMessage(t *testing.T) {
+	other := strings.NewReplacer("command=HMGET", "command=HSET",
+		"The message timed out in the backlog attempting to send because no connection became available",
+		"No connection is active/available to service this operation").Replace(dotnetConsoleTrace)
+	elsewhere := strings.Replace(dotnetConsoleTrace, "RedisCartStore.GetCartAsync", "RedisCartStore.AddItemAsync", 1)
+	var log []string
+	for _, trace := range []string{dotnetConsoleTrace, other, elsewhere} {
+		log = append(log, strings.Split(trace, "\n")...)
+	}
+	s := Summarize(timestamped(log...), redact.New())
+	if len(s.Exceptions) != 2 {
+		t.Fatalf("exceptions = %+v; want the two messages as one, the other frame apart", s.Exceptions)
+	}
+	if total, most := s.Exceptions[0].Count+s.Exceptions[1].Count, max(s.Exceptions[0].Count, s.Exceptions[1].Count); total != 3 || most != 2 {
+		t.Fatalf("counts = %d and %d, want 2 and 1", s.Exceptions[0].Count, s.Exceptions[1].Count)
+	}
+}
+
 func TestMessageAndLevel(t *testing.T) {
 	for line, want := range map[string]string{
 		`{"severity":"ERROR","message":"payment failed"}`:                                        "payment failed|error",
