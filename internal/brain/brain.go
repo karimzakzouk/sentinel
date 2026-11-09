@@ -8,6 +8,7 @@ import (
 	"math"
 	"slices"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 
@@ -573,6 +574,11 @@ func (b *Brain) assess(ctx context.Context, inc *incident, workload model.Object
 			params := maps.Clone(args)
 			if experiment != "" {
 				params[argExperiment] = experiment
+			}
+			earned, why := b.standing(model.TrackKey{Action: a.Type, FaultClass: classes.Top().Value, Service: workload.String()})
+			params[argEarned] = strconv.FormatBool(earned)
+			if why != "" {
+				params[argTrack] = why
 			}
 			requested, err := b.Act.Request(ctx, model.Action{ID: a.ID, IncidentID: a.IncidentID, Type: a.Type, Target: a.Target,
 				Params: params}, decision.Reason)

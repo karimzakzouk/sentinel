@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -157,5 +158,50 @@ func TestARequestNamesItsVerificationInAnAnnotation(t *testing.T) {
 	params, _, _ := unstructured.NestedStringMap(got.Object, "spec", "params")
 	if got.GetAnnotations()[actor.AnnotationExperiment] != "lab-0/sentinel-x-verify" || params[ParamExperiment] != "" || params[actor.ParamFromTemplateHash] != "bbb" {
 		t.Fatalf("annotations %v, params %v", got.GetAnnotations(), params)
+	}
+}
+
+// Where a policy makes an action earn its level, a request whose track
+// record has not earned it is marked to wait for a person, saying why.
+func TestARequestWaitsForAPersonUntilItsTrackRecordEarnsItsLevel(t *testing.T) {
+	ctx := context.Background()
+	earnedPolicy := func(earned bool) *unstructured.Unstructured {
+		u := policyAt(t, v1alpha1.AutonomyAutonomous)
+		autonomy, _, _ := unstructured.NestedSlice(u.Object, "spec", "autonomy")
+		autonomy[0].(map[string]any)["earned"] = earned
+		_ = unstructured.SetNestedSlice(u.Object, autonomy, "spec", "autonomy")
+		return u
+	}
+	cases := map[string]struct {
+		earnedPolicy bool
+		earned       string
+		marked       bool
+	}{
+		"not yet earned":          {true, "false", true},
+		"earned":                  {true, "true", false},
+		"not asked to earn it":    {false, "false", false},
+		"earned, said by nothing": {true, "", true},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			r, _ := newRequests(t, earnedPolicy(tc.earnedPolicy))
+			a := rollback()
+			if tc.earned != "" {
+				a.Params[ParamEarned] = tc.earned
+			}
+			a.Params[ParamTrack] = "its track record has not earned autonomy yet: 3 verified and 0 not"
+			if asked, err := r.Request(ctx, a, "test"); err != nil || !asked {
+				t.Fatalf("asked=%v, %v", asked, err)
+			}
+			got, err := r.Dynamic.Resource(actor.RequestsResource).Namespace("shop").Get(ctx, requestName(a.IncidentID, actor.ActionRolloutUndo), metav1.GetOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			why, marked := got.GetAnnotations()[actor.AnnotationNeedsApproval]
+			params, _, _ := unstructured.NestedStringMap(got.Object, "spec", "params")
+			if marked != tc.marked || marked && !strings.Contains(why, "3 verified") || params[ParamEarned] != "" || params[ParamTrack] != "" {
+				t.Fatalf("annotations %v, params %v; want marked=%v", got.GetAnnotations(), params, tc.marked)
+			}
+		})
 	}
 }

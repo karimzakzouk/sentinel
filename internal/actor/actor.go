@@ -65,6 +65,12 @@ const (
 // verifies a request. The actor trusts only what that Experiment says.
 const AnnotationExperiment = "sentinel.karimzakzouk.github.io/experiment"
 
+// AnnotationNeedsApproval, set by the controller where a policy makes an
+// action earn its level and its track record has not yet, says why the
+// request waits for a person whatever the policy's level. It can only make
+// a request stricter.
+const AnnotationNeedsApproval = "sentinel.karimzakzouk.github.io/needs-approval"
+
 // ExperimentsResource is the Lab's Experiment custom resource.
 var ExperimentsResource = v1alpha1.GroupVersion.WithResource("experiments")
 
@@ -152,7 +158,12 @@ func (a *Actor) admit(ctx context.Context, req *v1alpha1.ActionRequest) (bool, v
 	if !req.Spec.ExpiresAt.IsZero() {
 		untilExpiry = req.Spec.ExpiresAt.Sub(now) + time.Second
 	}
-	switch level := policy.Autonomy(policies, req.Spec.Action); level {
+	level := policy.Autonomy(policies, req.Spec.Action)
+	held := req.Annotations[AnnotationNeedsApproval]
+	if held != "" && policy.Above(level, v1alpha1.AutonomyApprove) {
+		level = v1alpha1.AutonomyApprove
+	}
+	switch level {
 	case v1alpha1.AutonomyAutonomous:
 	case v1alpha1.AutonomyActUnlessVetoed:
 		if wait := req.CreationTimestamp.Add(VetoWindow).Sub(now); wait > 0 {
@@ -162,6 +173,8 @@ func (a *Actor) admit(ctx context.Context, req *v1alpha1.ActionRequest) (bool, v
 	case v1alpha1.AutonomyApprove:
 		who := req.Annotations[AnnotationApprovedBy]
 		switch {
+		case who == "" && held != "":
+			return false, v1alpha1.ActionPending, "waiting for a person to approve it: " + held, untilExpiry, nil
 		case who == "":
 			return false, v1alpha1.ActionPending, "waiting for a person to approve it", untilExpiry, nil
 		case slices.Contains(a.Self, who):

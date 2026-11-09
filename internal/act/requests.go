@@ -5,6 +5,7 @@
 package act
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"log/slog"
@@ -107,6 +108,25 @@ func (r *Requests) Autonomy(namespace, action string) v1alpha1.AutonomyLevel {
 	return policy.Autonomy(policies, action)
 }
 
+// Earned reports whether the namespace's policies make an action earn its
+// level through its track record.
+func (r *Requests) Earned(namespace, action string) bool {
+	r.mu.Lock()
+	store := r.policies[namespace]
+	r.mu.Unlock()
+	if store == nil {
+		return false
+	}
+	var policies []v1alpha1.SentinelPolicy
+	for _, obj := range store.List() {
+		var p v1alpha1.SentinelPolicy
+		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(obj.(*unstructured.Unstructured).Object, &p); err == nil {
+			policies = append(policies, p)
+		}
+	}
+	return policy.Earned(policies, action)
+}
+
 // Acting reports whether any watched namespace's policies let Sentinel run
 // an action on its own.
 func (r *Requests) Acting() bool {
@@ -138,9 +158,15 @@ func RequestAction(brainAction string) (string, bool) {
 // waits for one.
 const approvalTTL = time.Hour
 
-// ParamExperiment carries, from the Brain, the Lab Experiment verifying an
-// action; the request names it in an annotation, not in its parameters.
-const ParamExperiment = "experiment"
+// Parameters the Brain passes about an action, which the request carries
+// in annotations, not in its parameters: the Lab Experiment verifying it,
+// and whether its track record has earned its level, with a sentence for
+// whoever must approve it when not.
+const (
+	ParamExperiment = "experiment"
+	ParamEarned     = "earned"
+	ParamTrack      = "track"
+)
 
 // Request asks the actor for an action if the target namespace's policy
 // lets Sentinel run it on its own, after a veto window, or once a person
@@ -159,7 +185,8 @@ func (r *Requests) Request(ctx context.Context, a model.Action, reason string) (
 		action = actor.RollbackAction(dep.ObjectMeta)
 	}
 	ttl := r.TTL
-	switch r.Autonomy(a.Target.Namespace, action) {
+	level := r.Autonomy(a.Target.Namespace, action)
+	switch level {
 	case v1alpha1.AutonomyAutonomous:
 	case v1alpha1.AutonomyActUnlessVetoed:
 		ttl += actor.VetoWindow
@@ -169,11 +196,17 @@ func (r *Requests) Request(ctx context.Context, a model.Action, reason string) (
 		return false, nil
 	}
 	params := maps.Clone(a.Params)
-	var annotations map[string]string
+	annotations := map[string]string{}
 	if exp := params[ParamExperiment]; exp != "" {
-		annotations = map[string]string{actor.AnnotationExperiment: exp}
+		annotations[actor.AnnotationExperiment] = exp
 	}
-	delete(params, ParamExperiment)
+	if r.Earned(a.Target.Namespace, action) && policy.Above(level, v1alpha1.AutonomyApprove) && params[ParamEarned] != "true" {
+		annotations[actor.AnnotationNeedsApproval] = cmp.Or(params[ParamTrack], "its track record has not earned "+string(level)+" yet")
+		ttl = approvalTTL
+	}
+	for _, p := range []string{ParamExperiment, ParamEarned, ParamTrack} {
+		delete(params, p)
+	}
 	req := &v1alpha1.ActionRequest{
 		TypeMeta:   metav1.TypeMeta{APIVersion: v1alpha1.GroupVersion.String(), Kind: "ActionRequest"},
 		ObjectMeta: metav1.ObjectMeta{Name: requestName(a.IncidentID, action), Namespace: a.Target.Namespace, Annotations: annotations},

@@ -380,3 +380,25 @@ func TestARollbackRequestNamesItsVerification(t *testing.T) {
 		t.Fatalf("requests = %+v; want one rollback naming the Lab's Experiment", req.calls)
 	}
 }
+
+// A cell's standing: nothing verified yet, some but short of the bar, and
+// earned once the 5th percentile of its success rate clears it.
+func TestACellsStandingSaysWhyItHasNotEarnedAutonomy(t *testing.T) {
+	b, _ := newBrain(t)
+	key := model.TrackKey{Action: ActionRolloutUndo, FaultClass: ClassBadImage, Service: web.String()}
+	if earned, why := b.standing(key); earned || !strings.Contains(why, "has been verified yet") {
+		t.Fatalf("with no record: %v, %q", earned, why)
+	}
+	for range 3 {
+		b.track(key, true, "inc", onset)
+	}
+	if earned, why := b.standing(key); earned || !strings.Contains(why, "3 verified and 0 not") {
+		t.Fatalf("after three: %v, %q", earned, why)
+	}
+	for range 25 {
+		b.track(key, true, "inc", onset)
+	}
+	if earned, why := b.standing(key); !earned || why != "" {
+		t.Fatalf("after 28 straight: %v, %q", earned, why)
+	}
+}
