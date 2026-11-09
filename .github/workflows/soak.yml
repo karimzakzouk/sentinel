@@ -88,6 +88,10 @@ jobs:
             sleep 3600
             echo "== after ${h}h"
             hack/soak.sh report
+            # The runner is burstable: once its CPU credits run out it slows to
+            # 40%, which could cause alarms of its own, so log how busy it is.
+            uptime
+            docker stats --no-stream --format '{{.Name}} cpu {{.CPUPerc}} memory {{.MemUsage}}' | grep -- '-control-plane\|-worker' || true
           done
       - name: Report
         if: always()
