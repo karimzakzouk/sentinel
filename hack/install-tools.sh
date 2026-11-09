@@ -13,10 +13,11 @@ ARCH=amd64
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-fetch() { curl -fsSL --retry 5 --retry-delay 2 -o "$2" "$1"; }
-# Checksums come through the same retries: GitHub's release downloads answer
-# 504 now and then.
-get() { curl -fsSL --retry 5 --retry-delay 2 "$1"; }
+fetch() { curl -fsSL --retry 8 --retry-max-time 300 -o "$2" "$1"; }
+# Checksums come through the same retries. GitHub's release downloads answer
+# 504 for minutes at a time now and then; curl doubles its wait between
+# tries, so eight tries span about four minutes.
+get() { curl -fsSL --retry 8 --retry-max-time 300 "$1"; }
 verify() { echo "$1  $2" | sha256sum -c --quiet -; }
 
 # CI provides Go through actions/setup-go; anywhere else, install it.

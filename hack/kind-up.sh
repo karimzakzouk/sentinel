@@ -37,7 +37,9 @@ esac
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 fetch() {
-  curl -fsSL --retry 3 -o "$2" "$1"
+  # GitHub's release downloads answer 504 for minutes at a time now and then;
+  # curl doubles its wait between tries, so eight tries span about four.
+  curl -fsSL --retry 8 --retry-max-time 300 -o "$2" "$1"
   echo "$3  $2" | sha256sum -c --quiet -
 }
 
