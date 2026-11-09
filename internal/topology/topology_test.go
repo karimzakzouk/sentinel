@@ -2,6 +2,7 @@ package topology
 
 import (
 	"fmt"
+	"reflect"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -87,5 +88,28 @@ func TestDependentsAndDependencies(t *testing.T) {
 	}
 	if got := names(m.Dependencies(deployment("frontend"))); got != "[cartservice productcatalogservice redis-cart]" {
 		t.Errorf("dependencies of frontend = %s", got)
+	}
+}
+
+func TestExternalHostsAreTheAddressesOutsideTheNamespace(t *testing.T) {
+	tpl := corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{
+		Env: []corev1.EnvVar{
+			{Name: "BACKEND", Value: "backend:8080"},
+			{Name: "BACKEND_FQDN", Value: "http://backend.shop.svc.cluster.local:8080/api"},
+			{Name: "PAYMENTS", Value: "https://api.stripe.com/v1"},
+			{Name: "DB", Value: "postgres://app:secret@db.other.svc:5432/app"},
+			{Name: "CACHE", Value: "redis-cart:6379"},
+			{Name: "PEERS", Value: "10.0.0.7:9000,10.0.0.8:9000"},
+			{Name: "LOG_LEVEL", Value: "info"},
+			{Name: "VERSION", Value: "1.2.3"},
+			{Name: "CONFIG", Value: "/etc/app/config.yaml"},
+			{Name: "TIMEOUT", Value: "host:abc"},
+		},
+		Args: []string{"--upstream=metrics.example.com:443"},
+	}}}}
+	got := ExternalHosts(tpl, "shop", map[string]bool{"backend": true})
+	want := []string{"10.0.0.7", "10.0.0.8", "api.stripe.com", "db.other.svc", "metrics.example.com", "redis-cart"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
 	}
 }
