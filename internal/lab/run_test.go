@@ -71,8 +71,9 @@ func TestTheLabRefusesBeforeItStartsAnything(t *testing.T) {
 
 func TestTheSealVerdictSaysWhereItLeaks(t *testing.T) {
 	r := func(name string, allowed, outside, reached bool) Result {
-		return Result{Probe: Probe{Name: name, Allowed: allowed, Outside: outside}, Reached: reached}
+		return Result{Probe: Probe{Name: name, Allowed: allowed, Outside: outside}, Reached: reached, Later: reached && !allowed}
 	}
+	starting := Result{Probe: Probe{Name: "cluster DNS"}, Reached: true}
 	control := r("echo service", true, false, true)
 	cases := map[string]struct {
 		results []Result
@@ -83,6 +84,8 @@ func TestTheSealVerdictSaysWhereItLeaks(t *testing.T) {
 		"leaks inside":       {[]Result{control, r("cluster DNS", false, false, true), r("cloud metadata", false, true, true)}, PhaseFailed, "the seal leaks to cluster DNS, and outside the cluster to cloud metadata"},
 		"leaks only outside": {[]Result{control, r("cluster DNS", false, false, false), r("cloud metadata", false, true, true)}, PhaseFailed, "the seal leaks outside the cluster to cloud metadata: the network plugin lets pods reach them"},
 		"a silent control":   {[]Result{r("echo service", true, false, false), r("cluster DNS", false, false, false)}, PhaseNotSure, "the positive controls did not answer (echo service)"},
+		"leaks as a pod starts": {[]Result{control, starting, r("API server", false, false, false)}, PhaseFailed,
+			"the seal leaks while a pod starts, to cluster DNS: the network plugin applies policy to a new pod only after it starts"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

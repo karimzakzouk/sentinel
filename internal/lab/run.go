@@ -189,27 +189,35 @@ func readyServices(built *Built, plan *Plan) []*corev1.Service {
 }
 
 // sealVerdict reads the matrix: the seal holds when every forbidden
-// destination was refused and every control answered.
+// destination was refused in both passes and every control answered.
 func sealVerdict(results []Result) (v1alpha1.ExperimentPhase, string, bool) {
 	var inside, outside, silent []string
-	refused := 0
+	steady, refused := false, 0
 	for _, r := range results {
 		switch {
 		case r.Allowed && !r.Reached:
 			silent = append(silent, r.Name)
-		case !r.Allowed && r.Reached && r.Outside:
-			outside = append(outside, r.Name)
-		case !r.Allowed && r.Reached:
-			inside = append(inside, r.Name)
-		case !r.Allowed:
+		case r.Allowed:
+		case !r.Reached && !r.Later:
 			refused++
+		case r.Outside:
+			outside = append(outside, r.Name)
+		default:
+			inside = append(inside, r.Name)
+			steady = steady || r.Later
 		}
 	}
 	switch {
 	case len(inside) > 0:
 		msg := "the seal leaks to " + strings.Join(inside, ", ")
+		if !steady {
+			msg = "the seal leaks while a pod starts, to " + strings.Join(inside, ", ")
+		}
 		if len(outside) > 0 {
 			msg += ", and outside the cluster to " + strings.Join(outside, ", ")
+		}
+		if !steady {
+			msg += ": the network plugin applies policy to a new pod only after it starts, so a copy could reach them as it starts"
 		}
 		return PhaseFailed, msg, false
 	case len(outside) > 0:
