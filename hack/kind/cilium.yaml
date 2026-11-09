@@ -1,0 +1,13 @@
+# Cilium enforces NetworkPolicy with eBPF, which needs neither ipset nor
+# NFQUEUE, so this cluster lets the Lab run on kernels where kindnet and
+# Calico cannot enforce. hack/kind-up.sh installs Cilium after the cluster
+# starts.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+networking:
+  disableDefaultCNI: true
+  podSubnet: 10.244.0.0/16
+  kubeProxyMode: nftables
+nodes:
+  - role: control-plane
+  - role: worker

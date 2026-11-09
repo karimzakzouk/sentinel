@@ -224,9 +224,9 @@ func TestNetworkPolicyProbeMatchesTheNetworkPlugin(t *testing.T) {
 	got := capability.NetworkPolicyProbe{Client: clientAs(t, ""), Namespace: labNS, Settle: 30 * time.Second}.Run(context.Background())
 	t.Logf("%s: %s (%s)", network, got.Status, got.Detail)
 	switch network {
-	case "calico":
+	case "calico", "cilium":
 		if got.Status != capability.Available {
-			t.Fatalf("Calico enforces NetworkPolicy, but the probe says %s", got.Status)
+			t.Fatalf("%s enforces NetworkPolicy, but the probe says %s", network, got.Status)
 		}
 	case "flannel":
 		if got.Status != capability.Unavailable {

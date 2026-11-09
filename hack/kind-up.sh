@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Creates a two-node kind cluster and waits until it is ready.
 #
-#   hack/kind-up.sh <cluster-name> [kindnet|calico|flannel]
+#   hack/kind-up.sh <cluster-name> [kindnet|calico|flannel|cilium]
 #
 #   kindnet  kind's default. It enforces NetworkPolicy only on kernels with
 #            NFQUEUE support, and silently does not elsewhere.
-#   calico   always enforces NetworkPolicy.
+#   calico   always enforces NetworkPolicy, where the kernel has ipset.
 #   flannel  never enforces NetworkPolicy.
+#   cilium   enforces NetworkPolicy with eBPF, on kernels the others fail on.
 #
 # KIND_NODE_IMAGE, when set, picks the node image and so the Kubernetes
 # version; kind's default is used otherwise.
@@ -14,7 +15,7 @@
 # Safe to rerun: an existing cluster is reused.
 set -euo pipefail
 
-name=${1:?usage: hack/kind-up.sh <cluster-name> [kindnet|calico|flannel]}
+name=${1:?usage: hack/kind-up.sh <cluster-name> [kindnet|calico|flannel|cilium]}
 network=${2:-kindnet}
 here=$(cd "$(dirname "$0")" && pwd)
 
@@ -24,11 +25,12 @@ FLANNEL_VERSION=v0.28.10
 FLANNEL_SHA256=393bdbce53eb50c8eb97dd513b218518b7d6e7985dc7b889be956e112a711084
 CNI_PLUGINS_VERSION=v1.9.1
 CNI_PLUGINS_SHA256=b98f74a0f8522f0a83867178729c1aa70f2158f90c45a2ca8fa791db1c76b303
+CILIUM_VERSION=1.20.4
 METRICS_SERVER_VERSION=v0.9.1
 METRICS_SERVER_SHA256=3c7f57cdbee0f57fb0259a150e8f6d6cb4f29d72d1aa5dce8803151dd6d4c2a1
 
 case "$network" in
-  kindnet | calico | flannel) ;;
+  kindnet | calico | flannel | cilium) ;;
   *) echo "unknown network plugin: $network" >&2; exit 2 ;;
 esac
 
@@ -67,6 +69,11 @@ case "$network" in
     sed -i 's/"Type": "vxlan"/"Type": "host-gw"/; s/"EnableNFTables": false/"EnableNFTables": true/' "$tmp/flannel.yaml"
     kubectl --context "$ctx" apply -f "$tmp/flannel.yaml" >/dev/null
     kubectl --context "$ctx" -n kube-flannel rollout status daemonset/kube-flannel-ds --timeout 5m
+    ;;
+  cilium)
+    helm --kube-context "$ctx" upgrade --install cilium cilium --repo https://helm.cilium.io/ --version "$CILIUM_VERSION" \
+      --namespace kube-system --set ipam.mode=kubernetes --set operator.replicas=1 --wait --timeout 10m >/dev/null
+    kubectl --context "$ctx" -n kube-system rollout status daemonset/cilium --timeout 5m
     ;;
 esac
 
