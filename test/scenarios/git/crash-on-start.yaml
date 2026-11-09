@@ -18,8 +18,7 @@ groundTruth:
   changeType: config
   symptoms: [pod.crash-loop]
   mitigation: rollout.undo
-  # The right fix removes the line the commit added; the Fixer restores
-  # images only so far, so this run measures what it does not yet cover.
+  # The right fix removes the line the commit added.
   fix: {path: deployment.yaml, line: 18}
 manifest:
   condition: crash-loop

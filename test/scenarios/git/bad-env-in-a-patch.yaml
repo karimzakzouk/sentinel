@@ -1,0 +1,26 @@
+id: git-bad-env-in-a-patch
+title: A commit gives patched a port that is not a number in its kustomization's patch, not its manifest
+app: git
+fault:
+  kind: commit
+  target: {apiVersion: kustomize.toolkit.fluxcd.io/v1, kind: Kustomization, namespace: flux-system, name: git-patched}
+  commit:
+    repository: person/delivery
+    path: patched/kustomization.yaml
+    old: 'value: "8080"'
+    new: 'value: eighty'
+    message: Name the port in the overlay
+groundTruth:
+  faultClass: deploy.crash-on-start
+  rootCause: {apiVersion: apps/v1, kind: Deployment, namespace: e2e-delivery, name: git-patched}
+  changeType: config
+  symptoms: [pod.crash-loop]
+  mitigation: rollout.undo
+  # The patch sets the port; the manifest's port, which the patch hides,
+  # stays.
+  fix: {path: patched/kustomization.yaml, line: 10}
+manifest:
+  condition: crash-loop
+  namespace: e2e-delivery
+  selector: app=patched
+  timeout: 4m

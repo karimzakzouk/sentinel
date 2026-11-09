@@ -1,0 +1,24 @@
+id: git-bad-tag-in-images
+title: A commit sets a tag that does not exist in images' kustomization, which the manifest does not name
+app: git
+fault:
+  kind: commit
+  target: {apiVersion: kustomize.toolkit.fluxcd.io/v1, kind: Kustomization, namespace: flux-system, name: git-images}
+  commit:
+    repository: person/delivery
+    path: images/kustomization.yaml
+    old: 'newTag: "2.61"'
+    new: 'newTag: "2.61-missing"'
+    message: Bump agnhost
+groundTruth:
+  faultClass: deploy.bad-image
+  rootCause: {apiVersion: apps/v1, kind: Deployment, namespace: e2e-delivery, name: git-images}
+  changeType: image
+  symptoms: [pod.image-pull-error]
+  mitigation: rollout.undo
+  fix: {path: images/kustomization.yaml, line: 7}
+manifest:
+  condition: image-pull-error
+  namespace: e2e-delivery
+  selector: app=images
+  timeout: 4m

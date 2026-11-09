@@ -1,0 +1,7 @@
+# images: the tag comes from this kustomization's images entry, so a fix
+# belongs there, not in the manifest.
+resources:
+  - deployment.yaml
+images:
+  - name: registry.k8s.io/e2e-test-images/agnhost
+    newTag: "2.61"
