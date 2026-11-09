@@ -22,10 +22,24 @@ type IncidentVersion struct {
 	Incident model.Incident
 }
 
+// ActionEvent is one step of an action Sentinel took or proposed.
+type ActionEvent struct {
+	At     time.Time
+	Verb   string
+	Action model.Action
+}
+
 // ReadIncidents reads a Ledger export (CloudEvents, one per line) and returns
 // every incident's recorded versions, oldest first.
 func ReadIncidents(r io.Reader) (map[model.ID][]IncidentVersion, error) {
-	out := map[model.ID][]IncidentVersion{}
+	incidents, _, err := ReadExport(r)
+	return incidents, err
+}
+
+// ReadExport reads a Ledger export and returns every incident's recorded
+// versions and every incident's action steps, oldest first.
+func ReadExport(r io.Reader) (map[model.ID][]IncidentVersion, map[model.ID][]ActionEvent, error) {
+	out, actions := map[model.ID][]IncidentVersion{}, map[model.ID][]ActionEvent{}
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 1<<20), 16<<20)
 	for sc.Scan() {
@@ -35,7 +49,15 @@ func ReadIncidents(r io.Reader) (map[model.ID][]IncidentVersion, error) {
 			Data json.RawMessage `json:"data"`
 		}
 		if err := json.Unmarshal(sc.Bytes(), &ev); err != nil {
-			return nil, fmt.Errorf("ledger export: %w", err)
+			return nil, nil, fmt.Errorf("ledger export: %w", err)
+		}
+		if verb, ok := strings.CutPrefix(ev.Type, "sentinel.action."); ok {
+			var a model.Action
+			if err := json.Unmarshal(ev.Data, &a); err != nil {
+				return nil, nil, fmt.Errorf("action in ledger export: %w", err)
+			}
+			actions[a.IncidentID] = append(actions[a.IncidentID], ActionEvent{At: ev.Time, Verb: verb, Action: a})
+			continue
 		}
 		verb, ok := strings.CutPrefix(ev.Type, "sentinel.incident.")
 		if !ok {
@@ -43,11 +65,11 @@ func ReadIncidents(r io.Reader) (map[model.ID][]IncidentVersion, error) {
 		}
 		var inc model.Incident
 		if err := json.Unmarshal(ev.Data, &inc); err != nil {
-			return nil, fmt.Errorf("incident in ledger export: %w", err)
+			return nil, nil, fmt.Errorf("incident in ledger export: %w", err)
 		}
 		out[inc.ID] = append(out[inc.ID], IncidentVersion{At: ev.Time, Verb: verb, Incident: inc})
 	}
-	return out, sc.Err()
+	return out, actions, sc.Err()
 }
 
 // LoadRuns reads every run record in a directory, oldest first.
@@ -89,6 +111,15 @@ type RunScore struct {
 	DecisionRight bool   `json:"decisionRight"`
 	// FalseAlarms counts incidents during a control run.
 	FalseAlarms int `json:"falseAlarms,omitempty"`
+	// Acted names the action Sentinel carried out on the run's incident, and
+	// Verified whether it cleared the incident; Recovery is the time from the
+	// fault manifesting to that verification.
+	Acted    string        `json:"acted,omitempty"`
+	Verified bool          `json:"verified,omitempty"`
+	Recovery time.Duration `json:"recovery,omitempty"`
+	// WrongActions counts actions carried out that the ground truth does not
+	// call for: any in a quiet run, or one other than the mitigation.
+	WrongActions int `json:"wrongActions,omitempty"`
 }
 
 // Report sums up a scoring session.
@@ -101,6 +132,10 @@ type Report struct {
 	AC1, AC3, Avg5                                                  float64
 	ClassAccuracy, CulpritAccuracy, DecisionAccuracy                float64
 	MedianLatency                                                   time.Duration
+	// Acting: fault runs Sentinel acted on, those verified, wrong actions,
+	// and the median time to verified recovery.
+	ActedRuns, VerifiedRuns, WrongActions int
+	MedianRecovery                        time.Duration
 }
 
 // ScoreOptions tunes the matching.
@@ -108,6 +143,9 @@ type ScoreOptions struct {
 	// Grace is how long after a revert an incident still counts toward the
 	// run; a run without a revert counts for Grace after its injection.
 	Grace time.Duration
+	// Actions are the incidents' action steps, from ReadExport; without
+	// them, acting is not scored.
+	Actions map[model.ID][]ActionEvent
 }
 
 // Score compares Sentinel's incidents with the runs' ground truth, per event
@@ -150,7 +188,7 @@ func Score(runs []*Run, incidents map[model.ID][]IncidentVersion, opts ScoreOpti
 	sort.Slice(cands, func(i, j int) bool { return cands[i].openedAt.Before(cands[j].openedAt) })
 	rep.Incidents = len(cands)
 
-	var latencies []time.Duration
+	var latencies, recoveries []time.Duration
 	inWindow := func(r *Run) []*candidate {
 		start, end := window(r)
 		var out []*candidate
@@ -194,21 +232,33 @@ func Score(runs []*Run, incidents map[model.ID][]IncidentVersion, opts ScoreOpti
 		if s.Detected {
 			rep.DetectedRuns++
 			latencies = append(latencies, s.Latency)
+			s.scoreAction(opts.Actions[s.Incident], end)
+			if s.Acted != "" {
+				rep.ActedRuns++
+			}
+			if s.Verified {
+				rep.VerifiedRuns++
+				recoveries = append(recoveries, s.Recovery)
+			}
 		}
+		rep.WrongActions += s.WrongActions
 		rep.Runs[i] = s
 	}
 	for i, r := range runs {
 		if !r.Quiet() {
 			continue
 		}
+		_, end := window(r)
 		s := RunScore{Run: r}
 		for _, c := range inWindow(r) {
 			if !c.matched && !c.falseAlarm {
 				c.falseAlarm = true
 				s.FalseAlarms++
+				s.WrongActions += len(executed(opts.Actions[c.id], end))
 			}
 		}
 		rep.ControlFalseAlarms += s.FalseAlarms
+		rep.WrongActions += s.WrongActions
 		rep.Runs[i] = s
 	}
 	for _, c := range cands {
@@ -246,7 +296,39 @@ func Score(runs []*Run, incidents map[model.ID][]IncidentVersion, opts ScoreOpti
 		slices.Sort(latencies)
 		rep.MedianLatency = latencies[len(latencies)/2]
 	}
+	if len(recoveries) > 0 {
+		slices.Sort(recoveries)
+		rep.MedianRecovery = recoveries[len(recoveries)/2]
+	}
 	return rep
+}
+
+// executed returns the actions carried out by end.
+func executed(events []ActionEvent, end time.Time) []ActionEvent {
+	var out []ActionEvent
+	for _, e := range events {
+		if e.Verb == "executed" && !e.At.After(end) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// scoreAction scores what Sentinel did about a detected fault by end: the
+// action it carried out, whether it was the mitigation the ground truth
+// names, and when it was verified.
+func (s *RunScore) scoreAction(events []ActionEvent, end time.Time) {
+	for _, e := range executed(events, end) {
+		s.Acted = e.Action.Type
+		if !decisionMatches(e.Action.Type, s.Run.GroundTruth.Mitigation) {
+			s.WrongActions++
+		}
+	}
+	for _, e := range events {
+		if e.Verb == "verified" && !e.At.After(end) && s.Acted != "" {
+			s.Verified, s.Recovery = true, max(e.At.Sub(manifested(s.Run)), 0)
+		}
+	}
 }
 
 func boolf(b bool) float64 {
@@ -312,29 +394,44 @@ func manifested(r *Run) time.Time {
 	return r.InjectedAt
 }
 
-// WriteMarkdown writes the report as Markdown tables.
+// WriteMarkdown writes the report as Markdown tables. Acting columns and
+// measures appear when Sentinel carried out actions in the session.
 func (rep Report) WriteMarkdown(w io.Writer) error {
+	acting := rep.ActedRuns > 0 || rep.WrongActions > 0
 	var b strings.Builder
-	b.WriteString("| Scenario | Detected | Latency | Class | Root cause rank | Decision |\n|---|---|---|---|---|---|\n")
+	b.WriteString("| Scenario | Detected | Latency | Class | Root cause rank | Decision |")
+	if acting {
+		b.WriteString(" Acted |")
+	}
+	b.WriteString("\n|---|---|---|---|---|---|")
+	if acting {
+		b.WriteString("---|")
+	}
+	b.WriteString("\n")
 	for _, s := range rep.Runs {
-		if s.Run.Quiet() {
+		var row string
+		switch {
+		case s.Run.Quiet():
 			kind := "control"
 			if s.Run.FaultKind != FaultNone && s.Run.GroundTruth.FaultClass != "none" {
 				kind = "heals itself"
 			}
-			fmt.Fprintf(&b, "| %s (%s) | %d false alarm(s) | | | | |\n", s.Run.Scenario, kind, s.FalseAlarms)
-			continue
+			row = fmt.Sprintf("| %s (%s) | %d false alarm(s) | | | | |", s.Run.Scenario, kind, s.FalseAlarms)
+		case !s.Detected:
+			row = fmt.Sprintf("| %s | no | | | | |", s.Run.Scenario)
+		default:
+			rank := "not ranked"
+			if s.Rank > 0 {
+				rank = fmt.Sprint(s.Rank)
+			}
+			row = fmt.Sprintf("| %s | yes | %s | %s %s | %s | %s %s |", s.Run.Scenario, s.Latency.Round(time.Second),
+				s.Class, mark(s.ClassRight), rank, s.Decision, mark(s.DecisionRight))
 		}
-		if !s.Detected {
-			fmt.Fprintf(&b, "| %s | no | | | | |\n", s.Run.Scenario)
-			continue
+		b.WriteString(row)
+		if acting {
+			b.WriteString(" " + s.actedCell() + " |")
 		}
-		rank := "not ranked"
-		if s.Rank > 0 {
-			rank = fmt.Sprint(s.Rank)
-		}
-		fmt.Fprintf(&b, "| %s | yes | %s | %s %s | %s | %s %s |\n", s.Run.Scenario, s.Latency.Round(time.Second),
-			s.Class, mark(s.ClassRight), rank, s.Decision, mark(s.DecisionRight))
+		b.WriteString("\n")
 	}
 	fmt.Fprintf(&b, "\n| Measure | Value |\n|---|---|\n")
 	fmt.Fprintf(&b, "| Fault runs detected (recall) | %d of %d (%.2f) |\n", rep.DetectedRuns, rep.FaultRuns, rep.Recall)
@@ -345,8 +442,28 @@ func (rep Report) WriteMarkdown(w io.Writer) error {
 		rep.ClassAccuracy, rep.CulpritAccuracy, rep.DecisionAccuracy)
 	fmt.Fprintf(&b, "| Median detection latency | %s |\n| False alarms in quiet runs (controls, faults that heal themselves) | %d |\n",
 		rep.MedianLatency.Round(time.Second), rep.ControlFalseAlarms)
+	if acting {
+		fmt.Fprintf(&b, "| Fault runs Sentinel acted on | %d of %d |\n| Actions verified | %d of %d |\n", rep.ActedRuns, rep.FaultRuns,
+			rep.VerifiedRuns, rep.ActedRuns)
+		fmt.Fprintf(&b, "| Median time from fault to verified recovery | %s |\n| Wrong actions | %d |\n",
+			rep.MedianRecovery.Round(time.Second), rep.WrongActions)
+	}
 	_, err := io.WriteString(w, b.String())
 	return err
+}
+
+// actedCell says what Sentinel did about a run.
+func (s RunScore) actedCell() string {
+	switch {
+	case s.WrongActions > 0:
+		return fmt.Sprintf("%d wrong action(s) ✗", s.WrongActions)
+	case s.Acted == "":
+		return ""
+	case s.Verified:
+		return fmt.Sprintf("%s, verified after %s ✓", s.Acted, s.Recovery.Round(time.Second))
+	default:
+		return s.Acted + ", not verified"
+	}
 }
 
 func mark(ok bool) string {
