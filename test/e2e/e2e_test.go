@@ -35,6 +35,7 @@ import (
 	"github.com/karimzakzouk/sentinel/internal/capability"
 	"github.com/karimzakzouk/sentinel/internal/harness"
 	"github.com/karimzakzouk/sentinel/internal/kube"
+	"github.com/karimzakzouk/sentinel/internal/lab"
 )
 
 const (
@@ -237,6 +238,50 @@ func TestNetworkPolicyProbeMatchesTheNetworkPlugin(t *testing.T) {
 		// right; what matters is that the probe reaches one.
 		if got.Status == capability.Unknown {
 			t.Fatalf("the probe could not decide: %s", got.Detail)
+		}
+	}
+}
+
+// The Lab's seal holds exactly where the cluster enforces NetworkPolicy:
+// every forbidden destination is refused there, and where policy is not
+// enforced the matrix must catch leaks, or it proves nothing. Either way
+// the positive controls answer, so "refused" never means "probe broken".
+func TestTheLabSealHoldsOnlyWherePolicyIsEnforced(t *testing.T) {
+	ctx := context.Background()
+	client := clientAs(t, "")
+	enforced := capability.NetworkPolicyProbe{Client: client, Namespace: labNS, Settle: 30 * time.Second}.Run(ctx)
+	if enforced.Status == capability.Unknown {
+		t.Fatalf("the NetworkPolicy probe could not decide: %s", enforced.Detail)
+	}
+	p := &lab.Prover{Client: client, Twins: []string{smokeNS, "boutique"}, Timeout: 3 * time.Minute}
+	if err := p.Seal(ctx, labNS); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = client.NetworkingV1().NetworkPolicies(labNS).Delete(ctx, "lab-internal", metav1.DeleteOptions{})
+	})
+	results, err := p.Prove(ctx, labNS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var leaks []string
+	for _, r := range results {
+		t.Logf("%-40s %-22s allowed=%-5v reached=%v", r.Name, r.Address, r.Allowed, r.Reached)
+		switch {
+		case r.Allowed && !r.Reached:
+			t.Fatalf("the positive control %s did not answer: a refusal would mean nothing", r.Name)
+		case !r.Allowed && r.Reached:
+			leaks = append(leaks, r.Name)
+		}
+	}
+	switch enforced.Status {
+	case capability.Available:
+		if len(leaks) > 0 {
+			t.Fatalf("NetworkPolicy is enforced, yet the seal leaks to %v", leaks)
+		}
+	case capability.Unavailable:
+		if len(leaks) == 0 {
+			t.Fatal("NetworkPolicy is not enforced, yet the matrix caught no leak: it proves nothing")
 		}
 	}
 }
