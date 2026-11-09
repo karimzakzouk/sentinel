@@ -7,9 +7,14 @@ import (
 	"strings"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
 	"github.com/karimzakzouk/sentinel/api/v1alpha1"
 	"github.com/karimzakzouk/sentinel/internal/codefix"
 	"github.com/karimzakzouk/sentinel/internal/logs"
+	"github.com/karimzakzouk/sentinel/internal/model"
+	"github.com/karimzakzouk/sentinel/internal/verify"
 )
 
 // codeClasses are the faults a new image's code can cause. An image that
@@ -191,6 +196,49 @@ func (f *Fixer) awaitBuild(ctx context.Context, fix *v1alpha1.Fix, now time.Time
 	}
 	if opened := fix.CreationTimestamp.Time; !opened.IsZero() && now.Sub(opened) > buildWait {
 		cf.Message = fmt.Sprintf("no image was built from %s within %s", short(cf.Commit), buildWait)
+		return true
+	}
+	return false
+}
+
+// reportVerdict says on the code fix's pull request what the Lab found,
+// once it has raced the built image against the failing one. It reports
+// whether the status changed.
+func (f *Fixer) reportVerdict(ctx context.Context, fix *v1alpha1.Fix) bool {
+	cf := fix.Status.Code
+	if cf == nil || cf.Image == "" || cf.Verdict != "" || cf.Number == 0 || len(f.LabNamespaces) == 0 {
+		return false
+	}
+	name := verify.CodeExperimentName(model.ID(fix.Spec.IncidentID))
+	for _, ns := range f.LabNamespaces {
+		u, err := f.Dynamic.Resource(verify.ExperimentsResource).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			continue
+		}
+		phase, _, _ := unstructured.NestedString(u.Object, "status", "phase")
+		msg, _, _ := unstructured.NestedString(u.Object, "status", "message")
+		switch phase {
+		case "Passed", "Failed", "NotSure", "Aborted":
+		default:
+			return false
+		}
+		owner, repo, err := f.Forge.Repo(cf.Repository)
+		if err != nil {
+			return false
+		}
+		word := "it could not tell"
+		switch phase {
+		case "Passed":
+			word = "it fixes the crash"
+		case "Failed":
+			word = "it does not fix the crash"
+		}
+		body := fmt.Sprintf("Sentinel's Lab raced `%s` against the failing image in a sealed copy of the workload: **%s**.\n\n%s\n", cf.Image, word, msg)
+		if err := f.Forge.Comment(ctx, owner, repo, int(cf.Number), body); err != nil {
+			f.Log.Error("could not say the Lab's verdict on the pull request", "pullRequest", cf.PullRequest, "error", err)
+			return false
+		}
+		cf.Verdict, cf.Message = phase, "the Lab: "+msg
 		return true
 	}
 	return false

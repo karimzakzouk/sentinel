@@ -52,6 +52,7 @@ export const fixStages: Record<string, { title: string; pill: string; tone: stri
   "sentinel.fix.abstained": { title: "The Fixer has no fix to propose", pill: "fix it by hand", tone: "amber" },
   "sentinel.fix.failed": { title: "The Fixer could not propose a fix", pill: "fix it by hand", tone: "red" },
   "sentinel.fix.declined": { title: "The fix was closed without merging", pill: "declined", tone: "amber" },
+  "sentinel.fix.code": { title: "The fix to the image's code moved on", pill: "code", tone: "accent" },
 };
 
 // webLink is a URL safe to link to: http or https only.

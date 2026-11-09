@@ -60,8 +60,10 @@ type Fixer struct {
 	Author          object.Signature
 	ArgoCDNamespace string
 	// Registry, when set, reads images' labels, which turns on fixes to a
-	// failing image's code.
-	Registry *codefix.Registry
+	// failing image's code; LabNamespaces are where the Lab races the
+	// images built from them.
+	Registry      *codefix.Registry
+	LabNamespaces []string
 	// Poll is how often it reads an open pull request, and a merged fix's
 	// source.
 	Poll    time.Duration
@@ -130,14 +132,16 @@ func (f *Fixer) process(ctx context.Context, store cache.Store, key string, trie
 	if poll <= 0 {
 		poll = 30 * time.Second
 	}
-	if f.awaitBuild(ctx, &fix, time.Now()) {
+	if f.awaitBuild(ctx, &fix, time.Now()) || f.reportVerdict(ctx, &fix) {
 		return poll, f.setStatus(ctx, &fix, fix.Status.Phase, fix.Status.Message)
 	}
 	// A code fix's build is looked for whatever phase the fix that pins
 	// the image back has reached, Applied included.
 	defer func() {
-		if cf := fix.Status.Code; err == nil && cf != nil && cf.Commit != "" && cf.Image == "" &&
-			!strings.HasPrefix(cf.Message, "no image") && (after == 0 || after > poll) {
+		cf := fix.Status.Code
+		building := cf != nil && cf.Commit != "" && cf.Image == "" && !strings.HasPrefix(cf.Message, "no image")
+		judging := cf != nil && cf.Image != "" && cf.Verdict == "" && len(f.LabNamespaces) > 0
+		if err == nil && (building || judging) && (after == 0 || after > poll) {
 			after = poll
 		}
 	}()

@@ -40,3 +40,17 @@ func TestConfigRevertTakesOnlyTheConfiguration(t *testing.T) {
 		t.Fatal("copies with different containers were matched")
 	}
 }
+
+// A built fix replaces the failing image of its repository, pinned or not;
+// an image of another repository has nothing to replace.
+func TestImageCandidateReplacesTheFailingImage(t *testing.T) {
+	failing := &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{
+		{Name: "web", Image: "registry.test/shop/web@sha256:bad"}, {Name: "proxy", Image: "envoy:1"}}}}
+	got, err := ImageCandidate(failing, "registry.test/shop/web:3f2a9c1")
+	if err != nil || got.Spec.Containers[0].Image != "registry.test/shop/web:3f2a9c1" || got.Spec.Containers[1].Image != "envoy:1" {
+		t.Fatalf("candidate %+v, %v", got, err)
+	}
+	if _, err := ImageCandidate(failing, "registry.test/other:1"); err == nil {
+		t.Fatal("an image of another repository was raced")
+	}
+}

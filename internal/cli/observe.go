@@ -173,9 +173,13 @@ func newObserver(ctx context.Context, log *slog.Logger, cfg *config.Config, clie
 		f := &fixes.Fixes{Dynamic: dyn, Namespace: cfg.FixerNamespace, Log: log,
 			OnUpdate: func(ctx context.Context, u fixes.Update) {
 				s := u.Status
+				var code *model.FixCode
+				if c := s.Code; c != nil {
+					code = &model.FixCode{PullRequest: c.PullRequest, Function: c.Function, Change: c.Change, Image: c.Image, Verdict: c.Verdict, Message: c.Message}
+				}
 				if err := b.OnFixUpdate(ctx, brain.FixUpdate{IncidentID: u.IncidentID, Fix: u.Name, Phase: string(s.Phase), Message: s.Message,
 					Owner: s.Owner, Resume: s.Resume, Repository: s.Repository, PullRequest: s.PullRequest, MergeCommit: s.MergeCommit,
-					Change: s.Change}); err != nil {
+					Change: s.Change, Code: code}); err != nil {
 					log.Error("could not record the Fixer's step", "fix", u.Name, "error", err)
 				}
 			}}

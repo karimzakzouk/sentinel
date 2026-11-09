@@ -1,6 +1,9 @@
 package lab
 
 import (
+	"fmt"
+	"strings"
+
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 )
@@ -41,4 +44,32 @@ func ConfigRevert(failing, previous *corev1.Pod) (*corev1.Pod, bool) {
 func sameContainers(a, b *corev1.Pod) bool {
 	return equality.Semantic.DeepEqual(a.Spec.InitContainers, b.Spec.InitContainers) &&
 		equality.Semantic.DeepEqual(a.Spec.Containers, b.Spec.Containers)
+}
+
+// ImageCandidate is the failing copy with image in place of the image of
+// its containers from the same repository: a fix to the code, built.
+func ImageCandidate(failing *corev1.Pod, image string) (*corev1.Pod, error) {
+	repo := imageRepository(image)
+	out := failing.DeepCopy()
+	replaced := false
+	for _, cs := range [][]corev1.Container{out.Spec.InitContainers, out.Spec.Containers} {
+		for i := range cs {
+			if imageRepository(cs[i].Image) == repo {
+				cs[i].Image, replaced = image, true
+			}
+		}
+	}
+	if !replaced {
+		return nil, fmt.Errorf("no container of the failing copy runs %s", repo)
+	}
+	return out, nil
+}
+
+// imageRepository is an image reference without its tag or digest.
+func imageRepository(image string) string {
+	name, _, _ := strings.Cut(image, "@")
+	if i := strings.LastIndexByte(name, ':'); i > strings.LastIndexByte(name, '/') {
+		name = name[:i]
+	}
+	return name
 }

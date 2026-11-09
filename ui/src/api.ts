@@ -153,6 +153,14 @@ export interface Fix {
   change?: string[];
   pullRequest?: string;
   mergeCommit?: string;
+  code?: {
+    pullRequest?: string;
+    function?: string;
+    change?: string[];
+    image?: string;
+    verdict?: string;
+    message?: string;
+  };
 }
 
 export interface TrackRecord {

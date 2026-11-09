@@ -75,6 +75,13 @@ func (c *Client) Merge(ctx context.Context, owner, repo string, number int) erro
 	return c.call(ctx, http.MethodPost, path, map[string]string{"Do": "merge"}, nil)
 }
 
+// Comment adds a comment to a pull request, as both GitHub and Gitea take
+// one on its issue.
+func (c *Client) Comment(ctx context.Context, owner, repo string, number int, body string) error {
+	return c.call(ctx, http.MethodPost, fmt.Sprintf("/repos/%s/%s/issues/%d/comments", url.PathEscape(owner), url.PathEscape(repo), number),
+		map[string]string{"body": body}, nil)
+}
+
 // Get reads a pull request.
 func (c *Client) Get(ctx context.Context, owner, repo string, number int) (PullRequest, error) {
 	var pr PullRequest

@@ -29,6 +29,7 @@ import (
 	"github.com/karimzakzouk/sentinel/internal/actor"
 	"github.com/karimzakzouk/sentinel/internal/codefix"
 	"github.com/karimzakzouk/sentinel/internal/forge"
+	"github.com/karimzakzouk/sentinel/internal/verify"
 )
 
 // gitRun runs git in a working copy, as a person committing would.
@@ -127,7 +128,8 @@ func TestACrashInCodeGetsAFixInItsSource(t *testing.T) {
 		OwnerReferences: []metav1.OwnerReference{{UID: "dep"}}}, Spec: appsv1.ReplicaSetSpec{Template: podTemplate(badImage)}}
 	unstr := func(obj map[string]any) *unstructured.Unstructured { return &unstructured.Unstructured{Object: obj} }
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{
-		FixesResource: "FixList", actor.KustomizationsResource: "KustomizationList", GitRepositoriesResource: "GitRepositoryList"},
+		FixesResource: "FixList", actor.KustomizationsResource: "KustomizationList", GitRepositoriesResource: "GitRepositoryList",
+		verify.ExperimentsResource: "ExperimentList"},
 		unstr(map[string]any{"apiVersion": "kustomize.toolkit.fluxcd.io/v1", "kind": "Kustomization",
 			"metadata": map[string]any{"name": "delivery", "namespace": "flux-system"},
 			"spec":     map[string]any{"sourceRef": map[string]any{"kind": "GitRepository", "name": "delivery"}, "path": "./kustomize"}}),
@@ -145,8 +147,8 @@ func TestACrashInCodeGetsAFixInItsSource(t *testing.T) {
 	}
 	f := &Fixer{Client: fake.NewClientset(dep, rs), Dynamic: dyn, Namespace: "sentinel", GitUser: "sentinel",
 		Forge:    &forge.Client{Web: srv.URL, API: srv.URL + "/api/v1", Token: "s3cret"},
-		Registry: &codefix.Registry{HTTP: reg.Client()},
-		Author:   object.Signature{Name: "Sentinel", Email: "sentinel@example.com"}, Log: slog.New(slog.DiscardHandler)}
+		Registry: &codefix.Registry{HTTP: reg.Client()}, LabNamespaces: []string{"sentinel-lab-0"},
+		Author: object.Signature{Name: "Sentinel", Email: "sentinel@example.com"}, Log: slog.New(slog.DiscardHandler)}
 	step := func() v1alpha1.Fix {
 		t.Helper()
 		store := cache.NewStore(cache.MetaNamespaceKeyFunc)
@@ -182,6 +184,24 @@ func TestACrashInCodeGetsAFixInItsSource(t *testing.T) {
 	got = step()
 	if got.Status.Code.Image != host+"/sentinel/shop:"+cf.Commit[:7] {
 		t.Fatalf("code %+v", got.Status.Code)
+	}
+	// The Lab races it; once it has a verdict, the pull request says it.
+	exp := unstr(map[string]any{"apiVersion": v1alpha1.GroupVersion.String(), "kind": "Experiment",
+		"metadata": map[string]any{"name": verify.CodeExperimentName("01a1c008-0123-4567-89ab-0123456789ab"), "namespace": "sentinel-lab-0"},
+		"status":   map[string]any{"phase": "Running"}})
+	if _, err := dyn.Resource(verify.ExperimentsResource).Namespace("sentinel-lab-0").Create(ctx, exp, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if got = step(); got.Status.Code.Verdict != "" || len(srv.comments) != 0 {
+		t.Fatalf("a verdict before the Lab had one: %+v", got.Status.Code)
+	}
+	exp.Object["status"] = map[string]any{"phase": "Passed", "message": "the image fixes it: it worked in 15 of 15 runs"}
+	if _, err := dyn.Resource(verify.ExperimentsResource).Namespace("sentinel-lab-0").Update(ctx, exp, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	got = step()
+	if got.Status.Code.Verdict != "Passed" || len(srv.comments) != 1 || !strings.Contains(srv.comments[0], "it fixes the crash") {
+		t.Fatalf("code %+v, comments %q", got.Status.Code, srv.comments)
 	}
 }
 

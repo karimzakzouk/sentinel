@@ -55,6 +55,8 @@ type FixerConfig struct {
 	Code *struct {
 		InsecureRegistries []string `json:"insecureRegistries,omitempty"`
 		Platform           string   `json:"platform,omitempty"`
+		// LabNamespaces are where the Lab races images built from fixes.
+		LabNamespaces []string `json:"labNamespaces,omitempty"`
 	} `json:"code,omitempty"`
 }
 
@@ -127,6 +129,7 @@ func newFixerCmd(kf *kube.Flags) *cobra.Command {
 				ArgoCDNamespace: cfg.ArgoCDNamespace, Poll: cfg.Poll, Log: log}
 			if c := cfg.Code; c != nil {
 				f.Registry = &codefix.Registry{HTTP: &http.Client{Timeout: 30 * time.Second}, Insecure: c.InsecureRegistries, Platform: c.Platform}
+				f.LabNamespaces = c.LabNamespaces
 			}
 			ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGTERM, os.Interrupt)
 			defer stop()

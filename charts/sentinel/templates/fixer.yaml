@@ -14,6 +14,9 @@ healthAddr: ":8081"
 code:
   insecureRegistries: {{ toJson .Values.fixer.code.insecureRegistries }}
   platform: {{ .Values.fixer.code.platform | quote }}
+  {{- if .Values.lab.enabled }}
+  labNamespaces: {{ include "sentinel.labNamespaces" . }}
+  {{- end }}
 {{- end }}
 {{- include "sentinel.leaderElection" (dict "values" .Values.fixer "namespace" .Release.Namespace "name" "sentinel-fixer") }}
 {{- end }}
@@ -277,6 +280,40 @@ roleRef:
   name: {{ $.Release.Name }}-fixer-owners
 subjects:
   - {{ toJson $fixer }}
+{{- end }}
+{{- if and .Values.fixer.code.enabled .Values.lab.enabled }}
+{{- range (include "sentinel.labNamespaces" $ | fromJsonArray) }}
+---
+# Reading the Lab's verdict on an image built from a fix to code, to say it
+# on the fix's pull request.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: sentinel-fixer-verdicts
+  namespace: {{ . }}
+  labels:
+    {{- include "sentinel.labels" $ | nindent 4 }}
+rules:
+  - apiGroups: [sentinel.karimzakzouk.github.io]
+    resources: [experiments]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: sentinel-fixer-verdicts
+  namespace: {{ . }}
+  labels:
+    {{- include "sentinel.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: sentinel-fixer-verdicts
+subjects:
+  - kind: ServiceAccount
+    name: sentinel-fixer
+    namespace: {{ $.Release.Namespace }}
+{{- end }}
 {{- end }}
 {{- include "sentinel.leaseRBAC" (dict "values" .Values.fixer "namespace" .Release.Namespace "name" "sentinel-fixer" "serviceAccount" "sentinel-fixer" "labels" (include "sentinel.labels" .)) }}
 {{- end }}
