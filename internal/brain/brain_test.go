@@ -388,6 +388,28 @@ func TestAnErrorRateIncidentIsEscalatedWithItsNewErrors(t *testing.T) {
 	}
 }
 
+// The error rate can alarm before a deploy's new-error test has read the new
+// pods; until it has, the deploy is the likely cause, and undoing it the
+// answer, not an escalation.
+func TestErrorsRightAfterADeployBlameTheDeploy(t *testing.T) {
+	b, l := newBrain(t)
+	change := watcher.Change{ID: model.NewID(), Kind: watcher.ChangeTemplate, Object: web, Fields: []string{"env:web"},
+		At: onset.Add(-30 * time.Second), Actor: "kubectl"}
+	if err := b.OnChange(ctx, change); err != nil {
+		t.Fatal(err)
+	}
+	b.Now = func() time.Time { return onset }
+	det := watcher.Detection{ID: model.NewID(), Workload: web, Kind: watcher.FactLogErrors, Count: 120, Onset: onset, At: onset,
+		Window: map[watcher.FactKind]int{watcher.FactLogErrors: 120}, Revisions: map[string]int{"new": 120}}
+	if err := b.OnDetection(ctx, det); err != nil {
+		t.Fatal(err)
+	}
+	got := incidents(t, l)
+	if a := got[0].Assessment; a == nil || a.Class != ClassNewErrors || a.Decision != ActionRolloutUndo {
+		t.Fatalf("assessment = %+v, want new errors after a deploy, rolled back", a)
+	}
+}
+
 // A long error message's details split one error into several templates;
 // the incident records it once. Logs a rollout read that hold only the
 // workload's routine errors are not evidence either.
