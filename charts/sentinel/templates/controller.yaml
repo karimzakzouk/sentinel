@@ -79,6 +79,10 @@ spec:
           ports:
             - name: health
               containerPort: 8081
+            {{- if .Values.capture.enabled }}
+            - name: capture
+              containerPort: 4318
+            {{- end }}
           livenessProbe:
             httpGet:
               path: /healthz
@@ -102,6 +106,11 @@ spec:
               mountPath: /var/lib/sentinel
             - name: tmp
               mountPath: /tmp
+            {{- if .Values.capture.enabled }}
+            - name: capture-token
+              mountPath: /etc/sentinel-capture
+              readOnly: true
+            {{- end }}
       volumes:
         - name: config
           configMap:
@@ -112,6 +121,11 @@ spec:
         - name: tmp
           emptyDir:
             sizeLimit: 64Mi
+        {{- if .Values.capture.enabled }}
+        - name: capture-token
+          secret:
+            secretName: sentinel-capture-token
+        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
@@ -126,7 +140,7 @@ spec:
       {{- end }}
 ---
 # The controller only talks to the API server and DNS, and only kubelet
-# health checks reach it.
+# health checks and traffic capture's agent reach it.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -142,6 +156,17 @@ spec:
   ingress:
     - ports:
         - port: 8081
+    {{- if .Values.capture.enabled }}
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.capture.namespace }}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: sentinel-capture
+      ports:
+        - port: 4318
+    {{- end }}
   egress:
     - ports:
         - port: 53

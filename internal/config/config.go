@@ -38,6 +38,7 @@ type Config struct {
 	Detection    Detection              `json:"detection,omitempty"`
 	Logs         Logs                   `json:"logs,omitempty"`
 	UI           UI                     `json:"ui,omitempty"`
+	Capture      Capture                `json:"capture,omitempty"`
 	HealthAddr   string                 `json:"healthAddr,omitempty"`
 	Slots        map[string]slot.Config `json:"slots,omitempty"`
 }
@@ -98,6 +99,14 @@ type UI struct {
 	// Address to listen on. Keep it on loopback: kubectl port-forward reaches
 	// it, and nothing else should.
 	Address string `json:"address,omitempty"`
+}
+
+// Capture configures the receiver for traffic capture's agent.
+type Capture struct {
+	// Address to receive OTLP traces on; empty when capture is off.
+	Address string `json:"address,omitempty"`
+	// TokenFile holds the bearer token the agent sends.
+	TokenFile string `json:"tokenFile,omitempty"`
 }
 
 // Load reads, defaults and validates a config file. Unknown fields are
@@ -196,6 +205,9 @@ func (c *Config) Validate() error {
 	if d.Tick.Duration < time.Second || d.Window.Duration < 2*d.Tick.Duration || d.HalfLife.Duration < d.Window.Duration {
 		errs = append(errs, fmt.Errorf("detection needs tick >= 1s, window >= 2 ticks and halfLife >= window (got %s, %s, %s)",
 			d.Tick.Duration, d.Window.Duration, d.HalfLife.Duration))
+	}
+	if c.Capture.Address != "" && !filepath.IsAbs(c.Capture.TokenFile) {
+		errs = append(errs, fmt.Errorf("capture.tokenFile %q must be an absolute path when capture.address is set", c.Capture.TokenFile))
 	}
 	for name, s := range c.Slots {
 		if s.Champion == "" {

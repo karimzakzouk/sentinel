@@ -32,6 +32,9 @@ type Options struct {
 	ActorGroups []string
 	// NetworkPolicy is the result of an active NetworkPolicyProbe, if one ran.
 	NetworkPolicy *Check
+	// CaptureSeen, when traffic capture is installed, reports when the
+	// newest request from its agent arrived.
+	CaptureSeen func() time.Time
 }
 
 // Detector computes capability reports.
@@ -340,6 +343,16 @@ func (d *Detector) deriveFeatures(rep *Report, a access, probes probeResults, sa
 		rep.feature("owner."+o.name, status("owner."+o.name) == Available, "%s", detail(rep, "owner."+o.name))
 	}
 	rep.feature("owner.helm", status("owner.helm") == Available, "%s", detail(rep, "owner.helm"))
+
+	switch seen := d.Options.CaptureSeen; {
+	case seen == nil:
+		rep.feature("capture", false, "traffic capture is not installed: capture.enabled in the chart turns it on where nodes run eBPF")
+	case time.Since(seen()) > time.Hour:
+		rep.feature("capture", false, "traffic capture is installed, but no request has arrived in the last hour: "+
+			"its agent may not run on these nodes (%s), or no namespace turned it on in its SentinelPolicy", detail(rep, "probe.ebpf"))
+	default:
+		rep.feature("capture", true, "request details arrive from the capture agent")
+	}
 }
 
 func detail(rep *Report, id string) string {

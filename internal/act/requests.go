@@ -95,11 +95,16 @@ func (r *Requests) Start(ctx context.Context) error {
 
 // Autonomy returns the level the namespace's policies allow an action.
 func (r *Requests) Autonomy(namespace, action string) v1alpha1.AutonomyLevel {
+	return policy.Autonomy(r.namespacePolicies(namespace), action)
+}
+
+// namespacePolicies returns the SentinelPolicies of a namespace.
+func (r *Requests) namespacePolicies(namespace string) []v1alpha1.SentinelPolicy {
 	r.mu.Lock()
 	store := r.policies[namespace]
 	r.mu.Unlock()
 	if store == nil {
-		return v1alpha1.AutonomyObserve
+		return nil
 	}
 	var policies []v1alpha1.SentinelPolicy
 	for _, obj := range store.List() {
@@ -108,26 +113,19 @@ func (r *Requests) Autonomy(namespace, action string) v1alpha1.AutonomyLevel {
 			policies = append(policies, p)
 		}
 	}
-	return policy.Autonomy(policies, action)
+	return policies
+}
+
+// Capture reports whether the namespace's policies turn traffic capture
+// on.
+func (r *Requests) Capture(namespace string) bool {
+	return policy.Capture(r.namespacePolicies(namespace))
 }
 
 // Earned reports whether the namespace's policies make an action earn its
 // level through its track record.
 func (r *Requests) Earned(namespace, action string) bool {
-	r.mu.Lock()
-	store := r.policies[namespace]
-	r.mu.Unlock()
-	if store == nil {
-		return false
-	}
-	var policies []v1alpha1.SentinelPolicy
-	for _, obj := range store.List() {
-		var p v1alpha1.SentinelPolicy
-		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(obj.(*unstructured.Unstructured).Object, &p); err == nil {
-			policies = append(policies, p)
-		}
-	}
-	return policy.Earned(policies, action)
+	return policy.Earned(r.namespacePolicies(namespace), action)
 }
 
 // Acting reports whether any watched namespace's policies let Sentinel run

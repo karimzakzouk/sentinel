@@ -110,6 +110,24 @@ fixer:
     name: Sentinel
     email: sentinel@localhost
 
+# Traffic capture keeps, for namespaces whose SentinelPolicy turns it on
+# (capture.requests), the method, route, status and timing of the requests
+# their workloads serve and make, never a body or a header, so the Lab can
+# replay reads to its copies. Its agent, OpenTelemetry's eBPF
+# instrumentation, runs on every node, in a namespace of its own that allows
+# the capabilities eBPF needs. Off by default; where nodes cannot run it,
+# the capability report says so and Sentinel works without it.
+capture:
+  enabled: false
+  namespace: sentinel-capture
+  image: otel/ebpf-instrument:v1.0.0
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+
 # Where Sentinel tells people what it needs from them or did: approvals,
 # escalations, and actions that cleared an incident. Name a Secret holding a
 # Slack incoming webhook URL; without one, notices stay in the UI.

@@ -77,6 +77,19 @@ type SentinelPolicySpec struct {
 	// +optional
 	// +kubebuilder:default="30m"
 	QuietPeriodAfterHumanEdit *metav1.Duration `json:"quietPeriodAfterHumanEdit,omitempty"`
+	// Capture turns traffic capture on for the namespace, where its agent
+	// is installed.
+	// +optional
+	Capture *Capture `json:"capture,omitempty"`
+}
+
+// Capture says what traffic capture keeps of a namespace's requests.
+type Capture struct {
+	// Requests keeps the method, route, status and timing of the requests
+	// its workloads serve and make, never a body or a header, so the Lab
+	// can replay reads and stand in for what they call.
+	// +optional
+	Requests bool `json:"requests,omitempty"`
 }
 
 // SentinelPolicyStatus reports whether the policy is in effect.

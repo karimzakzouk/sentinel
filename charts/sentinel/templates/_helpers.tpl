@@ -58,7 +58,20 @@ detection:
 logs:
   enabled: {{ .Values.logs.enabled }}
   sampleInterval: {{ .Values.logs.sampleInterval }}
+{{- if .Values.capture.enabled }}
+capture:
+  address: ":4318"
+  tokenFile: /etc/sentinel-capture/token
+{{- end }}
 healthAddr: ":8081"
+{{- end }}
+
+{{- define "sentinel.captureConfig" -}}
+discovery:
+  instrument:
+    {{- range .Values.watch.namespaces }}
+    - k8s_namespace: {{ . | quote }}
+    {{- end }}
 {{- end }}
 
 {{- define "sentinel.validate" -}}

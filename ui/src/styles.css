@@ -763,6 +763,12 @@ textarea.field {
 .policy h3 .muted {
   font-weight: 400;
 }
+.policy .capture {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 10px;
+}
 .rule {
   display: flex;
   gap: 8px;
