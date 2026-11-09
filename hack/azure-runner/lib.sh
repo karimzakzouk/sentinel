@@ -2,6 +2,8 @@
 # Each setting may be overridden from the environment.
 RG=${RG:-sentinel-ci}
 LOCATION=${LOCATION:-eastus}
+# VM sizes to try, in order of preference.
+SIZES=${SIZES:-Standard_D4as_v4 Standard_D4s_v4}
 VM=${VM:-sentinel-azure-1}
 REPO=${REPO:-karimzakzouk/sentinel}
 RUNNER_NAME=${RUNNER_NAME:-sentinel-azure-1}

@@ -27,22 +27,42 @@ az group show -n "$RG" -o none
 
 if ! exists az vm show -g "$RG" -n "$VM"; then
   step "size"
+  # Nothing can reach SSH, but Azure requires a key: make one and throw it away.
+  key=$(mktemp -d)
+  trap 'rm -rf "$key"' EXIT
+  ssh-keygen -q -t rsa -b 3072 -N '' -C "$VM throwaway" -f "$key/id"
+  vm_args=(-g "$RG" -n "$VM" -l "$LOCATION" --priority Regular --image Canonical:ubuntu-24_04-lts:server:latest
+    --os-disk-name "$VM-osdisk" --os-disk-size-gb 64 --storage-sku StandardSSD_LRS --os-disk-delete-option Delete
+    --admin-username azureuser --ssh-key-values "$key/id.pub" --assign-identity '[system]'
+    --tags purpose=github-actions-runner repository="$REPO")
   usages=$(az vm list-usage -l "$LOCATION" -o json)
   usage() { jq -r --arg name "$1" '.[] | select(.name.value == $name) | "\(.currentValue) \(.limit)"' <<<"$usages"; }
   read -r cores_used cores_limit < <(usage cores)
   size=
-  for candidate in Standard_D4as_v4 Standard_D4s_v4; do
-    read -r family restrictions < <(az vm list-skus -l "$LOCATION" --size "$candidate" --resource-type virtualMachines -o json |
+  for candidate in $SIZES; do
+    read -r family vcpus restrictions < <(az vm list-skus -l "$LOCATION" --size "$candidate" --resource-type virtualMachines --all -o json |
       jq -r --arg size "$candidate" '.[] | select(.name == $size) |
-        "\(.family) \([.restrictions[] | select(.type == "Location")] | length)"')
+        "\(.family) \(.capabilities[] | select(.name == "vCPUs") | .value) \([.restrictions[] | select(.type == "Location")] | length)"')
+    if [ -z "$family" ]; then
+      echo "$candidate: not offered in $LOCATION"
+      continue
+    fi
     read -r family_used family_limit < <(usage "$family")
-    echo "$candidate: $family $family_used/$family_limit vCPUs, regional $cores_used/$cores_limit, location restrictions: $restrictions"
-    if [ "$restrictions" = 0 ] && ((family_limit - family_used >= 4 && cores_limit - cores_used >= 4)); then
+    family_used=${family_used:-0} family_limit=${family_limit:-0}
+    echo "$candidate: $vcpus vCPUs, $family $family_used/$family_limit, regional $cores_used/$cores_limit, location restrictions: $restrictions"
+    [ "$restrictions" = 0 ] || continue
+    ((family_limit - family_used >= vcpus && cores_limit - cores_used >= vcpus)) || continue
+    # Capacity limits and region policies show only when Azure validates a
+    # deployment; this validates one with its own network, creating nothing.
+    if err=$(az vm create "${vm_args[@]}" --size "$candidate" --public-ip-sku Standard --nsg-rule NONE \
+      --accelerated-networking true --validate -o none 2>&1); then
       size=$candidate
       break
     fi
+    echo "$candidate: refused: $(grep -oE '\([A-Z][A-Za-z]+\)' <<<"$err" | grep -vx '(InvalidTemplateDeployment)' |
+      sort -u | tr -d '()' | paste -sd ' ')"
   done
-  [ -n "$size" ] || { echo "no 4-vCPU size fits in $LOCATION" >&2; exit 1; }
+  [ -n "$size" ] || { echo "none of $SIZES can be created in $LOCATION" >&2; exit 1; }
   echo "using $size"
 fi
 
@@ -67,15 +87,7 @@ exists az network nic show -g "$RG" -n "$VM-nic" ||
 
 step "vm"
 if ! exists az vm show -g "$RG" -n "$VM"; then
-  # Nothing can reach SSH, but Azure requires a key: make one and throw it away.
-  key=$(mktemp -d)
-  ssh-keygen -q -t rsa -b 3072 -N '' -C "$VM throwaway" -f "$key/id"
-  az vm create -g "$RG" -n "$VM" -l "$LOCATION" --size "$size" --priority Regular \
-    --image Canonical:ubuntu-24_04-lts:server:latest --nics "$VM-nic" \
-    --os-disk-name "$VM-osdisk" --os-disk-size-gb 64 --storage-sku StandardSSD_LRS --os-disk-delete-option Delete \
-    --admin-username azureuser --ssh-key-values "$key/id.pub" --assign-identity '[system]' \
-    --tags purpose=github-actions-runner repository="$REPO" -o none
-  rm -rf "$key"
+  az vm create "${vm_args[@]}" --size "$size" --nics "$VM-nic" -o none
   az vm boot-diagnostics enable -g "$RG" -n "$VM" -o none
 fi
 
