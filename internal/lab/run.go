@@ -189,7 +189,8 @@ func (l *Lab) handle(ctx context.Context, exp *v1alpha1.Experiment) Verdict {
 		candidates, controls = []string{variants[0].Name}, []string{variants[1].Name}
 	}
 	race := NewRace(float64(cmp.Or(exp.Spec.AlphaPercent, 5))/100, candidates, controls)
-	blocks, err := l.Prover.RunRace(ctx, ns, dns, baseline, variants, race, int(cmp.Or(exp.Spec.MaxRuns, 200)))
+	fidelity = append(fidelity, "every copy waits until the seal holds for it before it starts")
+	blocks, err := l.Prover.RunRace(ctx, ns, built, dns, baseline, variants, race, int(cmp.Or(exp.Spec.MaxRuns, 200)))
 	if log, lerr := l.Prover.DNSLog(ctx, ns); lerr == nil {
 		var own []string
 		for _, p := range probes {

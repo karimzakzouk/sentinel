@@ -344,6 +344,11 @@ func TestALabExperimentRunsOnlyBehindAProvenSeal(t *testing.T) {
 	})
 }
 
+// unroutable is an address no network answers (TEST-NET-1): the seal gate's
+// forbidden destination in tests of the Lab's mechanics, which run on any
+// cluster, sealed or not. Experiments use the API server, as the Lab does.
+const unroutable = "192.0.2.1:443"
+
 // strictEgress says the network plugin is known to apply egress policy to
 // addresses outside the cluster, and to new pods from their first packet,
 // so any leak is a failure.
@@ -355,6 +360,7 @@ func strictEgress() bool {
 // network plugin, outside the cluster or as pods start, which only a
 // plugin not known to be strict may have.
 func pluginLimit(phase v1alpha1.ExperimentPhase, msg string) bool {
+	msg = strings.TrimPrefix(msg, "with the world running, ")
 	return !strictEgress() && (phase == lab.PhaseFailed || phase == lab.PhaseNotSure) &&
 		(strings.HasPrefix(msg, "the seal leaks outside the cluster") || strings.HasPrefix(msg, "the seal leaks while a pod starts"))
 }
@@ -442,7 +448,7 @@ func TestTheLabBuildsAWorkloadsStatelessWorld(t *testing.T) {
 			t.Errorf("the fidelity list lacks %q: %v", want, plan.Fidelity)
 		}
 	}
-	p := &lab.Prover{Client: client, Twins: []string{smokeNS}, Timeout: 3 * time.Minute}
+	p := &lab.Prover{Client: client, Twins: []string{smokeNS}, Timeout: 3 * time.Minute, Forbidden: unroutable}
 	if err := p.Clean(ctx, labNS); err != nil {
 		t.Fatal(err)
 	}
@@ -499,6 +505,9 @@ func TestTheLabTellsAFixFromTheFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, _, err := lab.PreviousTemplate(ctx, client, ref, ""); apierrors.IsForbidden(err) {
+		t.Fatalf("the Lab may not read the front's revisions: %v", err)
+	}
 	good, err := lab.Synthesize(world, ref, labNS)
 	if err != nil {
 		t.Fatal(err)
@@ -513,7 +522,7 @@ func TestTheLabTellsAFixFromTheFailure(t *testing.T) {
 	}
 	failing, deps := plan.Split(ref)
 	fix, _ := good.Split(ref)
-	p := &lab.Prover{Client: client, Twins: []string{smokeNS}, Timeout: 3 * time.Minute}
+	p := &lab.Prover{Client: client, Twins: []string{smokeNS}, Timeout: 3 * time.Minute, Forbidden: unroutable}
 	if err := p.Clean(ctx, labNS); err != nil {
 		t.Fatal(err)
 	}
@@ -530,7 +539,7 @@ func TestTheLabTellsAFixFromTheFailure(t *testing.T) {
 	}
 	variants := []lab.Variant{{Name: "previous revision", Slug: "cand", Pod: fix}, {Name: "deletion control", Slug: "del", Pod: lab.DeletionControl(failing)}}
 	race := lab.NewRace(0.05, []string{"previous revision"}, []string{"deletion control"})
-	blocks, err := p.RunRace(ctx, labNS, lab.DNSConfig(built.DNS, smokeNS, "cluster.local"), failing, variants, race, 30)
+	blocks, err := p.RunRace(ctx, labNS, built, lab.DNSConfig(built.DNS, smokeNS, "cluster.local"), failing, variants, race, 30)
 	if err != nil {
 		t.Fatal(err)
 	}
