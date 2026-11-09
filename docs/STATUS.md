@@ -1,6 +1,6 @@
 # Status
 
-Last updated: Monday 9 November 2026, 14:30 Cairo time (UTC+2).
+Last updated: Monday 9 November 2026, 17:30 Cairo time (UTC+2).
 
 ## Where things stand
 
@@ -60,7 +60,7 @@ To look at it on a cluster where it runs:
 | 0. An enforcing development cluster | Not possible on the development VM (decision 46); Lab tests run in CI | The network plugins workflow, now with Cilium |
 | 1. Seal and prove | Done, except the per-Lab DNS, teardown re-check and reaper, which move to slice 2 with the workloads that need them. The Lab runs as its own fenced identity (decision 48) and fails closed where enforcement is not proven | `TestTheLabSealHoldsOnlyWherePolicyIsEnforced`: on Flannel the matrix caught 16 leaks, as it must; in CI's enforcing clusters none may leak. `TestALabExperimentRunsOnlyBehindAProvenSeal`: on Flannel the Lab stays off and says why; in enforcing clusters a `prove` Experiment passes, and fails once an extra policy opens the namespace. Seven Lab cases in `TestFenceBlocksForbiddenWrites`. In CI, Calico and Cilium refused every forbidden destination; kindnet let Lab pods reach cloud metadata, and everything in the cluster as a pod started, so the Lab refuses it there (decisions 49 and 56) |
 | 2. Synthesize the stateless world | The world built and proven: synthesis, the Lab DNS (decision 51), production's images under the fence's bounds (decision 50), the seal proven before the world starts and again with it running; Online Boutique's frontend and the ten services it calls ran in a Lab on the development cluster, every copy ready within 95 seconds and answering by its production name, once copies were fitted to Pod Security `restricted` (decision 59) | `TestTheLabBuildsAWorkloadsStatelessWorld`, as the Lab's identity: a front and the backend it calls answer by their production names, the API server's name resolves to nothing, and a canary Secret never reaches the Lab. `TestALabReproductionRunsTheWorldBehindAProvenSeal` in CI's enforcing clusters |
-| 3. Reproduce and judge | Races and verdicts built (decisions 52 and 53): reproduce and verify-fix Experiments, the previous revision as the first candidate, a deletion control; the gate's repetitions wait for the self-hosted runner | `TestTheLabTellsAFixFromTheFailure` on the development cluster: against a front that crashes as it starts, its previous revision passed after 15 blocks (15 of 15 against 0 of 15), the deletion control failed. Through the Lab in CI, on Calico and Cilium: "the previous revision front-9964bb8bd fixes it: it worked in 15 of 15 runs where the failing revision failed in 15 of 15", and a healthy front's failure "did not reproduce"; kindnet and Flannel were refused. Unit simulations: 3.4% false PASS at the null's edge for α = 5%. The `Lab gate` workflow's first round, on the development cluster: the fix passed in 15 blocks, a revision that still crashes and a deletion-style candidate failed in 3, and a flaky revision raced against itself ran out of its 60 blocks, NOT SURE |
+| 3. Reproduce and judge | Races and verdicts built (decisions 52 and 53): reproduce and verify-fix Experiments, the previous revision as the first candidate, a deletion control. The gate's repetitions passed on the self-hosted runner under Calico | `TestTheLabTellsAFixFromTheFailure` on the development cluster: against a front that crashes as it starts, its previous revision passed after 15 blocks (15 of 15 against 0 of 15), the deletion control failed. Through the Lab in CI, on Calico and Cilium: "the previous revision front-9964bb8bd fixes it: it worked in 15 of 15 runs where the failing revision failed in 15 of 15", and a healthy front's failure "did not reproduce"; kindnet and Flannel were refused. Unit simulations: 3.4% false PASS at the null's edge for α = 5%. The `Lab gate` workflow's first round, on the development cluster: the fix passed in 15 blocks, a revision that still crashes and a deletion-style candidate failed in 3, and a flaky revision raced against itself ran out of its 60 blocks, NOT SURE. The `Lab gate` workflow on the self-hosted runner, Calico, 10 races of each kind at α = 5%: a fix passed 10 of 10 (median 15 blocks); a revision that still crashes and a deletion that does nothing failed 10 of 10 (3 blocks); a flaky revision against itself failed 7 and was NOT SURE 3 (51 blocks). No false PASS in 30 races that must not pass. Beside it, Online Boutique's frontend and the ten services it calls were copied into a sealed world, every copy ready and every name the world asked for provided |
 | Verified rollbacks | The controller asks the Lab about each proposed rollback (decision 54); the verdict joins the incident and its notices; at `lab-verified` it carries the rollback out (decision 57) | On the development cluster a bad image on `web` opened an incident, the controller asked the Lab, and the Lab, refusing a cluster without enforcement, answered NOT SURE within 35 seconds; the verdict shows on the incident page. In CI on Calico and Cilium, a request at `lab-verified` waited while the Lab raced a crashing revision of the front against its predecessor (15 of 15 against 15 of 15), then the actor rolled the front back, approved by the Lab |
 | 4. Datastores and replay | Not started | |
 
@@ -234,10 +234,8 @@ Full reasoning in [decisions.md](decisions.md).
 
 ## Next
 
-- **Phase 3:** the gate's repetitions on the self-hosted runner (the `Lab
-  gate` workflow: races with known answers, and Online Boutique's frontend
-  sealed under Calico); a config value reverted as a second candidate;
-  slice 4's datastores and replay.
+- **Phase 3:** a config value reverted as a second candidate, and slice 4's
+  datastores and replay. The gate's repetitions passed (above).
 - **Phase 4 (Fixer)**, planned in [phase-4.md](plan/phase-4.md): restoring
   more than images (arguments, environment, probes), which the Git session
   showed is the next gap, then slice 2's partial reverts. The Gitea now in
@@ -251,7 +249,8 @@ Full reasoning in [decisions.md](decisions.md).
   two-tier app deployed into a watched namespace and the Lab's worlds and
   races running beside it. It ended when the controller was redeployed. The
   72-hour soak's first attempt stopped as it started, on a results directory
-  a fresh checkout does not have; it is requested again behind the Lab gate.
+  a fresh checkout does not have; the second has been watching since Monday
+  17:21 Cairo time and ends on Thursday at about the same time.
 - **The rest of slice 4,** shaped by the soak: seasonal baselines (SPOT on
   decomposed residuals) if daily cycles cause false alarms, and dependency
   edges from connection errors in logs.
