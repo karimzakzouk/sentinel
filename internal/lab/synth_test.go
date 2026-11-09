@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
@@ -163,5 +164,81 @@ func TestSynthesisRefusesWhatItCannotCopy(t *testing.T) {
 				t.Fatalf("got %v; want a refusal saying %q", err, tc.why)
 			}
 		})
+	}
+}
+
+// A copy is fitted to the restricted Pod Security standard, each change
+// noted; one that must run privileged or with extra capabilities is
+// refused, and one already fitted is left as it is.
+func TestCopiesFitThePodSecurityStandardTheLabEnforces(t *testing.T) {
+	bare := shop()
+	plan, err := Synthesize(bare, ref("Deployment", "backend"), "sentinel-lab-0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := plan.Pods[0].Spec
+	sc := spec.Containers[0].SecurityContext
+	switch {
+	case spec.SecurityContext.SeccompProfile.Type != corev1.SeccompProfileTypeRuntimeDefault || !*spec.SecurityContext.RunAsNonRoot:
+		t.Fatalf("pod security context %+v", spec.SecurityContext)
+	case *sc.AllowPrivilegeEscalation || !slices.Contains(sc.Capabilities.Drop, "ALL"):
+		t.Fatalf("container security context %+v", sc)
+	}
+	for _, want := range []string{"runs under the runtime's default seccomp profile", "must run as a non-root user",
+		"may not gain privileges", "runs without Linux capabilities"} {
+		if !slices.ContainsFunc(plan.Fidelity, func(f string) bool { return strings.Contains(f, "backend") && strings.Contains(f, want) }) {
+			t.Errorf("fidelity lacks %q: %v", want, plan.Fidelity)
+		}
+	}
+
+	hardened := shop()
+	b := hardened.Workloads[ref("Deployment", "backend")]
+	b.Template.Spec.SecurityContext = &corev1.PodSecurityContext{RunAsNonRoot: ptr.To(true),
+		SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}}
+	b.Template.Spec.Containers[0].SecurityContext = &corev1.SecurityContext{AllowPrivilegeEscalation: ptr.To(false),
+		Capabilities: &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}, Add: []corev1.Capability{"NET_BIND_SERVICE"}}}
+	hardened.Workloads[b.Ref] = b
+	plan, err = Synthesize(hardened, b.Ref, "sentinel-lab-0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slices.ContainsFunc(plan.Fidelity, func(f string) bool { return strings.Contains(f, "seccomp") || strings.Contains(f, "capabilities") }) {
+		t.Fatalf("a fitted copy was changed: %v", plan.Fidelity)
+	}
+
+	for name, sc := range map[string]*corev1.SecurityContext{
+		"privileged":     {Privileged: ptr.To(true)},
+		"with SYS_ADMIN": {Capabilities: &corev1.Capabilities{Add: []corev1.Capability{"SYS_ADMIN"}}},
+	} {
+		w := shop()
+		b := w.Workloads[ref("Deployment", "backend")]
+		b.Template.Spec.Containers[0].SecurityContext = sc
+		w.Workloads[b.Ref] = b
+		if _, err := Synthesize(w, b.Ref, "sentinel-lab-0"); err == nil || !strings.Contains(err.Error(), "no Lab pod may") {
+			t.Errorf("%s: got %v; want a refusal", name, err)
+		}
+	}
+}
+
+// A copy asks for little CPU, so it fits beside production; its limit,
+// which caps it as it caps production, stays.
+func TestCopiesAskForLittleCPUButKeepTheirLimits(t *testing.T) {
+	w := shop()
+	b := w.Workloads[ref("Deployment", "backend")]
+	b.Template.Spec.Containers[0].Resources = corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("500m"), corev1.ResourceMemory: resource.MustParse("256Mi")},
+		Limits:   corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1"), corev1.ResourceMemory: resource.MustParse("512Mi")},
+	}
+	w.Workloads[b.Ref] = b
+	plan, err := Synthesize(w, b.Ref, "sentinel-lab-0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := plan.Pods[0].Spec.Containers[0].Resources
+	if r.Requests.Cpu().String() != "50m" || r.Limits.Cpu().String() != "1" || r.Requests.Memory().String() != "256Mi" {
+		t.Fatalf("resources = %+v", r)
+	}
+	if !slices.ContainsFunc(plan.Fidelity, func(f string) bool { return strings.Contains(f, "asks for 50m of CPU instead of 500m") }) {
+		t.Fatalf("fidelity lacks the CPU request: %v", plan.Fidelity)
 	}
 }

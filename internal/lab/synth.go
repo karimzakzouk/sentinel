@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/utils/ptr"
@@ -219,6 +220,14 @@ func copyPod(wl Workload, w World, ns string, note func(string, ...any)) (*corev
 	if err := copyVolumes(spec.Volumes, ref, note); err != nil {
 		return nil, err
 	}
+	if err := restrict(&spec, ref, note); err != nil {
+		return nil, err
+	}
+	for _, cs := range [][]corev1.Container{spec.InitContainers, spec.Containers} {
+		for i := range cs {
+			trimCPURequest(&cs[i], ref, note)
+		}
+	}
 	name := ref.Name + "-lab"
 	if ref.Kind == "StatefulSet" {
 		name = ref.Name + "-0"
@@ -232,6 +241,95 @@ func copyPod(wl Workload, w World, ns string, note func(string, ...any)) (*corev
 	meta.Annotations["sidecar.istio.io/inject"] = "false"
 	meta.Annotations["linkerd.io/inject"] = "disabled"
 	return &corev1.Pod{ObjectMeta: meta, Spec: spec}, nil
+}
+
+// restrict fits a copy to the restricted Pod Security standard the Lab's
+// namespaces enforce, noting each change from production; it refuses what
+// cannot be made to fit. A copy whose image runs only as root then fails to
+// start, and the Lab says so.
+func restrict(spec *corev1.PodSpec, ref model.ObjectRef, note func(string, ...any)) error {
+	if spec.SecurityContext == nil {
+		spec.SecurityContext = &corev1.PodSecurityContext{}
+	}
+	pod := spec.SecurityContext
+	runtimeDefault := &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}
+	unconfined := func(p *corev1.SeccompProfile) bool { return p != nil && p.Type == corev1.SeccompProfileTypeUnconfined }
+	if pod.SeccompProfile == nil || unconfined(pod.SeccompProfile) {
+		pod.SeccompProfile = runtimeDefault
+		note("%s runs under the runtime's default seccomp profile, which production does not set", ref)
+	}
+	if !ptr.Deref(pod.RunAsNonRoot, false) {
+		pod.RunAsNonRoot = ptr.To(true)
+		note("%s must run as a non-root user, which production does not require", ref)
+	}
+	for _, cs := range [][]corev1.Container{spec.InitContainers, spec.Containers} {
+		for i := range cs {
+			c := &cs[i]
+			if c.SecurityContext == nil {
+				c.SecurityContext = &corev1.SecurityContext{}
+			}
+			sc := c.SecurityContext
+			if ptr.Deref(sc.Privileged, false) {
+				return fmt.Errorf("%s runs %s privileged, which no Lab pod may", ref, c.Name)
+			}
+			if sc.Capabilities != nil {
+				for _, add := range sc.Capabilities.Add {
+					if add != "NET_BIND_SERVICE" {
+						return fmt.Errorf("%s gives %s the capability %s, which no Lab pod may have", ref, c.Name, add)
+					}
+				}
+			}
+			if ptr.Deref(sc.AllowPrivilegeEscalation, true) {
+				sc.AllowPrivilegeEscalation = ptr.To(false)
+				note("%s's %s may not gain privileges, which production allows", ref, c.Name)
+			}
+			if sc.Capabilities == nil || !slices.Contains(sc.Capabilities.Drop, "ALL") {
+				if sc.Capabilities == nil {
+					sc.Capabilities = &corev1.Capabilities{}
+				}
+				sc.Capabilities.Drop = append(sc.Capabilities.Drop, "ALL")
+				note("%s's %s runs without Linux capabilities, which production keeps", ref, c.Name)
+			}
+			if unconfined(sc.SeccompProfile) {
+				sc.SeccompProfile = runtimeDefault
+				note("%s's %s runs under the runtime's default seccomp profile instead of none", ref, c.Name)
+			}
+			if sc.RunAsNonRoot != nil && !*sc.RunAsNonRoot {
+				sc.RunAsNonRoot = ptr.To(true)
+				note("%s's %s must run as a non-root user, which production forbids", ref, c.Name)
+			}
+			for j := range c.Ports {
+				if c.Ports[j].HostPort != 0 {
+					c.Ports[j].HostPort = 0
+					note("%s's %s listens on no port of the node", ref, c.Name)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// maxCPURequest is the most CPU a copy's container asks the scheduler for.
+// A request only reserves room on a node; the limit still caps the copy as
+// it caps production, so the world fits beside production on the same
+// nodes.
+var maxCPURequest = resource.MustParse("50m")
+
+func trimCPURequest(c *corev1.Container, ref model.ObjectRef, note func(string, ...any)) {
+	req, ok := c.Resources.Requests[corev1.ResourceCPU]
+	if !ok {
+		// Without a request, Kubernetes takes the limit as one.
+		req, ok = c.Resources.Limits[corev1.ResourceCPU]
+	}
+	if !ok || req.Cmp(maxCPURequest) <= 0 {
+		return
+	}
+	if c.Resources.Requests == nil {
+		c.Resources.Requests = corev1.ResourceList{}
+	}
+	c.Resources.Requests[corev1.ResourceCPU] = maxCPURequest
+	note("%s's %s asks for %s of CPU instead of %s, so the world fits beside production; its limit is production's", ref, c.Name,
+		maxCPURequest.String(), req.String())
 }
 
 func withoutMesh(cs []corev1.Container, ref model.ObjectRef, note func(string, ...any)) []corev1.Container {
