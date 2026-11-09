@@ -378,16 +378,16 @@ func (a *Actor) argoCDRollback(ctx context.Context, req *v1alpha1.ActionRequest,
 	return paused + "; " + undone, nil
 }
 
-// fluxRollback suspends the Flux Kustomization that applies the Deployment,
-// then rolls the Deployment back. If the rollback fails, the Kustomization
+// fluxRollback suspends the Flux Kustomization or HelmRelease that applies
+// the Deployment, then rolls the Deployment back. If the rollback fails, it
 // stays suspended.
 func (a *Actor) fluxRollback(ctx context.Context, req *v1alpha1.ActionRequest, dryRun bool) (string, error) {
 	dep, err := a.deployment(ctx, req)
 	if err != nil {
 		return "", err
 	}
-	if fluxKustomization(dep.ObjectMeta) == "" {
-		return "", fmt.Errorf("%s is not applied by a Flux Kustomization", dep.Name)
+	if fluxKustomization(dep.ObjectMeta) == "" && fluxHelmRelease(dep.ObjectMeta) == "" {
+		return "", fmt.Errorf("%s is not applied by a Flux Kustomization or HelmRelease", dep.Name)
 	}
 	paused, err := a.pauseFlux(ctx, dep.ObjectMeta, dryRun)
 	if err != nil {

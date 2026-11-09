@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 )
@@ -34,19 +35,30 @@ const ActionFluxRollback = "flux.rollback"
 // KustomizationsResource is Flux's Kustomization.
 var KustomizationsResource = schema.GroupVersionResource{Group: "kustomize.toolkit.fluxcd.io", Version: "v1", Resource: "kustomizations"}
 
+// HelmReleasesResource is Flux's HelmRelease.
+var HelmReleasesResource = schema.GroupVersionResource{Group: "helm.toolkit.fluxcd.io", Version: "v2", Resource: "helmreleases"}
+
 // RollbackAction names the request for rolling a workload back: through its
 // owner when one keeps it in sync, plain otherwise. A policy allows each
-// separately, so pausing a GitOps owner is a choice of its own. A Flux
-// HelmRelease has no adapter yet: helm-controller may roll back a failed
-// upgrade itself, and two rollbacks would race.
+// separately, so pausing a GitOps owner is a choice of its own.
 func RollbackAction(meta metav1.ObjectMeta) string {
 	switch {
 	case reconciler(meta) == "Argo CD":
 		return ActionArgoCDRollback
-	case fluxKustomization(meta) != "":
+	case fluxKustomization(meta) != "", fluxHelmRelease(meta) != "":
 		return ActionFluxRollback
 	}
 	return ActionRolloutUndo
+}
+
+// fluxHelmRelease returns namespace/name of the Flux HelmRelease that
+// renders a workload, from the labels helm-controller sets.
+func fluxHelmRelease(meta metav1.ObjectMeta) string {
+	name, ns := meta.Labels["helm.toolkit.fluxcd.io/name"], meta.Labels["helm.toolkit.fluxcd.io/namespace"]
+	if name == "" || ns == "" {
+		return ""
+	}
+	return ns + "/" + name
 }
 
 // fluxKustomization returns namespace/name of the Flux Kustomization that
@@ -59,27 +71,37 @@ func fluxKustomization(meta metav1.ObjectMeta) string {
 	return ns + "/" + name
 }
 
-// pauseFlux suspends the Kustomization that applies a workload and notes it.
-// When a parent Kustomization sets the child's spec.suspend, it would
-// resume the child at its next reconcile, so the actor refuses.
+// pauseFlux suspends the Flux object that applies a workload, a
+// Kustomization or a HelmRelease, and notes it. When another manager sets
+// its spec.suspend, a parent Kustomization say, it would resume it at its
+// next reconcile, so the actor refuses. So it does when helm-controller rolls
+// a failed upgrade back itself: two rollbacks would race.
 func (a *Actor) pauseFlux(ctx context.Context, meta metav1.ObjectMeta, dryRun bool) (string, error) {
-	ns, name, ok := strings.Cut(fluxKustomization(meta), "/")
-	if !ok {
-		return "", fmt.Errorf("%s has no Flux Kustomization labels", meta.Name)
+	kind, resource, ref := "Kustomization", KustomizationsResource, fluxKustomization(meta)
+	if ref == "" {
+		kind, resource, ref = "HelmRelease", HelmReleasesResource, fluxHelmRelease(meta)
 	}
-	ks := a.Dynamic.Resource(KustomizationsResource).Namespace(ns)
+	ns, name, ok := strings.Cut(ref, "/")
+	if !ok {
+		return "", fmt.Errorf("%s has no Flux labels", meta.Name)
+	}
+	ks := a.Dynamic.Resource(resource).Namespace(ns)
 	k, err := ks.Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
-		return "", fmt.Errorf("the Flux Kustomization %s/%s: %w", ns, name, err)
+		return "", fmt.Errorf("the Flux %s %s/%s: %w", kind, ns, name, err)
 	}
 	for _, f := range k.GetManagedFields() {
 		if f.Manager != FieldManager && f.FieldsV1 != nil && strings.Contains(f.FieldsV1.GetRawString(), `"f:suspend"`) {
-			return "", fmt.Errorf("%s sets the Flux Kustomization %s/%s's spec.suspend and would resume it; Sentinel leaves it to people",
-				f.Manager, ns, name)
+			return "", fmt.Errorf("%s sets the Flux %s %s/%s's spec.suspend and would resume it; Sentinel leaves it to people",
+				f.Manager, kind, ns, name)
 		}
 	}
+	if retries, _, _ := unstructured.NestedInt64(k.Object, "spec", "upgrade", "remediation", "retries"); kind == "HelmRelease" && retries != 0 {
+		return "", fmt.Errorf("helm-controller rolls the HelmRelease %s/%s back itself after a failed upgrade "+
+			"(spec.upgrade.remediation); Sentinel leaves it to helm-controller", ns, name)
+	}
 	if suspended, _, _ := unstructuredBool(k.Object, "spec", "suspend"); suspended {
-		return fmt.Sprintf("the Flux Kustomization %s/%s was already suspended", ns, name), nil
+		return fmt.Sprintf("the Flux %s %s/%s was already suspended", kind, ns, name), nil
 	}
 	patch, err := json.Marshal(map[string]any{
 		"metadata": map[string]any{"annotations": map[string]string{AnnotationPausedSync: "suspended"}},
@@ -93,10 +115,14 @@ func (a *Actor) pauseFlux(ctx context.Context, meta metav1.ObjectMeta, dryRun bo
 		opts.DryRun = []string{metav1.DryRunAll}
 	}
 	if _, err := ks.Patch(ctx, name, types.MergePatchType, patch, opts); err != nil {
-		return "", fmt.Errorf("suspend the Flux Kustomization %s/%s: %w", ns, name, err)
+		return "", fmt.Errorf("suspend the Flux %s %s/%s: %w", kind, ns, name, err)
 	}
-	return fmt.Sprintf("suspended the Flux Kustomization %s/%s; once Git is fixed, resume it with "+
-		"`sentinel resume flux %s/%s`", ns, name, ns, name), nil
+	command := "flux"
+	if kind == "HelmRelease" {
+		command = "helmrelease"
+	}
+	return fmt.Sprintf("suspended the Flux %s %s/%s; once Git is fixed, resume it with "+
+		"`sentinel resume %s %s/%s`", kind, ns, name, command, ns, name), nil
 }
 
 func unstructuredBool(obj map[string]any, path ...string) (bool, bool, error) {
