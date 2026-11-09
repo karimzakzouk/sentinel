@@ -3,9 +3,11 @@
 # a two-node kind cluster, which needs the inotify limits and kernel modules
 # that setup.sh configures, comes up, takes a locally built image, reaches the
 # internet and is deleted again. Runs as root through vm-run.sh and installs
-# kind, pinned as in hack/install-tools.sh, when it is missing.
+# kind, at the version hack/install-tools.sh pins, when it is missing.
 set -euo pipefail
 KIND_VERSION=v0.33.0
+# From that release's kind-linux-amd64.sha256sum; change both together.
+KIND_SHA256=aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d
 
 echo "--- kernel $(uname -r)"
 sysctl fs.inotify.max_user_instances fs.inotify.max_user_watches \
@@ -15,9 +17,8 @@ for module in br_netfilter overlay; do
 done
 
 if [ "$(kind version 2>/dev/null | awk '{print $2}')" != "$KIND_VERSION" ]; then
-  url="https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64"
-  curl -fsSL --retry 3 -o /tmp/kind "$url"
-  echo "$(curl -fsSL --retry 3 "$url.sha256sum" | awk '{print $1}')  /tmp/kind" | sha256sum -c --quiet -
+  curl -fsSL --retry 3 -o /tmp/kind "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64"
+  echo "$KIND_SHA256  /tmp/kind" | sha256sum -c --quiet -
   install -m 0755 /tmp/kind /usr/local/bin/kind
   rm -f /tmp/kind
 fi
