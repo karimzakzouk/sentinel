@@ -94,6 +94,45 @@ func TestScore(t *testing.T) {
 	}
 }
 
+// With actions, the scorer says what Sentinel did: the right action,
+// verified, counts toward recovery; any other, or any in a quiet run, is a
+// wrong action.
+func TestScoreActions(t *testing.T) {
+	badImage := run("bad-image", 0, GroundTruth{FaultClass: "deploy.bad-image", RootCause: target("web"), Mitigation: "rollout.undo"}, FaultPatch)
+	redis := run("redis-down", 10*time.Minute, GroundTruth{FaultClass: "dependency.unavailable", RootCause: target("redis"), Mitigation: "scale"}, FaultPatch)
+	control := run("control", 20*time.Minute, GroundTruth{FaultClass: "none", Mitigation: "none"}, FaultNone)
+	ranked := func(name string) *model.Assessment {
+		return &model.Assessment{RootCauses: []model.RankedObject{{Object: ref(name), P: 0.9, InSet: true}}}
+	}
+	incidents, err := ReadIncidents(export(t,
+		IncidentVersion{At: t0.Add(30 * time.Second), Verb: "opened", Incident: incident("i1", []model.ObjectRef{ref("web")}, ranked("web"))},
+		IncidentVersion{At: t0.Add(10*time.Minute + 30*time.Second), Verb: "opened", Incident: incident("i2", []model.ObjectRef{ref("redis")}, ranked("redis"))},
+		IncidentVersion{At: t0.Add(20*time.Minute + 30*time.Second), Verb: "opened", Incident: incident("i3", []model.ObjectRef{ref("web")}, nil)},
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	step := func(at time.Duration, verb, typ string) ActionEvent {
+		return ActionEvent{At: t0.Add(at), Verb: verb, Action: model.Action{Type: typ}}
+	}
+	actions := map[model.ID][]ActionEvent{
+		"i1": {step(31*time.Second, "requested", "rollout.undo"), step(32*time.Second, "executed", "rollout.undo"),
+			step(80*time.Second, "verified", "rollout.undo")},
+		"i2": {step(10*time.Minute+31*time.Second, "executed", "rollout.undo")},
+		"i3": {step(20*time.Minute+31*time.Second, "executed", "rollout.undo")},
+	}
+	rep := Score([]*Run{badImage, redis, control}, incidents, ScoreOptions{Grace: 2 * time.Minute, Actions: actions})
+	if rep.ActedRuns != 2 || rep.VerifiedRuns != 1 || rep.WrongActions != 2 || rep.MedianRecovery != time.Minute {
+		t.Fatalf("acted %d, verified %d, wrong %d, recovery %v; want 2, 1, 2 (the rollback for Redis and the one in the control), 1m",
+			rep.ActedRuns, rep.VerifiedRuns, rep.WrongActions, rep.MedianRecovery)
+	}
+	var md strings.Builder
+	if err := rep.WriteMarkdown(&md); err != nil || !strings.Contains(md.String(), "rollout.undo, verified after 1m0s ✓") ||
+		!strings.Contains(md.String(), "| Wrong actions | 2 |") {
+		t.Fatalf("markdown:\n%s", md.String())
+	}
+}
+
 // Runs follow each other closely: the next fault's incident opens within a
 // control's grace period, and belongs to the fault. A fault that heals
 // itself, like a deleted pod its Deployment replaces, is quiet when right.

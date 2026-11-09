@@ -159,11 +159,11 @@ right. Incidents during control runs are false alarms.`,
 				return err
 			}
 			defer func() { _ = f.Close() }()
-			incidents, err := harness.ReadIncidents(f)
+			incidents, actions, err := harness.ReadExport(f)
 			if err != nil {
 				return err
 			}
-			rep := harness.Score(runs, incidents, harness.ScoreOptions{Grace: grace})
+			rep := harness.Score(runs, incidents, harness.ScoreOptions{Grace: grace, Actions: actions})
 			if asJSON {
 				enc := json.NewEncoder(cmd.OutOrStdout())
 				enc.SetIndent("", "  ")
