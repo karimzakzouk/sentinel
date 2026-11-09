@@ -4,14 +4,17 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// AutonomyLevel is one rung of the autonomy ladder.
-// +kubebuilder:validation:Enum=observe;recommend;approve;act-unless-vetoed;autonomous
+// AutonomyLevel is one rung of the autonomy ladder. lab-verified acts on
+// its own once the Lab has verified the fix, and otherwise waits for a
+// person, as approve does.
+// +kubebuilder:validation:Enum=observe;recommend;approve;lab-verified;act-unless-vetoed;autonomous
 type AutonomyLevel string
 
 const (
 	AutonomyObserve         AutonomyLevel = "observe"
 	AutonomyRecommend       AutonomyLevel = "recommend"
 	AutonomyApprove         AutonomyLevel = "approve"
+	AutonomyLabVerified     AutonomyLevel = "lab-verified"
 	AutonomyActUnlessVetoed AutonomyLevel = "act-unless-vetoed"
 	AutonomyAutonomous      AutonomyLevel = "autonomous"
 )

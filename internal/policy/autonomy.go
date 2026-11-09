@@ -8,8 +8,11 @@ import (
 	"github.com/karimzakzouk/sentinel/api/v1alpha1"
 )
 
+// ladder orders the levels from strictest. lab-verified sits above approve,
+// since it may act without a person, and below act-unless-vetoed, since it
+// acts only on the Lab's evidence.
 var ladder = []v1alpha1.AutonomyLevel{v1alpha1.AutonomyObserve, v1alpha1.AutonomyRecommend, v1alpha1.AutonomyApprove,
-	v1alpha1.AutonomyActUnlessVetoed, v1alpha1.AutonomyAutonomous}
+	v1alpha1.AutonomyLabVerified, v1alpha1.AutonomyActUnlessVetoed, v1alpha1.AutonomyAutonomous}
 
 // Autonomy returns the level a namespace's policies allow an action: the
 // lowest any of them names, since the strictest wins, and observe when none
