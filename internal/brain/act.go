@@ -239,27 +239,32 @@ func (b *Brain) track(key model.TrackKey, success bool, incident model.ID, now t
 // TrackID is the Ledger entity a cell's record is kept under.
 func TrackID(key model.TrackKey) model.ID { return model.ID("track/" + key.String()) }
 
+// argExperiment carries the Lab Experiment verifying an action to the
+// actor's request, which names it in an annotation (act.ParamExperiment).
+const argExperiment = "experiment"
+
 // askLab asks the Lab, once per incident, whether rolling back fixes it:
 // for a rollback of the Deployment revision blamed for the incident,
-// whether or not policy lets Sentinel act. Callers hold b.mu.
-func (b *Brain) askLab(ctx context.Context, inc *incident, decision Decision, args map[string]string) []ledger.Draft {
+// whether or not policy lets Sentinel act. It returns what to record and
+// the Experiment that answers, once asked. Callers hold b.mu.
+func (b *Brain) askLab(ctx context.Context, inc *incident, decision Decision, args map[string]string) ([]ledger.Draft, string) {
 	hash := args[argFromTemplateHash]
 	if b.Lab == nil || inc.labAsked || decision.Action != ActionRolloutUndo || decision.Target.Kind != "Deployment" || hash == "" {
-		return nil
+		return nil, inc.experiment
 	}
 	revision := decision.Target.Name + "-" + hash
 	experiment, asked, err := b.Lab.Verify(ctx, inc.rec.ID, decision.Target, revision)
 	switch {
 	case err != nil:
 		b.Log.Error("could not ask the Lab to verify a rollback", "incident", inc.rec.ID, "error", err)
-		return nil
+		return nil, ""
 	case !asked:
-		return nil
+		return nil, ""
 	}
-	inc.labAsked = true
+	inc.labAsked, inc.experiment = true, experiment
 	e := model.Experiment{ID: model.ExperimentID(inc.rec.ID), IncidentID: inc.rec.ID, Purpose: "verify-fix", Target: decision.Target,
 		Revision: revision, Lab: experiment, Phase: "Requested"}
-	return []ledger.Draft{ledger.RecordDraft(source, model.KindExperiment, "requested", e.ID, inc.rec.ID, e)}
+	return []ledger.Draft{ledger.RecordDraft(source, model.KindExperiment, "requested", e.ID, inc.rec.ID, e)}, experiment
 }
 
 // LabVerdict is the Lab's verdict on an incident's proposed rollback.

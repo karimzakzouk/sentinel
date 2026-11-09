@@ -139,3 +139,23 @@ func TestOutcomesArePassedOnOnceAndNotReplayed(t *testing.T) {
 		t.Fatalf("outcomes = %+v, want the new request's success once, and nothing for the earlier one", got)
 	}
 }
+
+// The Experiment verifying an action goes in an annotation, which the actor
+// reads at lab-verified, and not among the action's parameters.
+func TestARequestNamesItsVerificationInAnAnnotation(t *testing.T) {
+	ctx := context.Background()
+	r, _ := newRequests(t, policyAt(t, v1alpha1.AutonomyLabVerified))
+	a := rollback()
+	a.Params[ParamExperiment] = "lab-0/sentinel-x-verify"
+	if asked, err := r.Request(ctx, a, "test"); err != nil || !asked {
+		t.Fatalf("asked=%v, %v", asked, err)
+	}
+	got, err := r.Dynamic.Resource(actor.RequestsResource).Namespace("shop").Get(ctx, requestName(a.IncidentID, actor.ActionRolloutUndo), metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	params, _, _ := unstructured.NestedStringMap(got.Object, "spec", "params")
+	if got.GetAnnotations()[actor.AnnotationExperiment] != "lab-0/sentinel-x-verify" || params[ParamExperiment] != "" || params[actor.ParamFromTemplateHash] != "bbb" {
+		t.Fatalf("annotations %v, params %v", got.GetAnnotations(), params)
+	}
+}

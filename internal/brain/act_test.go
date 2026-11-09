@@ -368,3 +368,15 @@ func TestTheLabVerifiesAProposedRollbackOnce(t *testing.T) {
 		t.Fatalf("notices = %+v; want the approver told", notices)
 	}
 }
+
+// The rollback's request names the Experiment verifying it, for a policy
+// that lets the Lab stand in for a person.
+func TestARollbackRequestNamesItsVerification(t *testing.T) {
+	b, _ := newBrain(t)
+	req := &fakeRequester{allow: true}
+	b.Act, b.Lab = req, &fakeLab{}
+	badDeploy(t, b)
+	if len(req.calls) != 1 || !strings.HasPrefix(req.calls[0].Params[argExperiment], "lab-0/") || req.calls[0].Params[argFromTemplateHash] != "new" {
+		t.Fatalf("requests = %+v; want one rollback naming the Lab's Experiment", req.calls)
+	}
+}

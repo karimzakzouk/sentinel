@@ -123,8 +123,10 @@ type incident struct {
 	verdict bool
 	// notified holds the notices already sent about the incident.
 	notified map[string]bool
-	// labAsked is set once the Lab is asked to verify the incident's fix.
-	labAsked bool
+	// labAsked is set once the Lab is asked to verify the incident's fix,
+	// and experiment names the Experiment that answers.
+	labAsked   bool
+	experiment string
 }
 
 // factsOf returns the facts an incident holds for one of its workloads.
@@ -219,7 +221,7 @@ func (b *Brain) Restore(ctx context.Context) (int, error) {
 	for _, e := range experiments {
 		for _, inc := range b.open {
 			if inc.rec.ID == e.IncidentID {
-				inc.labAsked = true
+				inc.labAsked, inc.experiment = true, e.Lab
 			}
 		}
 	}
@@ -554,6 +556,8 @@ func (b *Brain) assess(ctx context.Context, inc *incident, workload model.Object
 		}
 		drafts = append(drafts, ledger.RecordDraft(source, model.KindHypothesis, "proposed", h.ID, inc.rec.ID, h))
 	}
+	labDrafts, experiment := b.askLab(ctx, inc, decision, actionArgs(decision.Action, top, b.revision(workload)))
+	drafts = append(drafts, labDrafts...)
 	if decision.Action != ActionNone && decision.Action != inc.lastAction {
 		a := model.Action{ID: model.NewID(), IncidentID: inc.rec.ID, Type: decision.Action, Target: decision.Target,
 			Params: map[string]string{"reason": decision.Reason}, Owner: "kubernetes", State: model.ActionProposed,
@@ -566,8 +570,12 @@ func (b *Brain) assess(ctx context.Context, inc *incident, workload model.Object
 			args = nil
 		}
 		if b.Act != nil && inc.action == nil && args != nil {
+			params := maps.Clone(args)
+			if experiment != "" {
+				params[argExperiment] = experiment
+			}
 			requested, err := b.Act.Request(ctx, model.Action{ID: a.ID, IncidentID: a.IncidentID, Type: a.Type, Target: a.Target,
-				Params: args}, decision.Reason)
+				Params: params}, decision.Reason)
 			switch {
 			case err != nil:
 				b.Log.Error("could not ask the actor for an action", "incident", inc.rec.ID, "action", a.Type, "error", err)
@@ -584,7 +592,6 @@ func (b *Brain) assess(ctx context.Context, inc *incident, workload model.Object
 		}
 	}
 	inc.lastAction = decision.Action
-	drafts = append(drafts, b.askLab(ctx, inc, decision, actionArgs(decision.Action, top, b.revision(workload)))...)
 
 	a := &model.Assessment{Class: classes.Top().Value, ClassP: round(classes.Top().P), Decision: decision.Action}
 	summary := []any{"class", a.Class, "classP", a.ClassP, "decision", decision.Action}
