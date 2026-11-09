@@ -28,7 +28,7 @@ on:
         type: boolean
         default: false
       gitea:
-        description: with flux, run a Gitea in the cluster and the Fixer, which proposes fixes to its repository
+        description: run a Gitea in the cluster and the Fixer, which proposes fixes to its repository
         required: false
         type: boolean
         default: false
