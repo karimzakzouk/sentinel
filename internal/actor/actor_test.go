@@ -286,6 +286,30 @@ func TestPeopleApproveAndVeto(t *testing.T) {
 	}
 }
 
+// A workload Argo CD or Flux keeps in sync would have a plain rollback undone
+// at the next sync; the actor leaves it to people.
+func TestReconciledWorkloadsAreLeftToPeople(t *testing.T) {
+	for owner, meta := range map[string]metav1.ObjectMeta{
+		"Argo CD": {Annotations: map[string]string{"argocd.argoproj.io/tracking-id": "shop:apps/Deployment:shop/web"}},
+		"Flux":    {Labels: map[string]string{"kustomize.toolkit.fluxcd.io/name": "shop"}},
+	} {
+		a, client, _ := newActor(t, 3, sentinelPolicy(v1alpha1.AutonomyAutonomous, ActionRolloutUndo, ActionScale))
+		dep, _ := client.AppsV1().Deployments("shop").Get(ctx, "web", metav1.GetOptions{})
+		dep.Labels, dep.Annotations = meta.Labels, meta.Annotations
+		if _, err := client.AppsV1().Deployments("shop").Update(ctx, dep, metav1.UpdateOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		for _, req := range []*v1alpha1.ActionRequest{
+			request(ActionRolloutUndo, map[string]string{ParamFromTemplateHash: "bbb"}),
+			request(ActionScale, map[string]string{ParamReplicas: "4", ParamFromReplicas: "3"}),
+		} {
+			if phase, msg := a.Handle(ctx, req); phase != v1alpha1.ActionFailed || !strings.Contains(msg, "kept in sync by "+owner) {
+				t.Fatalf("%s on a workload %s keeps in sync: %s: %s", req.Spec.Action, owner, phase, msg)
+			}
+		}
+	}
+}
+
 // The strictest policy in a namespace wins.
 func TestTheStrictestPolicyWins(t *testing.T) {
 	a, _, _ := newActor(t, 3, sentinelPolicy(v1alpha1.AutonomyAutonomous, ActionRolloutUndo), func() *v1alpha1.SentinelPolicy {
