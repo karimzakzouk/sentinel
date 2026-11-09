@@ -1,5 +1,5 @@
-import { api, type ActionSummary, type TrackRecord } from "./api";
-import { actionLabel, actionStages, ago, classLabel, clock, pct, workload } from "./format";
+import { api, type ActionSummary, type Experiment, type TrackRecord } from "./api";
+import { actionLabel, actionStages, ago, classLabel, clock, labStages, pct, workload } from "./format";
 import { usePoll } from "./usePoll";
 
 function Row({ s, onOpen }: { s: ActionSummary; onOpen: (id: string) => void }) {
@@ -82,11 +82,59 @@ function Records({ records }: { records: TrackRecord[] }) {
   );
 }
 
+// Verdicts lists what the Lab said about each rollback Sentinel proposed.
+function Verdicts({ experiments, onOpen }: { experiments: Experiment[]; onOpen: (id: string) => void }) {
+  return (
+    <table className="table actions">
+      <thead>
+        <tr>
+          <th>Workload</th>
+          <th>Failing revision</th>
+          <th>Verdict</th>
+          <th>Why</th>
+          <th />
+        </tr>
+      </thead>
+      <tbody>
+        {experiments.map((e) => {
+          const stage = labStages[`sentinel.experiment.${(e.phase ?? "Requested").toLowerCase()}`];
+          return (
+            <tr key={e.id}>
+              <td className="mono">{workload(e.target)}</td>
+              <td className="mono">{e.revision}</td>
+              <td>{stage && <span className={`pill ${stage.tone}`}>{stage.pill}</span>}</td>
+              <td className="detail">
+                {e.message ?? "The Lab is copying the workload to try it."}
+                {e.fidelity && e.fidelity.length > 0 && (
+                  <details className="fidelity">
+                    <summary>How the copy differed ({e.fidelity.length})</summary>
+                    <ul>
+                      {e.fidelity.map((f) => (
+                        <li key={f}>{f}</li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
+              </td>
+              <td>
+                <a href={`#/incidents/${e.incidentId}`} onClick={() => onOpen(e.incidentId)}>
+                  incident
+                </a>
+              </td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  );
+}
+
 // Actions is the audit view: what Sentinel did where a policy let it, and
 // what it would have done elsewhere.
 export function Actions({ onOpen }: { onOpen: (id: string) => void }) {
   const actions = usePoll(api.actions, []);
   const records = usePoll(api.trackRecords, []);
+  const experiments = usePoll(api.experiments, []);
   if (actions.error && !actions.data) return <div className="error-banner">{actions.error}</div>;
   if (!actions.data) return <p className="empty">Loading…</p>;
   const taken = actions.data.filter((s) => !s.action.shadow);
@@ -106,6 +154,21 @@ export function Actions({ onOpen }: { onOpen: (id: string) => void }) {
           <Table rows={taken} onOpen={onOpen} />
         ) : (
           <p className="note">None yet: no SentinelPolicy has let Sentinel act, or nothing called for it.</p>
+        )}
+      </section>
+      <section className="card" style={{ marginBottom: 16 }}>
+        <h2>Lab verdicts</h2>
+        {experiments.data && experiments.data.length > 0 ? (
+          <>
+            <p className="note">
+              Before a rollback, the Lab races the revision before the failing one against it in a sealed copy of the workload.
+              A verdict holds its error rate at 5% however early the Lab stops; at the lab-verified level a passing one lets
+              Sentinel act without a person.
+            </p>
+            <Verdicts experiments={experiments.data} onOpen={onOpen} />
+          </>
+        ) : (
+          <p className="note">The Lab has not been asked about a rollback yet.</p>
         )}
       </section>
       <section className="card" style={{ marginBottom: 16 }}>
