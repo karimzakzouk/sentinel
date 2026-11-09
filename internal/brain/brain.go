@@ -84,6 +84,8 @@ type Brain struct {
 	// breakers hold, by action and workload, until when Sentinel will not
 	// ask for an action that failed there.
 	breakers map[string]time.Time
+	// tracks hold every cell's track record.
+	tracks map[model.TrackKey]*model.TrackRecord
 }
 
 type incident struct {
@@ -190,6 +192,14 @@ func (b *Brain) Restore(ctx context.Context) (int, error) {
 		if _, err := b.Ledger.Append(ctx, drafts...); err != nil {
 			return 0, err
 		}
+	}
+	records, err := ledger.List[model.TrackRecord](ctx, b.Ledger, model.KindTrackRecord, "")
+	if err != nil {
+		return 0, err
+	}
+	b.tracks = map[model.TrackKey]*model.TrackRecord{}
+	for i := range records {
+		b.tracks[records[i].Key] = &records[i]
 	}
 	// Breakers outlive restarts: an action that failed in the last day stays
 	// barred on its workload.

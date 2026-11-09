@@ -1,5 +1,5 @@
-import { api, type ActionSummary } from "./api";
-import { actionLabel, actionStages, ago, clock, workload } from "./format";
+import { api, type ActionSummary, type TrackRecord } from "./api";
+import { actionLabel, actionStages, ago, classLabel, clock, pct, workload } from "./format";
 import { usePoll } from "./usePoll";
 
 function Row({ s, onOpen }: { s: ActionSummary; onOpen: (id: string) => void }) {
@@ -47,10 +47,46 @@ function Table({ rows, onOpen }: { rows: ActionSummary[]; onOpen: (id: string) =
   );
 }
 
+// Records shows each cell's track record: how often an action cleared a kind
+// of incident on a workload, and the autonomy that record supports.
+function Records({ records }: { records: TrackRecord[] }) {
+  return (
+    <table className="table">
+      <thead>
+        <tr>
+          <th>Action</th>
+          <th>Fault class</th>
+          <th>Workload</th>
+          <th title="Verified: the incident's signals cleared">Cleared</th>
+          <th title="The action ran but the incident did not clear">Did not</th>
+          <th title="5th percentile of the success rate, from a uniform prior">At least</th>
+          <th>Supports</th>
+        </tr>
+      </thead>
+      <tbody>
+        {records.map((r) => (
+          <tr key={`${r.key.action}|${r.key.faultClass}|${r.key.service}`}>
+            <td>{actionLabel(r.key.action)}</td>
+            <td>{classLabel(r.key.faultClass)}</td>
+            <td className="mono">{r.key.service.replace(/^[^/]*\//, "")}</td>
+            <td>{r.successes}</td>
+            <td>{r.failures}</td>
+            <td>{pct(r.lower)}</td>
+            <td>
+              <span className={`pill ${r.level === "autonomous" ? "green" : ""}`}>{r.level}</span>
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
 // Actions is the audit view: what Sentinel did where a policy let it, and
 // what it would have done elsewhere.
 export function Actions({ onOpen }: { onOpen: (id: string) => void }) {
   const actions = usePoll(api.actions, []);
+  const records = usePoll(api.trackRecords, []);
   if (actions.error && !actions.data) return <div className="error-banner">{actions.error}</div>;
   if (!actions.data) return <p className="empty">Loading…</p>;
   const taken = actions.data.filter((s) => !s.action.shadow);
@@ -70,6 +106,20 @@ export function Actions({ onOpen }: { onOpen: (id: string) => void }) {
           <Table rows={taken} onOpen={onOpen} />
         ) : (
           <p className="note">None yet: no SentinelPolicy has let Sentinel act, or nothing called for it.</p>
+        )}
+      </section>
+      <section className="card" style={{ marginBottom: 16 }}>
+        <h2>Track records</h2>
+        {records.data && records.data.length > 0 ? (
+          <>
+            <p className="note">
+              Each verified action counts for its cell. A cell supports acting on its own once the success rate is at least
+              90% with 95% confidence: 28 straight successes from a uniform prior. For now this is shown, not enforced.
+            </p>
+            <Records records={records.data} />
+          </>
+        ) : (
+          <p className="note">No verified actions yet.</p>
         )}
       </section>
       <section className="card">

@@ -16,6 +16,7 @@ import (
 	"github.com/karimzakzouk/sentinel/internal/capability"
 	"github.com/karimzakzouk/sentinel/internal/ledger"
 	"github.com/karimzakzouk/sentinel/internal/model"
+	"github.com/karimzakzouk/sentinel/internal/stats"
 )
 
 // Server answers the UI's questions from the Ledger.
@@ -49,6 +50,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/incidents/{id}", s.incident)
 	mux.HandleFunc("GET /api/capabilities", s.capabilities)
 	mux.HandleFunc("GET /api/actions", s.actions)
+	mux.HandleFunc("GET /api/trackrecords", s.trackRecords)
 	mux.HandleFunc("GET /api/", func(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusNotFound, errors.New("no such API route"))
 	})
@@ -168,6 +170,33 @@ func (s *Server) actions(w http.ResponseWriter, r *http.Request) {
 		out[i].Since = e.Time
 	}
 	writeJSON(w, map[string]any{"actions": out})
+}
+
+// TrackSummary is one cell's track record, with what it says.
+type TrackSummary struct {
+	model.TrackRecord
+	// Successes and Failures are the verified actions and those that did not
+	// clear their incident; the record's prior adds one of each.
+	Successes int `json:"successes"`
+	Failures  int `json:"failures"`
+	// Lower is the 5th percentile of the success rate.
+	Lower float64 `json:"lower"`
+}
+
+// trackRecords lists every cell's track record, the most used first.
+func (s *Server) trackRecords(w http.ResponseWriter, r *http.Request) {
+	records, err := ledger.List[model.TrackRecord](r.Context(), s.Ledger, model.KindTrackRecord, "")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	out := make([]TrackSummary, len(records))
+	for i, t := range records {
+		out[i] = TrackSummary{TrackRecord: t, Successes: int(t.Alpha) - 1, Failures: int(t.Beta) - 1,
+			Lower: stats.BetaQuantile(0.05, t.Alpha, t.Beta)}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Alpha+out[i].Beta > out[j].Alpha+out[j].Beta })
+	writeJSON(w, map[string]any{"trackRecords": out})
 }
 
 // IncidentDetail is an incident and everything recorded about it, in order.

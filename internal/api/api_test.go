@@ -118,6 +118,22 @@ func TestActionsListEachActionAtItsLatestStage(t *testing.T) {
 	}
 }
 
+func TestTrackRecordsSayWhatTheyShow(t *testing.T) {
+	s, open, _ := newServer(t)
+	key := model.TrackKey{Action: "rollout.undo", FaultClass: "deploy.bad-image", Service: "Deployment.apps/shop/web"}
+	rec := model.TrackRecord{Key: key, Alpha: 29, Beta: 1, Level: model.AutonomyAutonomous}
+	if _, err := s.Ledger.Append(context.Background(),
+		ledger.RecordDraft("/test", model.KindTrackRecord, "updated", model.ID("track/"+key.String()), open.ID, rec)); err != nil {
+		t.Fatal(err)
+	}
+	var out struct{ TrackRecords []TrackSummary }
+	get(t, s, "localhost", "/api/trackrecords", &out)
+	if len(out.TrackRecords) != 1 || out.TrackRecords[0].Successes != 28 || out.TrackRecords[0].Failures != 0 ||
+		out.TrackRecords[0].Lower < 0.9 || out.TrackRecords[0].Key != key {
+		t.Fatalf("track records = %+v", out.TrackRecords)
+	}
+}
+
 // A name an attacker controls, pointed at 127.0.0.1, must not reach the API.
 func TestOnlyLoopbackHostsAreServed(t *testing.T) {
 	s, _, _ := newServer(t)
