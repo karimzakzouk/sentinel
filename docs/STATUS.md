@@ -1,6 +1,6 @@
 # Status
 
-Last updated: Monday 9 November 2026, 14:05 Cairo time (UTC+2).
+Last updated: Monday 9 November 2026, 14:30 Cairo time (UTC+2).
 
 ## Where things stand
 
@@ -13,7 +13,9 @@ median of 69 seconds after the fault appeared, with no wrong action
 (below). Through Argo CD and Flux it first pauses the owner that would
 undo the rollback: in the GitOps session, a median of 66 seconds from fault
 to verified recovery. Without a policy it still only records what it would
-do.
+do. **Phase 4 (Fix) has started:** after such a rollback, Sentinel now
+proposes the one-line change that makes it hold in Git, as a pull request,
+and checks that it held once a person has merged it and resumed the owner.
 
 To look at it on a cluster where it runs:
 
@@ -61,6 +63,16 @@ To look at it on a cluster where it runs:
 | 3. Reproduce and judge | Races and verdicts built (decisions 52 and 53): reproduce and verify-fix Experiments, the previous revision as the first candidate, a deletion control; the gate's repetitions wait for the self-hosted runner | `TestTheLabTellsAFixFromTheFailure` on the development cluster: against a front that crashes as it starts, its previous revision passed after 15 blocks (15 of 15 against 0 of 15), the deletion control failed. Through the Lab in CI, on Calico and Cilium: "the previous revision front-9964bb8bd fixes it: it worked in 15 of 15 runs where the failing revision failed in 15 of 15", and a healthy front's failure "did not reproduce"; kindnet and Flannel were refused. Unit simulations: 3.4% false PASS at the null's edge for α = 5%. The `Lab gate` workflow's first round, on the development cluster: the fix passed in 15 blocks, a revision that still crashes and a deletion-style candidate failed in 3, and a flaky revision raced against itself ran out of its 60 blocks, NOT SURE |
 | Verified rollbacks | The controller asks the Lab about each proposed rollback (decision 54); the verdict joins the incident and its notices; at `lab-verified` it carries the rollback out (decision 57) | On the development cluster a bad image on `web` opened an incident, the controller asked the Lab, and the Lab, refusing a cluster without enforcement, answered NOT SURE within 35 seconds; the verdict shows on the incident page. In CI on Calico and Cilium, a request at `lab-verified` waited while the Lab raced a crashing revision of the front against its predecessor (15 of 15 against 15 of 15), then the actor rolled the front back, approved by the Lab |
 | 4. Datastores and replay | Not started | |
+
+## Phase 4 progress
+
+| Slice | State | Proof |
+|---|---|---|
+| 1. Restore a bad value through Git | Built for an image set in the files a Flux Kustomization or an Argo CD Application deploys (decisions 67 to 70): the Fixer finds the file or images entry that set it, opens a one-line pull request, follows it until the owner has applied it, and Sentinel checks that it held. Resuming the owner stays a person's (decision 69). Proven through Flux; Argo CD's end-to-end test is next | `TestTheFixerProposesTheFixInGit`, on the development cluster: a bad image committed to the Gitea repository Flux deploys from, Sentinel's rollback, pull request #1 changing line 17 of `deployment.yaml` with its comment kept, merged, the Kustomization resumed, and "fix held", 3 minutes after the proposal. Unit tests render overlays with images entries, plain manifests, owners' name prefixes, and the abstentions |
+| 2. Partial reverts | Not started | |
+| 3. Values of their own | Not started | |
+| 4. Code incidents | Not started | |
+| 5. Delivery tiers | Not started | |
 
 ## Acting session
 
@@ -201,11 +213,10 @@ Full reasoning in [decisions.md](decisions.md).
   gate` workflow: races with known answers, and Online Boutique's frontend
   sealed under Calico); a config value reverted as a second candidate;
   slice 4's datastores and replay.
-- **Phase 4 (Fixer)** is planned in [phase-4.md](plan/phase-4.md). Slice 1:
-  a pull request that restores a bad value delivered through Git, then
-  resumes the paused owner once it is merged, against a Git server inside the
-  test cluster until the test organization and GitHub App below exist. The
-  same Git server will let the parent-Kustomization test use a real parent.
+- **Phase 4 (Fixer)**, planned in [phase-4.md](plan/phase-4.md): slice 1's
+  Argo CD end-to-end test, then partial reverts of a culprit commit. The
+  Gitea now in the test cluster will also let the parent-Kustomization test
+  use a real parent.
 - **Soak.** A long run with the scenario pool's controls and background
   traffic, to measure false alarms per service per week, the error-rate
   detector's especially. Shorter runs on the development cluster first; the

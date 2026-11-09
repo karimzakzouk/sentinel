@@ -72,6 +72,15 @@ would, and Sentinel resumes the Kustomization and verifies; the same through
 Argo CD; and a case where the value comes from a file the Fixer cannot
 place, where it abstains.
 
+**Built** (decisions 67 to 70), for images: the Fix resource, the Fixer
+as its own fenced identity, the controller asking once per verified
+rollback of a Deployment, and the steps after the pull request, Merged,
+Ready (the owner's source has the merge) and Applied (the owner is resumed
+and has applied it), with Sentinel checking two minutes later that the fix
+held. Step 6 changed: resuming stays a person's, whom Sentinel tells how
+(decision 69). Proven end to end through Flux against a Gitea in the test
+cluster; the abstentions are unit-tested.
+
 ### 2. Partial reverts
 
 When the blamed change is a commit, revert only its hunks that set the
