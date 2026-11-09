@@ -134,6 +134,21 @@ func TestTrackRecordsSayWhatTheyShow(t *testing.T) {
 	}
 }
 
+func TestExperimentsListTheLabsVerdictsNewestFirst(t *testing.T) {
+	s, open, resolved := newServer(t)
+	for _, inc := range []model.Incident{resolved, open} {
+		e := model.Experiment{ID: model.ExperimentID(inc.ID), IncidentID: inc.ID, Purpose: "verify-fix", Phase: "Passed", Runs: 15}
+		if _, err := s.Ledger.Append(context.Background(), ledger.RecordDraft("/test", model.KindExperiment, "passed", e.ID, inc.ID, e)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var out struct{ Experiments []model.Experiment }
+	get(t, s, "localhost", "/api/experiments", &out)
+	if len(out.Experiments) != 2 || out.Experiments[0].IncidentID != open.ID || out.Experiments[0].Runs != 15 {
+		t.Fatalf("experiments = %+v", out.Experiments)
+	}
+}
+
 // A name an attacker controls, pointed at 127.0.0.1, must not reach the API.
 func TestOnlyLoopbackHostsAreServed(t *testing.T) {
 	s, _, _ := newServer(t)
