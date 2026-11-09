@@ -6,9 +6,9 @@
 #
 # E2E_ARGOCD=1 also installs Argo CD (the core install, without its UI) and
 # lets the actor pause its Applications; E2E_FLUX=1 installs Flux and lets
-# the actor suspend its Kustomizations. E2E_GITEA=1, with E2E_FLUX=1, runs a
-# Gitea in the cluster and the Fixer, which proposes fixes to its
-# repository. Safe to rerun.
+# the actor suspend its Kustomizations. E2E_GITEA=1 runs a Gitea in the
+# cluster and the Fixer, which proposes fixes to its repository through
+# either. Safe to rerun.
 set -euo pipefail
 
 cluster=${E2E_CLUSTER:-sentinel-e2e}

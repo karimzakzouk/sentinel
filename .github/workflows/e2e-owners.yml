@@ -47,7 +47,8 @@ jobs:
       network: kindnet
       label: -argocd
       argocd: true
-      run: TestArgoCD
+      gitea: true
+      run: TestArgoCD|TestTheFixer
   flux:
     name: Flux
     uses: ./.github/workflows/e2e-run.yml
