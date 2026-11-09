@@ -161,9 +161,9 @@ Full reasoning in [decisions.md](decisions.md).
   sealed under Calico); a config value reverted as a second candidate;
   slice 4's datastores and replay.
 - **Phase 2:** the rest of slice 5 (records pooled across similar
-  workloads and decaying, a person's revert counting as harm), now that a
-  policy can make an action earn its level (decision 60); Flux HelmReleases;
-  an acting session through Argo CD and Flux.
+  workloads and decaying), now that a policy can make an action earn its
+  level (decision 60) and a person's revert counts against it (decision 61);
+  Flux HelmReleases; an acting session through Argo CD and Flux.
 - **Soak.** A long run with the scenario pool's controls and background
   traffic, to measure false alarms per service per week, the error-rate
   detector's especially. Shorter runs on the development cluster first; the
