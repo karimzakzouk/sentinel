@@ -1,0 +1,25 @@
+id: git-env-bad-mode
+title: A commit sets bugapp's MODE to a value it rejects, so it exits as it starts, and Flux deploys it
+app: git
+fault:
+  kind: commit
+  target: {apiVersion: kustomize.toolkit.fluxcd.io/v1, kind: Kustomization, namespace: flux-system, name: bugapp}
+  commit:
+    repository: person/bugapp
+    path: deployment.yaml
+    old: "value: \"serve\""
+    new: "value: \"write\""
+    message: Allow writes
+groundTruth:
+  faultClass: deploy.crash-on-start
+  rootCause: {apiVersion: apps/v1, kind: Deployment, namespace: e2e-delivery, name: bugapp-bugapp}
+  changeType: config
+  symptoms: [pod.crash-loop]
+  mitigation: rollout.undo
+  # The right fix sets the environment variable back to its last good value.
+  fix: {path: deployment.yaml, line: 25}
+manifest:
+  condition: crash-loop
+  namespace: e2e-delivery
+  selector: app=bugapp
+  timeout: 4m

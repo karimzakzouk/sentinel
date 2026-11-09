@@ -1,0 +1,25 @@
+id: git-env-bad-duration
+title: A commit sets bugapp's CACHE_TTL to a value it cannot parse, so it exits as it starts, and Flux deploys it
+app: git
+fault:
+  kind: commit
+  target: {apiVersion: kustomize.toolkit.fluxcd.io/v1, kind: Kustomization, namespace: flux-system, name: bugapp}
+  commit:
+    repository: person/bugapp
+    path: deployment.yaml
+    old: "value: \"30s\""
+    new: "value: \"thirty-seconds\""
+    message: Tune the cache
+groundTruth:
+  faultClass: deploy.crash-on-start
+  rootCause: {apiVersion: apps/v1, kind: Deployment, namespace: e2e-delivery, name: bugapp-bugapp}
+  changeType: config
+  symptoms: [pod.crash-loop]
+  mitigation: rollout.undo
+  # The right fix sets the environment variable back to its last good value.
+  fix: {path: deployment.yaml, line: 23}
+manifest:
+  condition: crash-loop
+  namespace: e2e-delivery
+  selector: app=bugapp
+  timeout: 4m

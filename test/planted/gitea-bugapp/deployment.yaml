@@ -1,0 +1,41 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bugapp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bugapp
+  template:
+    metadata:
+      labels:
+        app: bugapp
+    spec:
+      containers:
+        - name: bugapp
+          image: sentinel-bugapp:1
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: LISTEN_PORT
+              value: "8080"
+            - name: CACHE_TTL
+              value: "30s"
+            - name: MODE
+              value: "serve"
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            capabilities: {drop: [ALL]}
+            seccompProfile: {type: RuntimeDefault}
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
