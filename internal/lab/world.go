@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
+	"sort"
+	"strconv"
 	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -127,6 +130,71 @@ func revisionTemplate(ctx context.Context, client kubernetes.Interface, target m
 		return patch.Spec.Template, nil
 	}
 	return corev1.PodTemplateSpec{}, fmt.Errorf("the Lab copies Deployments and StatefulSets, not %s", target.Kind)
+}
+
+// PreviousTemplate reads the workload's revision before the failing one,
+// or before its newest when revision is empty: the first fix the Lab
+// tries. It says which revision that is.
+func PreviousTemplate(ctx context.Context, client kubernetes.Interface, target model.ObjectRef, revision string) (corev1.PodTemplateSpec, string, error) {
+	type rev struct {
+		name   string
+		number int64
+		tpl    corev1.PodTemplateSpec
+	}
+	var revs []rev
+	owned := func(meta metav1.ObjectMeta) bool {
+		for _, o := range meta.OwnerReferences {
+			if o.Kind == target.Kind && o.Name == target.Name {
+				return true
+			}
+		}
+		return false
+	}
+	switch target.Kind {
+	case "Deployment":
+		list, err := client.AppsV1().ReplicaSets(target.Namespace).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return corev1.PodTemplateSpec{}, "", fmt.Errorf("list revisions: %w", err)
+		}
+		for _, rs := range list.Items {
+			n, err := strconv.ParseInt(rs.Annotations["deployment.kubernetes.io/revision"], 10, 64)
+			if err != nil || !owned(rs.ObjectMeta) {
+				continue
+			}
+			tpl := *rs.Spec.Template.DeepCopy()
+			delete(tpl.Labels, appsv1.DefaultDeploymentUniqueLabelKey)
+			revs = append(revs, rev{rs.Name, n, tpl})
+		}
+	case "StatefulSet":
+		list, err := client.AppsV1().ControllerRevisions(target.Namespace).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return corev1.PodTemplateSpec{}, "", fmt.Errorf("list revisions: %w", err)
+		}
+		for _, cr := range list.Items {
+			if !owned(cr.ObjectMeta) {
+				continue
+			}
+			tpl, err := revisionTemplate(ctx, client, target, cr.Name)
+			if err != nil {
+				return corev1.PodTemplateSpec{}, "", err
+			}
+			revs = append(revs, rev{cr.Name, cr.Revision, tpl})
+		}
+	default:
+		return corev1.PodTemplateSpec{}, "", fmt.Errorf("the Lab copies Deployments and StatefulSets, not %s", target.Kind)
+	}
+	sort.Slice(revs, func(i, j int) bool { return revs[i].number > revs[j].number })
+	failing := 0
+	if revision != "" {
+		failing = slices.IndexFunc(revs, func(r rev) bool { return r.name == revision })
+		if failing < 0 {
+			return corev1.PodTemplateSpec{}, "", fmt.Errorf("revision %s does not belong to %s", revision, target)
+		}
+	}
+	if failing+1 >= len(revs) {
+		return corev1.PodTemplateSpec{}, "", fmt.Errorf("%s has no revision before the failing one", target)
+	}
+	return revs[failing+1].tpl, revs[failing+1].name, nil
 }
 
 func claims(spec corev1.PodSpec) bool {

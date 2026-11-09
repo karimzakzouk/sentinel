@@ -68,6 +68,22 @@ type Plan struct {
 	Fidelity   []string
 }
 
+// Split separates target's copy from the rest of the world, which a race
+// keeps up across its runs.
+func (p *Plan) Split(target model.ObjectRef) (*corev1.Pod, *Plan) {
+	rest := *p
+	rest.Pods = nil
+	var pod *corev1.Pod
+	for _, pp := range p.Pods {
+		if pp.Labels[CopyOf] == target.Kind+"."+target.Name {
+			pod = pp
+		} else {
+			rest.Pods = append(rest.Pods, pp)
+		}
+	}
+	return pod, &rest
+}
+
 // Synthesize copies target, and every workload it depends on, into Lab
 // namespace ns. It refuses what it cannot copy without state or privilege.
 func Synthesize(w World, target model.ObjectRef, ns string) (*Plan, error) {
