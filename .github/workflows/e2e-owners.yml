@@ -1,8 +1,9 @@
 # Runs the owner adapters' end-to-end tests: Argo CD or Flux is installed
 # in a kind cluster, deploys a public example, and Sentinel rolls back a bad
-# image delivered through it. It runs when the adapters or the Brain that
-# decides on them change, weekly, and on demand, so the main suite stays
-# fast.
+# image delivered through it; beside Flux, a Gitea and the Fixer, which
+# proposes the fix as a pull request. It runs when the adapters, the Brain
+# that decides on them or the Fixer change, weekly, and on demand, so the
+# main suite stays fast.
 name: E2E owners
 
 on:
@@ -12,6 +13,13 @@ on:
       - internal/actor/**
       - internal/act/**
       - internal/brain/**
+      - internal/fixer/**
+      - internal/fixes/**
+      - internal/forge/**
+      - test/e2e/fixer_test.go
+      - test/apps/gitea.yaml
+      - test/apps/gitea-delivery/**
+      - hack/gitea-up.sh
       - charts/sentinel/templates/rbac.yaml
       - charts/sentinel-fence/**
       - test/e2e/argocd_test.go
@@ -47,4 +55,5 @@ jobs:
       network: kindnet
       label: -flux
       flux: true
-      run: TestFlux
+      gitea: true
+      run: TestFlux|TestTheFixer

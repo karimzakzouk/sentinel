@@ -1,0 +1,5 @@
+# The repository person/delivery in the test Gitea starts with these files:
+# podinfo, which Flux deploys and the Fixer proposes fixes to.
+resources:
+  - deployment.yaml
+  - service.yaml

@@ -252,7 +252,7 @@ func (f *Fixer) propose(ctx context.Context, fix *v1alpha1.Fix) (v1alpha1.FixPha
 
 func body(fix *v1alpha1.Fix, src *Source, edit *Edit, change Change) string {
 	w := fix.Spec.Workload
-	return fmt.Sprintf(`Sentinel rolled **%s/%s** back from a revision whose container %s could not run as %s, and paused the %s so the rollback holds.
+	return fmt.Sprintf(`Sentinel rolled **%s/%s** back from the revision that set container %s's image to %s, and paused the %s so the rollback holds.
 
 This pull request makes the fix last: %s's image goes back to %s, the image the workload ran before.
 

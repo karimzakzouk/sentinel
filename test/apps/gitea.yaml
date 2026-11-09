@@ -1,0 +1,63 @@
+# A Gitea for the Fixer's tests, until a test GitHub organization exists:
+# the forge whose repository Flux deploys from and the Fixer proposes fixes
+# to. hack/gitea-up.sh applies it and creates its users and repository. Its
+# data lives in the pod, so a restart starts it empty.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: gitea
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gitea
+  namespace: gitea
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: {app: gitea}
+  template:
+    metadata:
+      labels: {app: gitea}
+    spec:
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: gitea
+          image: gitea/gitea:28.3.0-rootless
+          env:
+            - {name: GITEA__security__INSTALL_LOCK, value: "true"}
+            - {name: GITEA__database__DB_TYPE, value: sqlite3}
+            - {name: GITEA__server__DOMAIN, value: gitea-http.gitea.svc}
+            - {name: GITEA__server__HTTP_PORT, value: "3000"}
+            - {name: GITEA__server__ROOT_URL, value: "http://gitea-http.gitea.svc:3000/"}
+            - {name: GITEA__server__DISABLE_SSH, value: "true"}
+            - {name: GITEA__service__DISABLE_REGISTRATION, value: "true"}
+            - {name: GITEA__repository__DEFAULT_BRANCH, value: main}
+          ports:
+            - {name: http, containerPort: 3000}
+          readinessProbe:
+            httpGet: {path: /api/healthz, port: http}
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {memory: 512Mi}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/gitea}
+            - {name: config, mountPath: /etc/gitea}
+      volumes:
+        - {name: data, emptyDir: {}}
+        - {name: config, emptyDir: {}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gitea-http
+  namespace: gitea
+spec:
+  selector: {app: gitea}
+  ports:
+    - {name: http, port: 3000, targetPort: http}
