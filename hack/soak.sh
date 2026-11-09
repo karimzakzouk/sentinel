@@ -12,7 +12,7 @@ state="$root/test/results/soak-start"
 
 case "${1:-}" in
 start)
-  helm --kube-context "$ctx" upgrade sentinel "$root/charts/sentinel" --namespace sentinel --reuse-values \
+  helm --kube-context "$ctx" upgrade sentinel "$root/charts/sentinel" --namespace sentinel --reset-then-reuse-values \
     -f "$root/test/soak/values-sentinel.yaml" \
     --set detection.window=5m --set detection.tick=15s --set detection.incidentGap=5m \
     --set detection.warmUp=30m --set logs.sampleInterval=1m --set capabilities.interval=10m --wait
