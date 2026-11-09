@@ -110,6 +110,56 @@ func (c *Checkout) Files() (filesys.FileSystem, error) {
 	return files, err
 }
 
+// CloneHistory clones a branch with its history, for reading the files of
+// the commits images were built from; the default branch when empty.
+func CloneHistory(ctx context.Context, url, branch string, auth transport.AuthMethod) (*Checkout, error) {
+	tree := memfs.New()
+	opts := &git.CloneOptions{URL: url, Auth: auth, SingleBranch: true}
+	if branch != "" {
+		opts.ReferenceName = plumbing.NewBranchReferenceName(branch)
+	}
+	repo, err := git.CloneContext(ctx, memory.NewStorage(), tree, opts)
+	if err != nil {
+		return nil, fmt.Errorf("clone %s: %w", url, err)
+	}
+	head, err := repo.Head()
+	if err != nil {
+		return nil, err
+	}
+	return &Checkout{repo: repo, tree: tree, auth: auth, Branch: head.Name().Short(), Head: head.Hash().String()}, nil
+}
+
+// FilesAt reads every file of a commit the clone holds, up to
+// maxRepoBytes.
+func (c *Checkout) FilesAt(rev string) (map[string][]byte, error) {
+	hash, err := c.repo.ResolveRevision(plumbing.Revision(rev))
+	if err != nil {
+		return nil, fmt.Errorf("the branch's history has no commit %s: %w", rev, err)
+	}
+	commit, err := c.repo.CommitObject(*hash)
+	if err != nil {
+		return nil, err
+	}
+	tree, err := commit.Tree()
+	if err != nil {
+		return nil, err
+	}
+	out := map[string][]byte{}
+	total := int64(0)
+	err = tree.Files().ForEach(func(f *object.File) error {
+		if total += f.Size; total > maxRepoBytes {
+			return fmt.Errorf("the repository holds more than %d MiB", maxRepoBytes>>20)
+		}
+		data, err := f.Contents()
+		if err != nil {
+			return err
+		}
+		out[f.Name] = []byte(data)
+		return nil
+	})
+	return out, err
+}
+
 // Push commits the edit on a new branch from the checked out head, as
 // author, and pushes the branch, over one of the same name left by an
 // attempt that stopped before its pull request: the branch is Sentinel's.

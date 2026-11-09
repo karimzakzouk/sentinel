@@ -18,6 +18,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/yaml"
 
+	"github.com/karimzakzouk/sentinel/internal/codefix"
 	"github.com/karimzakzouk/sentinel/internal/fixer"
 	"github.com/karimzakzouk/sentinel/internal/forge"
 	"github.com/karimzakzouk/sentinel/internal/kube"
@@ -48,6 +49,13 @@ type FixerConfig struct {
 	// LeaderElection, when set, has replicas hold this Lease in turn; only
 	// its holder works.
 	LeaderElection *lead.Config `json:"leaderElection,omitempty"`
+	// Code, when set, turns on fixes to a failing image's code: the Fixer
+	// reads images' labels from their registries, those listed as insecure
+	// over plain HTTP, the platform's image of an index.
+	Code *struct {
+		InsecureRegistries []string `json:"insecureRegistries,omitempty"`
+		Platform           string   `json:"platform,omitempty"`
+	} `json:"code,omitempty"`
 }
 
 func loadFixerConfig(path string) (FixerConfig, error) {
@@ -117,6 +125,9 @@ func newFixerCmd(kf *kube.Flags) *cobra.Command {
 				Forge:           &forge.Client{Web: cfg.Forge.Web, API: cfg.Forge.API, Token: strings.TrimSpace(string(token)), HTTP: &http.Client{Timeout: time.Minute}},
 				Author:          object.Signature{Name: cfg.Author.Name, Email: cfg.Author.Email},
 				ArgoCDNamespace: cfg.ArgoCDNamespace, Poll: cfg.Poll, Log: log}
+			if c := cfg.Code; c != nil {
+				f.Registry = &codefix.Registry{HTTP: &http.Client{Timeout: 30 * time.Second}, Insecure: c.InsecureRegistries, Platform: c.Platform}
+			}
 			ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGTERM, os.Interrupt)
 			defer stop()
 			var ready atomic.Bool

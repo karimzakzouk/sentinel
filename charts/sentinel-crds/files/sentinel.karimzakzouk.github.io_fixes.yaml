@@ -58,6 +58,27 @@ spec:
               GitOps owner deploys from, the change that undoes the blamed change. It
               cannot be changed after creation.
             properties:
+              crash:
+                description: |-
+                  Crash is the stack the failing revision crashed with, when its logs
+                  held one: a fix to the image's code starts from it.
+                properties:
+                  frames:
+                    description: Frames are the application's own functions, innermost
+                      first.
+                    items:
+                      type: string
+                    maxItems: 20
+                    type: array
+                    x-kubernetes-list-type: atomic
+                  language:
+                    description: Language is the runtime that printed it, such as
+                      go.
+                    type: string
+                required:
+                - frames
+                - language
+                type: object
               faultClass:
                 description: |-
                   FaultClass is the class Sentinel gave the incident. When that
@@ -130,6 +151,48 @@ spec:
                   type: string
                 type: array
                 x-kubernetes-list-type: atomic
+              code:
+                description: |-
+                  Code is the fix proposed to the failing image's source, beside the
+                  one that pins the image back, when the fault is in its code.
+                properties:
+                  change:
+                    items:
+                      type: string
+                    type: array
+                    x-kubernetes-list-type: atomic
+                  commit:
+                    description: |-
+                      Commit is the fix's commit, whose image the source's own pipeline
+                      builds, and Image that image once the registry has it.
+                    type: string
+                  failing:
+                    description: |-
+                      Failing is the image that crashed; the image built from the fix is
+                      looked for in its repository.
+                    type: string
+                  function:
+                    description: Function is what the fix puts back as it was.
+                    type: string
+                  image:
+                    type: string
+                  message:
+                    description: Message says why there is no code fix, or how it
+                      stands.
+                    type: string
+                  number:
+                    format: int32
+                    type: integer
+                  pullRequest:
+                    type: string
+                  repository:
+                    description: |-
+                      Repository is the source's URL, and Revision the commit the failing
+                      image was built from.
+                    type: string
+                  revision:
+                    type: string
+                type: object
               mergeCommit:
                 description: MergeCommit is the commit that merged the pull request.
                 type: string

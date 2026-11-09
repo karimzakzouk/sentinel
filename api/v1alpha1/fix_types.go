@@ -37,6 +37,53 @@ type FixSpec struct {
 	// The Fixer checks the policy again before it merges.
 	// +optional
 	Merge bool `json:"merge,omitempty"`
+	// Crash is the stack the failing revision crashed with, when its logs
+	// held one: a fix to the image's code starts from it.
+	// +optional
+	Crash *Crash `json:"crash,omitempty"`
+}
+
+// Crash is a crash's stack as Sentinel parsed it from redacted logs.
+type Crash struct {
+	// Language is the runtime that printed it, such as go.
+	Language string `json:"language"`
+	// Frames are the application's own functions, innermost first.
+	// +listType=atomic
+	// +kubebuilder:validation:MaxItems=20
+	Frames []string `json:"frames"`
+}
+
+// CodeFix is a fix proposed to a failing image's source.
+type CodeFix struct {
+	// Repository is the source's URL, and Revision the commit the failing
+	// image was built from.
+	// +optional
+	Repository string `json:"repository,omitempty"`
+	// +optional
+	Revision string `json:"revision,omitempty"`
+	// Function is what the fix puts back as it was.
+	// +optional
+	Function string `json:"function,omitempty"`
+	// +optional
+	// +listType=atomic
+	Change []string `json:"change,omitempty"`
+	// +optional
+	PullRequest string `json:"pullRequest,omitempty"`
+	// +optional
+	Number int32 `json:"number,omitempty"`
+	// Failing is the image that crashed; the image built from the fix is
+	// looked for in its repository.
+	// +optional
+	Failing string `json:"failing,omitempty"`
+	// Commit is the fix's commit, whose image the source's own pipeline
+	// builds, and Image that image once the registry has it.
+	// +optional
+	Commit string `json:"commit,omitempty"`
+	// +optional
+	Image string `json:"image,omitempty"`
+	// Message says why there is no code fix, or how it stands.
+	// +optional
+	Message string `json:"message,omitempty"`
 }
 
 // FixPhase is a step in a fix's lifecycle: Proposed once its pull request
@@ -78,6 +125,10 @@ type FixStatus struct {
 	// MergeCommit is the commit that merged the pull request.
 	// +optional
 	MergeCommit string `json:"mergeCommit,omitempty"`
+	// Code is the fix proposed to the failing image's source, beside the
+	// one that pins the image back, when the fault is in its code.
+	// +optional
+	Code *CodeFix `json:"code,omitempty"`
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 }

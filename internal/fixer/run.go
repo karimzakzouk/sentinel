@@ -20,6 +20,7 @@ import (
 
 	"github.com/karimzakzouk/sentinel/api/v1alpha1"
 	"github.com/karimzakzouk/sentinel/internal/actor"
+	"github.com/karimzakzouk/sentinel/internal/codefix"
 	"github.com/karimzakzouk/sentinel/internal/forge"
 	"github.com/karimzakzouk/sentinel/internal/policy"
 )
@@ -58,6 +59,9 @@ type Fixer struct {
 	GitUser         string
 	Author          object.Signature
 	ArgoCDNamespace string
+	// Registry, when set, reads images' labels, which turns on fixes to a
+	// failing image's code.
+	Registry *codefix.Registry
 	// Poll is how often it reads an open pull request, and a merged fix's
 	// source.
 	Poll    time.Duration
@@ -113,7 +117,7 @@ func (f *Fixer) Run(ctx context.Context) error {
 	}
 }
 
-func (f *Fixer) process(ctx context.Context, store cache.Store, key string, tries int) (time.Duration, error) {
+func (f *Fixer) process(ctx context.Context, store cache.Store, key string, tries int) (after time.Duration, err error) {
 	obj, exists, err := store.GetByKey(key)
 	if err != nil || !exists {
 		return 0, err
@@ -126,6 +130,17 @@ func (f *Fixer) process(ctx context.Context, store cache.Store, key string, trie
 	if poll <= 0 {
 		poll = 30 * time.Second
 	}
+	if f.awaitBuild(ctx, &fix, time.Now()) {
+		return poll, f.setStatus(ctx, &fix, fix.Status.Phase, fix.Status.Message)
+	}
+	// A code fix's build is looked for whatever phase the fix that pins
+	// the image back has reached, Applied included.
+	defer func() {
+		if cf := fix.Status.Code; err == nil && cf != nil && cf.Commit != "" && cf.Image == "" &&
+			!strings.HasPrefix(cf.Message, "no image") && (after == 0 || after > poll) {
+			after = poll
+		}
+	}()
 	switch fix.Status.Phase {
 	case "", "Pending":
 		phase, msg, err := f.propose(ctx, &fix)
@@ -288,6 +303,7 @@ func (f *Fixer) propose(ctx context.Context, fix *v1alpha1.Fix) (v1alpha1.FixPha
 		return "", "", err
 	}
 	fix.Status.PullRequest, fix.Status.Number = pr.URL, int32(min(pr.Number, 1<<30)) //nolint:gosec // bounded just above
+	fix.Status.Code = f.codeFix(ctx, fix, change)
 	return PhaseProposed, edit.Why, nil
 }
 

@@ -7,8 +7,10 @@ import (
 	"time"
 
 	"github.com/karimzakzouk/sentinel/internal/ledger"
+	"github.com/karimzakzouk/sentinel/internal/logs"
 	"github.com/karimzakzouk/sentinel/internal/model"
 	"github.com/karimzakzouk/sentinel/internal/notify"
+	"github.com/karimzakzouk/sentinel/internal/watcher"
 )
 
 type fakeFixer struct {
@@ -165,5 +167,31 @@ func TestAFixEarnsItsOwnMerge(t *testing.T) {
 	b.MergePolicy = func(string) (model.AutonomyLevel, bool) { return model.AutonomyApprove, false }
 	if r := ask("inc-3"); r.Merge {
 		t.Fatal("a fix merged itself where the policy grants approve")
+	}
+}
+
+// The Fixer is told the newest crash in the workload's own logs, with its
+// application's frames; another workload's crash is not its.
+func TestTheFixerIsToldTheCrash(t *testing.T) {
+	b, l := newBrain(t)
+	fixer := &fakeFixer{}
+	b.Fixer = fixer
+	inc := &incident{rec: model.Incident{ID: "inc-1", Assessment: &model.Assessment{Class: ClassCrashOnStart}}}
+	evidence := func(workload model.ObjectRef, fn string, at time.Duration) ledger.Draft {
+		ev := watcher.LogEvidence{Workload: workload, Pod: workload.Name + "-1", CollectedAt: onset.Add(at), Summary: logs.Summary{
+			Exceptions: []logs.ExceptionCount{{Exception: logs.Exception{Language: "go", Types: []string{"nil pointer"},
+				Frames: []logs.Frame{{Function: fn, InApp: true}, {Function: "runtime.goexit"}}}}}}}
+		e := evidenceRecord("inc-1", ev)
+		return ledger.RecordDraft(source, model.KindEvidence, "attached", e.ID, "inc-1", e)
+	}
+	other := model.ObjectRef{Group: "apps", Kind: "Deployment", Namespace: web.Namespace, Name: "front"}
+	if _, err := l.Append(ctx, evidence(web, "example.com/shop/cart.Old", 0), evidence(web, "example.com/shop/cart.(*Store).Get", time.Minute),
+		evidence(other, "example.com/front.Render", 2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	a := &model.Action{Type: ActionRolloutUndo, Target: web, Params: map[string]string{argFromTemplateHash: "bad"}}
+	b.askFix(ctx, inc, a)
+	if c := fixer.requests[0].Crash; c == nil || c.Language != "go" || len(c.Frames) != 1 || c.Frames[0] != "example.com/shop/cart.(*Store).Get" {
+		t.Fatalf("crash %+v", c)
 	}
 }

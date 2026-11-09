@@ -37,9 +37,10 @@ import (
 // the pull request API, as Gitea does.
 type forgeServer struct {
 	*httptest.Server
-	mu     sync.Mutex
-	opened map[string]string
-	merged string
+	mu         sync.Mutex
+	opened     map[string]string
+	openedCode map[string]string
+	merged     string
 }
 
 func newForge(t *testing.T, root string) *forgeServer {
@@ -58,6 +59,12 @@ func newForge(t *testing.T, root string) *forgeServer {
 		defer f.mu.Unlock()
 		_ = json.NewDecoder(r.Body).Decode(&f.opened)
 		_, _ = io.WriteString(w, `{"number": 1, "html_url": "`+f.URL+`/sentinel/delivery/pulls/1", "state": "open"}`)
+	})
+	mux.HandleFunc("POST /api/v1/repos/sentinel/shop/pulls", func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		_ = json.NewDecoder(r.Body).Decode(&f.openedCode)
+		_, _ = io.WriteString(w, `{"number": 2, "html_url": "`+f.URL+`/sentinel/shop/pulls/2", "state": "open"}`)
 	})
 	mux.HandleFunc("GET /api/v1/repos/sentinel/delivery/pulls/1", func(w http.ResponseWriter, _ *http.Request) {
 		f.mu.Lock()
