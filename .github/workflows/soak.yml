@@ -1,10 +1,15 @@
 # A soak runs Sentinel with production detection settings beside Online
 # Boutique, its load generator and the smoke workloads, with nothing
 # injected, on the self-hosted runner: every incident it opens is a false
-# alarm. The phase 1 gate needs 72 hours.
+# alarm. The phase 1 gate needs 72 hours. "Run workflow" starts one, and so
+# does a push that changes .github/requests/soak.
 name: Soak
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - .github/requests/soak
   workflow_dispatch:
     inputs:
       hours:
@@ -70,6 +75,8 @@ jobs:
         run: hack/soak.sh start
       - name: Watch
         run: |
+          # A push of the request file has no inputs; it holds the hours.
+          HOURS="${HOURS:-$(awk '/^hours:/ {print $2}' .github/requests/soak)}"
           case "$HOURS" in
             '' | *[!0-9]*) echo "::error::hours must be a whole number"; exit 1 ;;
           esac

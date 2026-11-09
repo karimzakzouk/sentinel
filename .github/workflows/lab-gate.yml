@@ -1,10 +1,15 @@
 # The Lab's gate, on demand, on the self-hosted runner with Calico, which
 # enforces NetworkPolicy: races whose right answers are known, repeated, and
 # Online Boutique's frontend copied into the Lab. The tally of verdicts goes
-# in the run's summary.
+# in the run's summary. "Run workflow" starts one, and so does a push that
+# changes .github/requests/lab-gate.
 name: Lab gate
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - .github/requests/lab-gate
   workflow_dispatch:
     inputs:
       races:
@@ -67,6 +72,8 @@ jobs:
           make boutique-up
       - name: The Lab's gate
         run: |
+          # A push of the request file has no inputs; it holds the count.
+          export LAB_GATE_RACES="${LAB_GATE_RACES:-$(awk '/^races:/ {print $2}' .github/requests/lab-gate)}"
           LAB_GATE_REPORT="$PWD/lab-gate.md" E2E_TIMEOUT=1380m \
             E2E_RUN='TestTheLabsVerdictsHoldTheirErrorRates|TestTheLabCopiesOnlineBoutiquesFrontend' make e2e
       - name: Report
