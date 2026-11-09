@@ -22,6 +22,8 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/discovery/cached/memory"
 	"k8s.io/client-go/dynamic"
@@ -60,6 +62,27 @@ func clientAs(t *testing.T, as string) kubernetes.Interface {
 		t.Fatal(err)
 	}
 	return c
+}
+
+func dynamicAs(t *testing.T, as string) dynamic.Interface {
+	t.Helper()
+	cfg, err := flags(as).RESTConfig("sentinel-e2e")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dynamic.NewForConfigOrDie(cfg)
+}
+
+// actionRequest is a request to restart web, which nothing will run: the
+// e2e namespaces hold no SentinelPolicy.
+func actionRequest(ns, name string) *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "sentinel.karimzakzouk.github.io/v1alpha1", "kind": "ActionRequest",
+		"metadata": map[string]any{"name": name, "namespace": ns},
+		"spec": map[string]any{"incidentId": "fence-test", "action": "restart", "reason": "fence test",
+			"expiresAt": time.Now().Add(time.Minute).UTC().Format(time.RFC3339),
+			"target":    map[string]any{"apiVersion": "apps/v1", "kind": "Deployment", "namespace": ns, "name": "web"}},
+	}}
 }
 
 func eventually(t *testing.T, timeout time.Duration, what string, ok func() (bool, error)) {
@@ -250,6 +273,31 @@ func TestFenceBlocksForbiddenWrites(t *testing.T) {
 		}
 	}
 	restart := `{"spec":{"template":{"metadata":{"annotations":{"kubectl.kubernetes.io/restartedAt":"2026-01-01T00:00:00Z"}}}}}`
+	requests := schema.GroupVersionResource{Group: "sentinel.karimzakzouk.github.io", Version: "v1alpha1", Resource: "actionrequests"}
+	createRequest := func(as dynamic.Interface, ns string) func() error {
+		return func() error {
+			_, err := as.Resource(requests).Namespace(ns).Create(ctx, actionRequest(ns, "fence-test-dry"),
+				metav1.CreateOptions{DryRun: []string{metav1.DryRunAll}})
+			return err
+		}
+	}
+	if _, err := dynamicAs(t, "").Resource(requests).Namespace(smokeNS).Create(ctx, actionRequest(smokeNS, "fence-test"), metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = dynamicAs(t, "").Resource(requests).Namespace(smokeNS).Delete(ctx, "fence-test", metav1.DeleteOptions{})
+	})
+	updateStatus := func() error {
+		// The actor may already have rejected it: no policy lets it run.
+		u, err := dynamicAs(t, actorUser).Resource(requests).Namespace(smokeNS).Get(ctx, "fence-test", metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
+		u.Object["status"] = map[string]any{"phase": "Rejected", "message": "fence test"}
+		_, err = dynamicAs(t, actorUser).Resource(requests).Namespace(smokeNS).UpdateStatus(ctx, u,
+			metav1.UpdateOptions{DryRun: []string{metav1.DryRunAll}})
+		return err
+	}
 	cases := []struct {
 		name string
 		do   func() error
@@ -260,13 +308,19 @@ func TestFenceBlocksForbiddenWrites(t *testing.T) {
 		{"actor restarts a Deployment", patch(actor, smokeNS, "deployment", "web", restart), true, false},
 		{"actor scales a StatefulSet within bounds", patch(actor, smokeNS, "statefulset", "store", `{"spec":{"replicas":3}}`, "scale"), true, false},
 		{"actor scales past the bound", patch(actor, smokeNS, "deployment", "web", `{"spec":{"replicas":9}}`, "scale"), false, true},
-		{"actor changes the service account", patch(actor, smokeNS, "deployment", "web", `{"spec":{"template":{"spec":{"serviceAccountName":"default"}}}}`), false, true},
-		{"actor changes the image", patch(actor, smokeNS, "deployment", "web", `{"spec":{"template":{"spec":{"containers":[{"name":"web","image":"busybox"}]}}}}`), false, true},
-		{"actor adds an environment variable", patch(actor, smokeNS, "deployment", "web", `{"spec":{"template":{"spec":{"containers":[{"name":"web","env":[{"name":"X","value":"1"}]}]}}}}`), false, true},
+		// A rollback restores an earlier template, whatever changed in it.
+		{"actor restores a Deployment's template", patch(actor, smokeNS, "deployment", "web", `{"spec":{"template":{"spec":{"containers":[{"name":"web","image":"busybox"}]}}}}`), true, false},
+		{"actor pauses a Deployment", patch(actor, smokeNS, "deployment", "web", `{"spec":{"paused":true}}`), false, true},
+		{"actor changes a Deployment's labels", patch(actor, smokeNS, "deployment", "web", `{"metadata":{"labels":{"x":"y"}}}`), false, true},
+		{"actor changes a StatefulSet's image", patch(actor, smokeNS, "statefulset", "store", `{"spec":{"template":{"spec":{"containers":[{"name":"store","image":"busybox"}]}}}}`), false, true},
 		{"actor changes StatefulSet pod labels", patch(actor, smokeNS, "statefulset", "store", `{"spec":{"template":{"metadata":{"labels":{"x":"y"}}}}}`), false, true},
 		{"actor acts outside its namespaces", patch(actor, "kube-system", "deployment", "coredns", `{"spec":{"replicas":2}}`), false, false},
+		{"actor records an action request's outcome", updateStatus, true, false},
+		{"actor makes its own action request", createRequest(dynamicAs(t, actorUser), smokeNS), false, false},
 		{"controller creates a real pod", createPod(false), false, true},
 		{"controller makes a dry-run probe", createPod(true), true, false},
+		{"controller asks the actor for an action", createRequest(dynamicAs(t, controllerUser), smokeNS), true, false},
+		{"controller asks for an action outside its namespaces", createRequest(dynamicAs(t, controllerUser), "kube-system"), false, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

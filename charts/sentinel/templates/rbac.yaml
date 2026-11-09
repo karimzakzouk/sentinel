@@ -23,6 +23,16 @@ rules:
   - apiGroups: [metrics.k8s.io]
     resources: [pods]
     verbs: [get, list]
+  - apiGroups: [sentinel.karimzakzouk.github.io]
+    resources: [sentinelpolicies]
+    verbs: [get, list, watch]
+  {{- if .Values.actor.enabled }}
+  # Asking the actor for an action is the controller's only write; the fence
+  # holds it to the watched namespaces.
+  - apiGroups: [sentinel.karimzakzouk.github.io]
+    resources: [actionrequests]
+    verbs: [get, list, watch, create]
+  {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -105,7 +115,9 @@ subjects:
 {{- end }}
 {{- if .Values.actor.enabled }}
 ---
-# Patch existing workloads and their scale; never create, delete or read Secrets.
+# Update existing workloads and their scale, read the revisions a rollback
+# restores, and carry out action requests; never create, delete or read
+# Secrets. The fence bounds every write.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -115,7 +127,16 @@ metadata:
 rules:
   - apiGroups: [apps]
     resources: [deployments, statefulsets, deployments/scale, statefulsets/scale]
-    verbs: [get, patch]
+    verbs: [get, update, patch]
+  - apiGroups: [apps]
+    resources: [replicasets]
+    verbs: [get, list]
+  - apiGroups: [sentinel.karimzakzouk.github.io]
+    resources: [actionrequests, sentinelpolicies]
+    verbs: [get, list, watch]
+  - apiGroups: [sentinel.karimzakzouk.github.io]
+    resources: [actionrequests/status]
+    verbs: [update]
 {{- range .Values.watch.namespaces }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1

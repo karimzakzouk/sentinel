@@ -1,5 +1,6 @@
 # Every write by the actor: only updates of existing Deployments and
-# StatefulSets (or their scale) in allowlisted namespaces.
+# StatefulSets (or their scale), and of action requests' status, in
+# allowlisted namespaces.
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
@@ -25,8 +26,12 @@ spec:
     - expression: "request.resource.group in ['authorization.k8s.io', 'authentication.k8s.io'] || variables.requestNamespace in {{ include "fence.namespaces" . }}"
       message: "Sentinel may act only in its allowlisted namespaces"
       reason: Forbidden
-    - expression: "request.resource.group in ['authorization.k8s.io', 'authentication.k8s.io'] || (request.operation == 'UPDATE' && variables.workload && variables.subResource in ['', 'scale'])"
-      message: "Sentinel may only update existing Deployments and StatefulSets, or their scale"
+    - expression: >-
+        request.resource.group in ['authorization.k8s.io', 'authentication.k8s.io'] ||
+        (request.operation == 'UPDATE' && variables.workload && variables.subResource in ['', 'scale']) ||
+        (request.operation == 'UPDATE' && request.resource.group == 'sentinel.karimzakzouk.github.io' &&
+         request.resource.resource == 'actionrequests' && variables.subResource == 'status')
+      message: "Sentinel may only update existing Deployments and StatefulSets, or their scale, and the status of action requests"
       reason: Forbidden
     - expression: "variables.subResource != 'scale' || (object.spec.?replicas.orValue(0) >= {{ .Values.replicas.min }} && object.spec.?replicas.orValue(0) <= {{ .Values.replicas.max }})"
       message: "replicas must stay between {{ .Values.replicas.min }} and {{ .Values.replicas.max }}"
@@ -42,8 +47,10 @@ spec:
   policyName: sentinel-fence-actor
   validationActions: [Deny]
 ---
-# Deployment updates: replicas within bounds and the restart annotation; the
-# rest of the object must not change.
+# Deployment updates: replicas within bounds, and the pod template, which a
+# rollback restores from the Deployment's own ReplicaSets. The actor copies
+# templates only from there; no admission policy can tell that a template
+# ran before (decision 40). The rest of the object must not change.
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
@@ -104,6 +111,7 @@ spec:
     {{- include "fence.workloadVariables" . | nindent 4 }}
   validations:
     {{- include "fence.workloadValidations" . | nindent 4 }}
+    {{- include "fence.podTemplateValidations" . | nindent 4 }}
     - expression: >-
         object.spec.serviceName == oldObject.spec.serviceName &&
         object.spec.?podManagementPolicy == oldObject.spec.?podManagementPolicy &&

@@ -49,6 +49,27 @@ type ActionRequestSpec struct {
 // +kubebuilder:validation:Enum=Pending;Approved;Rejected;DryRunPassed;Executing;Succeeded;Failed;Undone;Expired
 type ActionPhase string
 
+const (
+	ActionPending      ActionPhase = "Pending"
+	ActionApproved     ActionPhase = "Approved"
+	ActionRejected     ActionPhase = "Rejected"
+	ActionDryRunPassed ActionPhase = "DryRunPassed"
+	ActionExecuting    ActionPhase = "Executing"
+	ActionSucceeded    ActionPhase = "Succeeded"
+	ActionFailed       ActionPhase = "Failed"
+	ActionUndone       ActionPhase = "Undone"
+	ActionExpired      ActionPhase = "Expired"
+)
+
+// Done reports a phase no request leaves.
+func (p ActionPhase) Done() bool {
+	switch p {
+	case ActionRejected, ActionDryRunPassed, ActionSucceeded, ActionFailed, ActionUndone, ActionExpired:
+		return true
+	}
+	return false
+}
+
 // ActionRequestStatus is written by the actor.
 type ActionRequestStatus struct {
 	// +optional

@@ -20,12 +20,22 @@ system:serviceaccount:{{ .Values.actor.namespace }}:{{ .Values.actor.serviceAcco
 [{{ range $i, $ns := .Values.namespaces }}{{ if $i }}, {{ end }}'{{ $ns }}'{{ end }}]
 {{- end }}
 
-{{- /* Shared checks for every workload update: replicas, labels, annotations and the pod spec. */ -}}
+{{- /* Shared checks for every workload update: replicas, the selector, and the workload's labels and annotations. */ -}}
 {{- define "fence.workloadValidations" -}}
 - expression: "object.spec.?replicas.orValue(1) >= {{ .Values.replicas.min }} && object.spec.?replicas.orValue(1) <= {{ .Values.replicas.max }}"
   message: "replicas must stay between {{ .Values.replicas.min }} and {{ .Values.replicas.max }}"
 - expression: "object.spec.selector == oldObject.spec.selector"
   message: "Sentinel may not change a workload's selector"
+- expression: "object.metadata.?labels == oldObject.metadata.?labels"
+  message: "Sentinel may not change workload labels"
+- expression: >-
+    variables.newObjectAnnotations.all(k, k.startsWith('sentinel.karimzakzouk.github.io/') || (k in variables.oldObjectAnnotations && variables.oldObjectAnnotations[k] == variables.newObjectAnnotations[k])) &&
+    variables.oldObjectAnnotations.all(k, k.startsWith('sentinel.karimzakzouk.github.io/') || k in variables.newObjectAnnotations)
+  message: "Sentinel may only change its own annotations on a workload"
+{{- end }}
+
+{{- /* The pod template is fixed but for the restart annotation, where no rollback contract applies. */ -}}
+{{- define "fence.podTemplateValidations" -}}
 - expression: "object.spec.template.spec == oldObject.spec.template.spec"
   message: "Sentinel may not change the pod spec: service account, volumes, images, environment and security settings are fixed"
 - expression: "object.spec.template.metadata.?labels == oldObject.spec.template.metadata.?labels"
@@ -34,12 +44,6 @@ system:serviceaccount:{{ .Values.actor.namespace }}:{{ .Values.actor.serviceAcco
     variables.newAnnotations.all(k, k == 'kubectl.kubernetes.io/restartedAt' || (k in variables.oldAnnotations && variables.oldAnnotations[k] == variables.newAnnotations[k])) &&
     variables.oldAnnotations.all(k, k == 'kubectl.kubernetes.io/restartedAt' || k in variables.newAnnotations)
   message: "the only pod template annotation Sentinel may change is the restart annotation"
-- expression: "object.metadata.?labels == oldObject.metadata.?labels"
-  message: "Sentinel may not change workload labels"
-- expression: >-
-    variables.newObjectAnnotations.all(k, k.startsWith('sentinel.karimzakzouk.github.io/') || (k in variables.oldObjectAnnotations && variables.oldObjectAnnotations[k] == variables.newObjectAnnotations[k])) &&
-    variables.oldObjectAnnotations.all(k, k.startsWith('sentinel.karimzakzouk.github.io/') || k in variables.newObjectAnnotations)
-  message: "Sentinel may only change its own annotations on a workload"
 {{- end }}
 
 {{- /* The API server omits empty request fields, and reading a missing key is an error in CEL. */ -}}
