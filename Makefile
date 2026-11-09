@@ -3,6 +3,7 @@ GO ?= go
 VERSION ?= $(shell git describe --tags --match 'v2.*' --always --dirty 2>/dev/null || echo dev)
 IMAGE ?= sentinel:dev
 E2E_CLUSTER ?= sentinel-e2e
+E2E_TIMEOUT ?= 45m
 LDFLAGS := -s -w -X github.com/karimzakzouk/sentinel/internal/version.Version=$(VERSION)
 
 .PHONY: all build test lint fmt vuln generate verify image helm-lint scenarios e2e-up e2e e2e-down tidy boutique-up score ui
@@ -52,7 +53,7 @@ e2e-up:
 # E2E_RUN narrows the suite to the tests a regular expression names, and
 # E2E_SKIP leaves out those another names.
 e2e:
-	E2E_CLUSTER=$(E2E_CLUSTER) $(GO) test -v -count=1 -timeout 45m -tags e2e $(if $(E2E_RUN),-run '$(E2E_RUN)') $(if $(E2E_SKIP),-skip '$(E2E_SKIP)') ./test/e2e/...
+	E2E_CLUSTER=$(E2E_CLUSTER) $(GO) test -v -count=1 -timeout $(E2E_TIMEOUT) -tags e2e $(if $(E2E_RUN),-run '$(E2E_RUN)') $(if $(E2E_SKIP),-skip '$(E2E_SKIP)') ./test/e2e/...
 
 e2e-down:
 	kind delete cluster --name $(E2E_CLUSTER)

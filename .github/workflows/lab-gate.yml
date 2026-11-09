@@ -1,0 +1,85 @@
+# The Lab's gate, on demand, on the self-hosted runner with Calico, which
+# enforces NetworkPolicy: races whose right answers are known, repeated, and
+# Online Boutique's frontend copied into the Lab. The tally of verdicts goes
+# in the run's summary.
+name: Lab gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      races:
+        description: rounds of the four kinds of race (about 30 minutes each)
+        type: number
+        default: 10
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lab-gate
+  cancel-in-progress: false
+
+jobs:
+  wake:
+    name: wake the runner
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: |
+            .github/actions
+            hack/azure-runner
+      - uses: ./.github/actions/wake-runner
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        with:
+          resource-group: ${{ vars.RUNNER_RESOURCE_GROUP || 'sentinel-ci' }}
+          vm-name: ${{ vars.RUNNER_VM_NAME }}
+
+  gate:
+    name: gate
+    needs: [wake]
+    runs-on: [self-hosted, sentinel-lab]
+    timeout-minutes: 1440
+    env:
+      E2E_CLUSTER: sentinel-lab-gate
+      E2E_NETWORK: calico
+      LAB_GATE_RACES: ${{ inputs.races }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Install pinned tools
+        run: hack/install-tools.sh
+      - name: Clear earlier jobs' clusters
+        run: |
+          kind delete clusters --all
+          docker container prune --force
+      - name: Bring up the cluster, Sentinel, the test workloads and Online Boutique
+        run: |
+          make e2e-up
+          make boutique-up
+      - name: The Lab's gate
+        run: |
+          LAB_GATE_REPORT="$PWD/lab-gate.md" E2E_TIMEOUT=1380m \
+            E2E_RUN='TestTheLabsVerdictsHoldTheirErrorRates|TestTheLabCopiesOnlineBoutiquesFrontend' make e2e
+      - name: Report
+        if: always()
+        run: |
+          if [ -f lab-gate.md ]; then cat lab-gate.md >> "$GITHUB_STEP_SUMMARY"; fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: lab-gate
+          path: lab-gate.md
+          if-no-files-found: ignore
+          retention-days: 90
+      - name: Delete the cluster
+        if: always()
+        run: kind delete clusters --all
