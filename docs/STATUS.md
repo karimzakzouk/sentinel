@@ -6,8 +6,8 @@ Last updated: Monday 9 November 2026, 14:05 Cairo time (UTC+2).
 
 **Phase 0 (Foundations) is done and tagged `v2.0.0-alpha.0`.** Phase 1
 (Observe) has all six slices built at least in their core; its gate still
-needs the 72-hour soak. **Phase 2 (Act) is under way:** where a namespace's
-SentinelPolicy allows it, Sentinel now stops the bleeding itself. In the
+needs the 72-hour soak. **Phase 2 (Act) is done, its gate passed:** where a
+namespace's SentinelPolicy allows it, Sentinel stops the bleeding itself. In the
 scored pool it rolled back or restored every fault, each verified, a
 median of 69 seconds after the fault appeared, with no wrong action
 (below). Through Argo CD and Flux it first pauses the owner that would
@@ -201,13 +201,11 @@ Full reasoning in [decisions.md](decisions.md).
   gate` workflow: races with known answers, and Online Boutique's frontend
   sealed under Calico); a config value reverted as a second candidate;
   slice 4's datastores and replay.
-- **Phase 2** has every slice built, both acting sessions scored, and the
-  owner adapters' ApplicationSet and parent-Kustomization cases tested on the
-  development cluster; its gate closes once they pass in CI too.
-- **Phase 4 (Fixer), slice 1:** a revert pull request for a bad change
-  delivered through Git, against a Git server inside the test cluster until
-  the test organization and GitHub App below exist. The same Git server will
-  let the parent-Kustomization test use a real parent.
+- **Phase 4 (Fixer)** is planned in [phase-4.md](plan/phase-4.md). Slice 1:
+  a pull request that restores a bad value delivered through Git, then
+  resumes the paused owner once it is merged, against a Git server inside the
+  test cluster until the test organization and GitHub App below exist. The
+  same Git server will let the parent-Kustomization test use a real parent.
 - **Soak.** A long run with the scenario pool's controls and background
   traffic, to measure false alarms per service per week, the error-rate
   detector's especially. Shorter runs on the development cluster first; the
