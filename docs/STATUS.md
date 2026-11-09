@@ -1,6 +1,6 @@
 # Status
 
-Last updated: Monday 9 November 2026, 03:45 Cairo time (UTC+2).
+Last updated: Monday 9 November 2026, 04:05 Cairo time (UTC+2).
 
 ## Where things stand
 
@@ -22,7 +22,10 @@ To look at it on a cluster where it runs:
   `... /sentinel report shadow --since 24h` for what it would have done.
 - To let it act in a namespace, a namespace admin creates a SentinelPolicy
   (for example `rollout.undo` and `scale` at `autonomous`, or at `approve`,
-  then `sentinel approve NAMESPACE/REQUEST` for each one).
+  then `sentinel approve NAMESPACE/REQUEST` for each one). For workloads
+  Argo CD or Flux keeps in sync, `argocd.rollback` or `flux.rollback` lets
+  Sentinel pause the owner first; `sentinel resume` undoes the pause once
+  Git is fixed.
 
 ## Phase 1 progress
 
@@ -41,8 +44,8 @@ To look at it on a cluster where it runs:
 |---|---|---|
 | 1. Act where a policy allows: the actor, requests, verification | Done | The acting session below; `TestAssistModeRollsBackABadImage` in CI |
 | 2. Guards | Budget, kill switch, capacity cap, breaker done | Unit tests; the fence test in CI |
-| 3. Approval and veto | Done, notifications to come | `TestAnApprovedRollbackRunsAndNamesItsApprover`; the fence refuses an approval in someone else's name |
-| 4. Owner adapters (Argo CD, Flux, Helm) | Not started; GitOps-managed workloads are left to people (decision 43) | |
+| 3. Approval, veto and notices | Done | `TestAnApprovedRollbackRunsAndNamesItsApprover`; the fence refuses an approval in someone else's name; Slack notices when a webhook is set |
+| 4. Owner adapters | Argo CD and Flux Kustomizations done; Flux HelmReleases left to people (decision 45) | `TestArgoCDRollbackPausesTheApplication` and `TestFluxRollbackSuspendsTheKustomization` in the E2E owners workflow |
 | 5. Track records and autonomy | Not started | |
 
 ## Acting session
@@ -142,9 +145,8 @@ Full reasoning in [decisions.md](decisions.md).
 
 ## Next
 
-- **Phase 2:** Slack or GitHub notices for escalations and approvals; the
-  Argo CD and Flux adapters, with both installed in the test clusters;
-  track records.
+- **Phase 2:** track records and earned autonomy (slice 5); Flux
+  HelmReleases; an acting session through Argo CD and Flux.
 - **Soak.** A long run with the scenario pool's controls and background
   traffic, to measure false alarms per service per week, the error-rate
   detector's especially. Shorter runs on the development cluster first; the
