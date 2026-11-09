@@ -208,7 +208,7 @@ func (f *Fixer) propose(ctx context.Context, fix *v1alpha1.Fix) (v1alpha1.FixPha
 	if err != nil {
 		return "", "", err
 	}
-	change, err := ImageChange(ctx, f.Client, dep, fix.Spec.FromRevision)
+	change, err := ContainerChange(ctx, f.Client, dep, fix.Spec.FromRevision)
 	if err != nil {
 		return PhaseAbstained, err.Error(), nil
 	}
@@ -234,8 +234,12 @@ func (f *Fixer) propose(ctx context.Context, fix *v1alpha1.Fix) (v1alpha1.FixPha
 	if err != nil {
 		return PhaseAbstained, err.Error(), nil
 	}
-	fix.Status.Change = []string{fmt.Sprintf("%s:%d: %s's image %s -> %s", edit.Path, edit.Line, change.Container, change.Bad, change.Good)}
-	title := fmt.Sprintf("Set %s's image back to %s", change.Container, change.Good)
+	field := what(change.field())
+	fix.Status.Change = []string{fmt.Sprintf("%s:%d: %s's %s %s -> %s", edit.Path, edit.Line, change.Container, field, shown(change.Bad), shown(change.Good))}
+	title := fmt.Sprintf("Set %s's %s back to %s", change.Container, field, shown(change.Good))
+	if change.Good == nil {
+		title = fmt.Sprintf("Remove %s's %s", change.Container, field)
+	}
 	why := strings.ToUpper(edit.Why[:1]) + edit.Why[1:]
 	message := fmt.Sprintf("%s\n\n%s. Sentinel rolled %s/%s back from it in incident %s.\n", title, why, w.Namespace, w.Name, fix.Spec.IncidentID)
 	branch := "sentinel/fix-" + shortID(fix.Spec.IncidentID)
@@ -252,18 +256,24 @@ func (f *Fixer) propose(ctx context.Context, fix *v1alpha1.Fix) (v1alpha1.FixPha
 
 func body(fix *v1alpha1.Fix, src *Source, edit *Edit, change Change) string {
 	w := fix.Spec.Workload
-	return fmt.Sprintf(`Sentinel rolled **%s/%s** back from the revision that set container %s's image to %s, and paused the %s so the rollback holds.
+	field := what(change.field())
+	code := func(v any) string { return "`" + shown(v) + "`" }
+	back := fmt.Sprintf("%s's %s goes back to %s, as the workload ran before", change.Container, field, code(change.Good))
+	if change.Good == nil {
+		back = fmt.Sprintf("%s's %s goes, as the workload ran before it was set", change.Container, field)
+	}
+	return fmt.Sprintf(`Sentinel rolled **%s/%s** back from the revision that set container %s's %s to %s, and paused the %s so the rollback holds.
 
-This pull request makes the fix last: %s's image goes back to %s, the image the workload ran before.
+This pull request makes the fix last: %s.
 
 - **What changes**: %s, line %d.
 - **Why there**: %s.
 
-Once this is merged and the %s has fetched it, resume it with `+"`%s`"+`; Sentinel then checks that %s keeps running %s.
+Once this is merged and the %s has fetched it, resume it with `+"`%s`"+`; Sentinel then checks that %s keeps running the revision it rolled back to.
 
 Incident %s.
-`, w.Namespace, w.Name, change.Container, "`"+change.Bad+"`", src.Owner, change.Container, "`"+change.Good+"`",
-		"`"+edit.Path+"`", edit.Line, edit.Why, src.Owner, src.Resume, w.Name, "`"+change.Good+"`", fix.Spec.IncidentID)
+`, w.Namespace, w.Name, change.Container, field, code(change.Bad), src.Owner, back,
+		"`"+edit.Path+"`", edit.Line, edit.Why, src.Owner, src.Resume, w.Name, fix.Spec.IncidentID)
 }
 
 func shortID(incident string) string {
