@@ -84,7 +84,7 @@ To look at it on a cluster where it runs:
 | 1. Restore a bad value through Git | Built for an image, a command, arguments and environment values set in the files a Flux Kustomization or an Argo CD Application deploys (decisions 67 to 70 and 72), and in a kustomization's patches (decision 73): the Fixer finds the file, images entry or patch that set it, opens a pull request, follows it until the owner has applied it, and Sentinel checks that it held. Resuming the owner stays a person's (decision 69). Proven through Flux and Argo CD, and scored (below) | `TestTheFixerProposesTheFixInGit` and `TestTheFixerProposesTheFixInGitThroughArgoCD`, in CI and on the development cluster: a bad image committed to the Gitea repository the owner deploys from, Sentinel's rollback, a pull request changing line 17 of `deployment.yaml` with its comment kept, merged, the owner resumed, and "fix held", about 3 minutes after the proposal. The Git scenario session below. Unit tests render overlays with images entries, plain manifests, owners' name prefixes, and the abstentions |
 | 2. Partial reverts | Built (decision 74): of several values a revision changed, the one the fault class blames is fixed and the rest stay, said in the pull request | The pool's bad tag beside a greeting (below): the tag fixed, the greeting kept; unit tests for every class |
 | 3. Values of their own | Built for memory limits (decision 75): a limit learned from healthy use, never above the one that held. The Lab racing it before the pull request is next | Unit tests; the pool's memory-limit scenario (below) |
-| 4. Code incidents | Part built: for a crash a new image brought, the Fixer resolves the commits both images were built from, by labels and a tag or version that agree, and proposes the crash's function back as it was, in the image's source, Go first; then finds the image the source's pipeline builds from it. The Lab racing that image is next | `TestACrashInCodeGetsAFixInItsSource`: a pull request to the source puts the crashing function back and keeps the commit's other change, and the built image is found; unit tests of the resolution and the frames |
+| 4. Code incidents | Part built: for a crash a new image brought, the Fixer resolves the commits both images were built from, by labels and a tag or version that agree, and proposes the crash's function back as it was, in the image's source, Go first; then finds the image the source's pipeline builds from it, has the Lab race that image against the failing one, and says the verdict on the pull request. Left: a test pipeline and a Go app with a bug in its code, to prove it on a cluster; Python and JavaScript | `TestACrashInCodeGetsAFixInItsSource`: a pull request to the source puts the crashing function back and keeps the commit's other change, the built image is found, and the Lab's verdict is said on the pull request; `TestAFixToTheCodeIsRacedOnceBuilt` for the controller's side; unit tests of the resolution and the frames |
 | 5. Delivery tiers | Built (decision 76): `fix.merge` at `autonomous`, earned by the record of fixes that held; the Fixer checks the grant before it merges | Unit tests of the grant, the record and the merge on Gitea and GitHub |
 
 ## Phase 5 progress
@@ -324,13 +324,13 @@ Full reasoning in [decisions.md](decisions.md).
 
 ## Next
 
-- **Code fixes (Phase 4 slice 4), the rest:** the Fixer already proposes,
-  for a crash a new image brought, the crashing function back as it was in
-  the image's source, and finds the image the source's pipeline builds from
-  that commit. Left: the Lab racing that image against the failing one and
-  saying on the pull request whether it fixes the crash; a test pipeline
-  next to Gitea (a registry and a builder) that plays a customer's; a Go
-  test app with a planted bug in code; then Python and JavaScript.
+- **Code fixes (Phase 4 slice 4), the rest:** the Fixer proposes, for a
+  crash a new image brought, the crashing function back as it was in the
+  image's source, finds the image the source's pipeline builds, has the Lab
+  race it and says the verdict on the pull request. Left: a test pipeline
+  next to Gitea (a registry and a builder) that plays a customer's, a Go
+  test app with a planted bug in its code and a scenario that releases it;
+  then Python and JavaScript.
 - **Traffic capture:** an optional agent, off until a namespace turns it on
   (in the console or its SentinelPolicy), recording request details, and
   bodies only for services named, redacted; then Lab replay, fakes of
