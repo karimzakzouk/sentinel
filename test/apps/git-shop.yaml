@@ -1,0 +1,16 @@
+# shop deployed by Flux from the shop/ directory of the test Gitea's
+# person/delivery into e2e-delivery, as git-shop: the workload the release
+# scenarios in test/scenarios/git break with a commit to its source,
+# person/shop-src. hack/shop-up.sh applies this.
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: git-shop
+  namespace: flux-system
+spec:
+  sourceRef: {kind: GitRepository, name: git-delivery}
+  path: ./shop
+  targetNamespace: e2e-delivery
+  namePrefix: git-
+  prune: true
+  interval: 1m

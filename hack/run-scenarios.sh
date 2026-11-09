@@ -11,12 +11,14 @@ ctx="kind-${E2E_CLUSTER:-sentinel-e2e}"
 root=$(cd "$(dirname "$0")/.." && pwd)
 observe=${OBSERVE_SECONDS:-60}
 
-# Commit faults go through the test Gitea's API (hack/gitea-up.sh), which a
-# port-forward reaches; the harness reads the person's token from the
-# cluster. Reverting one, the person merges Sentinel's fix, if any.
+# Commit and release faults go through the test Gitea's API
+# (hack/gitea-up.sh), which a port-forward reaches; the harness reads the
+# person's token from the cluster. Reverting one, the person merges
+# Sentinel's fix, if any. hack/ci.sh builds what a release commits.
 pf=""
 trap '[ -z "$pf" ] || kill "$pf" 2>/dev/null || true' EXIT
-if grep -q '^  kind: commit' "$@"; then
+export HARNESS_BUILD="$root/hack/ci.sh build"
+if grep -Eq '^  kind: (commit|release)' "$@"; then
   port=${GITEA_LOCAL_PORT:-13010}
   kubectl --context "$ctx" -n gitea port-forward svc/gitea-http "$port:3000" >/dev/null 2>&1 &
   pf=$!

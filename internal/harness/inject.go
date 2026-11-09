@@ -67,6 +67,9 @@ type Injector struct {
 	Forge             *Forge
 	SentinelNamespace string
 	FixWait           time.Duration
+	// Build, for release faults, builds a commit of a source repository
+	// as its pipeline would and returns the image tag it pushed.
+	Build func(ctx context.Context, repository, revision string) (string, error)
 }
 
 func (in *Injector) now() time.Time {
@@ -94,6 +97,10 @@ func (in *Injector) Inject(ctx context.Context, s *Scenario) (*Run, error) {
 		}
 	case FaultCommit:
 		if err := in.commit(ctx, s, run); err != nil {
+			return nil, err
+		}
+	case FaultRelease:
+		if err := in.release(ctx, s, run); err != nil {
 			return nil, err
 		}
 	case FaultNone:
@@ -233,12 +240,15 @@ func matches(c Condition, p *corev1.Pod) (bool, string) {
 	return false, ""
 }
 
-// Revert restores a patched target's spec, and undoes a commit as a person
-// would (revertCommit). Deleted pods are recreated by their controllers, and
-// controls need nothing.
+// Revert restores a patched target's spec, and undoes a commit or a
+// release as a person would (revertCommit, revertRelease). Deleted pods are
+// recreated by their controllers, and controls need nothing.
 func (in *Injector) Revert(ctx context.Context, run *Run) error {
-	if run.FaultKind == FaultCommit {
+	switch run.FaultKind {
+	case FaultCommit:
 		return in.revertCommit(ctx, run)
+	case FaultRelease:
+		return in.revertRelease(ctx, run)
 	}
 	if run.FaultKind != FaultPatch {
 		t := in.now()
