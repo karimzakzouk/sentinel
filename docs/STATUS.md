@@ -1,6 +1,6 @@
 # Status
 
-Last updated: Monday 9 November 2026, 04:45 Cairo time (UTC+2).
+Last updated: Monday 9 November 2026, 14:05 Cairo time (UTC+2).
 
 ## Where things stand
 
@@ -10,7 +10,10 @@ needs the 72-hour soak. **Phase 2 (Act) is under way:** where a namespace's
 SentinelPolicy allows it, Sentinel now stops the bleeding itself. In the
 scored pool it rolled back or restored every fault, each verified, a
 median of 69 seconds after the fault appeared, with no wrong action
-(below). Without a policy it still only records what it would do.
+(below). Through Argo CD and Flux it first pauses the owner that would
+undo the rollback: in the GitOps session, a median of 66 seconds from fault
+to verified recovery. Without a policy it still only records what it would
+do.
 
 To look at it on a cluster where it runs:
 
@@ -45,8 +48,8 @@ To look at it on a cluster where it runs:
 | 1. Act where a policy allows: the actor, requests, verification | Done | The acting session below; `TestAssistModeRollsBackABadImage` in CI |
 | 2. Guards | Budget, kill switch, capacity cap, breaker done | Unit tests; the fence test in CI |
 | 3. Approval, veto and notices | Done | `TestAnApprovedRollbackRunsAndNamesItsApprover`; the fence refuses an approval in someone else's name; Slack notices when a webhook is set |
-| 4. Owner adapters | Argo CD and Flux Kustomizations done; Flux HelmReleases left to people (decision 45) | `TestArgoCDRollbackPausesTheApplication` and `TestFluxRollbackSuspendsTheKustomization` in the E2E owners workflow |
-| 5. Track records and autonomy | Not started | |
+| 4. Owner adapters | Done for Argo CD Applications, Flux Kustomizations and Flux HelmReleases (decision 63). Left to people: an Application whose ApplicationSet rewrites its sync policy, a Kustomization whose parent sets its `spec.suspend`, and a HelmRelease that rolls back failed upgrades itself | The GitOps acting session below. In the E2E owners workflow: `TestArgoCDRollbackPausesTheApplication`, `TestArgoCDApplicationSets` (both kinds of ApplicationSet, and `sentinel resume` afterwards, decision 66), `TestFluxRollbackSuspendsTheKustomization`, `TestFluxRollbackSuspendsTheHelmRelease`, `TestFluxLeavesAKustomizationItsParentResumesToPeople` |
+| 5. Track records and autonomy | Done: levels a policy makes earned (decision 60), records that age and pool (decision 62), and a person's revert counted as harm once the revision they put back runs without trouble (decisions 61 and 65) | Unit tests; in CI, `TestAnApprovedRollbackRunsAndNamesItsApprover` holds an earned `autonomous` rollback for a person until it has a record |
 
 ## Phase 3 progress
 
@@ -87,6 +90,31 @@ weighed its own rollback as a possible cause and its decision turned to
 "escalate"; its own actions are no longer candidate causes. Recovery time
 includes the minute the development cluster's detection window takes to
 empty, which is when verification can tell the signals have ended.
+
+## GitOps acting session
+
+Four faults delivered through their owners on the development cluster
+(`make delivery-up`, then `hack/run-scenarios.sh
+test/scenarios/delivery/*.yaml`): a bad image through an Argo CD Application
+that syncs and heals itself, through a Flux HelmRelease, and through a Flux
+Kustomization, and a flag podinfo does not know, through a patch in the
+Kustomization, which makes it exit as it starts. Each fault is a change to
+the owner, so a plain rollback would be undone at the next sync:
+
+| Scenario | Detected | Sentinel did | Recovered (fault to verified) |
+|---|---|---|---|
+| Argo CD: bad image | 6s | paused the Application's automated sync, rolled back | 1m6s |
+| Flux HelmRelease: bad image | 8s | suspended the HelmRelease, rolled back | 1m18s |
+| Flux Kustomization: bad image | 5s | suspended the Kustomization, rolled back | 1m5s |
+| Flux Kustomization: crash on start | 6s | suspended the Kustomization, rolled back | 1m6s |
+
+4 of 4 acted on and verified, root cause, class, blamed change and decision
+right each time, no wrong action, no false alarm. Two earlier runs did not
+count. In the first, the runner script started the crash scenario while the
+previous incident was still open, so the crash joined it; the script now
+asks the Ledger for open incidents rather than counting log lines. The second
+put back the first run's bad revisions within the day, which Sentinel then
+took for people reverting its rollbacks (decision 65).
 
 ## Scored session (observe only)
 
@@ -151,6 +179,19 @@ minutes later, instead of opening incidents of their own.
 - **Secrets hide everywhere in logs.** The redactor catches every one of 46
   canary secrets in realistic lines, leaves stack traces and Kubernetes
   names alone, and a second pass never changes its output.
+- **Names collide.** podinfo's Helm chart passes `--grpc-service-name=podinfo`,
+  which the dependency map read as a call to another podinfo's Service, so in
+  CI a broken release joined someone else's incident and nothing acted on it.
+  A failed image pull, a missing ConfigMap or Secret and an unschedulable pod
+  now always keep their own incident (decision 64).
+- **Putting a revision back is not always disagreeing.** A pipeline that
+  redeploys a broken change, or an owner resumed before Git is fixed, looks
+  just like a person undoing Sentinel's rollback. What the revision does
+  next tells them apart: if it fails again, the rollback stands (decision 65).
+- **An ApplicationSet keeps a pause but not its note.** Told to ignore
+  `/spec/syncPolicy`, it left Sentinel's pause alone and deleted the note
+  `sentinel resume` read within two seconds; resuming now reads the
+  ApplicationSet's template instead (decision 66).
 
 Full reasoning in [decisions.md](decisions.md).
 
@@ -160,17 +201,22 @@ Full reasoning in [decisions.md](decisions.md).
   gate` workflow: races with known answers, and Online Boutique's frontend
   sealed under Calico); a config value reverted as a second candidate;
   slice 4's datastores and replay.
-- **Phase 2:** slice 5 is built (decisions 60 to 62: earned levels, a
-  person's revert counted as harm, records that age and pool), and Flux
-  HelmReleases have an adapter (decision 63); left is an acting session
-  through Argo CD and Flux.
+- **Phase 2** has every slice built, both acting sessions scored, and the
+  owner adapters' ApplicationSet and parent-Kustomization cases tested on the
+  development cluster; its gate closes once they pass in CI too.
+- **Phase 4 (Fixer), slice 1:** a revert pull request for a bad change
+  delivered through Git, against a Git server inside the test cluster until
+  the test organization and GitHub App below exist. The same Git server will
+  let the parent-Kustomization test use a real parent.
 - **Soak.** A long run with the scenario pool's controls and background
   traffic, to measure false alarms per service per week, the error-rate
   detector's especially. Shorter runs on the development cluster first; the
-  gate's 72 hours need the machine listed below. The first short run, with
+  gate's 72 hours run on the self-hosted runner. The first short run, with
   production settings: 1 hour 36 minutes, no incidents, through a new
   two-tier app deployed into a watched namespace and the Lab's worlds and
-  races running beside it. It ended when the controller was redeployed.
+  races running beside it. It ended when the controller was redeployed. The
+  72-hour soak's first attempt stopped as it started, on a results directory
+  a fresh checkout does not have; it is requested again behind the Lab gate.
 - **The rest of slice 4,** shaped by the soak: seasonal baselines (SPOT on
   decomposed residuals) if daily cycles cause false alarms, and dependency
   edges from connection errors in logs.
