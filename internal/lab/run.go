@@ -12,6 +12,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
@@ -64,12 +65,13 @@ type Lab struct {
 // provenFor is how long a namespace's proof of enforcement is trusted.
 const provenFor = 10 * time.Minute
 
-// Verdict is how an experiment ended, why, and how its world differed
-// from production.
+// Verdict is how an experiment ended, why, how its world differed from
+// production, and how many blocks it ran.
 type Verdict struct {
 	Phase    v1alpha1.ExperimentPhase
 	Message  string
 	Fidelity []string
+	Runs     int
 }
 
 func failed(format string, args ...any) Verdict {
@@ -86,24 +88,31 @@ func (l *Lab) Handle(ctx context.Context, exp *v1alpha1.Experiment) Verdict {
 	case exp.Namespace != ns:
 		return failed("an Experiment must live in the Lab namespace it uses")
 	}
-	var plan *Plan
-	var target *v1alpha1.TargetRef
-	if exp.Spec.Purpose != "prove" {
+	var (
+		plan   *Plan
+		world  World
+		ref    model.ObjectRef
 		target = exp.Spec.Workload
+	)
+	switch exp.Spec.Purpose {
+	case "prove":
+	case "reproduce", "verify-fix":
 		switch {
 		case target == nil:
 			return failed("the experiment names no workload")
 		case !slices.Contains(l.Prover.Twins, target.Namespace):
 			return failed("the Lab copies only from the namespaces Sentinel watches, not %s", target.Namespace)
 		}
-		ref := model.ObjectRef{Group: "apps", Kind: target.Kind, Namespace: target.Namespace, Name: target.Name}
-		world, err := ReadWorld(ctx, l.Prover.Client, target.Namespace, ref, exp.Spec.Revision)
-		if err != nil {
+		ref = model.ObjectRef{Group: "apps", Kind: target.Kind, Namespace: target.Namespace, Name: target.Name}
+		var err error
+		if world, err = ReadWorld(ctx, l.Prover.Client, target.Namespace, ref, exp.Spec.Revision); err != nil {
 			return failed("could not read %s: %v", ref, err)
 		}
 		if plan, err = Synthesize(world, ref, ns); err != nil {
 			return failed("%v", err)
 		}
+	default:
+		return Verdict{Phase: PhaseNotSure, Message: "the Lab cannot " + exp.Spec.Purpose + " yet"}
 	}
 	if ok, why := l.enforced(ctx, ns); !ok {
 		return failed("the Lab stays off: NetworkPolicy enforcement is not proven here (%s)", why)
@@ -132,12 +141,13 @@ func (l *Lab) Handle(ctx context.Context, exp *v1alpha1.Experiment) Verdict {
 		return Verdict{Phase: phase, Message: msg}
 	}
 	domain := cmp.Or(l.Domain, "cluster.local")
-	built, err := l.Prover.Build(ctx, ns, target.Namespace, domain, plan)
+	baseline, deps := plan.Split(ref)
+	built, err := l.Prover.Build(ctx, ns, target.Namespace, domain, deps)
 	if err != nil {
 		return Verdict{Phase: PhaseNotSure, Message: fmt.Sprintf("could not start the world: %v", err), Fidelity: plan.Fidelity}
 	}
 	dns := DNSConfig(built.DNS, target.Namespace, domain)
-	probes := WorldProbes(readyServices(built, plan), target.Namespace, domain)
+	probes := WorldProbes(readyServices(built, deps), target.Namespace, domain)
 	results, err = l.Prover.Prove(ctx, ns, &Inside{Probes: probes, DNS: dns})
 	if err != nil {
 		return Verdict{Phase: PhaseNotSure, Message: fmt.Sprintf("could not prove the seal with the world running: %v", err), Fidelity: plan.Fidelity}
@@ -146,25 +156,76 @@ func (l *Lab) Handle(ctx context.Context, exp *v1alpha1.Experiment) Verdict {
 		return Verdict{Phase: phase, Message: "with the world running, " + msg, Fidelity: plan.Fidelity}
 	}
 	fidelity := slices.Clone(plan.Fidelity)
-	log, err := l.Prover.DNSLog(ctx, ns)
-	if err != nil {
+	var variants []Variant
+	var candidates, controls []string
+	if exp.Spec.Purpose == "verify-fix" {
+		pod, revision, notes, err := l.candidate(ctx, world, ref, exp.Spec.Revision, ns)
+		if err != nil {
+			return Verdict{Phase: PhaseNotSure, Message: "the Lab has no fix to try: " + err.Error(), Fidelity: fidelity}
+		}
+		for _, n := range notes {
+			if !slices.Contains(fidelity, n) {
+				fidelity = append(fidelity, n)
+			}
+		}
+		variants = []Variant{{Name: "previous revision " + revision, Slug: "cand", Pod: pod},
+			{Name: "deletion control", Slug: "del", Pod: DeletionControl(baseline)}}
+		candidates, controls = []string{variants[0].Name}, []string{variants[1].Name}
+	}
+	race := NewRace(float64(cmp.Or(exp.Spec.AlphaPercent, 5))/100, candidates, controls)
+	blocks, err := l.Prover.RunRace(ctx, ns, dns, baseline, variants, race, int(cmp.Or(exp.Spec.MaxRuns, 200)))
+	if log, lerr := l.Prover.DNSLog(ctx, ns); lerr == nil {
+		var own []string
+		for _, p := range probes {
+			if host, _, err := net.SplitHostPort(p.Address); err == nil {
+				own = append(own, host)
+			}
+		}
+		for _, name := range Unresolved(log, dns.Searches, own) {
+			fidelity = append(fidelity, fmt.Sprintf("the world asked for %s, which the Lab does not provide", name))
+		}
+	} else {
 		fidelity = append(fidelity, "the Lab DNS log could not be read, so names the world missed are unknown")
 	}
-	var own []string
-	for _, p := range probes {
-		if host, _, err := net.SplitHostPort(p.Address); err == nil {
-			own = append(own, host)
+	if err != nil {
+		return Verdict{Phase: PhaseNotSure, Message: fmt.Sprintf("the runs stopped after %d blocks: %v", blocks, err), Fidelity: fidelity, Runs: blocks}
+	}
+	phase, msg, _ = race.Outcome(false)
+	return Verdict{Phase: phase, Message: msg, Fidelity: fidelity, Runs: blocks}
+}
+
+// candidate synthesizes the workload's revision before the failing one,
+// copying any ConfigMap only it reads, and says which revision it is and
+// how its copy differs from production.
+func (l *Lab) candidate(ctx context.Context, world World, ref model.ObjectRef, revision, ns string) (*corev1.Pod, string, []string, error) {
+	tpl, name, err := PreviousTemplate(ctx, l.Prover.Client, ref, revision)
+	if err != nil {
+		return nil, "", nil, err
+	}
+	var notes []string
+	note := func(format string, args ...any) { notes = append(notes, fmt.Sprintf(format, args...)) }
+	pod, err := copyPod(Workload{Ref: ref, Template: tpl, Replicas: 1}, world, ns, note)
+	if err != nil {
+		return nil, "", nil, err
+	}
+	core := l.Prover.Client.CoreV1()
+	for _, cm := range configMapsOf(pod.Spec) {
+		if _, err := core.ConfigMaps(ns).Get(ctx, cm.name, metav1.GetOptions{}); err == nil {
+			continue
+		}
+		src, err := core.ConfigMaps(ref.Namespace).Get(ctx, cm.name, metav1.GetOptions{})
+		switch {
+		case apierrors.IsNotFound(err) && cm.optional:
+			continue
+		case err != nil:
+			return nil, "", nil, fmt.Errorf("revision %s needs ConfigMap %s: %w", name, cm.name, err)
+		}
+		cp := &corev1.ConfigMap{ObjectMeta: worldMeta(ns, src.Name, nil), Data: src.Data, BinaryData: src.BinaryData}
+		if _, err := core.ConfigMaps(ns).Create(ctx, cp, metav1.CreateOptions{}); err != nil {
+			return nil, "", nil, fmt.Errorf("copy ConfigMap %s: %w", cm.name, err)
 		}
 	}
-	for _, name := range Unresolved(log, dns.Searches, own) {
-		fidelity = append(fidelity, fmt.Sprintf("the world asked for %s, which the Lab does not provide", name))
-	}
-	var states []string
-	for _, ref := range plan.Workloads {
-		states = append(states, fmt.Sprintf("%s %s", ref.Name, built.States[ref.Kind+"."+ref.Name]))
-	}
-	return Verdict{Phase: PhaseNotSure, Fidelity: fidelity,
-		Message: "the world ran sealed (" + strings.Join(states, "; ") + "); reproducing and judging come with phase 3's next slice"}
+	return pod, name, notes, nil
 }
 
 // readyServices are the world's Services whose every copy is ready, so a
@@ -343,7 +404,7 @@ func (l *Lab) process(ctx context.Context, stores map[string]cache.Store, key st
 		v.Phase, v.Message = PhaseAborted, "the experiment ran out of time: "+v.Message
 	}
 	l.Log.Info("experiment done", "experiment", key, "purpose", exp.Spec.Purpose, "phase", v.Phase, "message", v.Message)
-	exp.Status.Fidelity = v.Fidelity
+	exp.Status.Fidelity, exp.Status.Runs = v.Fidelity, int32(min(v.Runs, 1<<30)) //nolint:gosec // bounded just above
 	return l.setStatus(ctx, &exp, v.Phase, v.Message)
 }
 
