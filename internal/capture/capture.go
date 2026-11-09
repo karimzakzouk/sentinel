@@ -7,6 +7,7 @@
 package capture
 
 import (
+	"cmp"
 	"compress/gzip"
 	"crypto/subtle"
 	"encoding/json"
@@ -97,28 +98,41 @@ func (s *Store) LastSeen() time.Time {
 	return s.seen
 }
 
-// Replayable returns, from a workload's recent requests, the reads it
-// served (GET and HEAD) that production answered without a server error,
-// each method and path once, most frequent first, at most n: what a Lab can
-// send its copy again without changing anything.
-func Replayable(requests []Request, n int) []string {
-	count := map[string]int{}
+// Read is a GET a workload served, which a Lab can send its copy again
+// without changing anything.
+type Read struct {
+	Path string
+	// Port it was served on; 0 when the agent did not say.
+	Port int
+}
+
+// Replayable returns, from a workload's recent requests, the GETs it
+// served that production answered without a server error, each once, most
+// frequent first, at most n.
+func Replayable(requests []Request, n int) []Read {
+	count := map[Read]int{}
 	for _, r := range requests {
-		if r.Served && (r.Method == http.MethodGet || r.Method == http.MethodHead) && r.Status < 500 && r.Path != "" && !r.Redacted {
-			count[r.Method+" "+r.Path]++
+		if r.Served && r.Method == http.MethodGet && r.Status < 500 && !r.Redacted && replayablePath(r.Path) {
+			count[Read{Path: r.Path, Port: r.Port}]++
 		}
 	}
-	out := make([]string, 0, len(count))
+	out := make([]Read, 0, len(count))
 	for k := range count {
 		out = append(out, k)
 	}
-	slices.SortFunc(out, func(a, b string) int {
+	slices.SortFunc(out, func(a, b Read) int {
 		if count[a] != count[b] {
 			return count[b] - count[a]
 		}
-		return strings.Compare(a, b)
+		return cmp.Or(strings.Compare(a.Path, b.Path), a.Port-b.Port)
 	})
 	return out[:min(len(out), n)]
+}
+
+// replayablePath is a path a Lab can send as it is: absolute, no longer
+// than an Experiment allows, without a fragment or a space.
+func replayablePath(p string) bool {
+	return strings.HasPrefix(p, "/") && len(p) <= 1024 && !strings.ContainsAny(p, "?# \t\r\n")
 }
 
 // Receiver accepts traces as OTLP over HTTP, in JSON, from the capture
@@ -267,7 +281,9 @@ func requestOf(sp span) (Request, bool) {
 	if h := a["server.address"]; h != "" && !q.Served {
 		q.Host = h
 	}
-	q.Port, _ = strconv.Atoi(a["server.port"])
+	if port, err := strconv.Atoi(a["server.port"]); err == nil && port > 0 && port < 1<<16 {
+		q.Port = port
+	}
 	if !q.Served && q.Host == "" {
 		return Request{}, false
 	}

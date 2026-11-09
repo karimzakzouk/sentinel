@@ -210,7 +210,18 @@ func (l *Lab) handle(ctx context.Context, exp *v1alpha1.Experiment) Verdict {
 	}
 	race := NewRace(float64(cmp.Or(exp.Spec.AlphaPercent, 5))/100, candidates, controls)
 	fidelity = append(fidelity, "every copy waits until the seal holds for it before it starts")
-	blocks, err := l.Prover.RunRace(ctx, ns, built, dns, baseline, variants, race, int(cmp.Or(exp.Spec.MaxRuns, 200)))
+	traffic := Traffic{Requests: withPorts(exp.Spec.Replay, baseline), ServerErrors: len(plan.Empty) > 0}
+	switch {
+	case len(traffic.Requests) == 0:
+		fidelity = append(fidelity, "no traffic is replayed: a copy works if it stays ready")
+	case traffic.ServerErrors:
+		fidelity = append(fidelity, fmt.Sprintf("each copy is sent %d reads production answered, and must answer every one; "+
+			"with datastores empty, a server error is not held against it", len(traffic.Requests)))
+	default:
+		fidelity = append(fidelity, fmt.Sprintf("each copy is sent %d reads production answered, and must answer every one without a server error",
+			len(traffic.Requests)))
+	}
+	blocks, err := l.Prover.RunRace(ctx, ns, built, dns, baseline, variants, traffic, race, int(cmp.Or(exp.Spec.MaxRuns, 200)))
 	if log, lerr := l.Prover.DNSLog(ctx, ns); lerr == nil {
 		var own []string
 		for _, p := range probes {

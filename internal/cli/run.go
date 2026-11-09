@@ -124,7 +124,7 @@ func runController(ctx context.Context, log *slog.Logger, cfg *config.Config, cl
 		}()
 	}
 
-	w, requests, err := newObserver(ctx, log, cfg, client, dyn, l)
+	w, requests, err := newObserver(ctx, log, cfg, client, dyn, l, captured)
 	if err != nil {
 		return err
 	}

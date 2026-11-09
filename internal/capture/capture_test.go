@@ -3,6 +3,7 @@ package capture
 import (
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -75,16 +76,18 @@ func TestTheReceiverKeepsRequestsOfNamespacesThatTurnedCaptureOn(t *testing.T) {
 // What a Lab replays are the reads production answered, most frequent first.
 func TestReplayableAreReadsThatWorked(t *testing.T) {
 	got := Replayable([]Request{
-		{Served: true, Method: "GET", Path: "/cart/12345", Status: 200},
-		{Served: true, Method: "GET", Path: "/cart/12345", Status: 200},
+		{Served: true, Method: "GET", Path: "/cart/12345", Port: 8080, Status: 200},
+		{Served: true, Method: "GET", Path: "/cart/12345", Port: 8080, Status: 200},
 		{Served: true, Method: "GET", Path: "/reset/[REDACTED:token]", Status: 200, Redacted: true},
 		{Served: true, Method: "GET", Path: "/", Status: 200},
+		{Served: true, Method: "GET", Path: "/a b", Status: 200},
+		{Served: true, Method: "HEAD", Path: "/", Status: 200},
 		{Served: true, Method: "POST", Path: "/checkout", Status: 200},
 		{Served: true, Method: "GET", Path: "/broken", Status: 503},
 		{Served: false, Method: "GET", Path: "/v1/rates", Host: "rates.example", Status: 200},
 	}, 5)
-	if strings.Join(got, ",") != "GET /cart/12345,GET /" {
-		t.Fatalf("replayable %q", got)
+	if want := []Read{{Path: "/cart/12345", Port: 8080}, {Path: "/"}}; !slices.Equal(got, want) {
+		t.Fatalf("replayable %+v", got)
 	}
 }
 
@@ -96,7 +99,7 @@ func TestASecretInAPathIsRedacted(t *testing.T) {
 		t.Fatalf("request %+v", q)
 	}
 	if got := Replayable([]Request{q}, 5); len(got) != 0 {
-		t.Fatalf("replayable %q", got)
+		t.Fatalf("replayable %+v", got)
 	}
 }
 

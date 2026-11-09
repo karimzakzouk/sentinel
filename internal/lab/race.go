@@ -4,26 +4,43 @@ import (
 	"context"
 	"fmt"
 	"math/rand/v2"
+	"strconv"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
+
+	"github.com/karimzakzouk/sentinel/api/v1alpha1"
 )
 
 // VariantLabel names the variant a race's pod runs.
 const VariantLabel = "sentinel.karimzakzouk.github.io/variant"
 
 const (
-	// readyWithin is how long a run's copy has to become ready.
+	// readyWithin is how long a run's copy has to become ready, and its
+	// replay to finish once it is.
 	readyWithin = time.Minute
-	// holdFor is how long it must then stay ready, without restarting.
-	holdFor = 20 * time.Second
 	// roundPods is how many of a race's pods run at once: three blocks of
 	// a baseline, one candidate and a control, fewer blocks when there are
 	// more candidates, so a race stays within the Lab's quota.
 	roundPods = 9
 )
+
+// holdFor is how long a run's copy must stay ready, without restarting.
+var holdFor = 20 * time.Second
+
+// Traffic is what each run sends its copy once the copy is ready: reads
+// traffic capture saw production answer.
+type Traffic struct {
+	Requests []v1alpha1.ReplayRequest
+	// ServerErrors are forgiven where the world's datastores are empty, so
+	// a read may fail for want of data; a read not answered at all is not.
+	ServerErrors bool
+}
 
 // Variant is one version of the target a race starts in every block.
 type Variant struct {
@@ -53,13 +70,15 @@ type racePod struct {
 	name    string
 	created time.Time
 	ready   time.Time
-	ok      *bool
+	// replay is the pod replaying traffic to the copy, once it started.
+	replay string
+	ok     *bool
 }
 
 // RunRace runs blocks of the baseline and every variant, each block's pods
 // started together in random order, a few blocks at a time, until the race
 // decides or maxBlocks have run. It returns the blocks run.
-func (p *Prover) RunRace(ctx context.Context, ns string, built *Built, dns *corev1.PodDNSConfig, baseline *corev1.Pod, variants []Variant, race *Race, maxBlocks int) (int, error) {
+func (p *Prover) RunRace(ctx context.Context, ns string, built *Built, dns *corev1.PodDNSConfig, baseline *corev1.Pod, variants []Variant, traffic Traffic, race *Race, maxBlocks int) (int, error) {
 	core := p.Client.CoreV1()
 	all := append([]Variant{{Name: "baseline", Slug: "base", Pod: baseline}}, variants...)
 	stem := baseline.Labels[CopyOf]
@@ -84,9 +103,13 @@ func (p *Prover) RunRace(ctx context.Context, ns string, built *Built, dns *core
 				pods = append(pods, &racePod{block: b, variant: v.Name, name: pod.Name, created: time.Now()})
 			}
 		}
-		err := p.watchRuns(ctx, ns, pods)
+		err := p.watchRuns(ctx, ns, pods, traffic)
 		for _, rp := range pods {
-			_ = core.Pods(ns).Delete(context.WithoutCancel(ctx), rp.name, metav1.DeleteOptions{GracePeriodSeconds: ptr.To[int64](0)})
+			for _, name := range []string{rp.name, rp.replay} {
+				if name != "" {
+					_ = core.Pods(ns).Delete(context.WithoutCancel(ctx), name, metav1.DeleteOptions{GracePeriodSeconds: ptr.To[int64](0)})
+				}
+			}
 		}
 		if err != nil {
 			return blocks, err
@@ -113,9 +136,10 @@ func (p *Prover) RunRace(ctx context.Context, ns string, built *Built, dns *core
 }
 
 // watchRuns waits for every run's outcome. A run succeeds once its copy has
-// been ready for holdFor without a restart; it fails if the copy restarts,
-// stops, is plainly failing, or is not ready within readyWithin.
-func (p *Prover) watchRuns(ctx context.Context, ns string, pods []*racePod) error {
+// been ready for holdFor without a restart, and has answered the traffic
+// replayed to it; it fails if the copy restarts, stops, is plainly failing,
+// is not ready within readyWithin, or does not answer.
+func (p *Prover) watchRuns(ctx context.Context, ns string, pods []*racePod, traffic Traffic) error {
 	for {
 		pending := 0
 		for _, rp := range pods {
@@ -135,12 +159,26 @@ func (p *Prover) watchRuns(ctx context.Context, ns string, pods []*racePod) erro
 				state = "restarted"
 			}
 			switch {
-			case state == "ready" && rp.ready.IsZero():
-				rp.ready = now
-			case state == "ready" && now.Sub(rp.ready) >= holdFor:
-				rp.ok = ptr.To(true)
-			case state != "ready" && state != "starting", !rp.ready.IsZero() && state != "ready",
-				rp.ready.IsZero() && now.Sub(rp.created) > readyWithin:
+			case state == "ready":
+				if rp.ready.IsZero() {
+					rp.ready = now
+				}
+				if err := p.startReplay(ctx, ns, rp, pod, traffic); err != nil {
+					return err
+				}
+				if now.Sub(rp.ready) < holdFor {
+					break
+				}
+				answered, err := p.replayed(ctx, ns, rp, traffic)
+				switch {
+				case err != nil:
+					return err
+				case answered != nil:
+					rp.ok = answered
+				case now.Sub(rp.ready) > holdFor+readyWithin:
+					return fmt.Errorf("the traffic replayed to run %s did not finish", rp.name)
+				}
+			case state != "starting", !rp.ready.IsZero(), now.Sub(rp.created) > readyWithin:
 				rp.ok = ptr.To(false)
 			}
 			if rp.ok == nil {
@@ -165,4 +203,128 @@ func restarted(pod *corev1.Pod) bool {
 		}
 	}
 	return false
+}
+
+// startReplay starts the pod that sends a ready copy its traffic, unless
+// there is none, or the Lab's quota has no room for it yet.
+func (p *Prover) startReplay(ctx context.Context, ns string, rp *racePod, copied *corev1.Pod, traffic Traffic) error {
+	if len(traffic.Requests) == 0 || rp.replay != "" || copied.Status.PodIP == "" {
+		return nil
+	}
+	pod := replayPod(ns, rp.name+"-replay", copied.Status.PodIP, traffic.Requests)
+	_, err := p.Client.CoreV1().Pods(ns).Create(ctx, pod, metav1.CreateOptions{})
+	switch {
+	case err == nil:
+		rp.replay = pod.Name
+	case apierrors.IsForbidden(err) && strings.Contains(err.Error(), "exceeded quota"):
+	default:
+		return fmt.Errorf("replay traffic to run %s: %w", rp.name, err)
+	}
+	return nil
+}
+
+// replayed reports whether a run's copy answered its traffic: true without
+// traffic, nil while the replay has not finished.
+func (p *Prover) replayed(ctx context.Context, ns string, rp *racePod, traffic Traffic) (*bool, error) {
+	if len(traffic.Requests) == 0 {
+		return ptr.To(true), nil
+	}
+	if rp.replay == "" {
+		return nil, nil
+	}
+	pod, err := p.Client.CoreV1().Pods(ns).Get(ctx, rp.replay, metav1.GetOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("watch the replay to run %s: %w", rp.name, err)
+	}
+	switch pod.Status.Phase {
+	case corev1.PodSucceeded:
+	case corev1.PodFailed:
+		return nil, fmt.Errorf("the replay to run %s failed: %s", rp.name, podState(pod))
+	default:
+		return nil, nil
+	}
+	codes, err := replayCodes(terminationMessage(pod), len(traffic.Requests))
+	if err != nil {
+		return nil, fmt.Errorf("the replay to run %s: %w", rp.name, err)
+	}
+	return ptr.To(answered(codes, traffic.ServerErrors)), nil
+}
+
+// answered reports whether a copy answered every replayed read, without a
+// server error unless those are forgiven.
+func answered(codes []int, serverErrors bool) bool {
+	for _, c := range codes {
+		if c == 0 || c >= 500 && !serverErrors {
+			return false
+		}
+	}
+	return true
+}
+
+// replayPod sends every request to the copy at ip at once, and writes each
+// one's status, 0 when nothing answered, as a line of its termination
+// message. The URLs are arguments, never part of the script.
+func replayPod(ns, name, ip string, requests []v1alpha1.ReplayRequest) *corev1.Pod {
+	const script = `set +e; : > /dev/termination-log; i=0
+for u in "$@"; do
+  ( s=$(wget -S -q -O /dev/null -T 5 "$u" 2>&1 | grep -o 'HTTP/[0-9.]* [0-9][0-9][0-9]' | sed -n '$p'); c=${s##* }; echo "$i ${c:-0}" >> /dev/termination-log ) &
+  i=$((i+1))
+done
+wait`
+	args := []string{"sh", "-c", script, "replay"}
+	for _, r := range requests {
+		args = append(args, "http://"+hostPort(ip, int(r.Port))+r.Path)
+	}
+	pod := labPod(ns, name, nil, args)
+	pod.Spec.Containers[0].Resources = corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("16Mi")},
+		Limits:   corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("64Mi")},
+	}
+	return pod
+}
+
+// replayCodes reads the replay's lines: each request's status, by index.
+func replayCodes(message string, n int) ([]int, error) {
+	codes, seen := make([]int, n), make([]bool, n)
+	for _, line := range strings.Split(strings.TrimSpace(message), "\n") {
+		f := strings.Fields(line)
+		if len(f) != 2 {
+			continue
+		}
+		i, err1 := strconv.Atoi(f[0])
+		c, err2 := strconv.Atoi(f[1])
+		if err1 != nil || err2 != nil || i < 0 || i >= n {
+			continue
+		}
+		codes[i], seen[i] = c, true
+	}
+	for i, ok := range seen {
+		if !ok {
+			return nil, fmt.Errorf("it reported nothing for request %d", i)
+		}
+	}
+	return codes, nil
+}
+
+// withPorts gives each request without a port the copy's first declared
+// one, and drops those it has none for.
+func withPorts(requests []v1alpha1.ReplayRequest, copied *corev1.Pod) []v1alpha1.ReplayRequest {
+	var first int32
+	for _, c := range copied.Spec.Containers {
+		for _, p := range c.Ports {
+			if first == 0 && (p.Protocol == "" || p.Protocol == corev1.ProtocolTCP) {
+				first = p.ContainerPort
+			}
+		}
+	}
+	var out []v1alpha1.ReplayRequest
+	for _, r := range requests {
+		if r.Port == 0 {
+			r.Port = first
+		}
+		if r.Port != 0 {
+			out = append(out, r)
+		}
+	}
+	return out
 }

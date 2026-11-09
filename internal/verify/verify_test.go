@@ -90,6 +90,33 @@ func TestTheLabIsAskedOncePerIncidentWhereItIsFree(t *testing.T) {
 	}
 }
 
+// With traffic capture on, the Experiment carries the reads production
+// answered, for each run to send its copy.
+func TestTheLabIsAskedToReplayCapturedReads(t *testing.T) {
+	ctx := context.Background()
+	l, _ := newLab(t)
+	l.Replay = func(target model.ObjectRef) []v1alpha1.ReplayRequest {
+		if target != front {
+			t.Fatalf("replay asked for %s", target)
+		}
+		return []v1alpha1.ReplayRequest{{Path: "/cart/1", Port: 8080}}
+	}
+	if _, asked, err := l.Verify(ctx, incident, front, "front-7d9c"); err != nil || !asked {
+		t.Fatalf("Verify: %v, %v", asked, err)
+	}
+	got, err := l.Dynamic.Resource(ExperimentsResource).Namespace("lab-0").Get(ctx, ExperimentName(incident), metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var e v1alpha1.Experiment
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(got.Object, &e); err != nil {
+		t.Fatal(err)
+	}
+	if len(e.Spec.Replay) != 1 || e.Spec.Replay[0].Path != "/cart/1" || e.Spec.Replay[0].Port != 8080 {
+		t.Fatalf("replay %+v", e.Spec.Replay)
+	}
+}
+
 func TestTheLabIsNotAskedWhenBusyOrOutsideWatchedNamespaces(t *testing.T) {
 	ctx := context.Background()
 	l, _ := newLab(t, experimentIn(t, "lab-0", "a", "Sealing"), experimentIn(t, "lab-1", "b", "Running"))

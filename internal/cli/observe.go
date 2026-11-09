@@ -13,6 +13,7 @@ import (
 	"github.com/karimzakzouk/sentinel/api/v1alpha1"
 	"github.com/karimzakzouk/sentinel/internal/act"
 	"github.com/karimzakzouk/sentinel/internal/brain"
+	"github.com/karimzakzouk/sentinel/internal/capture"
 	"github.com/karimzakzouk/sentinel/internal/config"
 	"github.com/karimzakzouk/sentinel/internal/fixes"
 	"github.com/karimzakzouk/sentinel/internal/ledger"
@@ -78,7 +79,7 @@ func servesActing(client kubernetes.Interface) error {
 // newObserver wires the Watcher to the Brain, and the Brain to the actor
 // when the configuration names one.
 func newObserver(ctx context.Context, log *slog.Logger, cfg *config.Config, client kubernetes.Interface, dyn dynamic.Interface,
-	l *ledger.Ledger,
+	l *ledger.Ledger, captured *capture.Store,
 ) (*watcher.Watcher, *act.Requests, error) {
 	reg, err := Registry()
 	if err != nil {
@@ -162,6 +163,15 @@ func newObserver(ctx context.Context, log *slog.Logger, cfg *config.Config, clie
 					log.Error("could not record the Lab's verdict", "experiment", v.Experiment, "error", err)
 				}
 			}}
+		if captured != nil {
+			lab.Replay = func(target model.ObjectRef) []v1alpha1.ReplayRequest {
+				var out []v1alpha1.ReplayRequest
+				for _, r := range capture.Replayable(captured.Recent(target, time.Now().Add(-24*time.Hour)), 20) {
+					out = append(out, v1alpha1.ReplayRequest{Path: r.Path, Port: int32(r.Port)}) //nolint:gosec // a port the agent saw, below 65536
+				}
+				return out
+			}
+		}
 		if err := lab.Start(ctx); err != nil {
 			log.Warn("the Lab does not verify rollbacks", "reason", err)
 		} else {
