@@ -2,4 +2,4 @@
 # self-hosted runner, as "Run workflow" does; hours is how long to watch,
 # 1 to 72. The soak holds the runner for that long.
 hours: 72
-requested: 2026-11-09, the phase 1 gate's soak
+requested: 2026-11-09, the phase 1 gate's soak, again after the first stopped at its start
