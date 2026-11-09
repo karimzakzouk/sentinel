@@ -57,10 +57,10 @@ connect() {
   person=$(k -n gitea get secret gitea-person -o jsonpath='{.data.token}' | base64 -d)
 }
 
-# built reports whether the registry has an image's tag.
+# built reports whether the registry has an image's tag, whatever its
+# manifest's kind: Docker pushes an index.
 built() {
-  curl -fsS -o /dev/null -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' \
-    "http://127.0.0.1:$registry_port/v2/$1/manifests/$2" 2>/dev/null
+  curl -fsS "http://127.0.0.1:$registry_port/v2/$1/tags/list" 2>/dev/null | jq -e --arg tag "$2" '.tags // [] | index($tag)' >/dev/null
 }
 
 build() {
