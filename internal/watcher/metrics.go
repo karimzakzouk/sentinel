@@ -160,4 +160,28 @@ type metricsState struct {
 	last    time.Time
 	usage   map[string]map[string]ContainerUsage // namespace/pod → container → usage
 	history map[string]*usageHistory             // workload key
+	// memory holds, per workload key and container, the working sets its
+	// pods had at the latest polls, each with the revision it ran.
+	memory map[string]map[string][]memorySample
+}
+
+// memorySample is one container's working set at one poll.
+type memorySample struct {
+	revision string
+	bytes    float64
+}
+
+// memorySamples is how many working sets are kept per container of a
+// workload: six hours of one pod polled every 30 seconds.
+const memorySamples = 720
+
+func (m *metricsState) addMemory(workload, container, revision string, bytes float64) {
+	if m.memory == nil {
+		m.memory = map[string]map[string][]memorySample{}
+	}
+	if m.memory[workload] == nil {
+		m.memory[workload] = map[string][]memorySample{}
+	}
+	s := append(m.memory[workload][container], memorySample{revision: revision, bytes: bytes})
+	m.memory[workload][container] = s[max(0, len(s)-memorySamples):]
 }

@@ -20,6 +20,7 @@ import (
 	"k8s.io/client-go/tools/cache"
 
 	"github.com/karimzakzouk/sentinel/api/v1alpha1"
+	"github.com/karimzakzouk/sentinel/internal/brain"
 	"github.com/karimzakzouk/sentinel/internal/model"
 )
 
@@ -67,15 +68,16 @@ func (f *Fixes) Start(ctx context.Context) error {
 	return nil
 }
 
-// Fix asks the Fixer to make the rollback of target, away from the
-// revision with pod template hash fromRevision, hold at its source. Asking
-// twice for one incident is asking once. It returns the Fix's name.
-func (f *Fixes) Fix(ctx context.Context, incident model.ID, target model.ObjectRef, fromRevision string) (string, error) {
+// Fix asks the Fixer to make the rollback of a workload hold at its
+// source. Asking twice for one incident is asking once. It returns the
+// Fix's name.
+func (f *Fixes) Fix(ctx context.Context, r brain.FixRequest) (string, error) {
+	incident, target, fromRevision := r.Incident, r.Target, r.FromRevision
 	name := Name(incident)
 	fix := &v1alpha1.Fix{
 		TypeMeta:   metav1.TypeMeta{APIVersion: v1alpha1.GroupVersion.String(), Kind: "Fix"},
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: f.Namespace},
-		Spec: v1alpha1.FixSpec{IncidentID: string(incident), FromRevision: fromRevision,
+		Spec: v1alpha1.FixSpec{IncidentID: string(incident), FromRevision: fromRevision, FaultClass: r.FaultClass, MemoryLimits: r.MemoryLimits, Merge: r.Merge,
 			Workload: v1alpha1.TargetRef{APIVersion: "apps/v1", Kind: target.Kind, Namespace: target.Namespace, Name: target.Name}},
 	}
 	obj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(fix)

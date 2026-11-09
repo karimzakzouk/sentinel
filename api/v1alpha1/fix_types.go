@@ -20,6 +20,23 @@ type FixSpec struct {
 	// was rolled back from, whose template holds the bad values.
 	// +kubebuilder:validation:MinLength=1
 	FromRevision string `json:"fromRevision"`
+	// FaultClass is the class Sentinel gave the incident. When that
+	// revision changed several values, it says which of them to blame; the
+	// fix leaves the others as the revision set them.
+	// +optional
+	FaultClass string `json:"faultClass,omitempty"`
+	// MemoryLimits are, per container, the memory limit Sentinel learned
+	// from what the workload used while it was healthy. For a memory-limit
+	// incident a fix proposes it, since putting back the old limit can be
+	// as wrong as the new one.
+	// +optional
+	MemoryLimits map[string]string `json:"memoryLimits,omitempty"`
+	// Merge lets the Fixer merge its pull request itself: the namespace's
+	// policy grants fix.merge at autonomous, and Sentinel's fixes for this
+	// fault on this workload have earned it where the policy asks them to.
+	// The Fixer checks the policy again before it merges.
+	// +optional
+	Merge bool `json:"merge,omitempty"`
 }
 
 // FixPhase is a step in a fix's lifecycle: Proposed once its pull request

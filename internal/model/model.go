@@ -303,6 +303,10 @@ type Fix struct {
 	Change       []string `json:"change,omitempty"`
 	PullRequest  string   `json:"pullRequest,omitempty"`
 	MergeCommit  string   `json:"mergeCommit,omitempty"`
+	// FaultClass is the incident's class, for the fix's track record, and
+	// Merge says the Fixer was let merge it itself.
+	FaultClass string `json:"faultClass,omitempty"`
+	Merge      bool   `json:"merge,omitempty"`
 }
 
 // FixID is the one fix per incident.

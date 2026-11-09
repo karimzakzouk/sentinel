@@ -65,6 +65,16 @@ func (c *Client) Open(ctx context.Context, owner, repo, head, base, title, body 
 	return pr, err
 }
 
+// Merge merges a pull request with a merge commit, as GitHub and Gitea each
+// ask for one.
+func (c *Client) Merge(ctx context.Context, owner, repo string, number int) error {
+	path := fmt.Sprintf("/repos/%s/%s/pulls/%d/merge", url.PathEscape(owner), url.PathEscape(repo), number)
+	if api, err := url.Parse(c.API); err == nil && api.Host == "api.github.com" {
+		return c.call(ctx, http.MethodPut, path, map[string]string{"merge_method": "merge"}, nil)
+	}
+	return c.call(ctx, http.MethodPost, path, map[string]string{"Do": "merge"}, nil)
+}
+
 // Get reads a pull request.
 func (c *Client) Get(ctx context.Context, owner, repo string, number int) (PullRequest, error) {
 	var pr PullRequest
@@ -106,6 +116,9 @@ func (c *Client) call(ctx context.Context, method, path string, in, out any) err
 	}
 	if resp.StatusCode/100 != 2 {
 		return fmt.Errorf("%s %s: %s: %s", method, path, resp.Status, strings.TrimSpace(string(data)))
+	}
+	if out == nil {
+		return nil
 	}
 	return json.Unmarshal(data, out)
 }

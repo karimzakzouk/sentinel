@@ -7,15 +7,18 @@ import (
 	"strings"
 
 	"go.yaml.in/yaml/v3"
+	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 // Fields a fix restores beside the image: a container's command and
-// arguments, and an environment variable's literal value ("env:NAME").
+// arguments, an environment variable's literal value ("env:NAME"), and its
+// memory limit, which a fix sets to a learned value rather than restores.
 const (
-	fieldImage   = "image"
-	fieldCommand = "command"
-	fieldArgs    = "args"
-	envPrefix    = "env:"
+	fieldImage       = "image"
+	fieldCommand     = "command"
+	fieldArgs        = "args"
+	fieldMemoryLimit = "limits.memory"
+	envPrefix        = "env:"
 )
 
 // valueIn reads a field of a container, as a map: a string for the image
@@ -49,6 +52,12 @@ func valueIn(container map[string]any, field string) any {
 			}
 			s, _ := e["value"].(string)
 			return s
+		}
+	case field == fieldMemoryLimit:
+		res, _ := container["resources"].(map[string]any)
+		limits, _ := res["limits"].(map[string]any)
+		if v, ok := limits["memory"]; ok && v != nil {
+			return fmt.Sprint(v)
 		}
 	}
 	return nil
@@ -103,10 +112,42 @@ func setValue(container map[string]any, field string, v any) {
 			return
 		}
 		container["env"] = kept
+	case field == fieldMemoryLimit:
+		res, _ := container["resources"].(map[string]any)
+		limits, _ := res["limits"].(map[string]any)
+		if v == nil {
+			delete(limits, "memory")
+			return
+		}
+		if res == nil {
+			res = map[string]any{}
+			container["resources"] = res
+		}
+		if limits == nil {
+			limits = map[string]any{}
+			res["limits"] = limits
+		}
+		limits["memory"] = v
 	}
 }
 
 func sameValue(a, b any) bool { return reflect.DeepEqual(a, b) }
+
+// same reports whether two values of the change's field are equal: memory
+// limits as quantities, since "64Mi" and "67108864" are one limit.
+func (c Change) same(a, b any) bool {
+	if c.field() != fieldMemoryLimit {
+		return sameValue(a, b)
+	}
+	as, aok := a.(string)
+	bs, bok := b.(string)
+	if !aok || !bok {
+		return a == nil && b == nil
+	}
+	aq, aerr := resource.ParseQuantity(as)
+	bq, berr := resource.ParseQuantity(bs)
+	return aerr == nil && berr == nil && aq.Cmp(bq) == 0
+}
 
 // shown is a value as a pull request or a log line says it.
 func shown(v any) string {
@@ -125,6 +166,8 @@ func what(field string) string {
 	switch {
 	case field == fieldArgs:
 		return "arguments"
+	case field == fieldMemoryLimit:
+		return "memory limit"
 	case strings.HasPrefix(field, envPrefix):
 		return "environment variable " + strings.TrimPrefix(field, envPrefix)
 	}
@@ -186,6 +229,13 @@ func editField(src []byte, kind, name string, c Change) ([]byte, int, error) {
 		dash := entry.Column - 2
 		out, err := deleteLines(src, entry.Line, blockEnd(src, entry.Line, dash, false))
 		return out, entry.Line, err
+	case field == fieldMemoryLimit:
+		node := valueOf(valueOf(valueOf(container, "resources"), "limits"), "memory")
+		if node == nil || c.Good == nil {
+			return nil, 0, fmt.Errorf("container %s sets no memory limit here", c.Container)
+		}
+		out, err := splice(src, node, c.Good.(string))
+		return out, node.Line, err
 	}
 	return nil, 0, fmt.Errorf("the Fixer does not restore %s", field)
 }
@@ -225,10 +275,12 @@ func fileValue(src []byte, kind, name, container, field string) (any, bool) {
 }
 
 // containerNode finds, in a file of YAML documents, a workload's container.
+// An empty name matches any workload of the kind, as a patch Kustomize
+// aims by a target may name another.
 func containerNode(src []byte, kind, name, container string) (*yaml.Node, error) {
 	var found []*yaml.Node
 	for _, top := range documents(src) {
-		if scalar(top, "kind") != kind || scalar(valueOf(top, "metadata"), "name") != name {
+		if scalar(top, "kind") != kind || name != "" && scalar(valueOf(top, "metadata"), "name") != name {
 			continue
 		}
 		podSpec := valueOf(valueOf(valueOf(top, "spec"), "template"), "spec")

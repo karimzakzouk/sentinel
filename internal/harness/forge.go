@@ -14,7 +14,8 @@ import (
 
 // Forge is a Gitea's API as the person who owns the scenarios' repositories:
 // what commit faults change, and the pull requests that person merges.
-// Sentinel's Fixer never merges; only this person does.
+// Sentinel's Fixer merges only where a policy grants it fix.merge; else
+// this person does.
 type Forge struct {
 	// API is the API's base URL, a Gitea root URL followed by /api/v1.
 	API   string

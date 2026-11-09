@@ -121,7 +121,7 @@ func newObserver(ctx context.Context, log *slog.Logger, cfg *config.Config, clie
 		Revisions: w.NewestRevision, Lookback: time.Hour, Gap: d.IncidentGap.Duration, Localize: localize,
 		Dependents:   func(ref model.ObjectRef) []model.ObjectRef { return w.Topology().Dependents(ref) },
 		Dependencies: func(ref model.ObjectRef) []topology.Reach { return w.Topology().DependenciesWithHops(ref) },
-		Deviations:   w.Deviations}
+		Deviations:   w.Deviations, MemoryUse: w.MemoryUse}
 	if n, err := b.Restore(ctx); err != nil {
 		return nil, nil, fmt.Errorf("restore open incidents: %w", err)
 	} else if n > 0 {
@@ -147,6 +147,9 @@ func newObserver(ctx context.Context, log *slog.Logger, cfg *config.Config, clie
 			log.Warn("acting is off; Sentinel only observes", "reason", err)
 		} else {
 			b.Act = requests
+			b.MergePolicy = func(ns string) (model.AutonomyLevel, bool) {
+				return model.AutonomyLevel(requests.Autonomy(ns, brain.ActionFixMerge)), requests.Earned(ns, brain.ActionFixMerge)
+			}
 			acting = requests
 			log.Info("acting is on where a SentinelPolicy allows it", "namespaces", cfg.Namespaces)
 		}

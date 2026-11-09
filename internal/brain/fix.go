@@ -5,17 +5,37 @@ import (
 	"strings"
 	"time"
 
+	"github.com/karimzakzouk/sentinel/internal/learn"
 	"github.com/karimzakzouk/sentinel/internal/ledger"
 	"github.com/karimzakzouk/sentinel/internal/model"
 	"github.com/karimzakzouk/sentinel/internal/notify"
 )
 
 // Fixer asks for the change at the source that makes the rollback of a
-// workload, away from the revision with pod template hash fromRevision,
-// hold. It returns which Fix answers.
+// workload hold. It returns which Fix answers.
 type Fixer interface {
-	Fix(ctx context.Context, incident model.ID, target model.ObjectRef, fromRevision string) (string, error)
+	Fix(ctx context.Context, r FixRequest) (string, error)
 }
+
+// FixRequest is what the Fixer is asked: to make the rollback of Target,
+// away from the revision with pod template hash FromRevision, hold where
+// that revision was written. FaultClass says which of the revision's
+// changes to blame; MemoryLimits are limits learned, per container, from
+// what it used while healthy.
+type FixRequest struct {
+	Incident     model.ID
+	Target       model.ObjectRef
+	FromRevision string
+	FaultClass   string
+	MemoryLimits map[string]string
+	// Merge lets the Fixer merge the fix itself.
+	Merge bool
+}
+
+// ActionFixMerge is the policy action that lets the Fixer merge its own
+// pull requests, and the action of a fix's track record: a fix that held
+// counts for it, one that did not or that a person declined, against.
+const ActionFixMerge = "fix.merge"
 
 // FixUpdate is a step the Fixer reports for an incident's fix.
 type FixUpdate struct {
@@ -48,13 +68,40 @@ func (b *Brain) askFix(ctx context.Context, inc *incident, a *model.Action) []le
 	if b.Fixer == nil || inc.fixAsked || a.Type != ActionRolloutUndo || a.Target.Kind != "Deployment" || from == "" {
 		return nil
 	}
-	name, err := b.Fixer.Fix(ctx, inc.rec.ID, a.Target, from)
+	r := FixRequest{Incident: inc.rec.ID, Target: a.Target, FromRevision: from}
+	if inc.rec.Assessment != nil {
+		r.FaultClass = inc.rec.Assessment.Class
+	}
+	if r.FaultClass == ClassMemoryLimit && b.MemoryUse != nil {
+		for container, used := range b.MemoryUse(a.Target, from) {
+			if limit, err := learn.MemoryLimit(used); err == nil {
+				if r.MemoryLimits == nil {
+					r.MemoryLimits = map[string]string{}
+				}
+				r.MemoryLimits[container] = limit
+			} else {
+				b.Log.Info("no memory limit learned", "incident", inc.rec.ID, "container", container, "reason", err)
+			}
+		}
+	}
+	why := ""
+	if b.MergePolicy != nil {
+		if level, gated := b.MergePolicy(a.Target.Namespace); level == model.AutonomyAutonomous {
+			earned, standing := b.standing(model.TrackKey{Action: ActionFixMerge, FaultClass: r.FaultClass, Service: a.Target.String()})
+			r.Merge = !gated || earned
+			if !r.Merge {
+				why = "; a person merges it, since " + standing
+			}
+		}
+	}
+	name, err := b.Fixer.Fix(ctx, r)
 	if err != nil {
 		b.Log.Error("could not ask the Fixer for a fix at the source", "incident", inc.rec.ID, "error", err)
 		return nil
 	}
 	inc.fixAsked = true
-	f := model.Fix{ID: model.FixID(inc.rec.ID), IncidentID: inc.rec.ID, Target: a.Target, FromRevision: from, Phase: "Requested", Message: name}
+	f := model.Fix{ID: model.FixID(inc.rec.ID), IncidentID: inc.rec.ID, Target: a.Target, FromRevision: from, Phase: "Requested",
+		Message: name + why, FaultClass: r.FaultClass, Merge: r.Merge}
 	return []ledger.Draft{ledger.RecordDraft(source, model.KindFix, "requested", f.ID, inc.rec.ID, f)}
 }
 
@@ -86,6 +133,7 @@ func (b *Brain) OnFixUpdate(ctx context.Context, u FixUpdate) error {
 	f.PullRequest, f.MergeCommit, f.Change = u.PullRequest, u.MergeCommit, u.Change
 	b.Log.Info("fix "+strings.ToLower(u.Phase), "incident", u.IncidentID, "target", f.Target.String(), "pullRequest", u.PullRequest, "message", u.Message)
 	target := f.Target.String()
+	var drafts []ledger.Draft
 	resume := "resume it with `" + u.Resume + "`"
 	if u.Resume == "" {
 		resume = "resume what Sentinel paused"
@@ -100,6 +148,7 @@ func (b *Brain) OnFixUpdate(ctx context.Context, u FixUpdate) error {
 	case "Declined":
 		b.tell(ctx, notify.KindEscalation, u.IncidentID, f.Target, "The fix for "+target+" was closed without merging",
 			u.Owner+" stays paused. Fix the change where it was made, then "+resume+".")
+		drafts = append(drafts, b.track(fixTrack(*f), false, u.IncidentID, b.now()))
 	case "Ready":
 		b.tell(ctx, notify.KindApproval, u.IncidentID, f.Target, "The fix for "+target+" is in "+u.Owner+"'s source",
 			"Merged as "+u.MergeCommit+": "+resume+", and Sentinel checks that "+target+" keeps running.")
@@ -109,8 +158,14 @@ func (b *Brain) OnFixUpdate(ctx context.Context, u FixUpdate) error {
 		}
 		b.holding[u.IncidentID] = holdCheck{target: f.Target, from: f.FromRevision, since: b.now()}
 	}
-	_, err = b.Ledger.Append(ctx, ledger.RecordDraft(source, model.KindFix, strings.ToLower(u.Phase), f.ID, u.IncidentID, *f))
+	_, err = b.Ledger.Append(ctx, append([]ledger.Draft{ledger.RecordDraft(source, model.KindFix, strings.ToLower(u.Phase), f.ID, u.IncidentID, *f)},
+		drafts...)...)
 	return err
+}
+
+// fixTrack is the cell of a fix's track record.
+func fixTrack(f model.Fix) model.TrackKey {
+	return model.TrackKey{Action: ActionFixMerge, FaultClass: f.FaultClass, Service: f.Target.String()}
 }
 
 // holds checks the workloads of fixes their owners applied a while ago:
@@ -144,7 +199,8 @@ func (b *Brain) holds(ctx context.Context, now time.Time) []ledger.Draft {
 			b.tell(ctx, notify.KindActed, id, h.target, "Fixed at the source: "+h.target.String(), f.Message)
 		}
 		b.Log.Info("fix "+strings.ToLower(f.Phase), "incident", id, "target", h.target.String(), "message", f.Message)
-		drafts = append(drafts, ledger.RecordDraft(source, model.KindFix, strings.ToLower(f.Phase), f.ID, id, f))
+		drafts = append(drafts, ledger.RecordDraft(source, model.KindFix, strings.ToLower(f.Phase), f.ID, id, f),
+			b.track(fixTrack(f), f.Phase == "Held", id, now))
 	}
 	return drafts
 }

@@ -58,6 +58,12 @@ spec:
               GitOps owner deploys from, the change that undoes the blamed change. It
               cannot be changed after creation.
             properties:
+              faultClass:
+                description: |-
+                  FaultClass is the class Sentinel gave the incident. When that
+                  revision changed several values, it says which of them to blame; the
+                  fix leaves the others as the revision set them.
+                type: string
               fromRevision:
                 description: |-
                   FromRevision is the pod template hash of the revision the workload
@@ -68,6 +74,22 @@ spec:
                 description: IncidentID links the fix to its incident in the Ledger.
                 minLength: 1
                 type: string
+              memoryLimits:
+                additionalProperties:
+                  type: string
+                description: |-
+                  MemoryLimits are, per container, the memory limit Sentinel learned
+                  from what the workload used while it was healthy. For a memory-limit
+                  incident a fix proposes it, since putting back the old limit can be
+                  as wrong as the new one.
+                type: object
+              merge:
+                description: |-
+                  Merge lets the Fixer merge its pull request itself: the namespace's
+                  policy grants fix.merge at autonomous, and Sentinel's fixes for this
+                  fault on this workload have earned it where the policy asks them to.
+                  The Fixer checks the policy again before it merges.
+                type: boolean
               workload:
                 description: Workload is the workload the mitigation rolled back.
                 properties:

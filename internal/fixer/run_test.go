@@ -222,3 +222,71 @@ func TestAFixGoesFromProposalToReady(t *testing.T) {
 	}
 	step(PhaseApplied)
 }
+
+// The Fixer merges a fix itself only when the controller lets it and the
+// namespace's policy still grants fix.merge at autonomous.
+func TestAFixMergesItselfOnlyWhereThePolicyGrants(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		merge, policy bool
+		want          v1alpha1.FixPhase
+	}{
+		{"granted and earned", true, true, PhaseMerged},
+		{"earned but no longer granted", true, false, PhaseProposed},
+		{"granted but not earned", false, true, PhaseProposed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			var mu sync.Mutex
+			merges := 0
+			mux := http.NewServeMux()
+			mux.HandleFunc("GET /api/v1/repos/sentinel/delivery/pulls/1", func(w http.ResponseWriter, _ *http.Request) {
+				mu.Lock()
+				defer mu.Unlock()
+				if merges == 0 {
+					_, _ = io.WriteString(w, `{"number": 1, "state": "open"}`)
+					return
+				}
+				_, _ = io.WriteString(w, `{"number": 1, "state": "closed", "merged": true, "merge_commit_sha": "abc"}`)
+			})
+			mux.HandleFunc("POST /api/v1/repos/sentinel/delivery/pulls/1/merge", func(w http.ResponseWriter, _ *http.Request) {
+				mu.Lock()
+				defer mu.Unlock()
+				merges++
+			})
+			srv := httptest.NewServer(mux)
+			t.Cleanup(srv.Close)
+			fix := &unstructured.Unstructured{Object: map[string]any{"apiVersion": v1alpha1.GroupVersion.String(), "kind": "Fix",
+				"metadata": map[string]any{"name": "sentinel-0123456789ab-fix", "namespace": "sentinel"},
+				"spec": map[string]any{"incidentId": "01a1c008-0123-4567-89ab-0123456789ab", "fromRevision": "bad123", "merge": tc.merge,
+					"workload": map[string]any{"apiVersion": "apps/v1", "kind": "Deployment", "namespace": "shop", "name": "web"}},
+				"status": map[string]any{"phase": "Proposed", "repository": srv.URL + "/sentinel/delivery.git", "number": int64(1), "owner": "Kustomization flux-system/web"}}}
+			var objects []runtime.Object
+			if tc.policy {
+				objects = append(objects, &unstructured.Unstructured{Object: map[string]any{"apiVersion": v1alpha1.GroupVersion.String(), "kind": "SentinelPolicy",
+					"metadata": map[string]any{"name": "fixes", "namespace": "shop"},
+					"spec":     map[string]any{"autonomy": []any{map[string]any{"action": "fix.merge", "level": "autonomous"}}}}})
+			}
+			dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{
+				FixesResource: "FixList", actor.PoliciesResource: "SentinelPolicyList"}, objects...)
+			if _, err := dyn.Resource(FixesResource).Namespace("sentinel").Create(ctx, fix, metav1.CreateOptions{}); err != nil {
+				t.Fatal(err)
+			}
+			f := &Fixer{Dynamic: dyn, Namespace: "sentinel", Forge: &forge.Client{Web: srv.URL, API: srv.URL + "/api/v1", Token: "s3cret"},
+				Log: slog.New(slog.DiscardHandler)}
+			for range 2 {
+				store := cache.NewStore(cache.MetaNamespaceKeyFunc)
+				u, _ := dyn.Resource(FixesResource).Namespace("sentinel").Get(ctx, "sentinel-0123456789ab-fix", metav1.GetOptions{})
+				_ = store.Add(u)
+				if _, err := f.process(ctx, store, "sentinel/sentinel-0123456789ab-fix", 0); err != nil {
+					t.Fatal(err)
+				}
+			}
+			u, _ := dyn.Resource(FixesResource).Namespace("sentinel").Get(ctx, "sentinel-0123456789ab-fix", metav1.GetOptions{})
+			phase, _, _ := unstructured.NestedString(u.Object, "status", "phase")
+			if v1alpha1.FixPhase(phase) != tc.want || (merges > 0) != (tc.want == PhaseMerged) {
+				t.Fatalf("phase %s after %d merges, want %s", phase, merges, tc.want)
+			}
+		})
+	}
+}

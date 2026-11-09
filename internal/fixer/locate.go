@@ -88,7 +88,7 @@ func locateKustomized(repo filesys.FileSystem, root, kfile, kind, name string, c
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", rel(root), err)
 	}
-	if got := valueOfRes(res, c.Container, c.field()); !sameValue(got, c.Bad) {
+	if got := valueOfRes(res, c.Container, c.field()); !c.same(got, c.Bad) {
 		return nil, fmt.Errorf("%s renders %s's %s as %s, not %s: the bad value is set outside these files, "+
 			"such as on the owner itself", rel(root), c.Container, what(c.field()), shown(got), shown(c.Bad))
 	}
@@ -96,7 +96,7 @@ func locateKustomized(repo filesys.FileSystem, root, kfile, kind, name string, c
 	if c.field() == fieldImage {
 		edit, err = placeImage(repo, root, res, kind, name, c)
 	} else {
-		edit, err = placeField(repo, root, res, kind, name, c)
+		edit, err = placeField(repo, root, kfile, before, res, kind, name, c)
 	}
 	if err != nil {
 		return nil, err
@@ -299,16 +299,13 @@ func placeImage(repo filesys.FileSystem, root string, r *resource.Resource, kind
 	return nil, fmt.Errorf("%s cannot be set back to %s by changing one value", where, good)
 }
 
-// placeField finds a field other than the image in the manifest the
-// workload came from. A patch in a kustomization may set it instead, which
-// the Fixer does not edit yet.
-func placeField(repo filesys.FileSystem, root string, r *resource.Resource, kind, name string, c Change) (*Edit, error) {
-	for _, t := range transformers(r) {
-		if strings.HasPrefix(t.ConfiguredBy.Kind, "Patch") {
-			return nil, fmt.Errorf("a patch in %s changes %s %s, and the Fixer edits only the file a value is written in so far",
-				rel(path.Join(root, t.ConfiguredIn)), kind, name)
-		}
-	}
+// placeField finds a field other than the image: in the manifest the
+// workload came from, or in a patch of a kustomization that transformed it.
+// Each is a candidate edit, kept only when the render it makes differs from
+// before in the change's field alone; the Fixer proposes the one that is
+// left, and refuses when none or several are.
+func placeField(repo filesys.FileSystem, root, kfile string, before resmap.ResMap, r *resource.Resource, kind, name string, c Change) (*Edit, error) {
+	var cands []*Edit
 	file, err := origin(root, r, kind, name)
 	if err != nil {
 		return nil, err
@@ -317,7 +314,38 @@ func placeField(repo filesys.FileSystem, root string, r *resource.Resource, kind
 	if err != nil {
 		return nil, err
 	}
-	return fieldEdit(file, src, kind, name, c)
+	manifest, manifestErr := fieldEdit(file, src, kind, name, c)
+	if manifestErr == nil {
+		cands = append(cands, manifest)
+	}
+	cands = append(cands, patchEdits(repo, root, r, kind, c)...)
+	var held []*Edit
+	for _, edit := range cands {
+		if after, err := render(repo, root, kfile, edit); err == nil && onlyChanged(before, after, kind, name, c) == nil {
+			held = append(held, edit)
+		}
+	}
+	switch {
+	case len(held) == 1 && held[0] != manifest && manifestErr == nil:
+		if v, ok := fileValue(src, kind, name, c.Container, c.field()); ok && c.same(v, c.Bad) {
+			held[0].Why += fmt.Sprintf("; %s sets the same value under it, which the patch hides", rel(file))
+		}
+		return held[0], nil
+	case len(held) == 1:
+		return held[0], nil
+	case len(held) > 1:
+		return nil, fmt.Errorf("%d edits would each restore %s's %s; the Fixer proposes one only when one place sets it", len(held), c.Container, what(c.field()))
+	}
+	for _, t := range transformers(r) {
+		if strings.HasPrefix(t.ConfiguredBy.Kind, "Patch") {
+			return nil, fmt.Errorf("a patch in %s changes %s %s, and no edit of it or of %s restores %s's %s alone",
+				rel(path.Join(root, t.ConfiguredIn)), kind, name, rel(file), c.Container, what(c.field()))
+		}
+	}
+	if manifestErr != nil {
+		return nil, manifestErr
+	}
+	return nil, fmt.Errorf("editing %s does not restore %s's %s alone", rel(file), c.Container, what(c.field()))
 }
 
 // fieldEdit edits a field in one file, saying where.
@@ -399,9 +427,11 @@ func onlyChanged(before, after resmap.ResMap, kind, name string, c Change) error
 		if err != nil {
 			return err
 		}
+		withoutBuildMetadata(bm)
+		withoutBuildMetadata(am)
 		if b.GetKind() == kind && b.GetName() == name {
 			container := containerIn(bm, c.Container)
-			if got := valueOfRes(a, c.Container, c.field()); !sameValue(got, c.Good) || container == nil {
+			if got := valueOfRes(a, c.Container, c.field()); !c.same(got, c.Good) || container == nil {
 				return fmt.Errorf("with the fix %s's %s renders as %s, not %s", c.Container, what(c.field()), shown(got), shown(c.Good))
 			}
 			setValue(container, c.field(), c.Good)
@@ -411,6 +441,22 @@ func onlyChanged(before, after resmap.ResMap, kind, name string, c Change) error
 		}
 	}
 	return nil
+}
+
+// withoutBuildMetadata drops the annotations render asks Kustomize for: a
+// fix that removes a patch changes which transformers a resource names,
+// not the resource.
+func withoutBuildMetadata(m map[string]any) {
+	meta, _ := m["metadata"].(map[string]any)
+	ann, _ := meta["annotations"].(map[string]any)
+	if ann == nil {
+		return
+	}
+	delete(ann, originAnnotation)
+	delete(ann, transformationsAnnotation)
+	if len(ann) == 0 {
+		delete(meta, "annotations")
+	}
 }
 
 // locatePlain finds the bad value in a directory of plain manifests, as
@@ -425,7 +471,7 @@ func locatePlain(repo filesys.FileSystem, root, kind, name string, c Change) (*E
 		if err != nil {
 			return err
 		}
-		if got, ok := fileValue(src, kind, name, c.Container, c.field()); !ok || !sameValue(got, c.Bad) {
+		if got, ok := fileValue(src, kind, name, c.Container, c.field()); !ok || !c.same(got, c.Bad) {
 			return nil
 		}
 		edit, err := fieldEdit(p, src, kind, name, c)
