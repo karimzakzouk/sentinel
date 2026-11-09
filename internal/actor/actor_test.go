@@ -541,3 +541,29 @@ func TestTheLabMayStandInForAnApprover(t *testing.T) {
 		})
 	}
 }
+
+// A request the controller marks as needing approval, because its track
+// record has not earned the policy's level, waits for a person; the mark
+// never loosens a stricter policy.
+func TestARequestHeldForItsTrackRecordWaitsForAPerson(t *testing.T) {
+	undo := map[string]string{ParamFromTemplateHash: "bbb"}
+	held := func(who string) *v1alpha1.ActionRequest {
+		r := request(ActionRolloutUndo, undo)
+		r.Annotations = map[string]string{AnnotationNeedsApproval: "its track record has not earned autonomous yet"}
+		if who != "" {
+			r.Annotations[AnnotationApprovedBy] = who
+		}
+		return r
+	}
+	a, _, _ := newActor(t, 3, sentinelPolicy(v1alpha1.AutonomyAutonomous, ActionRolloutUndo))
+	if phase, msg := a.Handle(ctx, held("")); phase != v1alpha1.ActionPending || !strings.Contains(msg, "has not earned autonomous yet") {
+		t.Fatalf("%s: %s; want it waiting for a person, saying why", phase, msg)
+	}
+	if phase, msg := a.Handle(ctx, held("alice")); phase != v1alpha1.ActionSucceeded {
+		t.Fatalf("approved: %s: %s", phase, msg)
+	}
+	a, _, _ = newActor(t, 3, sentinelPolicy(v1alpha1.AutonomyRecommend, ActionRolloutUndo))
+	if phase, msg := a.Handle(ctx, held("alice")); phase != v1alpha1.ActionRejected {
+		t.Fatalf("under recommend: %s: %s; the mark may not loosen a stricter policy", phase, msg)
+	}
+}

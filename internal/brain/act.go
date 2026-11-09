@@ -2,6 +2,7 @@ package brain
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -239,9 +240,31 @@ func (b *Brain) track(key model.TrackKey, success bool, incident model.ID, now t
 // TrackID is the Ledger entity a cell's record is kept under.
 func TrackID(key model.TrackKey) model.ID { return model.ID("track/" + key.String()) }
 
-// argExperiment carries the Lab Experiment verifying an action to the
-// actor's request, which names it in an annotation (act.ParamExperiment).
-const argExperiment = "experiment"
+// Arguments the Brain passes about an action, which the actor's request
+// carries in annotations (act.ParamExperiment, ParamEarned, ParamTrack):
+// the Lab Experiment verifying it, and whether its cell's track record has
+// earned autonomy, with a sentence for whoever must approve it when not.
+const (
+	argExperiment = "experiment"
+	argEarned     = "earned"
+	argTrack      = "track"
+)
+
+// standing says whether a cell's track record has earned autonomy, and in
+// a sentence for an approver why not. Callers hold b.mu.
+func (b *Brain) standing(key model.TrackKey) (bool, string) {
+	t := b.tracks[key]
+	if t == nil || t.Alpha+t.Beta <= 2 {
+		return false, "no " + verb(key.Action, false) + " of this workload for this fault has been verified yet; " +
+			"a person approves until enough are"
+	}
+	if t.Level == model.AutonomyAutonomous {
+		return true, ""
+	}
+	return false, fmt.Sprintf("its track record has not earned autonomy yet: %d verified and %d not, and at least %.0f%% of "+
+		"such actions succeeding is all 95%% confidence allows, short of %.0f%%", int(t.Alpha)-1, int(t.Beta)-1,
+		100*stats.BetaQuantile(0.05, t.Alpha, t.Beta), 100*trackTarget)
+}
 
 // askLab asks the Lab, once per incident, whether rolling back fixes it:
 // for a rollback of the Deployment revision blamed for the incident,
