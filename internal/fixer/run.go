@@ -30,6 +30,7 @@ const (
 	PhaseProposed  v1alpha1.FixPhase = "Proposed"
 	PhaseMerged    v1alpha1.FixPhase = "Merged"
 	PhaseReady     v1alpha1.FixPhase = "Ready"
+	PhaseApplied   v1alpha1.FixPhase = "Applied"
 	PhaseDeclined  v1alpha1.FixPhase = "Declined"
 	PhaseAbstained v1alpha1.FixPhase = "Abstained"
 	PhaseFailed    v1alpha1.FixPhase = "Failed"
@@ -152,7 +153,7 @@ func (f *Fixer) process(ctx context.Context, store cache.Store, key string, trie
 			return 0, f.setStatus(ctx, &fix, PhaseDeclined, "the pull request was closed without merging; "+fix.Status.Owner+" stays paused")
 		}
 		return poll, nil
-	case PhaseMerged:
+	case PhaseMerged, PhaseReady:
 		dep, err := f.Client.AppsV1().Deployments(fix.Spec.Workload.Namespace).Get(ctx, fix.Spec.Workload.Name, metav1.GetOptions{})
 		if err != nil {
 			return 0, err
@@ -161,18 +162,35 @@ func (f *Fixer) process(ctx context.Context, store cache.Store, key string, trie
 		if err != nil {
 			return 0, err
 		}
-		head, err := src.Revision(ctx)
-		if err != nil || head == "" {
+		if fix.Status.Phase == PhaseMerged {
+			head, err := src.Revision(ctx)
+			if err != nil || head == "" {
+				return poll, err
+			}
+			if has, err := f.holds(ctx, &fix, head); err != nil || !has {
+				return poll, err
+			}
+			f.Log.Info("fix ready", "fix", key, "incident", fix.Spec.IncidentID, "revision", head)
+			return poll, f.setStatus(ctx, &fix, PhaseReady, fix.Status.Owner+"'s source has fetched the fix at "+head+
+				"; resume it with `"+fix.Status.Resume+"`")
+		}
+		resumed, applied, err := src.Applied(ctx)
+		if err != nil || !resumed || applied == "" {
 			return poll, err
 		}
-		has, err := Contains(ctx, fix.Status.Repository, fix.Status.Branch, head, fix.Status.MergeCommit, historyDepth, f.auth())
-		if err != nil || !has {
+		if has, err := f.holds(ctx, &fix, applied); err != nil || !has {
 			return poll, err
 		}
-		f.Log.Info("fix ready", "fix", key, "incident", fix.Spec.IncidentID, "revision", head)
-		return 0, f.setStatus(ctx, &fix, PhaseReady, fix.Status.Owner+"'s source has fetched the fix at "+head+"; it can be resumed")
+		f.Log.Info("fix applied", "fix", key, "incident", fix.Spec.IncidentID, "revision", applied)
+		return 0, f.setStatus(ctx, &fix, PhaseApplied, fix.Status.Owner+" is resumed and has applied the fix at "+applied)
 	}
 	return 0, nil
+}
+
+// holds reports whether a commit of the fix's branch is the merge or comes
+// after it.
+func (f *Fixer) holds(ctx context.Context, fix *v1alpha1.Fix, commit string) (bool, error) {
+	return Contains(ctx, fix.Status.Repository, fix.Status.Branch, commit, fix.Status.MergeCommit, historyDepth, f.auth())
 }
 
 func (f *Fixer) auth() *githttp.BasicAuth {
@@ -198,7 +216,7 @@ func (f *Fixer) propose(ctx context.Context, fix *v1alpha1.Fix) (v1alpha1.FixPha
 	if err != nil {
 		return PhaseAbstained, err.Error(), nil
 	}
-	fix.Status.Owner, fix.Status.Repository = src.Owner, src.URL
+	fix.Status.Owner, fix.Status.Repository, fix.Status.Resume = src.Owner, src.URL, src.Resume
 	owner, repo, err := f.Forge.Repo(src.URL)
 	if err != nil {
 		return PhaseAbstained, err.Error() + ", the only forge the Fixer may write to", nil
@@ -241,11 +259,11 @@ This pull request makes the fix last: %s's image goes back to %s, the image the 
 - **What changes**: %s, line %d.
 - **Why there**: %s.
 
-Once this is merged and the %s has fetched it, Sentinel resumes the %s and checks that %s keeps running %s.
+Once this is merged and the %s has fetched it, resume it with `+"`%s`"+`; Sentinel then checks that %s keeps running %s.
 
 Incident %s.
 `, w.Namespace, w.Name, change.Container, "`"+change.Bad+"`", src.Owner, change.Container, "`"+change.Good+"`",
-		"`"+edit.Path+"`", edit.Line, edit.Why, src.Owner, src.Owner, w.Name, "`"+change.Good+"`", fix.Spec.IncidentID)
+		"`"+edit.Path+"`", edit.Line, edit.Why, src.Owner, src.Resume, w.Name, "`"+change.Good+"`", fix.Spec.IncidentID)
 }
 
 func shortID(incident string) string {

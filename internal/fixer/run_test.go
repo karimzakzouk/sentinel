@@ -210,5 +210,15 @@ func TestAFixGoesFromProposalToReady(t *testing.T) {
 	if _, err := dyn.Resource(GitRepositoriesResource).Namespace("flux-system").Update(ctx, gitRepository, metav1.UpdateOptions{}); err != nil {
 		t.Fatal(err)
 	}
+	ready := step(PhaseReady)
+	if ready.Status.Resume != "sentinel resume flux flux-system/delivery" || !strings.Contains(ready.Status.Message, ready.Status.Resume) {
+		t.Fatalf("status = %+v", ready.Status)
+	}
+	// Applied once a person has resumed the owner and it has applied the fix.
 	step(PhaseReady)
+	kustomization.Object["status"] = map[string]any{"lastAppliedRevision": "main@sha1:" + ref.Hash().String()}
+	if _, err := dyn.Resource(actor.KustomizationsResource).Namespace("flux-system").Update(ctx, kustomization, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	step(PhaseApplied)
 }

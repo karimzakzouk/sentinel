@@ -24,10 +24,11 @@ type FixSpec struct {
 
 // FixPhase is a step in a fix's lifecycle: Proposed once its pull request
 // is open, Merged once someone merged it, Ready once the owner's source
-// holds the merge, so the owner can be resumed; Declined when the pull
-// request was closed unmerged, Abstained when the Fixer would not propose
-// a change, saying why.
-// +kubebuilder:validation:Enum=Pending;Proposed;Merged;Ready;Declined;Abstained;Failed
+// holds the merge, so a person can resume the owner, and Applied once the
+// owner is resumed and has applied it; Declined when the pull request was
+// closed unmerged, Abstained when the Fixer would not propose a change,
+// saying why.
+// +kubebuilder:validation:Enum=Pending;Proposed;Merged;Ready;Applied;Declined;Abstained;Failed
 type FixPhase string
 
 // FixStatus is written by the Fixer.
@@ -36,9 +37,12 @@ type FixStatus struct {
 	Phase FixPhase `json:"phase,omitempty"`
 	// +optional
 	Message string `json:"message,omitempty"`
-	// Owner is what deploys the workload, as Kind namespace/name.
+	// Owner is what deploys the workload, as Kind namespace/name, and
+	// Resume the command a person runs to resume it once the fix is in.
 	// +optional
 	Owner string `json:"owner,omitempty"`
+	// +optional
+	Resume string `json:"resume,omitempty"`
 	// Repository is the clone URL of the owner's source, and Branch the
 	// branch it deploys.
 	// +optional
