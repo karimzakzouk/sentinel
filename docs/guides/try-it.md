@@ -134,7 +134,9 @@ failing revision failed in 15 of 15"), **does not fix it**, or **not sure**,
 with the reason and how the Lab's copy differed from production. A verdict
 passes only once the failure has reproduced in the copy and a deletion
 control, a copy that starts but does nothing, has failed; it holds its error
-rate at 5% however early the Lab stops. To ask by hand:
+rate at 5% however early the Lab stops. Set the policy's level to
+`lab-verified` and Sentinel rolls back on its own once the Lab has verified
+the rollback, and waits for a person otherwise. To ask by hand:
 
 ```bash
 kubectl apply -f - <<'EOF'
