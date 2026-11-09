@@ -31,8 +31,11 @@ export AZURE_CORE_COLLECT_TELEMETRY=false AZURE_CORE_ONLY_SHOW_ERRORS=true
 
 log() {
   echo "$*"
-  # Under systemd, stdout already goes to the journal.
-  [ -n "${INVOCATION_ID:-}" ] || logger -t runner-idle-check -- "$*"
+  # Under runner-idle-check.service stdout is the journal already. Children of
+  # other services (run-command scripts) inherit JOURNAL_STREAM, so compare it
+  # with what stdout really is.
+  [ "${JOURNAL_STREAM:-}" = "$(stat -L -c %d:%i "/proc/$$/fd/1" 2>/dev/null)" ] ||
+    logger -t runner-idle-check -- "$*"
 }
 
 imds() {
