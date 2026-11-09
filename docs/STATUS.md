@@ -56,6 +56,7 @@ To look at it on a cluster where it runs:
 | 1. Seal and prove | Done, except the per-Lab DNS, teardown re-check and reaper, which move to slice 2 with the workloads that need them. The Lab runs as its own fenced identity (decision 48) and fails closed where enforcement is not proven | `TestTheLabSealHoldsOnlyWherePolicyIsEnforced`: on Flannel the matrix caught 16 leaks, as it must; in CI's enforcing clusters none may leak. `TestALabExperimentRunsOnlyBehindAProvenSeal`: on Flannel the Lab stays off and says why; in enforcing clusters a `prove` Experiment passes, and fails once an extra policy opens the namespace. Seven Lab cases in `TestFenceBlocksForbiddenWrites`. In CI, Calico and Cilium refused every forbidden destination; kindnet let Lab pods reach cloud metadata, so the Lab refuses it there (decision 49) |
 | 2. Synthesize the stateless world | The world built and proven: synthesis, the Lab DNS (decision 51), production's images under the fence's bounds (decision 50), the seal proven before the world starts and again with it running; Online Boutique waits for the self-hosted runner | `TestTheLabBuildsAWorkloadsStatelessWorld`, as the Lab's identity: a front and the backend it calls answer by their production names, the API server's name resolves to nothing, and a canary Secret never reaches the Lab. `TestALabReproductionRunsTheWorldBehindAProvenSeal` in CI's enforcing clusters |
 | 3. Reproduce and judge | Races and verdicts built (decisions 52 and 53): reproduce and verify-fix Experiments, the previous revision as the first candidate, a deletion control; the gate's repetitions wait for the self-hosted runner | `TestTheLabTellsAFixFromTheFailure` on the development cluster: against a front that crashes as it starts, its previous revision passed after 15 blocks (15 of 15 against 0 of 15), the deletion control failed. In CI's enforcing clusters `TestTheLabVerifiesTheRollbackOfACrashingRevision` runs the same through the Lab. Unit simulations: 3.4% false PASS at the null's edge for α = 5% |
+| Verified rollbacks | The controller asks the Lab about each proposed rollback (decision 54); the verdict joins the incident and its notices | On the development cluster a bad image on `web` opened an incident, the controller asked the Lab, and the Lab, refusing a cluster without enforcement, answered NOT SURE within 35 seconds; the verdict shows on the incident page |
 | 4. Datastores and replay | Not started | |
 
 ## Acting session
@@ -155,12 +156,19 @@ Full reasoning in [decisions.md](decisions.md).
 
 ## Next
 
+- **Phase 3:** the self-hosted runner's repetitions for the gate (A/A
+  false-PASS rate, Online Boutique's frontend); a config value reverted as a
+  second candidate; slice 4's datastores and replay; policies that let a
+  Lab verdict gate an action.
 - **Phase 2:** track records and earned autonomy (slice 5); Flux
   HelmReleases; an acting session through Argo CD and Flux.
 - **Soak.** A long run with the scenario pool's controls and background
   traffic, to measure false alarms per service per week, the error-rate
   detector's especially. Shorter runs on the development cluster first; the
-  gate's 72 hours need the machine listed below.
+  gate's 72 hours need the machine listed below. The first short run, with
+  production settings: 1 hour 36 minutes, no incidents, through a new
+  two-tier app deployed into a watched namespace and the Lab's worlds and
+  races running beside it. It ended when the controller was redeployed.
 - **The rest of slice 4,** shaped by the soak: seasonal baselines (SPOT on
   decomposed residuals) if daily cycles cause false alarms, and dependency
   edges from connection errors in logs.
