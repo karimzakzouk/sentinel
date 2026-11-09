@@ -9,7 +9,7 @@ demand.
 | | |
 |---|---|
 | VM | `sentinel-azure-1` in resource group `sentinel-ci`, eastus unless `LOCATION` says otherwise (see Create) |
-| Size | Standard_D4as_v4 (4 vCPUs, 16 GiB); Standard_D4s_v4 when that does not fit |
+| Size | The first of `SIZES` that can be created: Standard_D4as_v4 (4 vCPUs, 16 GiB), then Standard_D4s_v4 |
 | Image | Ubuntu 24.04 LTS, `Canonical:ubuntu-24_04-lts:server:latest` |
 | Disk | 64 GiB Standard SSD (`StandardSSD_LRS`); Docker's image cache lives on it |
 | Network | VNet `sentinel-ci-vnet`, subnet `runners` without default outbound access, Standard static public IP for outbound traffic, NSG `sentinel-azure-1-nsg` denying all inbound traffic |
@@ -47,22 +47,46 @@ export AZURE_CLIENT_ID=... AZURE_TENANT_ID=... AZURE_SUBSCRIPTION_ID=... AZURE_C
 hack/azure-runner/create.sh
 ```
 
-It picks the size (D4as_v4 unless its family quota or a location restriction
-rules it out), creates the network and the VM with a system-assigned managed
-identity, runs `vm/setup.sh` on it, sets up the identity it deallocates
-itself with, registers the runner, and sets the repository secrets
-`AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` and
-`AZURE_CLIENT_SECRET` (where missing) and the variables
-`RUNNER_RESOURCE_GROUP` and `RUNNER_VM_NAME`. RG, LOCATION, VM, REPO,
-RUNNER_NAME and RUNNER_LABELS override the defaults in `lib.sh`.
+It picks the first size in `SIZES` that the region offers the subscription,
+that fits the family and regional vCPU quota, and that Azure accepts when
+validating the whole deployment (`az vm create --validate`, which creates
+nothing; capacity limits and region policies show only there). Then it
+creates the network and the VM with a system-assigned managed identity, runs
+`vm/setup.sh` on it, sets up the identity it deallocates itself with,
+registers the runner, and sets the repository secrets `AZURE_CLIENT_ID`,
+`AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` and `AZURE_CLIENT_SECRET` (where
+missing) and the variables `RUNNER_RESOURCE_GROUP` and `RUNNER_VM_NAME`. RG,
+LOCATION, SIZES, VM, REPO, RUNNER_NAME and RUNNER_LABELS override the
+defaults in `lib.sh`; the resource group's own region does not matter.
 
-As of November 2026 the subscription (Azure for Students) may not deploy to
-eastus: every resource there fails with `RequestDisallowedByAzure` ("This
-policy maintains a set of best available regions where your subscription can
-deploy resources"). Run `LOCATION=<region> hack/azure-runner/create.sh` with a
-region the subscription allows (the portal offers only those when creating a
-resource); the resource group may stay where it is. Check the quota there
-first (`az vm list-usage -l <region>`), and expect slightly different prices.
+### Regions and sizes for this subscription
+
+Checked in November 2026 with deployment validations, which create nothing:
+
+- The subscription (Azure for Students) may deploy only to francecentral,
+  switzerlandnorth, italynorth, austriaeast and denmarkeast. Every US,
+  Canadian, Latin American, UK and other European region fails with
+  `RequestDisallowedByAzure` ("This policy maintains a set of best available
+  regions where your subscription can deploy resources"). Asia-Pacific, the
+  Middle East and Africa were not checked.
+- Neither default size can be created there. francecentral, italynorth,
+  austriaeast and denmarkeast do not offer D4as_v4 or D4s_v4 to the
+  subscription (`NotAvailableForSubscription`); switzerlandnorth refuses both
+  for capacity (`SkuNotAvailable`, in every zone). The newer families (Dv5,
+  Dasv5, Dv6 and so on) have no vCPU quota in any of the five.
+- Sizes with 4 vCPUs and at least 16 GiB that do validate: in austriaeast
+  Standard_B4as_v2 ($0.173 an hour), Standard_B4s_v2 ($0.192), D12_v2 and
+  DS12_v2 (28 GiB; no published price there, $0.417 in switzerlandnorth); in
+  denmarkeast the same plus B4ms and A4m_v2, none with a published price.
+  The B sizes are burstable: B4as_v2 and B4s_v2 sustain 40% of each vCPU and
+  go faster only on banked credits. Something else in the subscription
+  already uses 2 of austriaeast's 6 regional vCPUs.
+
+So the runner does not exist yet. With one of those sizes, for example:
+
+```sh
+SIZES=Standard_B4as_v2 LOCATION=austriaeast hack/azure-runner/create.sh
+```
 
 To check the VM afterwards, while it runs:
 
@@ -207,5 +231,7 @@ Pay-as-you-go prices in eastus (Azure retail price list, November 2026):
 | 64 GiB Standard SSD (E6) | $4.80 per month | $4.80 always, plus $0.002 per 10,000 disk operations |
 | Standard static public IP | $0.005 per hour | $3.65 always |
 
+In austriaeast and denmarkeast the disk and the IP cost the same, and
+Standard_B4as_v2 in austriaeast is $0.173 an hour ($6.92 for 40 hours).
 Deallocated, the VM costs only the disk and the IP, about $8.50 a month.
 Outbound data to the internet is free for the first 100 GB a month.
