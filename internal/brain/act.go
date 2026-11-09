@@ -7,6 +7,7 @@ import (
 
 	"github.com/karimzakzouk/sentinel/internal/ledger"
 	"github.com/karimzakzouk/sentinel/internal/model"
+	"github.com/karimzakzouk/sentinel/internal/notify"
 	"github.com/karimzakzouk/sentinel/internal/watcher"
 )
 
@@ -38,6 +39,50 @@ func actionArgs(action string, top *RankedChange, revision string) map[string]st
 		}
 	}
 	return nil
+}
+
+// classLabels name the fault classes for people, as the UI does.
+var classLabels = map[string]string{
+	ClassBadImage: "Bad image", ClassCrashOnStart: "Crash on start", ClassMemoryLimit: "Memory limit too low",
+	ClassProbe: "Broken health check", ClassConfigError: "Configuration error", ClassUnschedulable: "Cannot schedule",
+	ClassRuntimeCrash: "Crashing", ClassNewErrors: "New errors after a deploy", ClassDependencyUnavailable: "Dependency unavailable",
+	ClassRuntimeErrors: "Errors without a change",
+}
+
+func classLabel(c string) string {
+	if l, ok := classLabels[c]; ok {
+		return l
+	}
+	return c
+}
+
+// verbs say what an action does and did, for people.
+var verbs = map[string][2]string{
+	ActionRolloutUndo:  {"roll back", "rolled back"},
+	ActionScaleRestore: {"restore the replicas of", "restored the replicas of"},
+}
+
+func verb(action string, past bool) string {
+	v, ok := verbs[action]
+	if !ok {
+		return action
+	}
+	if past {
+		return v[1]
+	}
+	return v[0]
+}
+
+// notice tells people once per incident and kind. Callers hold b.mu.
+func (b *Brain) notice(ctx context.Context, inc *incident, kind, title, detail string) {
+	if b.Notify == nil || inc.notified[kind+title] {
+		return
+	}
+	if inc.notified == nil {
+		inc.notified = map[string]bool{}
+	}
+	inc.notified[kind+title] = true
+	b.Notify(ctx, notify.Notice{Kind: kind, Incident: inc.rec.ID, Workload: inc.primary, Title: title, Detail: detail})
 }
 
 // breakerOpen is how long Sentinel stops asking for an action on a workload
@@ -100,21 +145,24 @@ func (b *Brain) OnActionOutcome(ctx context.Context, o ActionOutcome) error {
 	if o.ApprovedBy != "" {
 		a.Params["approvedBy"] = o.ApprovedBy
 	}
-	verb := "executed"
+	step := "executed"
 	switch o.Phase {
 	case "Pending":
-		verb = "awaiting"
+		step = "awaiting"
+		b.notice(ctx, inc, notify.KindApproval, "Sentinel asks to "+verb(a.Type, false)+" "+a.Target.String(),
+			o.Message+"\nApprove with `sentinel approve "+o.Request+"`, or veto with `sentinel veto "+o.Request+"`.")
 	case "Succeeded":
 		inc.actedAt = b.now()
 	default:
-		a.State, verb = model.ActionFailed, "failed"
+		a.State, step = model.ActionFailed, "failed"
 		inc.verdict = true
 		b.Log.Warn("the actor did not run the action; escalating", "incident", inc.rec.ID, "action", a.Type,
 			"phase", o.Phase, "message", o.Message)
 		b.trip(a, b.now())
+		b.notice(ctx, inc, notify.KindEscalation, "Sentinel could not "+verb(a.Type, false)+" "+a.Target.String(), o.Message)
 	}
-	b.Log.Info("action "+verb, "incident", inc.rec.ID, "action", a.Type, "target", a.Target.String(), "message", o.Message)
-	_, err := b.Ledger.Append(ctx, ledger.RecordDraft(source, model.KindAction, verb, a.ID, inc.rec.ID, *a))
+	b.Log.Info("action "+step, "incident", inc.rec.ID, "action", a.Type, "target", a.Target.String(), "message", o.Message)
+	_, err := b.Ledger.Append(ctx, ledger.RecordDraft(source, model.KindAction, step, a.ID, inc.rec.ID, *a))
 	return err
 }
 
@@ -139,10 +187,15 @@ func (b *Brain) verify(inc *incident) []ledger.Draft {
 		return nil
 	}
 	inc.verdict = true
-	verb := "verified"
+	step := "verified"
 	if a.State == model.ActionFailed {
-		verb = "unverified"
+		step = "unverified"
+		b.notice(context.Background(), inc, notify.KindEscalation, "Sentinel "+verb(a.Type, true)+" "+a.Target.String()+
+			", but the incident did not clear", a.Params["verification"])
+	} else {
+		b.notice(context.Background(), inc, notify.KindActed, "Sentinel "+verb(a.Type, true)+" "+a.Target.String()+
+			"; the incident cleared", a.Params["verification"])
 	}
-	b.Log.Info("action "+verb, "incident", inc.rec.ID, "action", a.Type, "verification", a.Params["verification"])
-	return []ledger.Draft{ledger.RecordDraft(source, model.KindAction, verb, a.ID, inc.rec.ID, *a)}
+	b.Log.Info("action "+step, "incident", inc.rec.ID, "action", a.Type, "verification", a.Params["verification"])
+	return []ledger.Draft{ledger.RecordDraft(source, model.KindAction, step, a.ID, inc.rec.ID, *a)}
 }

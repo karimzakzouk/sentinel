@@ -2,11 +2,13 @@ package brain
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/karimzakzouk/sentinel/internal/ledger"
 	"github.com/karimzakzouk/sentinel/internal/model"
+	"github.com/karimzakzouk/sentinel/internal/notify"
 	"github.com/karimzakzouk/sentinel/internal/watcher"
 )
 
@@ -207,6 +209,50 @@ func TestSentinelsOwnChangeIsNeverTheCulprit(t *testing.T) {
 	a := incidents(t, l)[0].Assessment
 	if a == nil || a.Culprit == nil || a.Culprit.ChangeID == rollback.ID || a.Culprit.P < 0.9 || a.Decision != ActionRolloutUndo {
 		t.Fatalf("assessment = %+v, culprit %+v; want the bad deploy still blamed, firmly", a, a.Culprit)
+	}
+}
+
+func TestPeopleAreToldOnceWhatSentinelNeedsOrDid(t *testing.T) {
+	b, _ := newBrain(t)
+	var notices []notify.Notice
+	b.Notify = func(_ context.Context, n notify.Notice) { notices = append(notices, n) }
+	crash := watcher.Detection{ID: model.NewID(), Workload: web, Kind: watcher.FactCrashLoop, Count: 5, Onset: onset, At: onset}
+	for range 2 {
+		if err := b.OnDetection(ctx, crash); err != nil {
+			t.Fatal(err)
+		}
+		crash.ID = model.NewID()
+	}
+	if len(notices) != 1 || notices[0].Kind != notify.KindEscalation || !strings.Contains(notices[0].Title, "no safe action") {
+		t.Fatalf("notices = %+v, want one escalation", notices)
+	}
+
+	b2, l2 := newBrain(t)
+	notices = nil
+	b2.Notify = func(_ context.Context, n notify.Notice) { notices = append(notices, n) }
+	b2.Act = &fakeRequester{allow: true}
+	det := badDeploy(t, b2)
+	inc := incidents(t, l2)[0]
+	pending := ActionOutcome{IncidentID: inc.ID, Request: "shop/r1", Phase: "Pending", Message: "waiting for a person to approve it"}
+	for range 2 {
+		if err := b2.OnActionOutcome(ctx, pending); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := b2.OnActionOutcome(ctx, ActionOutcome{IncidentID: inc.ID, Request: "shop/r1", Phase: "Succeeded"}); err != nil {
+		t.Fatal(err)
+	}
+	det.Ended, det.At = true, onset.Add(2*time.Minute)
+	if err := b2.OnDetection(ctx, det); err != nil {
+		t.Fatal(err)
+	}
+	b2.Now = func() time.Time { return onset.Add(3 * time.Minute) }
+	if err := b2.Sweep(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(notices) != 2 || notices[0].Kind != notify.KindApproval || !strings.Contains(notices[0].Detail, "sentinel approve shop/r1") ||
+		notices[1].Kind != notify.KindActed || !strings.Contains(notices[1].Title, "rolled back") {
+		t.Fatalf("notices = %+v, want the approval request once, then the verified rollback", notices)
 	}
 }
 

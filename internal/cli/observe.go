@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"time"
 
 	"k8s.io/client-go/dynamic"
@@ -15,6 +16,7 @@ import (
 	"github.com/karimzakzouk/sentinel/internal/config"
 	"github.com/karimzakzouk/sentinel/internal/ledger"
 	"github.com/karimzakzouk/sentinel/internal/model"
+	"github.com/karimzakzouk/sentinel/internal/notify"
 	"github.com/karimzakzouk/sentinel/internal/slot"
 	"github.com/karimzakzouk/sentinel/internal/topology"
 	"github.com/karimzakzouk/sentinel/internal/watcher"
@@ -124,6 +126,10 @@ func newObserver(ctx context.Context, log *slog.Logger, cfg *config.Config, clie
 		log.Info("took back incidents left open by the last run", "incidents", n)
 	}
 	var acting *act.Requests
+	if url := os.Getenv("SENTINEL_SLACK_WEBHOOK"); url != "" {
+		b.Notify = notify.NewSlack(url, log).Notify
+		log.Info("notices go to a Slack webhook")
+	}
 	if cfg.ActorUser != "" && dyn != nil {
 		// Acting is optional: without the custom resources, Sentinel observes.
 		requests := &act.Requests{Dynamic: dyn, Namespaces: cfg.Namespaces, TTL: 10 * time.Minute, Log: log,

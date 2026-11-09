@@ -69,6 +69,13 @@ spec:
           env:
             - name: SENTINEL_LOG_LEVEL
               value: {{ .Values.logLevel | quote }}
+            {{- with .Values.notify.slack.secretName }}
+            - name: SENTINEL_SLACK_WEBHOOK
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . }}
+                  key: {{ $.Values.notify.slack.key }}
+            {{- end }}
           ports:
             - name: health
               containerPort: 8081

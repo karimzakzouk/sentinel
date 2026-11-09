@@ -13,6 +13,7 @@ import (
 
 	"github.com/karimzakzouk/sentinel/internal/ledger"
 	"github.com/karimzakzouk/sentinel/internal/model"
+	"github.com/karimzakzouk/sentinel/internal/notify"
 	"github.com/karimzakzouk/sentinel/internal/slot"
 	"github.com/karimzakzouk/sentinel/internal/topology"
 	"github.com/karimzakzouk/sentinel/internal/watcher"
@@ -66,7 +67,10 @@ type Brain struct {
 	// Act, when set, asks the actor for the reversible actions policies
 	// allow; their outcomes come back through OnActionOutcome.
 	Act Requester
-	Now func() time.Time
+	// Notify, when set, tells people what Sentinel needs from them or did.
+	// It must not block.
+	Notify func(context.Context, notify.Notice)
+	Now    func() time.Time
 
 	mu      sync.Mutex
 	changes []watcher.Change
@@ -106,6 +110,8 @@ type incident struct {
 	action  *model.Action
 	actedAt time.Time
 	verdict bool
+	// notified holds the notices already sent about the incident.
+	notified map[string]bool
 }
 
 // factsOf returns the facts an incident holds for one of its workloads.
@@ -540,6 +546,10 @@ func (b *Brain) assess(ctx context.Context, inc *incident, workload model.Object
 			}
 		}
 		drafts = append(drafts, ledger.RecordDraft(source, model.KindAction, verb, a.ID, inc.rec.ID, a))
+		if decision.Action == ActionEscalate {
+			b.notice(ctx, inc, notify.KindEscalation, classLabel(classes.Top().Value)+" on "+workload.String()+
+				": Sentinel has no safe action", decision.Reason)
+		}
 	}
 	inc.lastAction = decision.Action
 
