@@ -18,6 +18,11 @@ actor:
   enabled: false
   namespace: sentinel-actor
   serviceAccount: sentinel-actor
+  actions:
+    # The kill switch. Nothing acts without a SentinelPolicy that allows it.
+    enabled: true
+    # Actions per namespace per hour, at most.
+    perHour: 6
 
 # A pool of namespaces created at install for Lab runs. Sentinel never creates
 # namespaces or RBAC at runtime.

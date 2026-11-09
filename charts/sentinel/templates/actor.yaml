@@ -1,0 +1,122 @@
+{{- if .Values.actor.enabled }}
+# The actor carries out the controller's action requests, as its own
+# identity, in its own namespace, after checking each one again. The
+# sentinel-fence chart bounds every write it makes.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sentinel-actor-config
+  namespace: {{ .Values.actor.namespace }}
+  labels:
+    {{- include "sentinel.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    namespaces: {{ toJson .Values.watch.namespaces }}
+    # The kill switch: false rejects every request, within a minute of the
+    # change, without a restart.
+    enabled: {{ .Values.actor.actions.enabled }}
+    perHour: {{ .Values.actor.actions.perHour }}
+    healthAddr: ":8081"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sentinel-actor
+  namespace: {{ .Values.actor.namespace }}
+  labels:
+    {{- include "sentinel.labels" . | nindent 4 }}
+    app.kubernetes.io/component: actor
+spec:
+  # One actor runs requests one at a time; a second would race it.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sentinel-actor
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: sentinel-actor
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      serviceAccountName: {{ .Values.actor.serviceAccount }}
+      automountServiceAccountToken: true
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: actor
+          image: {{ include "sentinel.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: [actor, --config, /etc/sentinel-actor/config.yaml]
+          ports:
+            - name: health
+              containerPort: 8081
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: config
+              mountPath: /etc/sentinel-actor
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: sentinel-actor-config
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+# The actor only talks to the API server and DNS.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sentinel-actor
+  namespace: {{ .Values.actor.namespace }}
+  labels:
+    {{- include "sentinel.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: sentinel-actor
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - ports:
+        - port: 8081
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - ports:
+        - port: 443
+        - port: 6443
+{{- end }}
