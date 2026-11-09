@@ -11,8 +11,9 @@ type ExperimentSpec struct {
 	// IncidentID links the experiment to its incident in the Ledger.
 	// +kubebuilder:validation:MinLength=1
 	IncidentID string `json:"incidentId"`
-	// Purpose says what the experiment tests.
-	// +kubebuilder:validation:Enum=reproduce;verify-fix;verify-config
+	// Purpose says what the experiment tests: prove seals the Lab and
+	// proves its isolation, and runs no workload.
+	// +kubebuilder:validation:Enum=prove;reproduce;verify-fix;verify-config
 	Purpose string `json:"purpose"`
 	// LabNamespace is a namespace from the pool created at install.
 	// +kubebuilder:validation:MinLength=1

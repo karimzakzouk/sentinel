@@ -22,11 +22,13 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/utils/ptr"
+
+	"github.com/karimzakzouk/sentinel/internal/capability"
 )
 
 // Image is the probe image: agnhost serves the echo control and connects
 // for the prober.
-const Image = "registry.k8s.io/e2e-test-images/agnhost:2.61"
+const Image = capability.ProbeImage
 
 // Label marks every object the Lab creates, so teardown finds them.
 const Label = "sentinel.karimzakzouk.github.io/lab"
