@@ -234,6 +234,29 @@ func writeOptions(dryRun bool) metav1.UpdateOptions {
 	return o
 }
 
+// reconciler names the GitOps controller that keeps a workload in sync with
+// Git, or "" for none. A plain write to such a workload is undone at its next
+// sync, so the actor does not make one: the owner adapters of phase 2's
+// slice 4 act through the owner instead. Helm does not reconcile, so a
+// Helm-installed workload counts as plain.
+func reconciler(meta metav1.ObjectMeta) string {
+	switch {
+	case meta.Annotations["argocd.argoproj.io/tracking-id"] != "":
+		return "Argo CD"
+	case meta.Labels["kustomize.toolkit.fluxcd.io/name"] != "" || meta.Labels["helm.toolkit.fluxcd.io/name"] != "":
+		return "Flux"
+	}
+	return ""
+}
+
+func refuseReconciled(meta metav1.ObjectMeta, what string) error {
+	if owner := reconciler(meta); owner != "" {
+		return fmt.Errorf("%s is kept in sync by %s, which would undo %s at its next sync; Sentinel leaves it to people until it can act through %s",
+			meta.Name, owner, what, owner)
+	}
+	return nil
+}
+
 // rolloutUndo restores the revision before the one the request names, which
 // must still be the Deployment's newest. The template comes from the
 // Deployment's own ReplicaSet, never from the request.
@@ -244,6 +267,9 @@ func (a *Actor) rolloutUndo(ctx context.Context, req *v1alpha1.ActionRequest, dr
 	}
 	dep, err := a.Client.AppsV1().Deployments(t.Namespace).Get(ctx, t.Name, metav1.GetOptions{})
 	if err != nil {
+		return "", err
+	}
+	if err := refuseReconciled(dep.ObjectMeta, "a rollback"); err != nil {
 		return "", err
 	}
 	rss, err := a.Client.AppsV1().ReplicaSets(t.Namespace).List(ctx, metav1.ListOptions{})
@@ -320,8 +346,23 @@ func (a *Actor) scale(ctx context.Context, req *v1alpha1.ActionRequest, maxRemov
 		return "", fmt.Errorf("the request's %s %q is not a replica count", ParamFromReplicas, req.Spec.Params[ParamFromReplicas])
 	}
 	get, update := a.Client.AppsV1().Deployments(t.Namespace).GetScale, a.Client.AppsV1().Deployments(t.Namespace).UpdateScale
+	var meta metav1.ObjectMeta
 	if t.Kind == "StatefulSet" {
 		get, update = a.Client.AppsV1().StatefulSets(t.Namespace).GetScale, a.Client.AppsV1().StatefulSets(t.Namespace).UpdateScale
+		s, err := a.Client.AppsV1().StatefulSets(t.Namespace).Get(ctx, t.Name, metav1.GetOptions{})
+		if err != nil {
+			return "", err
+		}
+		meta = s.ObjectMeta
+	} else {
+		d, err := a.Client.AppsV1().Deployments(t.Namespace).Get(ctx, t.Name, metav1.GetOptions{})
+		if err != nil {
+			return "", err
+		}
+		meta = d.ObjectMeta
+	}
+	if err := refuseReconciled(meta, "a scale"); err != nil {
+		return "", err
 	}
 	sc, err := get(ctx, t.Name, metav1.GetOptions{})
 	if err != nil {
