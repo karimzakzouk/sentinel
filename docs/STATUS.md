@@ -147,6 +147,27 @@ changes, or that proposing none is right:
 Detection, class, root cause and decision right every time, every fault
 rolled back and verified, no wrong action; both fixes at the right line, and
 both held; no fix that did not hold, no abstention where a fix was right.
+
+### Planted-bug app (`bugapp`)
+
+podinfo shrugs off bad environment values, so a small service of our own
+(`test/planted/bugapp`) checks `LISTEN_PORT`, `CACHE_TTL` and `MODE` as it
+starts and exits on a bad one. Flux deploys it from its own Gitea repository,
+`person/bugapp` (`hack/bugapp-up.sh`, after `make delivery-up`). Two new
+scenarios commit a bad value, and the whole Git pool was scored with `make
+score` on the development cluster (Kubernetes 1.37, kindnet):
+
+| Scenario | Sentinel did | Fix |
+|---|---|---|
+| A commit sets `CACHE_TTL` to a value bugapp cannot parse | rolled back, verified after 1m6s | `deployment.yaml:23` set back, merged, held ✓ |
+| A commit sets `MODE` to a value bugapp rejects | rolled back, verified after 1m6s | `deployment.yaml:25` set back, merged, held ✓ |
+
+All five Git scenarios: detection 5 of 5, class, root cause and decision right,
+5 of 5 acted on and verified (median 1m6s), no wrong action, 4 of 4 fixes at
+the right line and held, the one abstention right. The Fixer needed no change
+for environment values; these runs show decision 72 working on an app that
+reads them. Four scenarios that must be fixed are still too few to say how
+often it is right, and all are one-line changes; slice 2 is the next test.
 The first runs found three things, all fixed: the Fixer restored images
 only (it now restores commands, arguments and environment values,
 decision 72); after a person resumed the Kustomization with `sentinel
@@ -259,6 +280,15 @@ Full reasoning in [decisions.md](decisions.md).
 - **Smaller items:** exception fingerprints of logged .NET exceptions
   split one error into several (a fingerprint version 2), and baselines are
   relearned after every restart (decision 35).
+
+## Blocked or flaky on the development VM
+
+- The Argo CD guestbook image (`gcr.io/google-samples/gb-frontend:v5`) timed
+  out pulling on a cold cluster, so `make delivery-up` waited on it. The Git
+  scenarios do not need it; `hack/bugapp-up.sh` can run without it. Preloading
+  the image with `kind load` would avoid it.
+- The disk was 95% full during bring-up; images cleared later. Online Boutique
+  was left out for memory.
 
 ## Waiting on you
 
