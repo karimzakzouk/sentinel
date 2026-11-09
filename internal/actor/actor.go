@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -60,6 +61,16 @@ const (
 	AnnotationVetoedBy   = "sentinel.karimzakzouk.github.io/vetoed-by"
 )
 
+// AnnotationExperiment names, as namespace/name, the Lab Experiment that
+// verifies a request. The actor trusts only what that Experiment says.
+const AnnotationExperiment = "sentinel.karimzakzouk.github.io/experiment"
+
+// ExperimentsResource is the Lab's Experiment custom resource.
+var ExperimentsResource = v1alpha1.GroupVersion.WithResource("experiments")
+
+// labRecheck is how often a request at lab-verified looks at the Lab again.
+const labRecheck = 30 * time.Second
+
 // VetoWindow is how long a request at act-unless-vetoed waits for a veto.
 const VetoWindow = 2 * time.Minute
 
@@ -83,8 +94,10 @@ type Actor struct {
 	Self []string
 	// ArgoCDNamespace is where Argo CD keeps its Applications.
 	ArgoCDNamespace string
-	Log             *slog.Logger
-	Now             func() time.Time
+	// LabNamespaces are where the Lab's verdicts may come from.
+	LabNamespaces []string
+	Log           *slog.Logger
+	Now           func() time.Time
 
 	mu     sync.Mutex
 	recent map[string][]time.Time
@@ -155,10 +168,59 @@ func (a *Actor) admit(ctx context.Context, req *v1alpha1.ActionRequest) (bool, v
 			return no(v1alpha1.ActionRejected, "Sentinel may not approve its own actions")
 		}
 		req.Status.ApprovedBy = who
+	case v1alpha1.AutonomyLabVerified:
+		verified, why := a.labVerified(ctx, req)
+		who := req.Annotations[AnnotationApprovedBy]
+		switch {
+		case verified:
+			req.Status.ApprovedBy = "the Lab, " + req.Annotations[AnnotationExperiment]
+		case who == "":
+			return false, v1alpha1.ActionPending, why + "; waiting for the Lab's verdict or a person's approval", min(untilExpiry, labRecheck), nil
+		case slices.Contains(a.Self, who):
+			return no(v1alpha1.ActionRejected, "Sentinel may not approve its own actions")
+		default:
+			req.Status.ApprovedBy = who
+		}
 	default:
 		return no(v1alpha1.ActionRejected, fmt.Sprintf("the namespace's policy holds %s at %s", req.Spec.Action, level))
 	}
 	return true, "", "", 0, policies
+}
+
+// labVerified reads the Experiment a request names and says whether the
+// Lab verified exactly this action: the same incident, workload and
+// failing revision, in the Lab's own namespaces, with a passing verdict.
+// Otherwise it says why not.
+func (a *Actor) labVerified(ctx context.Context, req *v1alpha1.ActionRequest) (bool, string) {
+	ref := req.Annotations[AnnotationExperiment]
+	ns, name, ok := strings.Cut(ref, "/")
+	switch {
+	case ref == "":
+		return false, "the Lab was not asked to verify it"
+	case !ok || !slices.Contains(a.LabNamespaces, ns):
+		return false, "the request names no Experiment of the Lab's"
+	}
+	u, err := a.Dynamic.Resource(ExperimentsResource).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return false, "the Lab's Experiment could not be read: " + err.Error()
+	}
+	var exp v1alpha1.Experiment
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(u.Object, &exp); err != nil {
+		return false, "the Lab's Experiment could not be read: " + err.Error()
+	}
+	w, t := exp.Spec.Workload, req.Spec.Target
+	switch {
+	case exp.Spec.Purpose != "verify-fix" || exp.Spec.IncidentID != req.Spec.IncidentID || w == nil ||
+		w.Kind != t.Kind || w.Namespace != t.Namespace || w.Name != t.Name:
+		return false, "the Lab's Experiment is about something else"
+	case exp.Spec.Revision != t.Name+"-"+req.Spec.Params[ParamFromTemplateHash]:
+		return false, "the Lab verified another revision"
+	case exp.Status.Phase == "Passed":
+		return true, ""
+	case exp.Status.Phase == "Failed" || exp.Status.Phase == "NotSure" || exp.Status.Phase == "Aborted":
+		return false, fmt.Sprintf("the Lab did not verify it (%s: %s)", exp.Status.Phase, exp.Status.Message)
+	}
+	return false, "the Lab is still verifying it"
 }
 
 // execute runs an admitted request: the contract's dry run, the budget,

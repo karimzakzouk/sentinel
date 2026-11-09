@@ -240,7 +240,38 @@ rules:
   - apiGroups: [sentinel.karimzakzouk.github.io]
     resources: [experiments]
     verbs: [get, list, watch, create]
+{{- if .Values.actor.enabled }}
+---
+# Reading the Lab's verdicts: at lab-verified the actor checks the
+# Experiment a request names before it acts.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Release.Name }}-lab-read
+  labels:
+    {{- $labels | nindent 4 }}
+rules:
+  - apiGroups: [sentinel.karimzakzouk.github.io]
+    resources: [experiments]
+    verbs: [get]
+{{- end }}
 {{- range include "sentinel.labNamespaces" . | fromJsonArray }}
+{{- if $.Values.actor.enabled }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $.Release.Name }}-lab-read
+  namespace: {{ . }}
+  labels:
+    {{- $labels | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $.Release.Name }}-lab-read
+subjects:
+  - {"kind": "ServiceAccount", "name": {{ $.Values.actor.serviceAccount | quote }}, "namespace": {{ $.Values.actor.namespace | quote }}}
+{{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

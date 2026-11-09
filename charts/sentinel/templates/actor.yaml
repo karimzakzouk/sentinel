@@ -10,6 +10,9 @@ self:
   - system:serviceaccount:{{ .Release.Namespace }}:sentinel
   - system:serviceaccount:{{ .Values.actor.namespace }}:{{ .Values.actor.serviceAccount }}
 argoCDNamespace: {{ .Values.owners.argocd.namespace }}
+# The Lab's verdicts, which stand in for a person at lab-verified, may come
+# only from its own namespaces.
+labNamespaces: {{ include "sentinel.labNamespaces" . }}
 healthAddr: ":8081"
 {{- end }}
 {{- if .Values.actor.enabled }}

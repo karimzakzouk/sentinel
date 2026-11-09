@@ -36,7 +36,9 @@ type ActorConfig struct {
 	Self []string `json:"self,omitempty"`
 	// ArgoCDNamespace is where Argo CD keeps its Applications; argocd by default.
 	ArgoCDNamespace string `json:"argoCDNamespace,omitempty"`
-	HealthAddr      string `json:"healthAddr,omitempty"`
+	// LabNamespaces are where the Lab's verdicts may come from.
+	LabNamespaces []string `json:"labNamespaces,omitempty"`
+	HealthAddr    string   `json:"healthAddr,omitempty"`
 }
 
 func loadActorConfig(path string) (ActorConfig, error) {
@@ -88,7 +90,7 @@ func newActorCmd(kf *kube.Flags) *cobra.Command {
 				return err
 			}
 			a := &actor.Actor{Client: client, Dynamic: dyn, Namespaces: cfg.Namespaces, PerHour: cfg.PerHour, Self: cfg.Self,
-				ArgoCDNamespace: cfg.ArgoCDNamespace, Log: log,
+				ArgoCDNamespace: cfg.ArgoCDNamespace, LabNamespaces: cfg.LabNamespaces, Log: log,
 				Disabled: func() bool {
 					current, err := loadActorConfig(configPath)
 					if err != nil {
