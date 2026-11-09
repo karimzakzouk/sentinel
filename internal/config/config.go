@@ -28,6 +28,9 @@ type Config struct {
 	// VerifyRollbacks asks the Lab whether each proposed rollback fixes its
 	// incident.
 	VerifyRollbacks bool `json:"verifyRollbacks,omitempty"`
+	// FixerNamespace, when set, is where the Fixer takes Fix requests: the
+	// controller asks it to make each verified rollback hold at its source.
+	FixerNamespace string `json:"fixerNamespace,omitempty"`
 	// ActorUser is the identity that executes actions.
 	ActorUser    string                 `json:"actorUser,omitempty"`
 	Ledger       Ledger                 `json:"ledger"`

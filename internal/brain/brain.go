@@ -77,6 +77,9 @@ type Brain struct {
 	Act Requester
 	// Lab, when set, verifies proposed rollbacks before anyone acts on them.
 	Lab Verifier
+	// Fixer, when set, proposes the change at the source that makes a
+	// verified rollback hold; its steps come back through OnFixUpdate.
+	Fixer Fixer
 	// Notify, when set, tells people what Sentinel needs from them or did.
 	// It must not block.
 	Notify func(context.Context, notify.Notice)
@@ -103,6 +106,9 @@ type Brain struct {
 	rollbacks    []rollback
 	lastTemplate map[string]watcher.Change
 	troubledAt   map[string]time.Time
+	// holding are the fixes applied at their source whose workloads Sentinel
+	// has yet to check, by incident.
+	holding map[model.ID]holdCheck
 }
 
 type incident struct {
@@ -135,6 +141,8 @@ type incident struct {
 	// and experiment names the Experiment that answers.
 	labAsked   bool
 	experiment string
+	// fixAsked is set once the Fixer is asked to make its rollback hold.
+	fixAsked bool
 }
 
 // factsOf returns the facts an incident holds for one of its workloads.
@@ -480,7 +488,7 @@ func (b *Brain) Sweep(ctx context.Context) error {
 	defer b.mu.Unlock()
 	b.pruneEvidence()
 	now := b.now()
-	drafts := b.reverts(ctx, now)
+	drafts := append(b.reverts(ctx, now), b.holds(ctx, now)...)
 	for key, inc := range b.open {
 		drafts = append(drafts, b.verify(inc)...)
 		if inc.quietSince.IsZero() || now.Sub(inc.quietSince) < b.Gap {
