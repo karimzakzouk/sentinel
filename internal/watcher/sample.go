@@ -53,8 +53,11 @@ func (w *Watcher) sampleWorkloads(ctx context.Context, now time.Time) {
 		w.sampled = map[string]time.Time{}
 	}
 	seen := map[string]bool{}
+	// A pod's first minutes are its startup, which logs warnings and errors
+	// that are no rate; crash, readiness and rollout fetches cover them.
+	settled := now.Add(-max(w.SampleInterval, 2*time.Minute))
 	for ns, l := range w.ns {
-		for ref, pods := range readyPodsByWorkload(l, ns) {
+		for ref, pods := range readyPodsByWorkload(l, ns, settled) {
 			key := ref.String()
 			seen[key] = true
 			last, ok := w.sampled[key]
@@ -95,16 +98,18 @@ func spread(key string, interval time.Duration) time.Duration {
 // errors end with it.
 var sampled = map[string]bool{"Deployment": true, "StatefulSet": true, "DaemonSet": true}
 
-// readyPodsByWorkload groups a namespace's ready pods by workload, in a
-// stable order so sampling rotates through them.
-func readyPodsByWorkload(l *namespaceListers, ns string) map[model.ObjectRef][]readyPod {
+// readyPodsByWorkload groups a namespace's ready pods whose first container
+// started before settled by workload, in a stable order so sampling rotates
+// through them.
+func readyPodsByWorkload(l *namespaceListers, ns string, settled time.Time) map[model.ObjectRef][]readyPod {
 	pods, err := l.pods.Pods(ns).List(labels.Everything())
 	if err != nil {
 		return nil
 	}
 	out := map[model.ObjectRef][]readyPod{}
 	for _, p := range pods {
-		if p.DeletionTimestamp != nil || p.Status.Phase != corev1.PodRunning || len(p.Spec.Containers) == 0 || !podReady(p) {
+		if p.DeletionTimestamp != nil || p.Status.Phase != corev1.PodRunning || len(p.Spec.Containers) == 0 || !podReady(p) ||
+			containerStarted(p).After(settled) {
 			continue
 		}
 		workload, rev := l.owners.Resolve(p)

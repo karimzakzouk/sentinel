@@ -78,6 +78,9 @@ type incident struct {
 	quietSince time.Time
 	// evidenceDigests identify the content of the evidence already attached.
 	evidenceDigests map[string]bool
+	// sampleErrors holds the errors, by workload and template, that attached
+	// error samples have shown.
+	sampleErrors map[string]bool
 }
 
 // factsOf returns the facts an incident holds for one of its workloads.

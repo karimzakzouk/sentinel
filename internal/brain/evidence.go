@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"slices"
 	"strings"
 	"time"
 
@@ -23,6 +22,9 @@ const (
 	evidenceLead = 10 * time.Minute
 	// maxPendingEvidence bounds the evidence kept per workload.
 	maxPendingEvidence = 20
+	// sampleLead is how long before an incident began an error sample may
+	// have been read and still show the incident's errors.
+	sampleLead = time.Minute
 )
 
 type pendingEvidence struct {
@@ -87,20 +89,57 @@ func (b *Brain) evidenceDrafts(inc *incident, key string) []ledger.Draft {
 			continue
 		}
 		p.attachedTo = inc.rec.ID
-		digest := contentDigest(p.ev)
-		if inc.evidenceDigests[digest] {
-			continue
+		if p.ev.Reason == watcher.ReasonSample {
+			if !b.newErrors(inc, key, p.ev) {
+				continue
+			}
+		} else {
+			digest := contentDigest(p.ev)
+			if inc.evidenceDigests[digest] {
+				continue
+			}
+			if inc.evidenceDigests == nil {
+				inc.evidenceDigests = map[string]bool{}
+			}
+			inc.evidenceDigests[digest] = true
 		}
-		if inc.evidenceDigests == nil {
-			inc.evidenceDigests = map[string]bool{}
-		}
-		inc.evidenceDigests[digest] = true
 		e := evidenceRecord(inc.rec.ID, p.ev)
 		inc.rec.EvidenceIDs = append(inc.rec.EvidenceIDs, e.ID)
 		drafts = append(drafts, ledger.RecordDraft(source, model.KindEvidence, "attached", e.ID, inc.rec.ID, e))
 		b.Log.Info("evidence attached", "incident", inc.rec.ID, "workload", key, "source", e.Source, "pod", p.ev.Pod, "summary", e.Summary)
 	}
 	return drafts
+}
+
+// newErrors reports whether an error sample shows an error the incident has
+// not recorded, and records it. Errors the workload's samples held before
+// the incident are its routine, not evidence, and so is a sample from before
+// it. Callers hold b.mu.
+func (b *Brain) newErrors(inc *incident, key string, ev watcher.LogEvidence) bool {
+	before := inc.rec.OpenedAt.Add(-sampleLead)
+	if ev.CollectedAt.Before(before) {
+		return false
+	}
+	routine := map[string]bool{}
+	for _, p := range b.evidence[key] {
+		if p.ev.Reason == watcher.ReasonSample && p.ev.CollectedAt.Before(before) {
+			for _, t := range p.ev.Summary.Templates {
+				routine[t.Template] = routine[t.Template] || t.Error
+			}
+		}
+	}
+	fresh := false
+	for _, t := range ev.Summary.Templates {
+		id := key + "\x00" + t.Template
+		if !t.Error || routine[t.Template] || inc.sampleErrors[id] {
+			continue
+		}
+		if inc.sampleErrors == nil {
+			inc.sampleErrors = map[string]bool{}
+		}
+		inc.sampleErrors[id], fresh = true, true
+	}
+	return fresh
 }
 
 // informative reports evidence worth recording: the logs of a crash or an
@@ -120,37 +159,23 @@ func informative(ev watcher.LogEvidence) bool {
 	return false
 }
 
-// contentDigest identifies what a log says, whichever pod said it. For an
-// error sample, that is which errors it holds: its counts change every
-// minute, and an incident needs a new sample only when its errors do.
+// contentDigest identifies what a log says, whichever pod said it.
 func contentDigest(ev watcher.LogEvidence) string {
 	type tpl struct {
 		T string
 		N int
 	}
-	sample := ev.Reason == watcher.ReasonSample
 	content := struct {
 		Container, Reason string
 		Templates         []tpl
 		Exceptions        []tpl
 	}{Container: ev.Container, Reason: ev.Reason}
 	for _, t := range ev.Summary.Templates {
-		switch {
-		case !sample:
-			content.Templates = append(content.Templates, tpl{t.Template, t.Count})
-		case t.Error:
-			content.Templates = append(content.Templates, tpl{T: t.Template})
-		}
+		content.Templates = append(content.Templates, tpl{t.Template, t.Count})
 	}
-	slices.SortFunc(content.Templates, func(a, b tpl) int { return strings.Compare(a.T, b.T) })
 	for _, e := range ev.Summary.Exceptions {
-		n := e.Count
-		if sample {
-			n = 0
-		}
-		content.Exceptions = append(content.Exceptions, tpl{e.Fingerprint, n})
+		content.Exceptions = append(content.Exceptions, tpl{e.Fingerprint, e.Count})
 	}
-	slices.SortFunc(content.Exceptions, func(a, b tpl) int { return strings.Compare(a.T, b.T) })
 	b, _ := json.Marshal(content)
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
