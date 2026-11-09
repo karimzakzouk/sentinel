@@ -1,6 +1,8 @@
 package lab
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"slices"
 	"sort"
@@ -22,8 +24,16 @@ const WorldRole = "world"
 // CopyOf labels a world's pod with the production workload it copies.
 const CopyOf = "sentinel.karimzakzouk.github.io/copy-of"
 
-// Placeholder stands in for every secret value in a world.
-const Placeholder = "sentinel-lab-placeholder"
+// SecretPlaceholder stands in for the value a key of a Secret holds in a
+// world. The Lab never reads the value; the placeholder names the key, so a
+// name a copy looks up from it, as a host taken from a secret, says which
+// secret the world lacks.
+func SecretPlaceholder(secret, key string) string {
+	sum := sha256.Sum256([]byte(secret + "\x00" + key))
+	return placeholderPrefix + hex.EncodeToString(sum[:5])
+}
+
+const placeholderPrefix = "sentinel-lab-secret-"
 
 // meshContainers are the sidecars and init containers service meshes
 // inject; a Lab copy runs without them.
@@ -43,8 +53,10 @@ type Workload struct {
 	Template corev1.PodTemplateSpec
 	// Replicas is how many pods production runs.
 	Replicas int32
-	// Claims says the workload keeps state in persistent volumes.
-	Claims bool
+	// Claims says the workload keeps state in persistent volumes, and
+	// ClaimTemplates names a StatefulSet's.
+	Claims         bool
+	ClaimTemplates []string
 }
 
 // World is what the Lab reads from a production namespace. It never holds
@@ -109,7 +121,12 @@ func Synthesize(w World, target model.ObjectRef, ns string) (*Plan, error) {
 	for _, ref := range closure {
 		wl := w.Workloads[ref]
 		if wl.Claims {
-			return nil, fmt.Errorf("%s keeps state in persistent volumes, which the Lab cannot copy yet", ref)
+			engine, ok := datastoreEngine(wl.Template.Spec)
+			if !ok {
+				return nil, fmt.Errorf("%s keeps state in persistent volumes, which the Lab cannot copy yet", ref)
+			}
+			note("%s runs as an empty %s: the Lab copies none of its data", ref, engine)
+			wl = throwaway(wl)
 		}
 		pod, err := copyPod(wl, w, ns, note)
 		if err != nil {
@@ -351,7 +368,7 @@ func copyContainer(c *corev1.Container, ref model.ObjectRef, digests map[string]
 	for i := range c.Env {
 		if from := c.Env[i].ValueFrom; from != nil && from.SecretKeyRef != nil {
 			note("%s's %s holds a placeholder instead of secret %s", ref, c.Env[i].Name, from.SecretKeyRef.Name)
-			c.Env[i] = corev1.EnvVar{Name: c.Env[i].Name, Value: Placeholder}
+			c.Env[i] = corev1.EnvVar{Name: c.Env[i].Name, Value: SecretPlaceholder(from.SecretKeyRef.Name, from.SecretKeyRef.Key)}
 		}
 	}
 	c.EnvFrom = slices.DeleteFunc(c.EnvFrom, func(e corev1.EnvFromSource) bool {

@@ -2,6 +2,7 @@ package lab
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/karimzakzouk/sentinel/api/v1alpha1"
 	"github.com/karimzakzouk/sentinel/internal/stats"
@@ -95,9 +96,12 @@ func (r *Race) verdict(c *Contender) v1alpha1.ExperimentPhase {
 	return ""
 }
 
-// Outcome is the race's verdict so far, and whether it is final. A
-// candidate passes only once the failure has reproduced and every control
-// has failed; without a budget left, an undecided race ends NOT SURE.
+// Outcome is the race's verdict so far, and whether it is final. The first
+// candidate is the subject: the fix someone would carry out, which the
+// verdict is about; the others say which part of it fixes the failure. The
+// subject passes only once the failure has reproduced and every control
+// has failed, and fails once it is shown not to work; without a budget
+// left, an undecided race ends NOT SURE.
 func (r *Race) Outcome(budgetLeft bool) (v1alpha1.ExperimentPhase, string, bool) {
 	level := r.level()
 	failing := fmt.Sprintf("%d of %d runs", r.Baseline.Runs-r.Baseline.Successes, r.Baseline.Runs)
@@ -114,32 +118,49 @@ func (r *Race) Outcome(budgetLeft bool) (v1alpha1.ExperimentPhase, string, bool)
 		}
 	}
 	reproduced := r.Baseline.fails.Rejects(level)
-	var passed, failed *Contender
-	decided := true
-	for _, c := range r.Candidates {
-		switch r.verdict(c) {
-		case PhasePassed:
-			if passed == nil {
-				passed = c
-			}
-		case PhaseFailed:
-			if failed == nil {
-				failed = c
-			}
-		default:
-			decided = false
-		}
-	}
 	switch {
 	case len(r.Candidates) == 0 && reproduced:
 		return PhasePassed, "the failure reproduces: the failing revision failed in " + failing, true
-	case len(r.Candidates) > 0 && reproduced && controlsFailed && decided && passed != nil:
-		return PhasePassed, fmt.Sprintf("the %s fixes it: it worked in %d of %d runs where the failing revision failed in %s",
-			passed.Name, passed.Successes, passed.Runs, failing), true
-	case len(r.Candidates) > 0 && reproduced && controlsFailed && decided:
-		return PhaseFailed, fmt.Sprintf("no candidate fixes it: the %s worked in only %d of %d runs", failed.Name, failed.Successes, failed.Runs), true
-	case !budgetLeft:
+	case len(r.Candidates) > 0 && reproduced && controlsFailed:
+		subject := r.Candidates[0]
+		switch r.verdict(subject) {
+		case PhasePassed:
+			return PhasePassed, fmt.Sprintf("the %s fixes it: it worked in %d of %d runs where the failing revision failed in %s%s",
+				subject.Name, subject.Successes, subject.Runs, failing, r.besides(subject)), true
+		case PhaseFailed:
+			lead := "no candidate fixes it"
+			for _, c := range r.Candidates[1:] {
+				if r.verdict(c) != PhaseFailed {
+					lead = "the " + subject.Name + " does not fix it"
+				}
+			}
+			return PhaseFailed, fmt.Sprintf("%s: the %s worked in only %d of %d runs%s", lead, subject.Name, subject.Successes, subject.Runs, r.besides(subject)), true
+		}
+	}
+	if !budgetLeft {
 		return PhaseNotSure, fmt.Sprintf("the runs ran out before a verdict: %d blocks", r.Baseline.Runs), true
 	}
 	return "", "", false
+}
+
+// besides says how the candidates other than the subject did.
+func (r *Race) besides(subject *Contender) string {
+	var parts []string
+	for _, c := range r.Candidates {
+		if c == subject {
+			continue
+		}
+		switch r.verdict(c) {
+		case PhasePassed:
+			parts = append(parts, fmt.Sprintf("the %s fixes it too, in %d of %d runs", c.Name, c.Successes, c.Runs))
+		case PhaseFailed:
+			parts = append(parts, fmt.Sprintf("the %s does not, working in %d of %d runs", c.Name, c.Successes, c.Runs))
+		default:
+			parts = append(parts, fmt.Sprintf("the %s is undecided after %d runs, working in %d", c.Name, c.Runs, c.Successes))
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "; " + strings.Join(parts, "; ")
 }

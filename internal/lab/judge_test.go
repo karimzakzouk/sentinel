@@ -81,3 +81,35 @@ func TestTheRaceHoldsItsLevel(t *testing.T) {
 		t.Logf("passed %.4f of candidates at the edge, at α=0.05", rate)
 	}
 }
+
+// With a second candidate, the verdict is still the first one's, and says
+// how the other did: a configuration that fixes it, or one that does not.
+func TestTheRaceReportsASecondCandidate(t *testing.T) {
+	deletion := map[string]float64{"deletion control": 0}
+	for _, tc := range []struct {
+		name  string
+		other float64
+		says  string
+	}{
+		{"a configuration that fixes it", 1, "the configuration reverted fixes it too"},
+		{"an image that fixes it", 0, "the configuration reverted does not"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := NewRace(0.05, []string{"previous revision", "configuration reverted"}, []string{"deletion control"})
+			rng := rand.New(rand.NewPCG(7, 8))
+			var phase v1alpha1.ExperimentPhase
+			var msg string
+			for b := 1; b <= 40; b++ {
+				r.Observe(false, map[string]bool{"previous revision": true, "configuration reverted": rng.Float64() < tc.other,
+					"deletion control": rng.Float64() < deletion["deletion control"]})
+				var final bool
+				if phase, msg, final = r.Outcome(b < 40); final {
+					break
+				}
+			}
+			if phase != PhasePassed || !strings.Contains(msg, "the previous revision fixes it") || !strings.Contains(msg, tc.says) {
+				t.Fatalf("%s: %s", phase, msg)
+			}
+		})
+	}
+}
