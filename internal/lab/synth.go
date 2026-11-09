@@ -79,6 +79,8 @@ type Plan struct {
 	Services   []*corev1.Service
 	Pods       []*corev1.Pod
 	Fidelity   []string
+	// Empty lists the datastores copied without their data.
+	Empty []model.ObjectRef
 }
 
 // Split separates target's copy from the rest of the world, which a race
@@ -127,6 +129,7 @@ func Synthesize(w World, target model.ObjectRef, ns string) (*Plan, error) {
 			}
 			note("%s runs as an empty %s: the Lab copies none of its data", ref, engine)
 			wl = throwaway(wl)
+			plan.Empty = append(plan.Empty, ref)
 		}
 		pod, err := copyPod(wl, w, ns, note)
 		if err != nil {

@@ -46,6 +46,9 @@ type Lab struct {
 	Watched   []string
 	Log       *slog.Logger
 	OnVerdict func(context.Context, Verdict)
+	// Replay, when traffic capture is on, returns the reads production
+	// answered that each run sends its copy.
+	Replay func(model.ObjectRef) []v1alpha1.ReplayRequest
 
 	mu        sync.Mutex
 	stores    map[string]cache.Store
@@ -113,6 +116,9 @@ func (l *Lab) ask(ctx context.Context, name string, incident model.ID, target mo
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
 		Spec: v1alpha1.ExperimentSpec{IncidentID: string(incident), Purpose: "verify-fix", LabNamespace: ns, Revision: revision, Candidate: image,
 			Workload: &v1alpha1.TargetRef{APIVersion: "apps/v1", Kind: target.Kind, Namespace: target.Namespace, Name: target.Name}},
+	}
+	if l.Replay != nil {
+		exp.Spec.Replay = l.Replay(target)
 	}
 	obj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(exp)
 	if err != nil {

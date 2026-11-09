@@ -47,6 +47,26 @@ type ExperimentSpec struct {
 	// +optional
 	// +kubebuilder:default="30m"
 	Timeout metav1.Duration `json:"timeout,omitempty"`
+	// Replay lists reads traffic capture saw production answer, which each
+	// run sends its copy once the copy is ready: a copy works only if it
+	// answers every one, without a server error unless its world's
+	// datastores are throwaway and empty.
+	// +optional
+	// +kubebuilder:validation:MaxItems=20
+	Replay []ReplayRequest `json:"replay,omitempty"`
+}
+
+// ReplayRequest is one GET a run sends its copy.
+type ReplayRequest struct {
+	// Path, with no query string.
+	// +kubebuilder:validation:Pattern=`^/[^?#\s]*$`
+	// +kubebuilder:validation:MaxLength=1024
+	Path string `json:"path"`
+	// Port the copy serves it on; its first declared port when omitted.
+	// +optional
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=65535
+	Port int32 `json:"port,omitempty"`
 }
 
 // ExperimentPhase is a step in an experiment's lifecycle.

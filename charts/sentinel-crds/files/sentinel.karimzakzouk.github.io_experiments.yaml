@@ -97,6 +97,32 @@ spec:
                 - verify-fix
                 - verify-config
                 type: string
+              replay:
+                description: |-
+                  Replay lists reads traffic capture saw production answer, which each
+                  run sends its copy once the copy is ready: a copy works only if it
+                  answers every one, without a server error unless its world's
+                  datastores are throwaway and empty.
+                items:
+                  description: ReplayRequest is one GET a run sends its copy.
+                  properties:
+                    path:
+                      description: Path, with no query string.
+                      maxLength: 1024
+                      pattern: ^/[^?#\s]*$
+                      type: string
+                    port:
+                      description: Port the copy serves it on; its first declared
+                        port when omitted.
+                      format: int32
+                      maximum: 65535
+                      minimum: 1
+                      type: integer
+                  required:
+                  - path
+                  type: object
+                maxItems: 20
+                type: array
               revision:
                 description: |-
                   Revision is the workload's failing revision: a Deployment's
