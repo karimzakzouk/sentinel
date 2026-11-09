@@ -162,7 +162,7 @@ func (a *Actor) pauseArgoCD(ctx context.Context, meta metav1.ObjectMeta, dryRun 
 	if err != nil {
 		return "", fmt.Errorf("the Argo CD Application %s/%s: %w", ns, name, err)
 	}
-	if set, ok := applicationSet(app.GetOwnerReferences()); ok {
+	if set, ok := ApplicationSetOf(app.GetOwnerReferences()); ok {
 		if err := a.applicationSetKeepsPause(ctx, ns, set); err != nil {
 			return "", err
 		}
@@ -196,7 +196,9 @@ func (a *Actor) pauseArgoCD(ctx context.Context, meta metav1.ObjectMeta, dryRun 
 // ApplicationSetsResource is Argo CD's ApplicationSet.
 var ApplicationSetsResource = schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applicationsets"}
 
-func applicationSet(owners []metav1.OwnerReference) (string, bool) {
+// ApplicationSetOf returns the name of the ApplicationSet that generates an
+// Application, from its owner references.
+func ApplicationSetOf(owners []metav1.OwnerReference) (string, bool) {
 	for _, o := range owners {
 		if o.Kind == "ApplicationSet" && strings.HasPrefix(o.APIVersion, "argoproj.io/") {
 			return o.Name, true
