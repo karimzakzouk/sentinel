@@ -39,8 +39,12 @@ func ReadWorld(ctx context.Context, client kubernetes.Interface, ns string, targ
 	}
 	for _, s := range sets.Items {
 		ref := model.ObjectRef{Group: "apps", Kind: "StatefulSet", Namespace: ns, Name: s.Name}
-		w.Workloads[ref] = Workload{Ref: ref, Template: s.Spec.Template, Replicas: ptr.Deref(s.Spec.Replicas, 1),
+		wl := Workload{Ref: ref, Template: s.Spec.Template, Replicas: ptr.Deref(s.Spec.Replicas, 1),
 			Claims: len(s.Spec.VolumeClaimTemplates) > 0 || claims(s.Spec.Template.Spec)}
+		for _, c := range s.Spec.VolumeClaimTemplates {
+			wl.ClaimTemplates = append(wl.ClaimTemplates, c.Name)
+		}
+		w.Workloads[ref] = wl
 	}
 	wl, ok := w.Workloads[target]
 	if !ok {

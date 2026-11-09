@@ -110,7 +110,7 @@ func TestSynthesisCopiesTheWorkloadAndWhatItCalls(t *testing.T) {
 		t.Fatalf("volumes %+v; want the secret emptied and the ConfigMap kept", spec.Volumes)
 	}
 	for _, e := range spec.Containers[0].Env {
-		if e.Name == "TOKEN" && (e.ValueFrom != nil || e.Value != Placeholder) {
+		if e.Name == "TOKEN" && (e.ValueFrom != nil || e.Value != SecretPlaceholder("front-secrets", "token")) {
 			t.Fatalf("the secret value was not replaced: %+v", e)
 		}
 	}
@@ -139,6 +139,9 @@ func TestSynthesisRefusesWhatItCannotCopy(t *testing.T) {
 			b := w.Workloads[ref("Deployment", "backend")]
 			b.Template.Spec.Containers[0].Env = []corev1.EnvVar{{Name: "DB", Value: "db:5432"}}
 			w.Workloads[b.Ref] = b
+			db := w.Workloads[ref("StatefulSet", "db")]
+			db.Template.Spec.Containers[0].Image = "shop/ledger:1"
+			w.Workloads[db.Ref] = db
 		}, "StatefulSet/shop/db keeps state in persistent volumes"},
 		"the node's network": {func(w *World) {
 			f := w.Workloads[ref("Deployment", "front")]
@@ -164,6 +167,34 @@ func TestSynthesisRefusesWhatItCannotCopy(t *testing.T) {
 				t.Fatalf("got %v; want a refusal saying %q", err, tc.why)
 			}
 		})
+	}
+}
+
+// A datastore the world needs runs empty, its claims empty directories,
+// with the engine and version production runs.
+func TestADatastoreRunsEmpty(t *testing.T) {
+	w := shop()
+	b := w.Workloads[ref("Deployment", "backend")]
+	b.Template.Spec.Containers[0].Env = []corev1.EnvVar{{Name: "DB", Value: "db:5432"}}
+	w.Workloads[b.Ref] = b
+	db := w.Workloads[ref("StatefulSet", "db")]
+	db.ClaimTemplates = []string{"data"}
+	db.Template.Spec.Containers[0].VolumeMounts = []corev1.VolumeMount{{Name: "data", MountPath: "/var/lib/postgresql"}}
+	w.Workloads[db.Ref] = db
+	plan, err := Synthesize(w, ref("Deployment", "front"), "sentinel-lab-0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	i := slices.IndexFunc(plan.Pods, func(p *corev1.Pod) bool { return p.Labels[CopyOf] == "StatefulSet.db" })
+	if i < 0 {
+		t.Fatalf("no copy of db among %d pods", len(plan.Pods))
+	}
+	spec := plan.Pods[i].Spec
+	if len(spec.Volumes) != 1 || spec.Volumes[0].Name != "data" || spec.Volumes[0].EmptyDir == nil || !strings.HasPrefix(spec.Containers[0].Image, "postgres") {
+		t.Fatalf("db copy: image %s, volumes %+v", spec.Containers[0].Image, spec.Volumes)
+	}
+	if want := "StatefulSet/shop/db runs as an empty postgres: the Lab copies none of its data"; !slices.Contains(plan.Fidelity, want) {
+		t.Fatalf("fidelity lacks %q:\n%s", want, strings.Join(plan.Fidelity, "\n"))
 	}
 }
 
@@ -240,5 +271,18 @@ func TestCopiesAskForLittleCPUButKeepTheirLimits(t *testing.T) {
 	}
 	if !slices.ContainsFunc(plan.Fidelity, func(f string) bool { return strings.Contains(f, "asks for 50m of CPU instead of 500m") }) {
 		t.Fatalf("fidelity lacks the CPU request: %v", plan.Fidelity)
+	}
+}
+
+// A name a copy looked up from a secret's placeholder names that secret.
+func TestAPlaceholderInALookupNamesItsSecret(t *testing.T) {
+	w := shop()
+	tokens := secretTokens(w)
+	host := SecretPlaceholder("front-secrets", "token")
+	if got := tokenIn(host+".svc", tokens); got != "key token of secret front-secrets" {
+		t.Fatalf("lookup of %s names %q", host, got)
+	}
+	if got := tokenIn("api.stripe.com", tokens); got != "" {
+		t.Fatalf("an ordinary name named %q", got)
 	}
 }

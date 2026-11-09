@@ -184,9 +184,18 @@ func (l *Lab) handle(ctx context.Context, exp *v1alpha1.Experiment) Verdict {
 				fidelity = append(fidelity, n)
 			}
 		}
-		variants = []Variant{{Name: "previous revision " + revision, Slug: "cand", Pod: pod},
-			{Name: "deletion control", Slug: "del", Pod: DeletionControl(baseline)}}
-		candidates, controls = []string{variants[0].Name}, []string{variants[1].Name}
+		variants = []Variant{{Name: "previous revision " + revision, Slug: "cand", Pod: pod}}
+		// When the previous revision changed more than configuration, the
+		// failing one with only its configuration reverted says which part
+		// of the rollback fixes it.
+		if cfg, ok := ConfigRevert(baseline, pod); ok && !sameContainers(cfg, pod) {
+			variants = append(variants, Variant{Name: "failing revision with the configuration of " + revision, Slug: "cfg", Pod: cfg})
+		}
+		for _, v := range variants {
+			candidates = append(candidates, v.Name)
+		}
+		variants = append(variants, Variant{Name: "deletion control", Slug: "del", Pod: DeletionControl(baseline)})
+		controls = []string{"deletion control"}
 	}
 	race := NewRace(float64(cmp.Or(exp.Spec.AlphaPercent, 5))/100, candidates, controls)
 	fidelity = append(fidelity, "every copy waits until the seal holds for it before it starts")
@@ -198,7 +207,12 @@ func (l *Lab) handle(ctx context.Context, exp *v1alpha1.Experiment) Verdict {
 				own = append(own, host)
 			}
 		}
+		tokens := secretTokens(world)
 		for _, name := range Unresolved(log, dns.Searches, own) {
+			if from := tokenIn(name, tokens); from != "" {
+				fidelity = append(fidelity, fmt.Sprintf("the world looked up %s, a name taken from %s, which holds a placeholder in the Lab", name, from))
+				continue
+			}
 			fidelity = append(fidelity, fmt.Sprintf("the world asked for %s, which the Lab does not provide", name))
 		}
 	} else {
@@ -243,6 +257,35 @@ func (l *Lab) candidate(ctx context.Context, world World, ref model.ObjectRef, r
 		}
 	}
 	return pod, name, notes, nil
+}
+
+// secretTokens maps each placeholder the world's copies hold to the key of
+// the Secret it stands in for.
+func secretTokens(w World) map[string]string {
+	out := map[string]string{}
+	for _, wl := range w.Workloads {
+		for _, c := range append(wl.Template.Spec.InitContainers, wl.Template.Spec.Containers...) {
+			for _, e := range c.Env {
+				if r := e.ValueFrom; r != nil && r.SecretKeyRef != nil {
+					out[SecretPlaceholder(r.SecretKeyRef.Name, r.SecretKeyRef.Key)] = fmt.Sprintf("key %s of secret %s", r.SecretKeyRef.Key, r.SecretKeyRef.Name)
+				}
+			}
+		}
+	}
+	return out
+}
+
+// tokenIn names the secret key whose placeholder a looked-up name holds.
+func tokenIn(name string, tokens map[string]string) string {
+	if !strings.Contains(name, placeholderPrefix) {
+		return ""
+	}
+	for token, from := range tokens {
+		if strings.Contains(name, token) {
+			return from
+		}
+	}
+	return ""
 }
 
 // readyServices are the world's Services whose every copy is ready, so a

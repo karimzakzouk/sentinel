@@ -19,8 +19,10 @@ const (
 	readyWithin = time.Minute
 	// holdFor is how long it must then stay ready, without restarting.
 	holdFor = 20 * time.Second
-	// roundBlocks is how many blocks run at once.
-	roundBlocks = 3
+	// roundPods is how many of a race's pods run at once: three blocks of
+	// a baseline, one candidate and a control, fewer blocks when there are
+	// more candidates, so a race stays within the Lab's quota.
+	roundPods = 9
 )
 
 // Variant is one version of the target a race starts in every block.
@@ -65,6 +67,7 @@ func (p *Prover) RunRace(ctx context.Context, ns string, built *Built, dns *core
 		stem = baseline.Name
 	}
 	blocks := 0
+	roundBlocks := max(1, roundPods/len(all))
 	for blocks < maxBlocks {
 		var pods []*racePod
 		for b := blocks; b < min(blocks+roundBlocks, maxBlocks); b++ {
