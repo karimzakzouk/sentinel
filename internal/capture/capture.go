@@ -39,9 +39,12 @@ type Request struct {
 	Route    string `json:"route,omitempty"`
 	Redacted bool   `json:"redacted,omitempty"`
 	// Host and Port are where a call went.
-	Host     string        `json:"host,omitempty"`
-	Port     int           `json:"port,omitempty"`
+	Host string `json:"host,omitempty"`
+	Port int    `json:"port,omitempty"`
+	// Status is the HTTP status, or for a gRPC call, whose Method is
+	// "gRPC", the one its code maps to; GRPC names the code.
 	Status   int           `json:"status,omitempty"`
+	GRPC     string        `json:"grpc,omitempty"`
 	Duration time.Duration `json:"duration"`
 	At       time.Time     `json:"at"`
 }
@@ -253,21 +256,23 @@ func workloadOf(list []attribute) (model.ObjectRef, bool) {
 	return model.ObjectRef{}, false
 }
 
-// requestOf reads an HTTP span as a request.
+// requestOf reads an HTTP or gRPC span as a request. Other spans, such as
+// a datastore's, whose statements carry data, are not kept.
 func requestOf(sp span) (Request, bool) {
 	a := attrs(sp.Attributes)
+	if sp.Kind != kindServer && sp.Kind != kindClient {
+		return Request{}, false
+	}
+	if cmp.Or(a["rpc.system.name"], a["rpc.system"]) == "grpc" {
+		return grpcOf(sp, a)
+	}
 	method := a["http.request.method"]
-	if method == "" || sp.Kind != kindServer && sp.Kind != kindClient {
+	if method == "" {
 		return Request{}, false
 	}
 	q := Request{Served: sp.Kind == kindServer, Method: method}
 	q.Status, _ = strconv.Atoi(a["http.response.status_code"])
-	start, _ := strconv.ParseInt(sp.Start, 10, 64)
-	end, _ := strconv.ParseInt(sp.End, 10, 64)
-	q.At = time.Unix(0, start).UTC()
-	if end > start {
-		q.Duration = time.Duration(end - start)
-	}
+	timed(&q, sp)
 	q.Route = a["http.route"]
 	path := a["url.path"]
 	if full := a["url.full"]; full != "" {
@@ -278,6 +283,39 @@ func requestOf(sp span) (Request, bool) {
 			q.Host = u.Hostname()
 		}
 	}
+	return addressed(q, a, path)
+}
+
+// grpcOf reads a gRPC span, under the semantic conventions before and
+// after rpc.system became rpc.system.name.
+func grpcOf(sp span, a map[string]string) (Request, bool) {
+	q := Request{Served: sp.Kind == kindServer, Method: "gRPC"}
+	timed(&q, sp)
+	method := cmp.Or(a["rpc.method"], sp.Name)
+	if service := a["rpc.service"]; service != "" && !strings.Contains(method, "/") {
+		method = service + "/" + method
+	}
+	if method == "" {
+		return Request{}, false
+	}
+	code, ok := grpcCode(cmp.Or(a["rpc.status_code"], a["rpc.grpc.status_code"]))
+	if ok {
+		q.GRPC, q.Status = grpcNames[code], grpcHTTP[code]
+	}
+	return addressed(q, a, "/"+strings.TrimPrefix(method, "/"))
+}
+
+func timed(q *Request, sp span) {
+	start, _ := strconv.ParseInt(sp.Start, 10, 64)
+	end, _ := strconv.ParseInt(sp.End, 10, 64)
+	q.At = time.Unix(0, start).UTC()
+	if end > start {
+		q.Duration = time.Duration(end - start)
+	}
+}
+
+// addressed adds where a request went and its cleaned path.
+func addressed(q Request, a map[string]string, path string) (Request, bool) {
 	if h := a["server.address"]; h != "" && !q.Served {
 		q.Host = h
 	}
@@ -294,6 +332,28 @@ func requestOf(sp span) (Request, bool) {
 	clean, found := redactor.String(path)
 	q.Path, q.Redacted = clean, len(found) > 0
 	return q, true
+}
+
+// gRPC's status codes, by number: their names, and the HTTP statuses they
+// map to, as gRPC's HTTP gateway maps them.
+var (
+	grpcNames = []string{"OK", "CANCELLED", "UNKNOWN", "INVALID_ARGUMENT", "DEADLINE_EXCEEDED", "NOT_FOUND", "ALREADY_EXISTS",
+		"PERMISSION_DENIED", "RESOURCE_EXHAUSTED", "FAILED_PRECONDITION", "ABORTED", "OUT_OF_RANGE", "UNIMPLEMENTED", "INTERNAL",
+		"UNAVAILABLE", "DATA_LOSS", "UNAUTHENTICATED"}
+	grpcHTTP = []int{200, 499, 500, 400, 504, 404, 409, 403, 429, 400, 409, 400, 501, 500, 503, 500, 401}
+)
+
+// grpcCode reads a gRPC status, by number or by name.
+func grpcCode(s string) (int, bool) {
+	if n, err := strconv.Atoi(s); err == nil {
+		return n, n >= 0 && n < len(grpcNames)
+	}
+	name := strings.ToUpper(s)
+	if name == "CANCELED" {
+		name = "CANCELLED"
+	}
+	i := slices.Index(grpcNames, name)
+	return i, i >= 0
 }
 
 var redactor = redact.New()

@@ -409,7 +409,7 @@ function Traffic({ target }: { target: ObjectRef }) {
                   <td className="mono">
                     {r.method} {r.served ? r.path : `${r.host ?? ""}${r.port ? ":" + r.port : ""}${r.path}`}
                   </td>
-                  <td className="mono">{r.status || "no answer"}</td>
+                  <td className="mono">{r.grpc ?? (r.status || "no answer")}</td>
                   <td className="muted">{(r.duration / 1e6).toFixed(r.duration < 1e7 ? 1 : 0)} ms</td>
                 </tr>
               ))}

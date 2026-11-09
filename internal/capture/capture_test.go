@@ -1,9 +1,11 @@
 package capture
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -107,4 +109,34 @@ func attr(key, value string) attribute {
 	a := attribute{Key: key}
 	a.Value.String = &value
 	return a
+}
+
+func intAttr(key string, value int) attribute {
+	a := attribute{Key: key}
+	a.Value.Int = json.Number(strconv.Itoa(value))
+	return a
+}
+
+// gRPC calls are kept under either generation of the conventions, their
+// codes mapped to HTTP statuses; a datastore's spans, whose statements
+// carry data, are not.
+func TestGRPCCallsAreKeptAndDatastoreStatementsAreNot(t *testing.T) {
+	old, ok := requestOf(span{Kind: kindClient, Attributes: []attribute{attr("rpc.system", "grpc"), attr("rpc.service", "hipstershop.CurrencyService"),
+		attr("rpc.method", "Convert"), intAttr("rpc.grpc.status_code", 14), attr("server.address", "currencyservice"), intAttr("server.port", 7000)}})
+	if !ok || old.Method != "gRPC" || old.Path != "/hipstershop.CurrencyService/Convert" || old.Status != 503 || old.GRPC != "UNAVAILABLE" ||
+		old.Host != "currencyservice" || old.Port != 7000 {
+		t.Fatalf("old conventions %+v", old)
+	}
+	current, ok := requestOf(span{Kind: kindServer, Attributes: []attribute{attr("rpc.system.name", "grpc"),
+		attr("rpc.method", "grpc.health.v1.Health/Check"), attr("rpc.status_code", "OK")}})
+	if !ok || current.Path != "/grpc.health.v1.Health/Check" || current.Status != 200 || current.GRPC != "OK" {
+		t.Fatalf("current conventions %+v", current)
+	}
+	if got := Replayable([]Request{current}, 5); len(got) != 0 {
+		t.Fatalf("a gRPC call is replayable: %+v", got)
+	}
+	if q, ok := requestOf(span{Kind: kindClient, Attributes: []attribute{attr("db.system.name", "redis"),
+		attr("db.query.text", "HMGET 9d336a7e-70c1-4102-bd4b-2e70643bce47 data"), attr("server.address", "redis-cart")}}); ok {
+		t.Fatalf("kept a datastore's statement: %+v", q)
+	}
 }

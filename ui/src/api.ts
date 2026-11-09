@@ -221,6 +221,7 @@ export interface CapturedRequest {
   host?: string;
   port?: number;
   status?: number;
+  grpc?: string;
   duration: number;
   at: string;
 }
