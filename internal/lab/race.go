@@ -57,7 +57,7 @@ type racePod struct {
 // RunRace runs blocks of the baseline and every variant, each block's pods
 // started together in random order, a few blocks at a time, until the race
 // decides or maxBlocks have run. It returns the blocks run.
-func (p *Prover) RunRace(ctx context.Context, ns string, dns *corev1.PodDNSConfig, baseline *corev1.Pod, variants []Variant, race *Race, maxBlocks int) (int, error) {
+func (p *Prover) RunRace(ctx context.Context, ns string, built *Built, dns *corev1.PodDNSConfig, baseline *corev1.Pod, variants []Variant, race *Race, maxBlocks int) (int, error) {
 	core := p.Client.CoreV1()
 	all := append([]Variant{{Name: "baseline", Slug: "base", Pod: baseline}}, variants...)
 	stem := baseline.Labels[CopyOf]
@@ -71,7 +71,7 @@ func (p *Prover) RunRace(ctx context.Context, ns string, dns *corev1.PodDNSConfi
 			order := append([]Variant(nil), all...)
 			rand.Shuffle(len(order), func(i, j int) { order[i], order[j] = order[j], order[i] }) //nolint:gosec // randomizes start order, not a secret
 			for _, v := range order {
-				pod := v.Pod.DeepCopy()
+				pod := gated(v.Pod, built.Gate)
 				pod.Name = fmt.Sprintf("%s-%s-%d", baseline.Name, v.Slug, b)
 				pod.Labels[VariantLabel] = v.Slug
 				pod.Spec.DNSPolicy, pod.Spec.DNSConfig = corev1.DNSNone, dns
@@ -122,6 +122,9 @@ func (p *Prover) watchRuns(ctx context.Context, ns string, pods []*racePod) erro
 			pod, err := p.Client.CoreV1().Pods(ns).Get(ctx, rp.name, metav1.GetOptions{})
 			if err != nil {
 				return fmt.Errorf("watch run %s: %w", rp.name, err)
+			}
+			if gateFailed(pod) {
+				return fmt.Errorf("the seal did not hold for run %s", rp.name)
 			}
 			now := time.Now()
 			state := podState(pod)

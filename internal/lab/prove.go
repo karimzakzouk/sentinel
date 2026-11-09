@@ -69,6 +69,9 @@ type Prover struct {
 	Twins []string
 	// Timeout bounds each wait for a pod.
 	Timeout time.Duration
+	// Forbidden is the destination the seal gate tries, which must be
+	// refused; the API server's Service when empty.
+	Forbidden string
 }
 
 // Seal adds the one allow rule a Lab needs: its pods may reach each other.

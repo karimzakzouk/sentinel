@@ -3,19 +3,87 @@ package lab
 import (
 	"context"
 	"fmt"
+	"net"
 	"sort"
 	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 )
 
+// GateName is the init container that holds a world's pod until its seal
+// applies.
+const GateName = "lab-seal-gate"
+
+// SealGate holds a pod's own containers until the seal applies to it: the
+// Lab DNS answers and forbidden, a destination the seal refuses, does not,
+// three times running. Some network plugins police a new pod only after it
+// starts; the gate absorbs that moment, so a copy's code never runs
+// unsealed. After a minute without the seal it fails, and the pod with it.
+func SealGate(dns, forbidden string) corev1.Container {
+	script := fmt.Sprintf(`ok=0
+for i in $(seq 60); do
+  if /agnhost connect %s --timeout=1s >/dev/null 2>&1 && ! /agnhost connect %s --timeout=1s >/dev/null 2>&1; then ok=$((ok+1)); else ok=0; fi
+  [ "$ok" -ge 3 ] && exit 0
+  sleep 1
+done
+echo "the seal did not hold for this pod within a minute" > /dev/termination-log
+exit 1`, net.JoinHostPort(dns, "53"), forbidden)
+	return corev1.Container{
+		Name: GateName, Image: Image, Command: []string{"sh", "-c", script},
+		Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("16Mi")},
+			Limits: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("64Mi")}},
+		SecurityContext: &corev1.SecurityContext{AllowPrivilegeEscalation: ptr.To(false), RunAsNonRoot: ptr.To(true),
+			RunAsUser: ptr.To[int64](65532), ReadOnlyRootFilesystem: ptr.To(true), Capabilities: &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+			SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}},
+	}
+}
+
+// gated is pod with the seal gate before its own init containers.
+func gated(pod *corev1.Pod, gate corev1.Container) *corev1.Pod {
+	pod = pod.DeepCopy()
+	pod.Spec.InitContainers = append([]corev1.Container{gate}, pod.Spec.InitContainers...)
+	return pod
+}
+
+// gateFailed says the seal never applied to the pod.
+func gateFailed(pod *corev1.Pod) bool {
+	for _, cs := range pod.Status.InitContainerStatuses {
+		if cs.Name != GateName {
+			continue
+		}
+		if t := cs.State.Terminated; t != nil && t.ExitCode != 0 {
+			return true
+		}
+		if t := cs.LastTerminationState.Terminated; t != nil && t.ExitCode != 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// forbidden is the API server's Service address: a destination every seal
+// refuses, for the gate to try.
+func (p *Prover) forbidden(ctx context.Context) (string, error) {
+	if p.Forbidden != "" {
+		return p.Forbidden, nil
+	}
+	svc, err := p.Client.CoreV1().Services("default").Get(ctx, "kubernetes", metav1.GetOptions{})
+	if err != nil {
+		return "", fmt.Errorf("read the API server's Service: %w", err)
+	}
+	return hostPort(svc.Spec.ClusterIP, 443), nil
+}
+
 // Built is a synthesized world running in a Lab namespace.
 type Built struct {
 	// DNS is the Lab DNS's address.
-	DNS      string
+	DNS string
+	// Gate holds every pod the world starts until its seal applies.
+	Gate     corev1.Container
 	Services []*corev1.Service
 	// States says how each copied workload's pod is doing, by workload.
 	States map[string]string
@@ -35,7 +103,11 @@ func (p *Prover) Build(ctx context.Context, ns, prodNS, domain string, plan *Pla
 			return nil, fmt.Errorf("copy ConfigMap %s: %w", cm.Name, err)
 		}
 	}
-	built := &Built{DNS: dns.Spec.ClusterIP, States: map[string]string{}}
+	forbidden, err := p.forbidden(ctx)
+	if err != nil {
+		return nil, err
+	}
+	built := &Built{DNS: dns.Spec.ClusterIP, Gate: SealGate(dns.Spec.ClusterIP, forbidden), States: map[string]string{}}
 	for _, svc := range plan.Services {
 		created, err := core.Services(ns).Create(ctx, svc, metav1.CreateOptions{})
 		if err != nil {
@@ -54,7 +126,7 @@ func (p *Prover) Build(ctx context.Context, ns, prodNS, domain string, plan *Pla
 		return nil, fmt.Errorf("the Lab DNS did not become ready: %w", err)
 	}
 	for _, pod := range plan.Pods {
-		pod = pod.DeepCopy()
+		pod = gated(pod, built.Gate)
 		pod.Spec.DNSConfig = DNSConfig(built.DNS, prodNS, domain)
 		if _, err := core.Pods(ns).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
 			return nil, fmt.Errorf("start the copy of %s: %w", pod.Labels[CopyOf], err)
@@ -70,7 +142,10 @@ func (p *Prover) Build(ctx context.Context, ns, prodNS, domain string, plan *Pla
 		for _, want := range plan.Pods {
 			got, err := core.Pods(ns).Get(ctx, want.Name, metav1.GetOptions{})
 			state := "not found"
-			if err == nil {
+			switch {
+			case err == nil && gateFailed(got):
+				return built, fmt.Errorf("the seal did not hold for the copy of %s", want.Labels[CopyOf])
+			case err == nil:
 				state = podState(got)
 			}
 			built.States[want.Labels[CopyOf]] = state
