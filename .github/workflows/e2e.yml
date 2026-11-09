@@ -45,3 +45,6 @@ jobs:
     uses: ./.github/workflows/e2e-run.yml
     with:
       network: kindnet
+      # The Lab's tests run on the self-hosted runner, with every network
+      # plugin (E2E network plugins).
+      skip: TestTheLab|TestALab

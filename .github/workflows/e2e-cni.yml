@@ -1,19 +1,28 @@
-# Proves the capability report's NetworkPolicy answer against network plugins
-# with known behavior: Calico and Cilium always enforce policy, Flannel never
-# does. It runs when the code it covers changes, weekly, and on demand.
+# Proves the capability report's NetworkPolicy answer and the Lab against
+# network plugins with known behavior: Calico and Cilium always enforce
+# policy, Flannel never does, and kindnet does but not as a pod starts. It
+# runs the whole suite on the self-hosted Azure runner, which the Lab needs,
+# when the code it covers changes, weekly, and on demand.
 name: E2E network plugins
 
 on:
   push:
     branches: [main]
     paths:
+      - api/**
       - internal/capability/**
-      - charts/sentinel/templates/lab.yaml
+      - internal/lab/**
+      - internal/verify/**
+      - internal/actor/**
+      - charts/**
       - hack/kind-up.sh
       - hack/kind/**
+      - hack/e2e-up.sh
       - test/e2e/**
+      - test/apps/**
       - .github/workflows/e2e-cni.yml
       - .github/workflows/e2e-run.yml
+      - .github/actions/wake-runner/**
   schedule:
     - cron: "17 3 * * 1"
   workflow_dispatch:
@@ -31,7 +40,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        network: [calico, cilium, flannel]
+        network: [calico, cilium, flannel, kindnet]
     uses: ./.github/workflows/e2e-run.yml
+    secrets: inherit
     with:
       network: ${{ matrix.network }}
+      self-hosted: true
