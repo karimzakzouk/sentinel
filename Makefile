@@ -49,9 +49,10 @@ helm-lint:
 e2e-up:
 	E2E_CLUSTER=$(E2E_CLUSTER) IMAGE=$(IMAGE) hack/e2e-up.sh
 
-# E2E_RUN narrows the suite to the tests a regular expression names.
+# E2E_RUN narrows the suite to the tests a regular expression names, and
+# E2E_SKIP leaves out those another names.
 e2e:
-	E2E_CLUSTER=$(E2E_CLUSTER) $(GO) test -v -count=1 -timeout 45m -tags e2e $(if $(E2E_RUN),-run '$(E2E_RUN)') ./test/e2e/...
+	E2E_CLUSTER=$(E2E_CLUSTER) $(GO) test -v -count=1 -timeout 45m -tags e2e $(if $(E2E_RUN),-run '$(E2E_RUN)') $(if $(E2E_SKIP),-skip '$(E2E_SKIP)') ./test/e2e/...
 
 e2e-down:
 	kind delete cluster --name $(E2E_CLUSTER)

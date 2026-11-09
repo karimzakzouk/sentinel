@@ -42,3 +42,5 @@ jobs:
       network: kindnet
       node-image: ${{ matrix.image }}
       label: -k8s-${{ matrix.version }}
+      # The Lab's tests run on the self-hosted runner (E2E network plugins).
+      skip: TestTheLab|TestALab
