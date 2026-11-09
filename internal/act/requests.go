@@ -254,7 +254,7 @@ func (r *Requests) observe(ctx context.Context, obj any) {
 	}
 	r.OnOutcome(ctx, Outcome{IncidentID: model.ID(req.Spec.IncidentID), Request: key, Action: req.Spec.Action,
 		Phase: req.Status.Phase, Message: req.Status.Message, ApprovedBy: req.Status.ApprovedBy,
-		BudgetSpent: req.Status.Phase == v1alpha1.ActionRejected && actor.BudgetSpent(req.Status.Message)})
+		BudgetSpent: req.Status.Phase == v1alpha1.ActionRejected && policy.BudgetSpent(req.Status.Message)})
 }
 
 // requestName is the same for every request of one action on one incident.

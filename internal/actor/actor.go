@@ -265,25 +265,13 @@ func (a *Actor) execute(ctx context.Context, req *v1alpha1.ActionRequest, polici
 		return v1alpha1.ActionDryRunPassed, "the dry run passed"
 	}
 	if !a.spend(req.Namespace, now) {
-		return v1alpha1.ActionRejected, fmt.Sprintf(budgetSpent, a.PerHour)
+		return v1alpha1.ActionRejected, policy.BudgetSpentMessage(a.PerHour)
 	}
 	msg, err := run(ctx, req, false)
 	if err != nil {
 		return v1alpha1.ActionFailed, err.Error()
 	}
 	return v1alpha1.ActionSucceeded, msg
-}
-
-// budgetSpent is the message of a request the hourly budget turned down.
-const budgetSpent = "the namespace's budget of %d actions an hour is spent"
-
-// BudgetSpent reports whether a rejected request's message says the
-// namespace's hourly budget turned it down: a limit on how often Sentinel
-// acts, not a judgment of the action.
-func BudgetSpent(message string) bool {
-	var n int
-	_, err := fmt.Sscanf(message, budgetSpent, &n)
-	return err == nil && fmt.Sprintf(budgetSpent, n) == message
 }
 
 // spend takes one action from the namespace's hourly budget.

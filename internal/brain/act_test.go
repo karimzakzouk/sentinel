@@ -641,3 +641,31 @@ func TestASpentBudgetDoesNotOpenTheBreaker(t *testing.T) {
 		})
 	}
 }
+
+// Breakers come back when the controller restarts, except for a request
+// only the hourly budget turned down.
+func TestARestartKeepsBreakersButNotBudgetRefusals(t *testing.T) {
+	for _, tc := range []struct {
+		result      string
+		wantBreaker bool
+	}{
+		{"the namespace's budget of 6 actions an hour is spent", false},
+		{"the rollout's ReplicaSet is gone", true},
+	} {
+		b, l := newBrain(t)
+		b.Now = func() time.Time { return onset.Add(time.Hour) }
+		inc := model.Incident{ID: model.NewID(), State: model.IncidentResolved, OpenedAt: onset, UpdatedAt: onset.Add(10 * time.Minute)}
+		a := model.Action{ID: model.NewID(), IncidentID: inc.ID, Type: ActionRolloutUndo, Target: web, State: model.ActionFailed,
+			Params: map[string]string{"result": tc.result}}
+		if _, err := l.Append(ctx, ledger.RecordDraft(source, model.KindIncident, "resolved", inc.ID, inc.ID, inc),
+			ledger.RecordDraft(source, model.KindAction, "failed", a.ID, inc.ID, a)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := b.Restore(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if open := !b.breakerUntil(ActionRolloutUndo, web).IsZero(); open != tc.wantBreaker {
+			t.Errorf("%q: breaker open %v, want %v", tc.result, open, tc.wantBreaker)
+		}
+	}
+}
