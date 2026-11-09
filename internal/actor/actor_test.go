@@ -100,7 +100,7 @@ func newActor(t *testing.T, replicas int32, policies ...*v1alpha1.SentinelPolicy
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
 		map[schema.GroupVersionResource]string{PoliciesResource: "SentinelPolicyList", RequestsResource: "ActionRequestList",
 			ApplicationsResource: "ApplicationList", ApplicationSetsResource: "ApplicationSetList", KustomizationsResource: "KustomizationList",
-			ExperimentsResource: "ExperimentList"}, objects...)
+			HelmReleasesResource: "HelmReleaseList", ExperimentsResource: "ExperimentList"}, objects...)
 	dyn.PrependReactor("patch", "*", func(action k8stesting.Action) (bool, runtime.Object, error) {
 		if p, ok := action.(k8stesting.PatchActionImpl); ok && len(p.PatchOptions.DryRun) > 0 {
 			return true, &unstructured.Unstructured{Object: map[string]any{}}, nil
@@ -461,8 +461,55 @@ func TestRollbackActionFollowsTheOwner(t *testing.T) {
 		}
 	}
 	helm := metav1.ObjectMeta{Labels: map[string]string{"helm.toolkit.fluxcd.io/name": "shop", "helm.toolkit.fluxcd.io/namespace": "flux-system"}}
-	if got := RollbackAction(helm); got != ActionRolloutUndo {
-		t.Errorf("a HelmRelease's workload: %s, want rollout.undo, which the actor refuses", got)
+	if got := RollbackAction(helm); got != ActionFluxRollback {
+		t.Errorf("a HelmRelease's workload: %s, want %s", got, ActionFluxRollback)
+	}
+}
+
+// helmShop labels web as rendered by the Flux HelmRelease flux-system/shop
+// and creates that HelmRelease, remediating failed upgrades when retries is
+// not zero.
+func helmShop(t *testing.T, a *Actor, client *fake.Clientset, retries int64) {
+	t.Helper()
+	dep, _ := client.AppsV1().Deployments("shop").Get(ctx, "web", metav1.GetOptions{})
+	dep.Labels = map[string]string{"helm.toolkit.fluxcd.io/name": "shop", "helm.toolkit.fluxcd.io/namespace": "flux-system"}
+	if _, err := client.AppsV1().Deployments("shop").Update(ctx, dep, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	spec := map[string]any{"chart": map[string]any{"spec": map[string]any{"chart": "web"}}, "values": map[string]any{"tag": "2-broken"}}
+	if retries != 0 {
+		spec["upgrade"] = map[string]any{"remediation": map[string]any{"retries": retries}}
+	}
+	hr := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "helm.toolkit.fluxcd.io/v2", "kind": "HelmRelease",
+		"metadata": map[string]any{"name": "shop", "namespace": "flux-system"}, "spec": spec}}
+	if _, err := a.Dynamic.Resource(HelmReleasesResource).Namespace("flux-system").Create(ctx, hr, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Through a Flux HelmRelease, a rollback suspends the release first, unless
+// helm-controller rolls failed upgrades back itself.
+func TestAFluxRollbackSuspendsTheHelmReleaseFirst(t *testing.T) {
+	a, client, _ := newActor(t, 3, sentinelPolicy(v1alpha1.AutonomyAutonomous, ActionFluxRollback))
+	helmShop(t, a, client, 0)
+	phase, msg := a.Handle(ctx, request(ActionFluxRollback, map[string]string{ParamFromTemplateHash: "bbb"}))
+	if phase != v1alpha1.ActionSucceeded || !strings.Contains(msg, "suspended the Flux HelmRelease flux-system/shop") ||
+		!strings.Contains(msg, "sentinel resume helmrelease flux-system/shop") {
+		t.Fatalf("%s: %s", phase, msg)
+	}
+	hr, _ := a.Dynamic.Resource(HelmReleasesResource).Namespace("flux-system").Get(ctx, "shop", metav1.GetOptions{})
+	if suspended, _, _ := unstructuredBool(hr.Object, "spec", "suspend"); !suspended || hr.GetAnnotations()[AnnotationPausedSync] == "" {
+		t.Fatalf("HelmRelease = %v", hr.Object)
+	}
+	if got, _ := client.AppsV1().Deployments("shop").Get(ctx, "web", metav1.GetOptions{}); got.Spec.Template.Spec.Containers[0].Image != "shop/web:1" {
+		t.Fatal("web was not rolled back")
+	}
+
+	a, client, _ = newActor(t, 3, sentinelPolicy(v1alpha1.AutonomyAutonomous, ActionFluxRollback))
+	helmShop(t, a, client, 3)
+	if phase, msg := a.Handle(ctx, request(ActionFluxRollback, map[string]string{ParamFromTemplateHash: "bbb"})); phase != v1alpha1.ActionFailed ||
+		!strings.Contains(msg, "helm-controller rolls the HelmRelease flux-system/shop back itself") {
+		t.Fatalf("with remediation: %s: %s", phase, msg)
 	}
 }
 
