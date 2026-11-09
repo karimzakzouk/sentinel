@@ -72,10 +72,12 @@ func FluxKustomization(meta metav1.ObjectMeta) string {
 }
 
 // pauseFlux suspends the Flux object that applies a workload, a
-// Kustomization or a HelmRelease, and notes it. When another manager sets
+// Kustomization or a HelmRelease, and notes it. When another manager applies
 // its spec.suspend, a parent Kustomization say, it would resume it at its
-// next reconcile, so the actor refuses. So it does when helm-controller rolls
-// a failed upgrade back itself: two rollbacks would race.
+// next reconcile, so the actor refuses. A manager that updated it once, a
+// person resuming it, does not set it again. The actor refuses too when
+// helm-controller rolls a failed upgrade back itself: two rollbacks would
+// race.
 func (a *Actor) pauseFlux(ctx context.Context, meta metav1.ObjectMeta, dryRun bool) (string, error) {
 	kind, resource, ref := "Kustomization", KustomizationsResource, FluxKustomization(meta)
 	if ref == "" {
@@ -91,7 +93,8 @@ func (a *Actor) pauseFlux(ctx context.Context, meta metav1.ObjectMeta, dryRun bo
 		return "", fmt.Errorf("the Flux %s %s/%s: %w", kind, ns, name, err)
 	}
 	for _, f := range k.GetManagedFields() {
-		if f.Manager != FieldManager && f.FieldsV1 != nil && strings.Contains(f.FieldsV1.GetRawString(), `"f:suspend"`) {
+		if f.Manager != FieldManager && f.Operation == metav1.ManagedFieldsOperationApply && f.FieldsV1 != nil &&
+			strings.Contains(f.FieldsV1.GetRawString(), `"f:suspend"`) {
 			return "", fmt.Errorf("%s sets the Flux %s %s/%s's spec.suspend and would resume it; Sentinel leaves it to people",
 				f.Manager, kind, ns, name)
 		}
