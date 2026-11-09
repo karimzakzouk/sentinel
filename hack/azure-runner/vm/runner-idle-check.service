@@ -1,0 +1,10 @@
+[Unit]
+Description=Deallocate this VM when its GitHub Actions runner is idle
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/default/runner-idle
+ExecStart=/usr/local/sbin/runner-idle-check
+SyslogIdentifier=runner-idle-check

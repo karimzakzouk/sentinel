@@ -1,0 +1,11 @@
+[Unit]
+Description=Prune unused Docker images and build cache weekly
+
+[Timer]
+OnCalendar=weekly
+# The VM is deallocated most of the time; run at the next boot instead.
+Persistent=true
+RandomizedDelaySec=30min
+
+[Install]
+WantedBy=timers.target

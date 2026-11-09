@@ -1,0 +1,13 @@
+[Unit]
+Description=Prune Docker images and build cache unused for 7 days
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/runner-docker-prune
+SyslogIdentifier=runner-docker-prune
+# It waits up to 6 hours for a running job to finish.
+TimeoutStartSec=7h
+Nice=10
+IOSchedulingClass=idle
