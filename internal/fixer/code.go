@@ -12,6 +12,7 @@ import (
 
 	"github.com/karimzakzouk/sentinel/api/v1alpha1"
 	"github.com/karimzakzouk/sentinel/internal/codefix"
+	"github.com/karimzakzouk/sentinel/internal/forge"
 	"github.com/karimzakzouk/sentinel/internal/logs"
 	"github.com/karimzakzouk/sentinel/internal/model"
 	"github.com/karimzakzouk/sentinel/internal/verify"
@@ -224,6 +225,7 @@ func (f *Fixer) reportVerdict(ctx context.Context, fix *v1alpha1.Fix) bool {
 		}
 		phase, _, _ := unstructured.NestedString(u.Object, "status", "phase")
 		msg, _, _ := unstructured.NestedString(u.Object, "status", "message")
+		runs, _, _ := unstructured.NestedInt64(u.Object, "status", "runs")
 		switch phase {
 		case "Passed", "Failed", "NotSure", "Aborted":
 		default:
@@ -241,11 +243,18 @@ func (f *Fixer) reportVerdict(ctx context.Context, fix *v1alpha1.Fix) bool {
 			word = "it does not fix the crash"
 		}
 		body := fmt.Sprintf("Sentinel's Lab raced `%s` against the failing image in a sealed copy of the workload: **%s**.\n\n%s\n", cf.Image, word, msg)
-		if err := f.Forge.Comment(ctx, owner, repo, int(cf.Number), body); err != nil {
-			f.Log.Error("could not say the Lab's verdict on the pull request", "pullRequest", cf.PullRequest, "error", err)
-			return false
+		if runs == 0 && phase != "Passed" && phase != "Failed" {
+			body = fmt.Sprintf("Sentinel's Lab did not race `%s` against the failing image, so it cannot say whether it fixes the crash.\n\n%s\n", cf.Image, msg)
 		}
 		cf.Verdict, cf.Message = phase, "the Lab: "+msg
+		if err := f.Forge.Comment(ctx, owner, repo, int(cf.Number), body); err != nil {
+			f.Log.Error("could not say the Lab's verdict on the pull request", "pullRequest", cf.PullRequest, "error", err)
+			if !forge.Refused(err) {
+				cf.Verdict = ""
+				return false
+			}
+			cf.Message += "; the forge refused the comment that says so on the pull request: " + err.Error()
+		}
 		return true
 	}
 	return false

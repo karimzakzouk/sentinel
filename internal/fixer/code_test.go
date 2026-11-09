@@ -1,8 +1,10 @@
 package fixer
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -225,3 +227,49 @@ func TestAFixToTheCodeSaysWhenNoLabWillRaceIt(t *testing.T) {
 		t.Fatalf("without a Lab:\n%s", body)
 	}
 }
+
+// A forge that refuses the verdict's comment, as for a token that may not
+// comment, does not keep the verdict from the fix's status; one that fails
+// for its own reasons is asked again.
+func TestTheLabsVerdictIsKeptWhenTheForgeRefusesItsComment(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		status  int
+		verdict string
+	}{{http.StatusForbidden, "NotSure"}, {http.StatusBadGateway, ""}} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, `{"message": "token does not have the required scope"}`, tc.status)
+		}))
+		exp := &unstructured.Unstructured{Object: map[string]any{"apiVersion": v1alpha1.GroupVersion.String(), "kind": "Experiment",
+			"metadata": map[string]any{"name": verify.CodeExperimentName("inc-1"), "namespace": "sentinel-lab-0"},
+			"status":   map[string]any{"phase": "NotSure", "message": "the Lab stays off"}}}
+		dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
+			map[schema.GroupVersionResource]string{verify.ExperimentsResource: "ExperimentList"}, exp)
+		f := &Fixer{Dynamic: dyn, Forge: &forge.Client{Web: srv.URL, API: srv.URL + "/api/v1", Token: "t"},
+			LabNamespaces: []string{"sentinel-lab-0"}, Log: slog.New(slog.DiscardHandler)}
+		fix := &v1alpha1.Fix{Spec: v1alpha1.FixSpec{IncidentID: "inc-1"}, Status: v1alpha1.FixStatus{Code: &v1alpha1.CodeFix{
+			Repository: srv.URL + "/person/shop-src", Number: 1, Image: "registry.test/shop:cfb0fc6"}}}
+		var said []string
+		f.Forge.HTTP = &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+			body, _ := io.ReadAll(r.Body)
+			var c map[string]string
+			_ = json.Unmarshal(body, &c)
+			said = append(said, c["body"])
+			r.Body = io.NopCloser(bytes.NewReader(body))
+			return http.DefaultTransport.RoundTrip(r)
+		})}
+		changed := f.reportVerdict(ctx, fix)
+		if len(said) != 1 || !strings.Contains(said[0], "did not race") {
+			t.Errorf("%d: said %q", tc.status, said)
+		}
+		if cf := fix.Status.Code; changed != (tc.verdict != "") || cf.Verdict != tc.verdict ||
+			(tc.verdict != "" && !strings.Contains(cf.Message, "the forge refused the comment")) {
+			t.Errorf("%d: changed %v, code %+v", tc.status, changed, cf)
+		}
+		srv.Close()
+	}
+}
+
+type roundTrip func(*http.Request) (*http.Response, error)
+
+func (f roundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
