@@ -388,6 +388,39 @@ func TestAnErrorRateIncidentIsEscalatedWithItsNewErrors(t *testing.T) {
 	}
 }
 
+// A long error message's details split one error into several templates;
+// the incident records it once. Logs a rollout read that hold only the
+// workload's routine errors are not evidence either.
+func TestOneErrorWithVaryingDetailsIsRecordedOnce(t *testing.T) {
+	b, l := newBrain(t)
+	const routine = "env platform is either empty or invalid"
+	cart := "request error: could not retrieve cart: rpc error: code = FailedPrecondition desc = Can't access cart storage."
+	b.Now = func() time.Time { return onset.Add(-3 * time.Minute) }
+	if err := b.OnEvidence(ctx, errorSample("web-1", onset.Add(-3*time.Minute), routine)); err != nil {
+		t.Fatal(err)
+	}
+	b.Now = func() time.Time { return onset }
+	det := watcher.Detection{ID: model.NewID(), Workload: web, Kind: watcher.FactLogErrors, Count: 90, Onset: onset, At: onset}
+	if err := b.OnDetection(ctx, det); err != nil {
+		t.Fatal(err)
+	}
+	rollout := errorSample("web-2", onset.Add(30*time.Second), routine)
+	rollout.Reason = "rollout-after"
+	for _, ev := range []watcher.LogEvidence{
+		rollout,
+		errorSample("web-1", onset.Add(time.Minute), routine, cart+" inst: <num>, qu: <num>, aw: False, rs: NotStarted"),
+		errorSample("web-2", onset.Add(2*time.Minute), cart+" inst: <num>, qu: <num>, qs: <num>, aw: True, rs: ReadAsync, ws: Idle"),
+	} {
+		b.Now = func() time.Time { return ev.CollectedAt }
+		if err := b.OnEvidence(ctx, ev); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if ev, _ := ledger.List[model.Evidence](ctx, l, model.KindEvidence, ""); len(ev) != 1 || !ev[0].CollectedAt.Equal(onset.Add(time.Minute)) {
+		t.Fatalf("evidence = %d, want the first sample with the cart error only", len(ev))
+	}
+}
+
 func TestAnUnexplainedCrashLoopIsEscalatedNotRolledBack(t *testing.T) {
 	b, l := newBrain(t)
 	det := watcher.Detection{ID: model.NewID(), Workload: web, Kind: watcher.FactCrashLoop, Count: 5, Onset: onset, At: onset}

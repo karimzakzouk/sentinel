@@ -89,7 +89,7 @@ func (b *Brain) evidenceDrafts(inc *incident, key string) []ledger.Draft {
 			continue
 		}
 		p.attachedTo = inc.rec.ID
-		if p.ev.Reason == watcher.ReasonSample {
+		if sampled(p.ev) {
 			if !b.newErrors(inc, key, p.ev) {
 				continue
 			}
@@ -111,9 +111,24 @@ func (b *Brain) evidenceDrafts(inc *incident, key string) []ledger.Draft {
 	return drafts
 }
 
-// newErrors reports whether an error sample shows an error the incident has
-// not recorded, and records it. Errors the workload's samples held before
-// the incident are its routine, not evidence, and so is a sample from before
+// sampled reports logs read from pods that were up: error samples and the
+// rollout comparison's, as opposed to a crash's or an unready pod's.
+func sampled(ev watcher.LogEvidence) bool {
+	return ev.Reason == watcher.ReasonSample || strings.HasPrefix(ev.Reason, "rollout-")
+}
+
+// errorKey names an error by the first words of its template. Long error
+// messages carry details that split one error into several templates (a
+// Redis client's counters and connection states); their first words name
+// the error.
+func errorKey(template string) string {
+	words := strings.Fields(template)
+	return strings.Join(words[:min(len(words), 12)], " ")
+}
+
+// newErrors reports whether sampled logs show an error the incident has not
+// recorded, and records it. Errors the workload's sampled logs held before
+// the incident are its routine, not evidence, and so are logs read before
 // it. Callers hold b.mu.
 func (b *Brain) newErrors(inc *incident, key string, ev watcher.LogEvidence) bool {
 	before := inc.rec.OpenedAt.Add(-sampleLead)
@@ -122,16 +137,16 @@ func (b *Brain) newErrors(inc *incident, key string, ev watcher.LogEvidence) boo
 	}
 	routine := map[string]bool{}
 	for _, p := range b.evidence[key] {
-		if p.ev.Reason == watcher.ReasonSample && p.ev.CollectedAt.Before(before) {
+		if sampled(p.ev) && p.ev.Reason != "rollout-after" && p.ev.CollectedAt.Before(before) {
 			for _, t := range p.ev.Summary.Templates {
-				routine[t.Template] = routine[t.Template] || t.Error
+				routine[errorKey(t.Template)] = routine[errorKey(t.Template)] || t.Error
 			}
 		}
 	}
 	fresh := false
 	for _, t := range ev.Summary.Templates {
-		id := key + "\x00" + t.Template
-		if !t.Error || routine[t.Template] || inc.sampleErrors[id] {
+		id := key + "\x00" + errorKey(t.Template)
+		if !t.Error || routine[errorKey(t.Template)] || inc.sampleErrors[id] {
 			continue
 		}
 		if inc.sampleErrors == nil {
