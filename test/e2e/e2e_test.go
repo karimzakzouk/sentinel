@@ -372,13 +372,18 @@ func runExperiment(t *testing.T, name string) (v1alpha1.ExperimentPhase, string)
 // the fidelity list.
 func runExperimentOn(t *testing.T, name string, workload map[string]any) (v1alpha1.ExperimentPhase, string, []string) {
 	t.Helper()
-	ctx := context.Background()
-	exps := dynamicAs(t, "").Resource(lab.ExperimentsResource).Namespace(labNS)
-	_ = exps.Delete(ctx, name, metav1.DeleteOptions{})
 	spec := map[string]any{"incidentId": "e2e", "purpose": "prove", "labNamespace": labNS}
 	if workload != nil {
 		spec["purpose"], spec["workload"] = "reproduce", workload
 	}
+	return runExperimentSpec(t, name, spec)
+}
+
+func runExperimentSpec(t *testing.T, name string, spec map[string]any) (v1alpha1.ExperimentPhase, string, []string) {
+	t.Helper()
+	ctx := context.Background()
+	exps := dynamicAs(t, "").Resource(lab.ExperimentsResource).Namespace(labNS)
+	_ = exps.Delete(ctx, name, metav1.DeleteOptions{})
 	exp := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "sentinel.karimzakzouk.github.io/v1alpha1", "kind": "Experiment",
 		"metadata": map[string]any{"name": name, "namespace": labNS}, "spec": spec,
@@ -481,9 +486,107 @@ func TestTheLabBuildsAWorkloadsStatelessWorld(t *testing.T) {
 	}
 }
 
-// A reproduction through the Lab: it proves the seal, copies the front's
-// world, proves the seal again with the world up, and reports how the copy
-// differs from production. It only means something where the Lab runs.
+// A race in the front's world, run directly as the Lab's identity, without
+// touching production: the front's template, made to crash as it starts,
+// is the failing revision, and its real template the candidate. The
+// candidate must pass, which it may only once the failure has reproduced
+// and the deletion control, which starts but does nothing, has failed.
+func TestTheLabTellsAFixFromTheFailure(t *testing.T) {
+	ctx := context.Background()
+	client := clientAs(t, labUser)
+	ref := model.ObjectRef{Group: "apps", Kind: "Deployment", Namespace: smokeNS, Name: "front"}
+	world, err := lab.ReadWorld(ctx, client, smokeNS, ref, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	good, err := lab.Synthesize(world, ref, labNS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	front := world.Workloads[ref]
+	front.Template = *front.Template.DeepCopy()
+	front.Template.Spec.Containers[0].Command = []string{"sh", "-c", "echo starting; exit 3"}
+	world.Workloads[ref] = front
+	plan, err := lab.Synthesize(world, ref, labNS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failing, deps := plan.Split(ref)
+	fix, _ := good.Split(ref)
+	p := &lab.Prover{Client: client, Twins: []string{smokeNS}, Timeout: 3 * time.Minute}
+	if err := p.Clean(ctx, labNS); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Seal(ctx, labNS); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = p.Clean(ctx, labNS)
+		_ = client.NetworkingV1().NetworkPolicies(labNS).Delete(ctx, "lab-internal", metav1.DeleteOptions{})
+	})
+	built, err := p.Build(ctx, labNS, smokeNS, "cluster.local", deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	variants := []lab.Variant{{Name: "previous revision", Slug: "cand", Pod: fix}, {Name: "deletion control", Slug: "del", Pod: lab.DeletionControl(failing)}}
+	race := lab.NewRace(0.05, []string{"previous revision"}, []string{"deletion control"})
+	blocks, err := p.RunRace(ctx, labNS, lab.DNSConfig(built.DNS, smokeNS, "cluster.local"), failing, variants, race, 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	phase, msg, _ := race.Outcome(false)
+	t.Logf("%s after %d blocks: %s", phase, blocks, msg)
+	if phase != lab.PhasePassed || !strings.HasPrefix(msg, "the previous revision fixes it") {
+		t.Fatalf("the race ended %s: %s", phase, msg)
+	}
+}
+
+// The whole loop through the Lab where it runs: production's front gets a
+// revision that crashes as it starts, and the Lab, asked whether the
+// revision before it fixes that, must say it does, which it may only once
+// the crash has reproduced in its copy and the deletion control has failed.
+func TestTheLabVerifiesTheRollbackOfACrashingRevision(t *testing.T) {
+	ctx := context.Background()
+	client := clientAs(t, "")
+	if enforced := (capability.NetworkPolicyProbe{Client: client, Namespace: labNS, Settle: 30 * time.Second}).Run(ctx); enforced.Status != capability.Available {
+		t.Skipf("the Lab refuses this cluster (%s); TestALabExperimentRunsOnlyBehindAProvenSeal covers that", enforced.Detail)
+	}
+	deployments := client.AppsV1().Deployments(smokeNS)
+	crash := `{"spec":{"template":{"spec":{"containers":[{"name":"front","command":["sh","-c","echo starting; exit 3"]}]}}}}`
+	if _, err := deployments.Patch(ctx, "front", types.StrategicMergePatchType, []byte(crash), metav1.PatchOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		restore := `{"spec":{"template":{"spec":{"containers":[{"name":"front","command":null}]}}}}`
+		_, _ = deployments.Patch(ctx, "front", types.StrategicMergePatchType, []byte(restore), metav1.PatchOptions{})
+	})
+	var failing string
+	eventually(t, time.Minute, "the crashing revision's ReplicaSet", func() (bool, error) {
+		rss, err := client.AppsV1().ReplicaSets(smokeNS).List(ctx, metav1.ListOptions{LabelSelector: "app=front"})
+		if err != nil {
+			return false, err
+		}
+		for _, rs := range rss.Items {
+			if c := rs.Spec.Template.Spec.Containers[0]; len(c.Command) > 0 && strings.Contains(strings.Join(c.Command, " "), "exit 3") {
+				failing = rs.Name
+			}
+		}
+		return failing != "", nil
+	})
+	phase, msg, _ := runExperimentSpec(t, "verify-front", map[string]any{"incidentId": "e2e", "purpose": "verify-fix", "labNamespace": labNS,
+		"workload": map[string]any{"apiVersion": "apps/v1", "kind": "Deployment", "namespace": smokeNS, "name": "front"}, "revision": failing})
+	if pluginLimit(phase, msg) {
+		t.Skipf("the Lab refuses this network plugin: %s", msg)
+	}
+	if phase != lab.PhasePassed || !strings.HasPrefix(msg, "the previous revision ") || !strings.Contains(msg, " fixes it: ") {
+		t.Fatalf("the verification ended %s: %s", phase, msg)
+	}
+}
+
+// A reproduction through the Lab of a front that works: it proves the seal,
+// copies the front's world, proves the seal again with the world up, and
+// races the front's copy, which must not count as a failure reproduced. It
+// only means something where the Lab runs.
 func TestALabReproductionRunsTheWorldBehindAProvenSeal(t *testing.T) {
 	enforced := capability.NetworkPolicyProbe{Client: clientAs(t, ""), Namespace: labNS, Settle: 30 * time.Second}.Run(context.Background())
 	if enforced.Status != capability.Available {
@@ -494,7 +597,7 @@ func TestALabReproductionRunsTheWorldBehindAProvenSeal(t *testing.T) {
 	if pluginLimit(phase, msg) {
 		t.Skipf("the Lab refuses this network plugin: %s", msg)
 	}
-	if phase != lab.PhaseNotSure || !strings.Contains(msg, "the world ran sealed (front ready; backend ready)") {
+	if phase != lab.PhaseNotSure || !strings.HasPrefix(msg, "the failure did not reproduce: the failing revision worked in") {
 		t.Fatalf("the reproduction ended %s: %s", phase, msg)
 	}
 	if !slices.ContainsFunc(fidelity, func(f string) bool { return strings.Contains(f, "API_TOKEN holds a placeholder") }) {
