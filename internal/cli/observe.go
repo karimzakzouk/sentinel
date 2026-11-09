@@ -6,8 +6,11 @@ import (
 	"log/slog"
 	"time"
 
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 
+	"github.com/karimzakzouk/sentinel/api/v1alpha1"
+	"github.com/karimzakzouk/sentinel/internal/act"
 	"github.com/karimzakzouk/sentinel/internal/brain"
 	"github.com/karimzakzouk/sentinel/internal/config"
 	"github.com/karimzakzouk/sentinel/internal/ledger"
@@ -49,28 +52,50 @@ func slotConfig(cfg *config.Config, name string) slot.Config {
 	return slot.Config{Champion: defaultChampions[name]}
 }
 
-// newObserver wires the Watcher to the Brain in observe mode.
-func newObserver(log *slog.Logger, cfg *config.Config, client kubernetes.Interface, l *ledger.Ledger) (*watcher.Watcher, error) {
+// servesActing reports whether the cluster serves the custom resources
+// acting needs.
+func servesActing(client kubernetes.Interface) error {
+	list, err := client.Discovery().ServerResourcesForGroupVersion(v1alpha1.GroupVersion.String())
+	if err != nil {
+		return fmt.Errorf("%s is not served: install the sentinel-crds chart: %w", v1alpha1.GroupVersion, err)
+	}
+	served := map[string]bool{}
+	for _, r := range list.APIResources {
+		served[r.Name] = true
+	}
+	for _, name := range []string{"actionrequests", "sentinelpolicies"} {
+		if !served[name] {
+			return fmt.Errorf("%s does not serve %s", v1alpha1.GroupVersion, name)
+		}
+	}
+	return nil
+}
+
+// newObserver wires the Watcher to the Brain, and the Brain to the actor
+// when the configuration names one.
+func newObserver(ctx context.Context, log *slog.Logger, cfg *config.Config, client kubernetes.Interface, dyn dynamic.Interface,
+	l *ledger.Ledger,
+) (*watcher.Watcher, *act.Requests, error) {
 	reg, err := Registry()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	rec := slot.LedgerRecorder{Ledger: l, Source: "/brain"}
 	classify, err := slot.Build[brain.ClassifyInput, slot.Distribution[string]](reg, slot.BrainClassify, slotConfig(cfg, slot.BrainClassify), rec)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	attribute, err := slot.Build[brain.AttributeInput, slot.Ranking[brain.RankedChange]](reg, slot.BrainAttribute, slotConfig(cfg, slot.BrainAttribute), rec)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	localize, err := slot.Build[brain.LocalizeInput, slot.Ranking[brain.Suspect]](reg, slot.BrainLocalize, slotConfig(cfg, slot.BrainLocalize), rec)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	decide, err := slot.Build[brain.DecideInput, brain.Decision](reg, slot.BrainDecide, slotConfig(cfg, slot.BrainDecide), rec)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	d := cfg.Detection
 	detector := watcher.NewCountDetector(d.Window.Duration, d.Tick.Duration, d.FalseAlarmsPerWeek, d.HalfLife.Duration)
@@ -93,10 +118,29 @@ func newObserver(log *slog.Logger, cfg *config.Config, client kubernetes.Interfa
 		Dependents:   func(ref model.ObjectRef) []model.ObjectRef { return w.Topology().Dependents(ref) },
 		Dependencies: func(ref model.ObjectRef) []topology.Reach { return w.Topology().DependenciesWithHops(ref) },
 		Deviations:   w.Deviations}
-	if n, err := b.Restore(context.Background()); err != nil {
-		return nil, fmt.Errorf("restore open incidents: %w", err)
+	if n, err := b.Restore(ctx); err != nil {
+		return nil, nil, fmt.Errorf("restore open incidents: %w", err)
 	} else if n > 0 {
 		log.Info("took back incidents left open by the last run", "incidents", n)
+	}
+	var acting *act.Requests
+	if cfg.ActorUser != "" && dyn != nil {
+		// Acting is optional: without the custom resources, Sentinel observes.
+		requests := &act.Requests{Dynamic: dyn, Namespaces: cfg.Namespaces, TTL: 10 * time.Minute, Log: log,
+			OnOutcome: func(ctx context.Context, o act.Outcome) {
+				if err := b.OnActionOutcome(ctx, brain.ActionOutcome{IncidentID: o.IncidentID, Phase: string(o.Phase), Message: o.Message}); err != nil {
+					log.Error("could not record an action's outcome", "request", o.Request, "error", err)
+				}
+			}}
+		if err := servesActing(client); err != nil {
+			log.Warn("acting is off; Sentinel only observes", "reason", err)
+		} else if err := requests.Start(ctx); err != nil {
+			log.Warn("acting is off; Sentinel only observes", "reason", err)
+		} else {
+			b.Act = requests
+			acting = requests
+			log.Info("acting is on where a SentinelPolicy allows it", "namespaces", cfg.Namespaces)
+		}
 	}
 	w.OnTick = func(ctx context.Context) {
 		if err := b.Sweep(ctx); err != nil {
@@ -121,5 +165,5 @@ func newObserver(log *slog.Logger, cfg *config.Config, client kubernetes.Interfa
 		})
 		w.SampleInterval = cfg.Logs.SampleEvery()
 	}
-	return w, nil
+	return w, acting, nil
 }

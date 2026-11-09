@@ -26,6 +26,9 @@ type Server struct {
 	Verified Verification
 	// UI serves the web app; nil serves the API alone.
 	UI http.Handler
+	// Acting, when set, reports whether a policy lets Sentinel run actions
+	// on its own somewhere.
+	Acting func() bool
 }
 
 // Verification is a completed check of the Ledger's hash chain.
@@ -57,7 +60,9 @@ func (s *Server) Handler() http.Handler {
 // Summary is the header of every page.
 type Summary struct {
 	Version string `json:"version"`
-	// Mode is "observe": Sentinel records what it would do and changes nothing.
+	// Mode is "observe" when Sentinel records what it would do and changes
+	// nothing, and "assist" when a namespace's policy lets it run reversible
+	// actions on its own.
 	Mode   string `json:"mode"`
 	Ledger struct {
 		HeadSeq  int64        `json:"headSeq"`
@@ -75,6 +80,9 @@ type Summary struct {
 func (s *Server) summary(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	out := Summary{Version: s.Version, Mode: "observe"}
+	if s.Acting != nil && s.Acting() {
+		out.Mode = "assist"
+	}
 	seq, hash, err := s.Ledger.Head(ctx)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)

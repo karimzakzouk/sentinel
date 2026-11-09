@@ -451,6 +451,73 @@ func TestBadImageScenario(t *testing.T) {
 	revertAndRecover(t, in, client, run)
 }
 
+// With a SentinelPolicy that lets Sentinel roll back on its own, the
+// bad-image scenario ends in Sentinel's rollback: the controller asks, the
+// actor restores the earlier template, and the controller verifies that the
+// incident's signals cleared.
+func TestAssistModeRollsBackABadImage(t *testing.T) {
+	ctx := context.Background()
+	in, client := newInjector(t)
+	waitForQuiet(t, client, "Deployment.apps/"+smokeNS+"/web")
+	policies := schema.GroupVersionResource{Group: "sentinel.karimzakzouk.github.io", Version: "v1alpha1", Resource: "sentinelpolicies"}
+	admin := dynamicAs(t, "")
+	policy := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "sentinel.karimzakzouk.github.io/v1alpha1", "kind": "SentinelPolicy",
+		"metadata": map[string]any{"name": "e2e-assist", "namespace": smokeNS},
+		"spec":     map[string]any{"autonomy": []any{map[string]any{"action": "rollout.undo", "level": "autonomous"}}},
+	}}
+	if _, err := admin.Resource(policies).Namespace(smokeNS).Create(ctx, policy, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = admin.Resource(policies).Namespace(smokeNS).Delete(ctx, "e2e-assist", metav1.DeleteOptions{})
+	})
+	before, err := client.AppsV1().Deployments(smokeNS).Get(ctx, "web", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	image := before.Spec.Template.Spec.Containers[0].Image
+	s, err := harness.LoadScenario("../scenarios/smoke/bad-image.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := inject(t, in, s)
+
+	waitForLogEntry(t, client, run.InjectedAt, 2*time.Minute, "a request for the rollback", func(e map[string]any) bool {
+		return e["msg"] == "asked the actor for an action" && e["action"] == "rollout.undo"
+	})
+	eventually(t, 3*time.Minute, "web back on its image, rolled out", func() (bool, error) {
+		d, err := client.AppsV1().Deployments(smokeNS).Get(ctx, "web", metav1.GetOptions{})
+		if err != nil {
+			return false, err
+		}
+		return d.Spec.Template.Spec.Containers[0].Image == image && d.Status.ObservedGeneration >= d.Generation &&
+			d.Status.UpdatedReplicas == *d.Spec.Replicas && d.Status.AvailableReplicas == *d.Spec.Replicas, nil
+	})
+	verified := waitForLogEntry(t, client, run.InjectedAt, 5*time.Minute, "the rollback verified", func(e map[string]any) bool {
+		return e["msg"] == "action verified" || e["msg"] == "action unverified"
+	})
+	if verified["msg"] != "action verified" {
+		t.Fatalf("the rollback was not verified: %v", verified)
+	}
+	d, err := client.AppsV1().Deployments(smokeNS).Get(ctx, "web", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if managers := managedBy(d.ManagedFields); !slices.Contains(managers, "sentinel-actor") {
+		t.Fatalf("web's managers are %v; the rollback was not the actor's", managers)
+	}
+	revertAndRecover(t, in, client, run)
+}
+
+func managedBy(fields []metav1.ManagedFieldsEntry) []string {
+	var out []string
+	for _, f := range fields {
+		out = append(out, f.Manager)
+	}
+	return out
+}
+
 func randomString(alphabet string, n int) string {
 	b := make([]byte, n)
 	for i := range b {
