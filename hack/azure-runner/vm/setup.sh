@@ -147,7 +147,8 @@ echo "--- installed"
 docker --version
 echo "azure-cli $(az version --query '"azure-cli"' -o tsv 2>/dev/null)"
 git --version
-echo "runner $("$runner_dir/bin/Runner.Listener" --version)"
+# Run by root, it would create _diag/ owned by root, where the runner cannot log.
+echo "runner $(runuser -u runner -- "$runner_dir/bin/Runner.Listener" --version)"
 uname -r
 sysctl fs.inotify.max_user_instances fs.inotify.max_user_watches \
   net.bridge.bridge-nf-call-iptables net.bridge.bridge-nf-call-ip6tables
