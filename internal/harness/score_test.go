@@ -93,3 +93,29 @@ func TestScore(t *testing.T) {
 		t.Fatalf("markdown:\n%s", md.String())
 	}
 }
+
+// Runs follow each other closely: the next fault's incident opens within a
+// control's grace period, and belongs to the fault. A fault that heals
+// itself, like a deleted pod its Deployment replaces, is quiet when right.
+func TestQuietRunsNeighborsAndSelfHealing(t *testing.T) {
+	control := run("control", 0, GroundTruth{FaultClass: "none", Mitigation: "none"}, FaultNone)
+	next := run("bad-image", 81*time.Second, GroundTruth{FaultClass: "deploy.bad-image", RootCause: target("web"),
+		Mitigation: "rollout.undo"}, FaultPatch)
+	podKill := run("pod-kill", 10*time.Minute, GroundTruth{FaultClass: "infra.pod-kill", Mitigation: "none"}, FaultDeletePods)
+	right := &model.Assessment{Class: "deploy.bad-image", Decision: "rollout.undo",
+		RootCauses: []model.RankedObject{{Object: ref("web"), P: 0.99, InSet: true}}}
+	incidents, err := ReadIncidents(export(t,
+		IncidentVersion{At: t0.Add(90 * time.Second), Verb: "opened", Incident: incident("i1", []model.ObjectRef{ref("web")}, right)}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep := Score([]*Run{control, next, podKill}, incidents, ScoreOptions{Grace: 2 * time.Minute})
+	if rep.ControlFalseAlarms != 0 || rep.FaultRuns != 1 || rep.DetectedRuns != 1 || rep.Recall != 1 {
+		t.Fatalf("%d false alarms, %d of %d fault runs detected; want the incident to be the fault's and the pod kill quiet",
+			rep.ControlFalseAlarms, rep.DetectedRuns, rep.FaultRuns)
+	}
+	var md strings.Builder
+	if err := rep.WriteMarkdown(&md); err != nil || !strings.Contains(md.String(), "pod-kill (heals itself) | 0 false alarm(s)") {
+		t.Fatalf("markdown:\n%s", md.String())
+	}
+}

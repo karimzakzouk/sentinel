@@ -133,10 +133,11 @@ func Score(runs []*Run, incidents map[model.ID][]IncidentVersion, opts ScoreOpti
 	}
 	// Incidents opened in the session that were not folded into another.
 	type candidate struct {
-		id       model.ID
-		openedAt time.Time
-		versions []IncidentVersion
-		matched  bool
+		id         model.ID
+		openedAt   time.Time
+		versions   []IncidentVersion
+		matched    bool
+		falseAlarm bool
 	}
 	var cands []*candidate
 	for id, vs := range incidents {
@@ -150,24 +151,28 @@ func Score(runs []*Run, incidents map[model.ID][]IncidentVersion, opts ScoreOpti
 	rep.Incidents = len(cands)
 
 	var latencies []time.Duration
-	for _, r := range runs {
+	inWindow := func(r *Run) []*candidate {
 		start, end := window(r)
-		s := RunScore{Run: r}
-		var inWindow []*candidate
+		var out []*candidate
 		for _, c := range cands {
 			if !c.openedAt.Before(start) && !c.openedAt.After(end) {
-				inWindow = append(inWindow, c)
+				out = append(out, c)
 			}
 		}
-		if r.GroundTruth.FaultClass == "none" || r.FaultKind == FaultNone {
-			s.FalseAlarms = len(inWindow)
-			rep.ControlFalseAlarms += s.FalseAlarms
-			rep.Runs = append(rep.Runs, s)
+		return out
+	}
+	rep.Runs = make([]RunScore, len(runs))
+	// Fault runs claim their incidents first, so an incident that a fault
+	// explains is never a neighboring quiet run's false alarm.
+	for i, r := range runs {
+		if r.Quiet() {
 			continue
 		}
+		_, end := window(r)
+		s := RunScore{Run: r}
 		rep.FaultRuns++
 		root := r.GroundTruth.RootCause
-		for _, c := range inWindow {
+		for _, c := range inWindow(r) {
 			inc := stateAt(c.versions, end)
 			rank, involved := rootCauseRank(inc, root)
 			if !involved {
@@ -190,7 +195,21 @@ func Score(runs []*Run, incidents map[model.ID][]IncidentVersion, opts ScoreOpti
 			rep.DetectedRuns++
 			latencies = append(latencies, s.Latency)
 		}
-		rep.Runs = append(rep.Runs, s)
+		rep.Runs[i] = s
+	}
+	for i, r := range runs {
+		if !r.Quiet() {
+			continue
+		}
+		s := RunScore{Run: r}
+		for _, c := range inWindow(r) {
+			if !c.matched && !c.falseAlarm {
+				c.falseAlarm = true
+				s.FalseAlarms++
+			}
+		}
+		rep.ControlFalseAlarms += s.FalseAlarms
+		rep.Runs[i] = s
 	}
 	for _, c := range cands {
 		if c.matched {
@@ -205,7 +224,7 @@ func Score(runs []*Run, incidents map[model.ID][]IncidentVersion, opts ScoreOpti
 		rep.Recall = float64(rep.DetectedRuns) / n
 		var ac [6]float64
 		for _, s := range rep.Runs {
-			if s.Run.GroundTruth.FaultClass == "none" || s.Run.FaultKind == FaultNone {
+			if s.Run.Quiet() {
 				continue
 			}
 			for k := 1; k <= 5; k++ {
@@ -298,8 +317,12 @@ func (rep Report) WriteMarkdown(w io.Writer) error {
 	var b strings.Builder
 	b.WriteString("| Scenario | Detected | Latency | Class | Root cause rank | Decision |\n|---|---|---|---|---|---|\n")
 	for _, s := range rep.Runs {
-		if s.Run.GroundTruth.FaultClass == "none" || s.Run.FaultKind == FaultNone {
-			fmt.Fprintf(&b, "| %s (control) | %d false alarm(s) | | | | |\n", s.Run.Scenario, s.FalseAlarms)
+		if s.Run.Quiet() {
+			kind := "control"
+			if s.Run.FaultKind != FaultNone && s.Run.GroundTruth.FaultClass != "none" {
+				kind = "heals itself"
+			}
+			fmt.Fprintf(&b, "| %s (%s) | %d false alarm(s) | | | | |\n", s.Run.Scenario, kind, s.FalseAlarms)
 			continue
 		}
 		if !s.Detected {
@@ -320,7 +343,7 @@ func (rep Report) WriteMarkdown(w io.Writer) error {
 		rep.AC1, rep.AC3, rep.Avg5)
 	fmt.Fprintf(&b, "| Fault class right | %.2f |\n| Culprit change right | %.2f |\n| Decision right | %.2f |\n",
 		rep.ClassAccuracy, rep.CulpritAccuracy, rep.DecisionAccuracy)
-	fmt.Fprintf(&b, "| Median detection latency | %s |\n| False alarms during controls | %d |\n",
+	fmt.Fprintf(&b, "| Median detection latency | %s |\n| False alarms in quiet runs (controls, faults that heal themselves) | %d |\n",
 		rep.MedianLatency.Round(time.Second), rep.ControlFalseAlarms)
 	_, err := io.WriteString(w, b.String())
 	return err
