@@ -1,6 +1,6 @@
 # Proves the capability report's NetworkPolicy answer against network plugins
-# with known behavior: Calico always enforces policy, Flannel never does. It
-# runs when the code it covers changes, weekly, and on demand.
+# with known behavior: Calico and Cilium always enforce policy, Flannel never
+# does. It runs when the code it covers changes, weekly, and on demand.
 name: E2E network plugins
 
 on:
@@ -31,7 +31,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        network: [calico, flannel]
+        network: [calico, cilium, flannel]
     uses: ./.github/workflows/e2e-run.yml
     with:
       network: ${{ matrix.network }}
