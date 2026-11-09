@@ -4,6 +4,8 @@ import { Actions } from "./Actions";
 import { Capabilities } from "./Capabilities";
 import { ago, classLabel, isOpen, workload } from "./format";
 import { IncidentView } from "./IncidentView";
+import { Policies } from "./Policies";
+import { SignIn, useSession } from "./session";
 import { usePoll } from "./usePoll";
 
 function useRoute(): [string, (route: string) => void] {
@@ -63,7 +65,34 @@ function Header({ summary }: { summary?: Summary }) {
           {open > 0 ? `${open} open` : "All clear"}
         </span>
       )}
+      <Account />
     </header>
+  );
+}
+
+// Account signs a person in to the console, or says who is.
+function Account() {
+  const { me, available, signOut } = useSession();
+  const [asking, setAsking] = useState(false);
+  if (!available) return null;
+  return (
+    <>
+      {me ? (
+        <span className="account">
+          <span className="pill" title={me.groups?.join(", ")}>
+            {me.user}
+          </span>
+          <button className="btn" onClick={() => void signOut()}>
+            Sign out
+          </button>
+        </span>
+      ) : (
+        <button className="btn primary" onClick={() => setAsking(true)}>
+          Sign in
+        </button>
+      )}
+      {asking && <SignIn onClose={() => setAsking(false)} />}
+    </>
   );
 }
 
@@ -93,7 +122,13 @@ export function App() {
   const [route, go] = useRoute();
   const summary = usePoll(api.summary, []);
   const incidents = usePoll(api.incidents, []);
-  const view = route.startsWith("/capabilities") ? "capabilities" : route.startsWith("/actions") ? "actions" : "incidents";
+  const view = route.startsWith("/capabilities")
+    ? "capabilities"
+    : route.startsWith("/actions")
+      ? "actions"
+      : route.startsWith("/policies")
+        ? "policies"
+        : "incidents";
   const all = (incidents.data ?? []).filter((i) => !i.mergedInto);
   const open = all.filter(isOpen);
   const done = all.filter((i) => !isOpen(i));
@@ -110,6 +145,9 @@ export function App() {
             </button>
             <button className="tab" role="tab" aria-selected={view === "actions"} onClick={() => go("/actions")}>
               Actions
+            </button>
+            <button className="tab" role="tab" aria-selected={view === "policies"} onClick={() => go("/policies")}>
+              Policies
             </button>
             <button className="tab" role="tab" aria-selected={view === "capabilities"} onClick={() => go("/capabilities")}>
               Capabilities
@@ -135,6 +173,8 @@ export function App() {
         <main className="main">
           {view === "capabilities" ? (
             <Capabilities />
+          ) : view === "policies" ? (
+            <Policies />
           ) : view === "actions" ? (
             <Actions onOpen={(id) => go(`/incidents/${id}`)} />
           ) : selected ? (

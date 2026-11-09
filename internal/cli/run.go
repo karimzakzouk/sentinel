@@ -60,14 +60,14 @@ func newRunCmd(kf *kube.Flags) *cobra.Command {
 			}
 			ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGTERM, os.Interrupt)
 			defer stop()
-			return runController(ctx, log, cfg, client, dyn)
+			return runController(ctx, log, cfg, client, dyn, &api.Console{Clients: api.ClientsFor(rc), Namespaces: cfg.Namespaces})
 		},
 	}
 	cmd.Flags().StringVar(&configPath, "config", "/etc/sentinel/config.yaml", "path to the controller config file")
 	return cmd
 }
 
-func runController(ctx context.Context, log *slog.Logger, cfg *config.Config, client kubernetes.Interface, dyn dynamic.Interface) error {
+func runController(ctx context.Context, log *slog.Logger, cfg *config.Config, client kubernetes.Interface, dyn dynamic.Interface, console *api.Console) error {
 	l, err := ledger.Open(ctx, cfg.Ledger.Path)
 	if err != nil {
 		return err
@@ -89,7 +89,8 @@ func runController(ctx context.Context, log *slog.Logger, cfg *config.Config, cl
 	var acting atomic.Pointer[act.Requests]
 	ui := &http.Server{Addr: cfg.UI.Address, ReadHeaderTimeout: 5 * time.Second, Handler: (&api.Server{
 		Ledger: l, Version: version.Get().Version, Verified: api.Verification{Events: n, At: time.Now().UTC()}, UI: webui.Handler(),
-		Acting: func() bool { r := acting.Load(); return r != nil && r.Acting() },
+		Acting:  func() bool { r := acting.Load(); return r != nil && r.Acting() },
+		Console: console,
 	}).Handler()}
 	serveErr := make(chan error, 2)
 	go func() { serveErr <- srv.ListenAndServe() }()
