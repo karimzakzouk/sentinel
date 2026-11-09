@@ -1,16 +1,20 @@
 package lab
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"slices"
 	"strings"
 	"sync"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/dynamic/dynamicinformer"
@@ -18,6 +22,7 @@ import (
 	"k8s.io/client-go/util/workqueue"
 
 	"github.com/karimzakzouk/sentinel/api/v1alpha1"
+	"github.com/karimzakzouk/sentinel/internal/model"
 )
 
 // ExperimentsResource is the Experiment custom resource.
@@ -44,6 +49,8 @@ type Lab struct {
 	Dynamic dynamic.Interface
 	// Pool lists the Lab namespaces created at install.
 	Pool []string
+	// Domain is the cluster's DNS domain.
+	Domain string
 	// Enforced proves that a namespace's NetworkPolicy is enforced, with
 	// live traffic; without it, the Lab never runs.
 	Enforced func(ctx context.Context, ns string) (bool, string)
@@ -57,33 +64,128 @@ type Lab struct {
 // provenFor is how long a namespace's proof of enforcement is trusted.
 const provenFor = 10 * time.Minute
 
-// Handle runs one Experiment and returns its verdict and why.
-func (l *Lab) Handle(ctx context.Context, exp *v1alpha1.Experiment) (v1alpha1.ExperimentPhase, string) {
+// Verdict is how an experiment ended, why, and how its world differed
+// from production.
+type Verdict struct {
+	Phase    v1alpha1.ExperimentPhase
+	Message  string
+	Fidelity []string
+}
+
+func failed(format string, args ...any) Verdict {
+	return Verdict{Phase: PhaseFailed, Message: fmt.Sprintf(format, args...)}
+}
+
+// Handle runs one Experiment. The Lab proves its seal before anything runs
+// and again with the world running, and removes everything it started.
+func (l *Lab) Handle(ctx context.Context, exp *v1alpha1.Experiment) Verdict {
 	ns := exp.Spec.LabNamespace
 	switch {
 	case !slices.Contains(l.Pool, ns):
-		return PhaseFailed, fmt.Sprintf("%s is not one of the Lab's namespaces", ns)
+		return failed("%s is not one of the Lab's namespaces", ns)
 	case exp.Namespace != ns:
-		return PhaseFailed, "an Experiment must live in the Lab namespace it uses"
+		return failed("an Experiment must live in the Lab namespace it uses")
+	}
+	var plan *Plan
+	var target *v1alpha1.TargetRef
+	if exp.Spec.Purpose != "prove" {
+		target = exp.Spec.Workload
+		switch {
+		case target == nil:
+			return failed("the experiment names no workload")
+		case !slices.Contains(l.Prover.Twins, target.Namespace):
+			return failed("the Lab copies only from the namespaces Sentinel watches, not %s", target.Namespace)
+		}
+		ref := model.ObjectRef{Group: "apps", Kind: target.Kind, Namespace: target.Namespace, Name: target.Name}
+		world, err := ReadWorld(ctx, l.Prover.Client, target.Namespace, ref, exp.Spec.Revision)
+		if err != nil {
+			return failed("could not read %s: %v", ref, err)
+		}
+		if plan, err = Synthesize(world, ref, ns); err != nil {
+			return failed("%v", err)
+		}
 	}
 	if ok, why := l.enforced(ctx, ns); !ok {
-		return PhaseFailed, "the Lab stays off: NetworkPolicy enforcement is not proven here (" + why + ")"
+		return failed("the Lab stays off: NetworkPolicy enforcement is not proven here (%s)", why)
 	}
-	if err := l.Prover.Seal(ctx, ns); err != nil {
-		return PhaseFailed, fmt.Sprintf("could not seal %s: %v", ns, err)
+	cleanup := context.WithoutCancel(ctx)
+	if err := l.Prover.Clean(ctx, ns); err != nil {
+		return failed("could not clear %s: %v", ns, err)
 	}
 	defer func() {
-		_ = l.Prover.Client.NetworkingV1().NetworkPolicies(ns).Delete(context.WithoutCancel(ctx), "lab-internal", metav1.DeleteOptions{})
+		if err := l.Prover.Clean(cleanup, ns); err != nil {
+			l.Log.Error("could not clear the Lab namespace", "namespace", ns, "error", err)
+		}
 	}()
-	results, err := l.Prover.Prove(ctx, ns)
+	if err := l.Prover.Seal(ctx, ns); err != nil {
+		return failed("could not seal %s: %v", ns, err)
+	}
+	defer func() {
+		_ = l.Prover.Client.NetworkingV1().NetworkPolicies(ns).Delete(cleanup, "lab-internal", metav1.DeleteOptions{})
+	}()
+	results, err := l.Prover.Prove(ctx, ns, nil)
 	if err != nil {
-		return PhaseNotSure, fmt.Sprintf("could not prove the seal: %v", err)
+		return Verdict{Phase: PhaseNotSure, Message: fmt.Sprintf("could not prove the seal: %v", err)}
 	}
 	phase, msg, sealed := sealVerdict(results)
-	if !sealed || exp.Spec.Purpose == "prove" {
-		return phase, msg
+	if !sealed || plan == nil {
+		return Verdict{Phase: phase, Message: msg}
 	}
-	return PhaseNotSure, "the Lab is sealed, but reproducing incidents comes with phase 3's next slice"
+	domain := cmp.Or(l.Domain, "cluster.local")
+	built, err := l.Prover.Build(ctx, ns, target.Namespace, domain, plan)
+	if err != nil {
+		return Verdict{Phase: PhaseNotSure, Message: fmt.Sprintf("could not start the world: %v", err), Fidelity: plan.Fidelity}
+	}
+	dns := DNSConfig(built.DNS, target.Namespace, domain)
+	probes := WorldProbes(readyServices(built, plan), target.Namespace, domain)
+	results, err = l.Prover.Prove(ctx, ns, &Inside{Probes: probes, DNS: dns})
+	if err != nil {
+		return Verdict{Phase: PhaseNotSure, Message: fmt.Sprintf("could not prove the seal with the world running: %v", err), Fidelity: plan.Fidelity}
+	}
+	if phase, msg, sealed := sealVerdict(results); !sealed {
+		return Verdict{Phase: phase, Message: "with the world running, " + msg, Fidelity: plan.Fidelity}
+	}
+	fidelity := slices.Clone(plan.Fidelity)
+	log, err := l.Prover.DNSLog(ctx, ns)
+	if err != nil {
+		fidelity = append(fidelity, "the Lab DNS log could not be read, so names the world missed are unknown")
+	}
+	var own []string
+	for _, p := range probes {
+		if host, _, err := net.SplitHostPort(p.Address); err == nil {
+			own = append(own, host)
+		}
+	}
+	for _, name := range Unresolved(log, dns.Searches, own) {
+		fidelity = append(fidelity, fmt.Sprintf("the world asked for %s, which the Lab does not provide", name))
+	}
+	var states []string
+	for _, ref := range plan.Workloads {
+		states = append(states, fmt.Sprintf("%s %s", ref.Name, built.States[ref.Kind+"."+ref.Name]))
+	}
+	return Verdict{Phase: PhaseNotSure, Fidelity: fidelity,
+		Message: "the world ran sealed (" + strings.Join(states, "; ") + "); reproducing and judging come with phase 3's next slice"}
+}
+
+// readyServices are the world's Services whose every copy is ready, so a
+// control through them must answer; a failing copy is the subject, not the
+// seal.
+func readyServices(built *Built, plan *Plan) []*corev1.Service {
+	var out []*corev1.Service
+	for _, svc := range built.Services {
+		sel := labels.SelectorFromSet(svc.Spec.Selector)
+		ok, any := true, false
+		for _, pod := range plan.Pods {
+			if sel.Matches(labels.Set(pod.Labels)) {
+				any = true
+				ok = ok && built.States[pod.Labels[CopyOf]] == "ready"
+			}
+		}
+		if ok && any {
+			out = append(out, svc)
+		}
+	}
+	return out
 }
 
 // sealVerdict reads the matrix: the seal holds when every forbidden
@@ -165,6 +267,12 @@ func (l *Lab) Run(ctx context.Context) error {
 	if !cache.WaitForCacheSync(ctx.Done(), synced...) {
 		return fmt.Errorf("experiment caches did not sync")
 	}
+	for _, ns := range l.Pool {
+		if err := l.Prover.Clean(ctx, ns); err != nil {
+			l.Log.Error("could not clear a Lab namespace", "namespace", ns, "error", err)
+		}
+		_ = l.Prover.Client.NetworkingV1().NetworkPolicies(ns).Delete(ctx, "lab-internal", metav1.DeleteOptions{})
+	}
 	l.Log.Info("lab started", "pool", l.Pool)
 	go func() {
 		<-ctx.Done()
@@ -222,12 +330,13 @@ func (l *Lab) process(ctx context.Context, stores map[string]cache.Store, key st
 	}
 	run, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	phase, msg := l.Handle(run, &exp)
+	v := l.Handle(run, &exp)
 	if run.Err() != nil && ctx.Err() == nil {
-		phase, msg = PhaseAborted, "the experiment ran out of time: "+msg
+		v.Phase, v.Message = PhaseAborted, "the experiment ran out of time: "+v.Message
 	}
-	l.Log.Info("experiment done", "experiment", key, "purpose", exp.Spec.Purpose, "phase", phase, "message", msg)
-	return l.setStatus(ctx, &exp, phase, msg)
+	l.Log.Info("experiment done", "experiment", key, "purpose", exp.Spec.Purpose, "phase", v.Phase, "message", v.Message)
+	exp.Status.Fidelity = v.Fidelity
+	return l.setStatus(ctx, &exp, v.Phase, v.Message)
 }
 
 func (l *Lab) setStatus(ctx context.Context, exp *v1alpha1.Experiment, phase v1alpha1.ExperimentPhase, msg string) error {
