@@ -72,7 +72,11 @@ function IncidentItem({ incident, current, onSelect }: { incident: Incident; cur
         <span>{workload(incident.objects?.[0])}</span>
         <span>·</span>
         <span>{ago(incident.openedAt)}</span>
-        {incident.objects && incident.objects.length > 1 && <span>· {incident.objects.length - 1} symptom(s) grouped</span>}
+        {incident.objects && incident.objects.length > 1 && (
+          <span>
+            · {incident.objects.length - 1} {incident.objects.length === 2 ? "symptom" : "symptoms"} grouped
+          </span>
+        )}
       </div>
     </button>
   );
