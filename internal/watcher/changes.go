@@ -61,6 +61,10 @@ func Transform(obj any) (any, error) {
 		setAnnotation(m, annotationManager, latest.Manager)
 		m.SetManagedFields(nil)
 	}
+	if n, ok := obj.(*corev1.Node); ok {
+		// A node's images are most of its size, and nothing here reads them.
+		n.Status.Images = nil
+	}
 	if cm, ok := obj.(*corev1.ConfigMap); ok {
 		hashes := map[string]string{}
 		for k, v := range cm.Data {

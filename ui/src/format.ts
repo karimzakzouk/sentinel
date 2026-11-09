@@ -12,6 +12,10 @@ const classes: Record<string, { label: string; meaning: string }> = {
   "runtime.crash": { label: "Crashing", meaning: "the containers keep crashing without a change that explains it" },
   "dependency.unavailable": { label: "Dependency unavailable", meaning: "a workload others depend on has no ready endpoints" },
   "runtime.errors": { label: "Errors without a change", meaning: "the pods stay up but log errors at an unusual rate, and no change explains it" },
+  "node.isolation": { label: "Node cannot run pods", meaning: "the pods are on a node that is not ready or is under memory, disk or process pressure" },
+  "dns.failure": { label: "Names do not resolve", meaning: "the workload cannot resolve the names of what it calls" },
+  "cert.expiry": { label: "Certificate expired", meaning: "a certificate the workload serves or checks has expired" },
+  "dependency.failure": { label: "Connections refused", meaning: "something the workload calls refuses its connections, and no change of its own explains it" },
 };
 
 const actions: Record<string, { label: string; verb: string }> = {
