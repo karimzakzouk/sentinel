@@ -1,9 +1,9 @@
 # Settings and helpers shared by the hack/azure-runner scripts; source it.
 # Each setting may be overridden from the environment.
 RG=${RG:-sentinel-ci}
-LOCATION=${LOCATION:-eastus}
-# VM sizes to try, in order of preference.
-SIZES=${SIZES:-Standard_D4as_v4 Standard_D4s_v4}
+LOCATION=${LOCATION:-austriaeast}
+# VM sizes to try, in order of preference. See README.md for why these.
+SIZES=${SIZES:-Standard_B4as_v2}
 VM=${VM:-sentinel-azure-1}
 REPO=${REPO:-karimzakzouk/sentinel}
 RUNNER_NAME=${RUNNER_NAME:-sentinel-azure-1}
