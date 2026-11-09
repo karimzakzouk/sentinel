@@ -525,6 +525,94 @@ func TestAssistModeRollsBackABadImage(t *testing.T) {
 	revertAndRecover(t, in, client, run)
 }
 
+// With a policy that holds rollbacks for approval, Sentinel asks and waits;
+// once a person approves, the actor rolls back and records who approved.
+func TestAnApprovedRollbackRunsAndNamesItsApprover(t *testing.T) {
+	ctx := context.Background()
+	in, client := newInjector(t)
+	waitForQuiet(t, client, "Deployment.apps/"+smokeNS+"/web")
+	policies := schema.GroupVersionResource{Group: "sentinel.karimzakzouk.github.io", Version: "v1alpha1", Resource: "sentinelpolicies"}
+	requests := schema.GroupVersionResource{Group: "sentinel.karimzakzouk.github.io", Version: "v1alpha1", Resource: "actionrequests"}
+	admin := dynamicAs(t, "")
+	policy := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "sentinel.karimzakzouk.github.io/v1alpha1", "kind": "SentinelPolicy",
+		"metadata": map[string]any{"name": "e2e-approve", "namespace": smokeNS},
+		"spec":     map[string]any{"autonomy": []any{map[string]any{"action": "rollout.undo", "level": "approve"}}},
+	}}
+	if _, err := admin.Resource(policies).Namespace(smokeNS).Create(ctx, policy, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = admin.Resource(policies).Namespace(smokeNS).Delete(ctx, "e2e-approve", metav1.DeleteOptions{})
+	})
+	me, err := clientAs(t, "").AuthenticationV1().SelfSubjectReviews().Create(ctx, &authenticationv1.SelfSubjectReview{}, metav1.CreateOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := client.AppsV1().Deployments(smokeNS).Get(ctx, "web", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	image := before.Spec.Template.Spec.Containers[0].Image
+	s, err := harness.LoadScenario("../scenarios/smoke/bad-image.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := inject(t, in, s)
+
+	var name string
+	eventually(t, 3*time.Minute, "a rollback request waiting for approval", func() (bool, error) {
+		list, err := admin.Resource(requests).Namespace(smokeNS).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return false, err
+		}
+		for _, u := range list.Items {
+			phase, _, _ := unstructured.NestedString(u.Object, "status", "phase")
+			action, _, _ := unstructured.NestedString(u.Object, "spec", "action")
+			if action == "rollout.undo" && phase == "Pending" && u.GetCreationTimestamp().After(run.InjectedAt.Add(-time.Second)) {
+				name = u.GetName()
+				return true, nil
+			}
+		}
+		return false, nil
+	})
+	d, err := client.AppsV1().Deployments(smokeNS).Get(ctx, "web", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Spec.Template.Spec.Containers[0].Image == image {
+		t.Fatal("web was rolled back before anyone approved")
+	}
+	patch := fmt.Sprintf(`{"metadata":{"annotations":{"sentinel.karimzakzouk.github.io/approved-by":%q}}}`, me.Status.UserInfo.Username)
+	if _, err := admin.Resource(requests).Namespace(smokeNS).Patch(ctx, name, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, 2*time.Minute, "the approved rollback", func() (bool, error) {
+		u, err := admin.Resource(requests).Namespace(smokeNS).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return false, err
+		}
+		phase, _, _ := unstructured.NestedString(u.Object, "status", "phase")
+		approvedBy, _, _ := unstructured.NestedString(u.Object, "status", "approvedBy")
+		switch phase {
+		case "Succeeded":
+			if approvedBy != me.Status.UserInfo.Username {
+				return false, fmt.Errorf("approvedBy = %q, want %q", approvedBy, me.Status.UserInfo.Username)
+			}
+			return true, nil
+		case "Failed", "Rejected", "Expired":
+			msg, _, _ := unstructured.NestedString(u.Object, "status", "message")
+			t.Fatalf("the approved request ended %s: %s", phase, msg)
+		}
+		return false, nil
+	})
+	eventually(t, 3*time.Minute, "web back on its image", func() (bool, error) {
+		d, err := client.AppsV1().Deployments(smokeNS).Get(ctx, "web", metav1.GetOptions{})
+		return err == nil && d.Spec.Template.Spec.Containers[0].Image == image, err
+	})
+	revertAndRecover(t, in, client, run)
+}
+
 func managedBy(fields []metav1.ManagedFieldsEntry) []string {
 	var out []string
 	for _, f := range fields {
