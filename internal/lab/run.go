@@ -56,6 +56,9 @@ type Lab struct {
 	// live traffic; without it, the Lab never runs.
 	Enforced func(ctx context.Context, ns string) (bool, string)
 	Log      *slog.Logger
+	// OnReady, when set, is called once the Lab sees its pool's
+	// Experiments.
+	OnReady func()
 
 	mu      sync.Mutex
 	proven  map[string]time.Time
@@ -72,6 +75,8 @@ type Verdict struct {
 	Message  string
 	Fidelity []string
 	Runs     int
+	// judged says the verdict is the race's, not a refusal to run.
+	judged bool
 }
 
 func failed(format string, args ...any) Verdict {
@@ -80,7 +85,18 @@ func failed(format string, args ...any) Verdict {
 
 // Handle runs one Experiment. The Lab proves its seal before anything runs
 // and again with the world running, and removes everything it started.
+// Only a prove Experiment fails for a seal that does not hold; for the
+// others, Failed is the race's verdict on the fix, and an experiment the
+// Lab could not run is NOT SURE.
 func (l *Lab) Handle(ctx context.Context, exp *v1alpha1.Experiment) Verdict {
+	v := l.handle(ctx, exp)
+	if exp.Spec.Purpose != "prove" && v.Phase == PhaseFailed && !v.judged {
+		v.Phase = PhaseNotSure
+	}
+	return v
+}
+
+func (l *Lab) handle(ctx context.Context, exp *v1alpha1.Experiment) Verdict {
 	ns := exp.Spec.LabNamespace
 	switch {
 	case !slices.Contains(l.Pool, ns):
@@ -191,7 +207,7 @@ func (l *Lab) Handle(ctx context.Context, exp *v1alpha1.Experiment) Verdict {
 		return Verdict{Phase: PhaseNotSure, Message: fmt.Sprintf("the runs stopped after %d blocks: %v", blocks, err), Fidelity: fidelity, Runs: blocks}
 	}
 	phase, msg, _ = race.Outcome(false)
-	return Verdict{Phase: phase, Message: msg, Fidelity: fidelity, Runs: blocks}
+	return Verdict{Phase: phase, Message: msg, Fidelity: fidelity, Runs: blocks, judged: true}
 }
 
 // candidate synthesizes the workload's revision before the failing one,
@@ -333,14 +349,25 @@ func (l *Lab) Run(ctx context.Context) error {
 		synced = append(synced, inf.HasSynced)
 		f.Start(ctx.Done())
 	}
-	if !cache.WaitForCacheSync(ctx.Done(), synced...) {
-		return fmt.Errorf("experiment caches did not sync")
+	wait, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	if !cache.WaitForCacheSync(wait.Done(), synced...) {
+		var stuck []string
+		for i, ns := range l.Pool {
+			if !synced[i]() {
+				stuck = append(stuck, ns)
+			}
+		}
+		return fmt.Errorf("experiments in %s did not sync within a minute: the Lab may lack permission there", strings.Join(stuck, ", "))
 	}
 	for _, ns := range l.Pool {
 		if err := l.Prover.Clean(ctx, ns); err != nil {
 			l.Log.Error("could not clear a Lab namespace", "namespace", ns, "error", err)
 		}
 		_ = l.Prover.Client.NetworkingV1().NetworkPolicies(ns).Delete(ctx, "lab-internal", metav1.DeleteOptions{})
+	}
+	if l.OnReady != nil {
+		l.OnReady()
 	}
 	l.Log.Info("lab started", "pool", l.Pool)
 	go func() {

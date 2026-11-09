@@ -25,7 +25,9 @@ func withWorkload(e *v1alpha1.Experiment, ns, name string) *v1alpha1.Experiment 
 }
 
 // The Lab runs only in its own namespaces, and only where NetworkPolicy
-// enforcement is proven; it never seals or starts anything otherwise.
+// enforcement is proven; it never seals or starts anything otherwise. A
+// refusal fails a prove Experiment, whose subject is the seal, and leaves
+// any other NOT SURE: the Lab did not judge the fix.
 func TestTheLabRefusesBeforeItStartsAnything(t *testing.T) {
 	cases := map[string]struct {
 		exp      *v1alpha1.Experiment
@@ -56,8 +58,12 @@ func TestTheLabRefusesBeforeItStartsAnything(t *testing.T) {
 					return tc.enforced, "the probe's deny policy did not block traffic"
 				}}
 			v := l.Handle(ctx, tc.exp)
-			if v.Phase != PhaseFailed || !strings.Contains(v.Message, tc.why) {
-				t.Fatalf("%s: %s; want Failed mentioning %q", v.Phase, v.Message, tc.why)
+			want := PhaseFailed
+			if tc.exp.Spec.Purpose != "prove" {
+				want = PhaseNotSure
+			}
+			if v.Phase != want || !strings.Contains(v.Message, tc.why) {
+				t.Fatalf("%s: %s; want %s mentioning %q", v.Phase, v.Message, want, tc.why)
 			}
 			if nps, _ := client.NetworkingV1().NetworkPolicies("sentinel-lab-0").List(ctx, metav1.ListOptions{}); len(nps.Items) != 0 {
 				t.Fatal("the Lab sealed a namespace it refused to use")
