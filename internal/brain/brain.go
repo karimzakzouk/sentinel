@@ -84,6 +84,9 @@ type Brain struct {
 	Act Requester
 	// Lab, when set, verifies proposed rollbacks before anyone acts on them.
 	Lab Verifier
+	// ImageLab, when set, races images built from fixes to code; without
+	// it, Lab does, when it can.
+	ImageLab ImageVerifier
 	// Fixer, when set, proposes the change at the source that makes a
 	// verified rollback hold; its steps come back through OnFixUpdate.
 	Fixer Fixer
@@ -244,11 +247,27 @@ func (b *Brain) Restore(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	asked := map[model.ID]bool{}
 	for _, e := range experiments {
+		asked[e.ID] = true
 		for _, inc := range b.open {
 			if inc.rec.ID == e.IncidentID {
 				inc.labAsked, inc.experiment = true, e.Lab
 			}
+		}
+	}
+	// A fix to the code built before a restart, and never raced, is asked
+	// about at the next sweep.
+	fixes, err := ledger.List[model.Fix](ctx, b.Ledger, model.KindFix, "")
+	if err != nil {
+		return 0, err
+	}
+	for _, f := range fixes {
+		if c := f.Code; c != nil && c.Image != "" && c.Verdict == "" && !asked[codeExperimentID(f.IncidentID)] {
+			if b.codeLab == nil {
+				b.codeLab = map[model.ID]model.Fix{}
+			}
+			b.codeLab[f.IncidentID] = f
 		}
 	}
 	// Breakers outlive restarts: an action that failed in the last day stays

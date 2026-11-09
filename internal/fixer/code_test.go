@@ -211,3 +211,17 @@ func writeFile(name, content string) error {
 	}
 	return os.WriteFile(name, []byte(content), 0o600)
 }
+
+// Where no Lab is installed, a fix to the code says it will not be raced.
+func TestAFixToTheCodeSaysWhenNoLabWillRaceIt(t *testing.T) {
+	fix := &v1alpha1.Fix{Spec: v1alpha1.FixSpec{IncidentID: "inc-1", Workload: v1alpha1.TargetRef{Namespace: "shop", Name: "cart"}}}
+	p := &codefix.Patch{Function: "main.load", Path: "catalog.go", Line: 17, Why: "it changed"}
+	src := codefix.Built{Repository: "http://forge/person/shop-src", Revision: "c2fe9e2bcce8aa"}
+	if body := codeBody(fix, p, "shop:95e2311", "shop:c2fe9e2", src, true); !strings.Contains(body, "races it against the failing one in its Lab") {
+		t.Fatalf("with a Lab:\n%s", body)
+	}
+	if body := codeBody(fix, p, "shop:95e2311", "shop:c2fe9e2", src, false); !strings.Contains(body, "no Lab is installed") ||
+		strings.Contains(body, "races it") {
+		t.Fatalf("without a Lab:\n%s", body)
+	}
+}

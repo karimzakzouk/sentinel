@@ -221,9 +221,13 @@ func (b *Brain) onCode(ctx context.Context, f *model.Fix, u FixUpdate) []ledger.
 // the code fixes the incident; when every Lab namespace is busy, the sweep
 // asks again. Callers hold b.mu.
 func (b *Brain) askCodeLab(ctx context.Context, f *model.Fix, image string) []ledger.Draft {
-	iv, ok := b.Lab.(ImageVerifier)
-	if !ok {
-		return nil
+	iv := b.ImageLab
+	if iv == nil {
+		lab, ok := b.Lab.(ImageVerifier)
+		if !ok {
+			return nil
+		}
+		iv = lab
 	}
 	revision := f.Target.Name + "-" + f.FromRevision
 	experiment, asked, err := iv.VerifyImage(ctx, f.IncidentID, f.Target, revision, image)

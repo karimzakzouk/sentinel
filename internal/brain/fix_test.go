@@ -260,3 +260,33 @@ func TestAFixToTheCodeIsRacedOnceBuilt(t *testing.T) {
 		t.Fatalf("last notice %+v", last)
 	}
 }
+
+// A fix to the code built while the controller was down is raced after it
+// restarts; one the Lab was already asked about is not asked about again.
+func TestAFixToTheCodeBuiltBeforeARestartIsRaced(t *testing.T) {
+	b, l := newBrain(t)
+	built := model.Fix{ID: model.FixID("inc-1"), IncidentID: "inc-1", Target: web, FromRevision: "bad", Phase: "Applied",
+		Code: &model.FixCode{PullRequest: "http://forge/shop/pulls/2", Image: "registry.test/shop:3f2a9c1"}}
+	raced := model.Fix{ID: model.FixID("inc-2"), IncidentID: "inc-2", Target: web, FromRevision: "bad", Phase: "Applied",
+		Code: &model.FixCode{PullRequest: "http://forge/shop/pulls/3", Image: "registry.test/shop:77aa001"}}
+	e := model.Experiment{ID: codeExperimentID("inc-2"), IncidentID: "inc-2", Purpose: "verify-code", Target: web, Phase: "Requested"}
+	if _, err := l.Append(ctx, ledger.RecordDraft(source, model.KindFix, "code", built.ID, "inc-1", built),
+		ledger.RecordDraft(source, model.KindFix, "code", raced.ID, "inc-2", raced),
+		ledger.RecordDraft(source, model.KindExperiment, "requested", e.ID, "inc-2", e)); err != nil {
+		t.Fatal(err)
+	}
+	lab := &fakeImageLab{}
+	b.ImageLab = lab
+	if _, err := b.Restore(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Sweep(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Sweep(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(lab.asked) != 1 || lab.asked[0] != web.Name+"-bad registry.test/shop:3f2a9c1" {
+		t.Fatalf("asked %v", lab.asked)
+	}
+}
