@@ -1,0 +1,11 @@
+# A soak runs Sentinel as it would run in production, detection settings
+# included, on the end-to-end cluster with nothing injected: every incident
+# is a false alarm. Debug logs keep each series' evaluation for the analysis.
+watch:
+  namespaces: [e2e-smoke, boutique]
+actor:
+  enabled: true
+lab:
+  enabled: true
+  poolSize: 1
+logLevel: debug
