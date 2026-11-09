@@ -17,6 +17,10 @@ func TestMask(t *testing.T) {
 		"password=[REDACTED:secret-value] rejected":              "password=[REDACTED:secret-value] rejected",
 		"started at 21:14:11.5 in 1.5s":                          "started at <time> in <duration>",
 		"cpu=-0.5 mem=+12":                                       "cpu=<num> mem=<num>",
+		"Now listening on: http://[::]:7070":                     "Now listening on: http://<ip>",
+		"GET http://10.0.0.5:8080/api/items/42?id=7&q=shoes":     "GET http://<ip>/api/items/<num>?id=<*>&q=<*>",
+		"dial http://productcatalog:3550/ failed":                "dial http://productcatalog:<num>/ failed",
+		"see https://example.com/docs.":                          "see https://example.com/docs.",
 	} {
 		if got := Mask(in); got != want {
 			t.Errorf("Mask(%q)\n  = %q\nwant %q", in, got, want)

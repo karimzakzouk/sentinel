@@ -69,6 +69,41 @@ func TestSummariesAreBounded(t *testing.T) {
 	}
 }
 
+// .NET's console logger puts the level and category on a line of their own;
+// the message, an error here, and its exception follow.
+func TestSummarizeDotnetConsoleErrors(t *testing.T) {
+	var log []string
+	for range 3 {
+		log = append(log, "GetCartAsync called with userId=6b0a5ffa-3e1c-4a5e-9c41-0d8f6f2b6c1e")
+		log = append(log, strings.Split(dotnetConsoleTrace, "\n")...)
+	}
+	log = append(log, "info: Microsoft.Hosting.Lifetime[0]", "      Now listening on: http://[::]:7070")
+	s := Summarize(timestamped(log...), redact.New())
+	if s.Records != 7 {
+		t.Fatalf("records = %d, want 7", s.Records)
+	}
+	byTemplate := map[string]TemplateCount{}
+	for _, tpl := range s.Templates {
+		byTemplate[tpl.Template] = tpl
+	}
+	var failed TemplateCount
+	for tpl, tc := range byTemplate {
+		if strings.HasPrefix(tpl, "Error status code 'FailedPrecondition'") {
+			failed = tc
+		}
+	}
+	if failed.Count != 3 || !failed.Error || !strings.HasPrefix(failed.Sample, "Error status code") {
+		t.Fatalf("templates = %+v, want the failed call three times, as an error", s.Templates)
+	}
+	if tc, ok := byTemplate["Now listening on: http://<ip>"]; !ok || tc.Error {
+		t.Fatalf("templates = %+v, want the startup line as information", s.Templates)
+	}
+	if len(s.Exceptions) != 1 || s.Exceptions[0].Count != 3 || s.Exceptions[0].Language != "dotnet" ||
+		s.Exceptions[0].Types[len(s.Exceptions[0].Types)-1] != "StackExchange.Redis.RedisConnectionException" {
+		t.Fatalf("exceptions = %+v", s.Exceptions)
+	}
+}
+
 func TestMessageAndLevel(t *testing.T) {
 	for line, want := range map[string]string{
 		`{"severity":"ERROR","message":"payment failed"}`:                                        "payment failed|error",

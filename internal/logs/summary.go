@@ -93,7 +93,7 @@ func Summarize(raw []byte, r *redact.Redactor) Summary {
 			}
 			s.Redactions[f.Rule]++
 		}
-		redacted := Record{Time: rec.Time, Lines: strings.Split(text, "\n")}
+		redacted, consoleLevel := dotnetConsole(Record{Time: rec.Time, Lines: strings.Split(text, "\n")})
 		e, isException := ParseException(redacted)
 		if isException {
 			if ec := exceptions[e.Fingerprint]; ec != nil {
@@ -103,6 +103,9 @@ func Summarize(raw []byte, r *redact.Redactor) Summary {
 			}
 		}
 		msg, level := message(redacted.Lines[0])
+		if consoleLevel != "" {
+			level = consoleLevel
+		}
 		tpl := miner.Add(Mask(msg))
 		st := stats[tpl]
 		if st == nil {
@@ -174,6 +177,30 @@ func message(line string) (string, string) {
 		}
 	}
 	return line, ""
+}
+
+// dotnetLevels maps the level prefixes of .NET's console logger.
+var dotnetLevels = map[string]string{"trce": "trace", "dbug": "debug", "info": "info", "warn": "warning",
+	"fail": "error", "crit": "critical"}
+
+// dotnetConsole unwraps a record of .NET's console logger, whose first line
+// holds only the level and category ("info: Grpc.AspNetCore.Server.
+// ServerCallHandler[7]") and whose message follows, indented by six spaces.
+// It returns the message lines and the level, or the record unchanged.
+func dotnetConsole(r Record) (Record, string) {
+	if len(r.Lines) < 2 || len(r.Lines[0]) < 9 || r.Lines[0][4] != ':' || r.Lines[0][5] != ' ' ||
+		!strings.HasSuffix(r.Lines[0], "]") || strings.Contains(r.Lines[0][6:], " ") {
+		return r, ""
+	}
+	level, ok := dotnetLevels[r.Lines[0][:4]]
+	if !ok {
+		return r, ""
+	}
+	lines := make([]string, len(r.Lines)-1)
+	for i, l := range r.Lines[1:] {
+		lines[i] = strings.TrimPrefix(l, "      ")
+	}
+	return Record{Time: r.Time, Lines: lines}, level
 }
 
 func firstString(fields map[string]any, keys ...string) string {

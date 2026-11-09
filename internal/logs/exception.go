@@ -53,8 +53,9 @@ func ParseException(r Record) (Exception, bool) {
 		e = parseJava(r.Lines)
 	case jsError(first):
 		e = parseNode(r.Lines)
-	case len(r.Lines) > 1 && strings.HasPrefix(strings.TrimLeft(r.Lines[1], " \t"), "at "):
-		// A logged exception: an entry's message, then frames.
+	case len(r.Lines) > 1 && hasAnyPrefix(strings.TrimLeft(r.Lines[1], " \t"), "at ", "---> "):
+		// A logged exception: an entry's message, then frames or, in .NET,
+		// the inner exceptions and their frames.
 		e = parseLogged(r.Lines)
 	default:
 		return Exception{}, false
@@ -251,7 +252,13 @@ func parseDotnet(lines []string) Exception {
 		name, _, _ := strings.Cut(part, ": ")
 		e.Types = append(e.Types, name)
 	}
-	for _, l := range lines[1:] {
+	dotnetChain(&e, lines[1:])
+	return e
+}
+
+// dotnetChain adds the inner exceptions and frames of a .NET trace.
+func dotnetChain(e *Exception, lines []string) {
+	for _, l := range lines {
 		t := strings.TrimLeft(l, " \t")
 		switch {
 		case strings.HasPrefix(t, "at "):
@@ -265,16 +272,19 @@ func parseDotnet(lines []string) Exception {
 			e.Types = append(e.Types, name)
 		}
 	}
-	return e
 }
 
 // parseLogged handles an entry's message followed by frames, as loggers
 // print an exception they caught. The masked message stands for the type.
 func parseLogged(lines []string) Exception {
-	e := parseJava(lines[1:])
-	e.Types = append([]string{Mask(lines[0])}, e.Types...)
-	if strings.Contains(lines[1], " in ") && strings.Contains(lines[1], ":line ") {
+	var e Exception
+	if second := strings.TrimLeft(lines[1], " \t"); strings.HasPrefix(second, "---> ") ||
+		strings.Contains(second, " in ") && strings.Contains(second, ":line ") {
 		e.Language = "dotnet"
+		dotnetChain(&e, lines[1:])
+	} else {
+		e = parseJava(lines[1:])
 	}
+	e.Types = append([]string{Mask(lines[0])}, e.Types...)
 	return e
 }
