@@ -1,0 +1,26 @@
+id: git-crash-on-start
+title: A commit passes podinfo a flag it does not know, so it exits as it starts, and Flux deploys it
+app: git
+fault:
+  kind: commit
+  target: {apiVersion: kustomize.toolkit.fluxcd.io/v1, kind: Kustomization, namespace: flux-system, name: git-podinfo}
+  commit:
+    repository: person/delivery
+    path: deployment.yaml
+    old: "          ports:\n"
+    new: "          args: [--no-such-flag]\n          ports:\n"
+    message: Turn on the new flag
+groundTruth:
+  faultClass: deploy.crash-on-start
+  rootCause: {apiVersion: apps/v1, kind: Deployment, namespace: e2e-delivery, name: git-podinfo}
+  changeType: config
+  symptoms: [pod.crash-loop]
+  mitigation: rollout.undo
+  # The right fix removes the line the commit added; the Fixer restores
+  # images only so far, so this run measures what it does not yet cover.
+  fix: {path: deployment.yaml, line: 18}
+manifest:
+  condition: crash-loop
+  namespace: e2e-delivery
+  selector: app=podinfo
+  timeout: 4m

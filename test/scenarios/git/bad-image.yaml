@@ -1,0 +1,24 @@
+id: git-bad-image
+title: A commit points podinfo at an image tag that does not exist, and Flux deploys it
+app: git
+fault:
+  kind: commit
+  target: {apiVersion: kustomize.toolkit.fluxcd.io/v1, kind: Kustomization, namespace: flux-system, name: git-podinfo}
+  commit:
+    repository: person/delivery
+    path: deployment.yaml
+    old: "podinfo:6.17.0"
+    new: "podinfo:does-not-exist"
+    message: Bump podinfo
+groundTruth:
+  faultClass: deploy.bad-image
+  rootCause: {apiVersion: apps/v1, kind: Deployment, namespace: e2e-delivery, name: git-podinfo}
+  changeType: image
+  symptoms: [pod.image-pull-error]
+  mitigation: rollout.undo
+  fix: {path: deployment.yaml, line: 17}
+manifest:
+  condition: image-pull-error
+  namespace: e2e-delivery
+  selector: app=podinfo
+  timeout: 4m

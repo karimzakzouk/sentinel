@@ -11,6 +11,22 @@ ctx="kind-${E2E_CLUSTER:-sentinel-e2e}"
 root=$(cd "$(dirname "$0")/.." && pwd)
 observe=${OBSERVE_SECONDS:-60}
 
+# Commit faults go through the test Gitea's API (hack/gitea-up.sh), which a
+# port-forward reaches; the harness reads the person's token from the
+# cluster. Reverting one, the person merges Sentinel's fix, if any.
+pf=""
+trap '[ -z "$pf" ] || kill "$pf" 2>/dev/null || true' EXIT
+if grep -q '^  kind: commit' "$@"; then
+  port=${GITEA_LOCAL_PORT:-13010}
+  kubectl --context "$ctx" -n gitea port-forward svc/gitea-http "$port:3000" >/dev/null 2>&1 &
+  pf=$!
+  export HARNESS_FORGE_API="http://127.0.0.1:$port/api/v1"
+  for _ in $(seq 30); do
+    curl -fsS "http://127.0.0.1:$port/api/healthz" >/dev/null 2>&1 && break
+    sleep 1
+  done
+fi
+
 # settle waits until Sentinel has no open incident. It asks the Ledger:
 # counting log lines misses incidents a restarted controller took back.
 settle() {

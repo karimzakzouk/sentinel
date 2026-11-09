@@ -1,0 +1,23 @@
+id: git-image-on-the-owner
+title: Someone sets a bad image on the Flux Kustomization itself, not in Git
+app: git
+fault:
+  kind: patch
+  target: {apiVersion: kustomize.toolkit.fluxcd.io/v1, kind: Kustomization, namespace: flux-system, name: git-podinfo}
+  patch:
+    type: merge
+    content: '{"spec":{"images":[{"name":"ghcr.io/stefanprodan/podinfo","newTag":"does-not-exist"}]}}'
+groundTruth:
+  faultClass: deploy.bad-image
+  rootCause: {apiVersion: apps/v1, kind: Deployment, namespace: e2e-delivery, name: git-podinfo}
+  changeType: image
+  symptoms: [pod.image-pull-error]
+  mitigation: rollout.undo
+  # Nothing in the repository sets the bad image, so the right fix proposes
+  # nothing there and says where it was set.
+  fix: {abstain: true}
+manifest:
+  condition: image-pull-error
+  namespace: e2e-delivery
+  selector: app=podinfo
+  timeout: 4m

@@ -32,14 +32,21 @@ type ActionEvent struct {
 // ReadIncidents reads a Ledger export (CloudEvents, one per line) and returns
 // every incident's recorded versions, oldest first.
 func ReadIncidents(r io.Reader) (map[model.ID][]IncidentVersion, error) {
-	incidents, _, err := ReadExport(r)
-	return incidents, err
+	e, err := ReadExport(r)
+	return e.Incidents, err
 }
 
-// ReadExport reads a Ledger export and returns every incident's recorded
-// versions and every incident's action steps, oldest first.
-func ReadExport(r io.Reader) (map[model.ID][]IncidentVersion, map[model.ID][]ActionEvent, error) {
-	out, actions := map[model.ID][]IncidentVersion{}, map[model.ID][]ActionEvent{}
+// Export is what scoring reads of a Ledger export, by incident, oldest
+// first: its recorded versions, its action's steps and its fix's.
+type Export struct {
+	Incidents map[model.ID][]IncidentVersion
+	Actions   map[model.ID][]ActionEvent
+	Fixes     map[model.ID][]model.Fix
+}
+
+// ReadExport reads a Ledger export.
+func ReadExport(r io.Reader) (Export, error) {
+	e := Export{Incidents: map[model.ID][]IncidentVersion{}, Actions: map[model.ID][]ActionEvent{}, Fixes: map[model.ID][]model.Fix{}}
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 1<<20), 16<<20)
 	for sc.Scan() {
@@ -49,14 +56,22 @@ func ReadExport(r io.Reader) (map[model.ID][]IncidentVersion, map[model.ID][]Act
 			Data json.RawMessage `json:"data"`
 		}
 		if err := json.Unmarshal(sc.Bytes(), &ev); err != nil {
-			return nil, nil, fmt.Errorf("ledger export: %w", err)
+			return e, fmt.Errorf("ledger export: %w", err)
 		}
 		if verb, ok := strings.CutPrefix(ev.Type, "sentinel.action."); ok {
 			var a model.Action
 			if err := json.Unmarshal(ev.Data, &a); err != nil {
-				return nil, nil, fmt.Errorf("action in ledger export: %w", err)
+				return e, fmt.Errorf("action in ledger export: %w", err)
 			}
-			actions[a.IncidentID] = append(actions[a.IncidentID], ActionEvent{At: ev.Time, Verb: verb, Action: a})
+			e.Actions[a.IncidentID] = append(e.Actions[a.IncidentID], ActionEvent{At: ev.Time, Verb: verb, Action: a})
+			continue
+		}
+		if strings.HasPrefix(ev.Type, "sentinel.fix.") {
+			var f model.Fix
+			if err := json.Unmarshal(ev.Data, &f); err != nil {
+				return e, fmt.Errorf("fix in ledger export: %w", err)
+			}
+			e.Fixes[f.IncidentID] = append(e.Fixes[f.IncidentID], f)
 			continue
 		}
 		verb, ok := strings.CutPrefix(ev.Type, "sentinel.incident.")
@@ -65,11 +80,11 @@ func ReadExport(r io.Reader) (map[model.ID][]IncidentVersion, map[model.ID][]Act
 		}
 		var inc model.Incident
 		if err := json.Unmarshal(ev.Data, &inc); err != nil {
-			return nil, nil, fmt.Errorf("incident in ledger export: %w", err)
+			return e, fmt.Errorf("incident in ledger export: %w", err)
 		}
-		out[inc.ID] = append(out[inc.ID], IncidentVersion{At: ev.Time, Verb: verb, Incident: inc})
+		e.Incidents[inc.ID] = append(e.Incidents[inc.ID], IncidentVersion{At: ev.Time, Verb: verb, Incident: inc})
 	}
-	return out, actions, sc.Err()
+	return e, sc.Err()
 }
 
 // LoadRuns reads every run record in a directory, oldest first.
@@ -120,6 +135,12 @@ type RunScore struct {
 	// WrongActions counts actions carried out that the ground truth does not
 	// call for: any in a quiet run, or one other than the mitigation.
 	WrongActions int `json:"wrongActions,omitempty"`
+	// Fix is the last step Sentinel's fix at the source reached (Held,
+	// NotHeld, Abstained...), FixAt the file and line it changed, and
+	// FixRight whether that is what the ground truth's fix does.
+	Fix      string `json:"fix,omitempty"`
+	FixAt    string `json:"fixAt,omitempty"`
+	FixRight bool   `json:"fixRight,omitempty"`
 }
 
 // Report sums up a scoring session.
@@ -136,6 +157,10 @@ type Report struct {
 	// and the median time to verified recovery.
 	ActedRuns, VerifiedRuns, WrongActions int
 	MedianRecovery                        time.Duration
+	// Fixing, over the runs whose ground truth says what a fix does: fixes
+	// proposed, those at the right place, those that held, those that did
+	// not, and right and wrong abstentions.
+	FixRuns, FixesProposed, FixesRight, FixesHeld, FixesNotHeld, RightAbstentions, WrongAbstentions int
 }
 
 // ScoreOptions tunes the matching.
@@ -143,9 +168,10 @@ type ScoreOptions struct {
 	// Grace is how long after a revert an incident still counts toward the
 	// run; a run without a revert counts for Grace after its injection.
 	Grace time.Duration
-	// Actions are the incidents' action steps, from ReadExport; without
-	// them, acting is not scored.
+	// Actions and Fixes are the incidents' action and fix steps, from
+	// ReadExport; without them, acting and fixing are not scored.
 	Actions map[model.ID][]ActionEvent
+	Fixes   map[model.ID][]model.Fix
 }
 
 // Score compares Sentinel's incidents with the runs' ground truth, per event
@@ -241,6 +267,23 @@ func Score(runs []*Run, incidents map[model.ID][]IncidentVersion, opts ScoreOpti
 				recoveries = append(recoveries, s.Recovery)
 			}
 		}
+		if truth := r.GroundTruth.Fix; truth != nil {
+			rep.FixRuns++
+			s.scoreFix(opts.Fixes[s.Incident], *truth)
+			switch {
+			case s.Fix == "Abstained" || s.Fix == "Failed":
+				if truth.Abstain {
+					rep.RightAbstentions++
+				} else {
+					rep.WrongAbstentions++
+				}
+			case s.Fix != "" && s.Fix != "Requested":
+				rep.FixesProposed++
+				rep.FixesRight += countIf(s.FixRight)
+				rep.FixesHeld += countIf(s.Fix == "Held")
+				rep.FixesNotHeld += countIf(s.Fix == "NotHeld")
+			}
+		}
 		rep.WrongActions += s.WrongActions
 		rep.Runs[i] = s
 	}
@@ -301,6 +344,36 @@ func Score(runs []*Run, incidents map[model.ID][]IncidentVersion, opts ScoreOpti
 		rep.MedianRecovery = recoveries[len(recoveries)/2]
 	}
 	return rep
+}
+
+// scoreFix records the last step a run's fix reached and where it changed
+// the source. A fix is right at the file and line the ground truth names; an
+// abstention is right where the ground truth abstains.
+func (s *RunScore) scoreFix(steps []model.Fix, truth FixTruth) {
+	if len(steps) == 0 {
+		return
+	}
+	last := steps[len(steps)-1]
+	s.Fix = last.Phase
+	for _, f := range steps {
+		if len(f.Change) > 0 {
+			at, _, _ := strings.Cut(f.Change[0], ": ")
+			s.FixAt = at
+		}
+	}
+	switch {
+	case s.Fix == "Abstained" || s.Fix == "Failed":
+		s.FixRight = truth.Abstain
+	case !truth.Abstain:
+		s.FixRight = s.FixAt == fmt.Sprintf("%s:%d", truth.Path, truth.Line)
+	}
+}
+
+func countIf(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // executed returns the actions carried out by end.
@@ -398,13 +471,20 @@ func manifested(r *Run) time.Time {
 // measures appear when Sentinel carried out actions in the session.
 func (rep Report) WriteMarkdown(w io.Writer) error {
 	acting := rep.ActedRuns > 0 || rep.WrongActions > 0
+	fixing := rep.FixRuns > 0
 	var b strings.Builder
 	b.WriteString("| Scenario | Detected | Latency | Class | Root cause rank | Decision |")
 	if acting {
 		b.WriteString(" Acted |")
 	}
+	if fixing {
+		b.WriteString(" Fix |")
+	}
 	b.WriteString("\n|---|---|---|---|---|---|")
 	if acting {
+		b.WriteString("---|")
+	}
+	if fixing {
 		b.WriteString("---|")
 	}
 	b.WriteString("\n")
@@ -431,6 +511,9 @@ func (rep Report) WriteMarkdown(w io.Writer) error {
 		if acting {
 			b.WriteString(" " + s.actedCell() + " |")
 		}
+		if fixing {
+			b.WriteString(" " + s.fixCell() + " |")
+		}
 		b.WriteString("\n")
 	}
 	fmt.Fprintf(&b, "\n| Measure | Value |\n|---|---|\n")
@@ -448,8 +531,30 @@ func (rep Report) WriteMarkdown(w io.Writer) error {
 		fmt.Fprintf(&b, "| Median time from fault to verified recovery | %s |\n| Wrong actions | %d |\n",
 			rep.MedianRecovery.Round(time.Second), rep.WrongActions)
 	}
+	if fixing {
+		fmt.Fprintf(&b, "| Fixes proposed in Git | %d of %d |\n| Fixes at the right file and line | %d of %d |\n", rep.FixesProposed, rep.FixRuns,
+			rep.FixesRight, rep.FixesProposed)
+		fmt.Fprintf(&b, "| Fixes that held once merged | %d of %d |\n| Fixes that did not hold | %d |\n", rep.FixesHeld, rep.FixesProposed,
+			rep.FixesNotHeld)
+		fmt.Fprintf(&b, "| Abstentions where none was right | %d |\n| Abstentions where a fix was right | %d |\n", rep.RightAbstentions,
+			rep.WrongAbstentions)
+	}
 	_, err := io.WriteString(w, b.String())
 	return err
+}
+
+func (s RunScore) fixCell() string {
+	switch {
+	case s.Run.GroundTruth.Fix == nil:
+		return ""
+	case s.Fix == "":
+		return "none"
+	case s.Fix == "Abstained" || s.Fix == "Failed":
+		return strings.ToLower(s.Fix) + " " + mark(s.FixRight)
+	case s.FixAt != "":
+		return fmt.Sprintf("%s at %s %s", strings.ToLower(s.Fix), s.FixAt, mark(s.FixRight))
+	}
+	return strings.ToLower(s.Fix)
 }
 
 // actedCell says what Sentinel did about a run.

@@ -6,12 +6,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/discovery/cached/memory"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
@@ -39,6 +42,11 @@ func newRoot() *cobra.Command {
 	}
 	root.PersistentFlags().StringVar(&kf.Kubeconfig, "kubeconfig", "", "path to the kubeconfig file")
 	root.PersistentFlags().StringVar(&kf.Context, "context", "", "kubeconfig context to use")
+	var fo forgeOptions
+	root.PersistentFlags().StringVar(&fo.api, "forge-api", os.Getenv("HARNESS_FORGE_API"),
+		"for commit faults, the Gitea API's base URL, such as http://127.0.0.1:13000/api/v1")
+	root.PersistentFlags().StringVar(&fo.secret, "forge-token-secret", "gitea/gitea-person",
+		"for commit faults, NAMESPACE/NAME of the Secret holding the token of the person who owns the repositories")
 
 	validate := &cobra.Command{
 		Use:   "validate SCENARIO...",
@@ -66,7 +74,7 @@ func newRoot() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			in, err := newInjector(kf)
+			in, err := newInjector(cmd.Context(), kf, fo)
 			if err != nil {
 				return err
 			}
@@ -106,14 +114,19 @@ func newRoot() *cobra.Command {
 			if err := json.Unmarshal(b, &run); err != nil {
 				return err
 			}
-			in, err := newInjector(kf)
+			in, err := newInjector(cmd.Context(), kf, fo)
 			if err != nil {
 				return err
 			}
 			if err := in.Revert(cmd.Context(), &run); err != nil {
 				return err
 			}
-			_, err = writeRun(filepath.Dir(runPath), &run)
+			if _, err := writeRun(filepath.Dir(runPath), &run); err != nil {
+				return err
+			}
+			if run.Reverted != "" {
+				_, err = fmt.Fprintf(cmd.OutOrStdout(), "%s: reverted: %s\n", run.Scenario, run.Reverted)
+			}
 			return err
 		},
 	}
@@ -159,11 +172,11 @@ right. Incidents during control runs are false alarms.`,
 				return err
 			}
 			defer func() { _ = f.Close() }()
-			incidents, actions, err := harness.ReadExport(f)
+			export, err := harness.ReadExport(f)
 			if err != nil {
 				return err
 			}
-			rep := harness.Score(runs, incidents, harness.ScoreOptions{Grace: grace, Actions: actions})
+			rep := harness.Score(runs, export.Incidents, harness.ScoreOptions{Grace: grace, Actions: export.Actions, Fixes: export.Fixes})
 			if asJSON {
 				enc := json.NewEncoder(cmd.OutOrStdout())
 				enc.SetIndent("", "  ")
@@ -183,7 +196,10 @@ right. Incidents during control runs are false alarms.`,
 	return root
 }
 
-func newInjector(kf kube.Flags) (*harness.Injector, error) {
+// forgeOptions say where commit faults go, and whose token commits them.
+type forgeOptions struct{ api, secret string }
+
+func newInjector(ctx context.Context, kf kube.Flags, fo forgeOptions) (*harness.Injector, error) {
 	cfg, err := kf.RESTConfig(version.UserAgent("harness"))
 	if err != nil {
 		return nil, err
@@ -197,7 +213,19 @@ func newInjector(kf kube.Flags) (*harness.Injector, error) {
 		return nil, err
 	}
 	mapper := restmapper.NewDeferredDiscoveryRESTMapper(memory.NewMemCacheClient(client.Discovery()))
-	return &harness.Injector{Client: client, Dynamic: dyn, Mapper: mapper}, nil
+	in := &harness.Injector{Client: client, Dynamic: dyn, Mapper: mapper}
+	if fo.api != "" {
+		ns, name, ok := strings.Cut(fo.secret, "/")
+		if !ok {
+			return nil, fmt.Errorf("--forge-token-secret: name it as NAMESPACE/NAME")
+		}
+		secret, err := client.CoreV1().Secrets(ns).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return nil, fmt.Errorf("the forge token: %w", err)
+		}
+		in.Forge = &harness.Forge{API: fo.api, Token: string(secret.Data["token"]), HTTP: &http.Client{Timeout: time.Minute}}
+	}
+	return in, nil
 }
 
 func writeRun(dir string, run *harness.Run) (string, error) {
@@ -216,6 +244,8 @@ func describe(run *harness.Run) string {
 	switch {
 	case run.FaultKind == harness.FaultNone:
 		return "control, nothing injected"
+	case run.Reverted != "":
+		return run.Reverted
 	case run.ManifestedAt != nil:
 		return fmt.Sprintf("manifested after %s (%s)", run.ManifestedAt.Sub(run.InjectedAt).Round(1e9), run.Observation)
 	case run.Observation != "":

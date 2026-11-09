@@ -30,10 +30,21 @@ type Run struct {
 	RevertedAt   *time.Time  `json:"revertedAt,omitempty"`
 	GroundTruth  GroundTruth `json:"groundTruth"`
 	Observation  string      `json:"observation,omitempty"`
-	// Before is the target's spec before injection, used to revert it.
+	// Before is the target's spec before injection, used to revert it; for a
+	// commit fault, the file as it was.
 	Before json.RawMessage `json:"before,omitempty"`
 	// DeletedPods lists the pods a delete-pods fault removed.
 	DeletedPods []string `json:"deletedPods,omitempty"`
+	// Reverted says what the revert did, when it did more than restore.
+	Reverted string `json:"reverted,omitempty"`
+}
+
+// committed is a file a commit fault changed, as it was.
+type committed struct {
+	Repository string `json:"repository"`
+	Branch     string `json:"branch"`
+	Path       string `json:"path"`
+	Content    string `json:"content"`
 }
 
 // Quiet reports a run during which Sentinel should raise nothing: a control,
@@ -50,6 +61,12 @@ type Injector struct {
 	Now     func() time.Time
 	// Poll is the wait between manifestation checks.
 	Poll time.Duration
+	// Forge, for commit faults, is the forge as the person who owns the
+	// repositories; SentinelNamespace is where Sentinel's Fixes are, and
+	// FixWait how long the person waits for each step of one.
+	Forge             *Forge
+	SentinelNamespace string
+	FixWait           time.Duration
 }
 
 func (in *Injector) now() time.Time {
@@ -73,6 +90,10 @@ func (in *Injector) Inject(ctx context.Context, s *Scenario) (*Run, error) {
 		}
 	case FaultDeletePods:
 		if err := in.deletePods(ctx, s, run); err != nil {
+			return nil, err
+		}
+	case FaultCommit:
+		if err := in.commit(ctx, s, run); err != nil {
 			return nil, err
 		}
 	case FaultNone:
@@ -212,9 +233,13 @@ func matches(c Condition, p *corev1.Pod) (bool, string) {
 	return false, ""
 }
 
-// Revert restores a patched target's spec. Deleted pods are recreated by their
-// controllers, and controls need nothing.
+// Revert restores a patched target's spec, and undoes a commit as a person
+// would (revertCommit). Deleted pods are recreated by their controllers, and
+// controls need nothing.
 func (in *Injector) Revert(ctx context.Context, run *Run) error {
+	if run.FaultKind == FaultCommit {
+		return in.revertCommit(ctx, run)
+	}
 	if run.FaultKind != FaultPatch {
 		t := in.now()
 		run.RevertedAt = &t

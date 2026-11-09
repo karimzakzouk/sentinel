@@ -46,6 +46,12 @@ func TestValidateRejectsIncompleteScenarios(t *testing.T) {
 		"no selector":     {ID: "x", App: "a", Fault: Fault{Kind: FaultDeletePods, Target: target}, GroundTruth: gt},
 		"control expects": {ID: "x", App: "a", Fault: Fault{Kind: FaultNone}, GroundTruth: gt, Manifest: Manifestation{Condition: ConditionCrashLoop, Namespace: "ns", Selector: "a=b"}},
 		"unknown kind":    {ID: "x", App: "a", Fault: Fault{Kind: "chaos"}, GroundTruth: gt},
+		"commit no text": {ID: "x", App: "a", GroundTruth: gt, Fault: Fault{Kind: FaultCommit,
+			Target: Target{Kind: "Kustomization", Namespace: "flux-system", Name: "app"}, Commit: &Commit{Repository: "p/r", Path: "d.yaml"}}},
+		"commit to a Deployment": {ID: "x", App: "a", GroundTruth: gt, Fault: Fault{Kind: FaultCommit, Target: target,
+			Commit: &Commit{Repository: "p/r", Path: "d.yaml", Old: "a", New: "b"}}},
+		"fix both ways": {ID: "x", App: "a", Fault: Fault{Kind: FaultNone},
+			GroundTruth: GroundTruth{FaultClass: "x", Mitigation: "none", Fix: &FixTruth{Path: "d.yaml", Line: 3, Abstain: true}}},
 	}
 	for name, s := range bad {
 		if s.Validate() == nil {
