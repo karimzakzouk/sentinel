@@ -1,6 +1,8 @@
 # podinfo deployed by Flux from the test Gitea's repository person/delivery
-# (hack/gitea-up.sh) into e2e-delivery, as git-podinfo: the workload the
-# scenarios in test/scenarios/git break by committing to that repository.
+# (hack/gitea-up.sh) into e2e-delivery, as git-podinfo, and the planted-bug
+# test apps from its directories, as git-echo, git-patched and git-images:
+# the workloads the scenarios in test/scenarios/git break by committing to
+# that repository.
 # The delivery SentinelPolicy in test/apps/delivery.yaml lets Sentinel roll
 # it back through Flux; hack/delivery-up.sh applies this when Gitea runs.
 apiVersion: source.toolkit.fluxcd.io/v1
@@ -21,6 +23,45 @@ metadata:
 spec:
   sourceRef: {kind: GitRepository, name: git-delivery}
   path: ./
+  targetNamespace: e2e-delivery
+  namePrefix: git-
+  prune: true
+  interval: 1m
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: git-echo
+  namespace: flux-system
+spec:
+  sourceRef: {kind: GitRepository, name: git-delivery}
+  path: ./echo
+  targetNamespace: e2e-delivery
+  namePrefix: git-
+  prune: true
+  interval: 1m
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: git-patched
+  namespace: flux-system
+spec:
+  sourceRef: {kind: GitRepository, name: git-delivery}
+  path: ./patched
+  targetNamespace: e2e-delivery
+  namePrefix: git-
+  prune: true
+  interval: 1m
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: git-images
+  namespace: flux-system
+spec:
+  sourceRef: {kind: GitRepository, name: git-delivery}
+  path: ./images
   targetNamespace: e2e-delivery
   namePrefix: git-
   prune: true

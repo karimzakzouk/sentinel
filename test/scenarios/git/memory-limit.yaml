@@ -1,0 +1,27 @@
+id: git-memory-limit
+title: A commit cuts echo's memory below what it uses, so it is killed as it starts, and Flux deploys it
+app: git
+fault:
+  kind: commit
+  target: {apiVersion: kustomize.toolkit.fluxcd.io/v1, kind: Kustomization, namespace: flux-system, name: git-echo}
+  commit:
+    repository: person/delivery
+    path: echo/deployment.yaml
+    old: "memory: 16Mi\n            limits:\n              memory: 64Mi\n"
+    new: "memory: 6Mi\n            limits:\n              memory: 6Mi\n"
+    message: Trim echo's memory
+groundTruth:
+  faultClass: resource.memory-limit
+  rootCause: {apiVersion: apps/v1, kind: Deployment, namespace: e2e-delivery, name: git-echo}
+  changeType: resources
+  symptoms: [pod.oom-killed, pod.crash-loop]
+  mitigation: rollout.undo
+  # The right fix sets a limit learned from what echo used while healthy
+  # where the commit set the limit; echo must have run long enough to learn
+  # from, about ten minutes.
+  fix: {path: echo/deployment.yaml, line: 34}
+manifest:
+  condition: oom-killed
+  namespace: e2e-delivery
+  selector: app=echo
+  timeout: 4m

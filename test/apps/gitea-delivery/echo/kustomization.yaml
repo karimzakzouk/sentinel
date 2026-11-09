@@ -1,0 +1,5 @@
+# echo: agnhost's netexec on the port PORT names, so a bad value in Git
+# stops it as it starts. The scenarios in test/scenarios/git break it with
+# a commit; each knows the line the right fix changes.
+resources:
+  - deployment.yaml

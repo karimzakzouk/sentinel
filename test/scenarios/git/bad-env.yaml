@@ -1,0 +1,24 @@
+id: git-bad-env
+title: A commit gives echo a port that is not a number, so it exits as it starts, and Flux deploys it
+app: git
+fault:
+  kind: commit
+  target: {apiVersion: kustomize.toolkit.fluxcd.io/v1, kind: Kustomization, namespace: flux-system, name: git-echo}
+  commit:
+    repository: person/delivery
+    path: echo/deployment.yaml
+    old: 'value: "8080"'
+    new: 'value: eighty'
+    message: Name the port
+groundTruth:
+  faultClass: deploy.crash-on-start
+  rootCause: {apiVersion: apps/v1, kind: Deployment, namespace: e2e-delivery, name: git-echo}
+  changeType: config
+  symptoms: [pod.crash-loop]
+  mitigation: rollout.undo
+  fix: {path: echo/deployment.yaml, line: 28}
+manifest:
+  condition: crash-loop
+  namespace: e2e-delivery
+  selector: app=echo
+  timeout: 4m

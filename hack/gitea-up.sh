@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Runs a Gitea in the end-to-end cluster for the Fixer's tests. A person owns
-# the repository person/delivery, seeded with test/apps/gitea-delivery; the
+# the repository person/delivery, seeded with test/apps/gitea-delivery
+# (podinfo at its root, the planted-bug test apps in directories); the
 # bot sentinel is a collaborator that may push branches and open pull
 # requests. The bot's token goes to the Secret the Fixer mounts
 # (sentinel/sentinel-fixer-forge), the person's to gitea/gitea-person, which
@@ -40,15 +41,22 @@ if [ -z "$person" ] || ! api "http://127.0.0.1:$port/api/v1/user" >/dev/null 2>&
   k -n sentinel create secret generic sentinel-fixer-forge --from-literal=token="$bot" --dry-run=client -o yaml | k apply -f -
 fi
 
-if ! api "http://127.0.0.1:$port/api/v1/repos/person/delivery" >/dev/null 2>&1; then
+repo="http://127.0.0.1:$port/api/v1/repos/person/delivery"
+if ! api "$repo" >/dev/null 2>&1; then
   api -X POST "http://127.0.0.1:$port/api/v1/user/repos" \
     -d '{"name": "delivery", "default_branch": "main", "auto_init": true, "readme": "Default"}' >/dev/null
-  files=""
-  for f in "$root"/test/apps/gitea-delivery/*.yaml; do
-    files="$files${files:+,}{\"operation\": \"create\", \"path\": \"$(basename "$f")\", \"content\": \"$(base64 -w0 <"$f")\"}"
-  done
-  api -X POST "http://127.0.0.1:$port/api/v1/repos/person/delivery/contents" \
-    -d "{\"branch\": \"main\", \"message\": \"Deploy podinfo\", \"files\": [$files]}" >/dev/null
-  api -X PUT "http://127.0.0.1:$port/api/v1/repos/person/delivery/collaborators/sentinel" -d '{"permission": "write"}' >/dev/null
+  api -X PUT "$repo/collaborators/sentinel" -d '{"permission": "write"}' >/dev/null
+fi
+# Every file of test/apps/gitea-delivery the repository lacks, so test apps
+# added later reach a Gitea set up before them; files it has stay as they are.
+have=$(api "$repo/git/trees/main?recursive=true" | jq -r '.tree[] | select(.type == "blob") | .path')
+files=""
+while IFS= read -r f; do
+  path=${f#"$root/test/apps/gitea-delivery/"}
+  grep -qxF "$path" <<<"$have" && continue
+  files="$files${files:+,}{\"operation\": \"create\", \"path\": \"$path\", \"content\": \"$(base64 -w0 <"$f")\"}"
+done < <(find "$root/test/apps/gitea-delivery" -type f -name '*.yaml' | sort)
+if [ -n "$files" ]; then
+  api -X POST "$repo/contents" -d "{\"branch\": \"main\", \"message\": \"Deploy the test apps\", \"files\": [$files]}" >/dev/null
 fi
 echo "Gitea is ready on $ctx: http://gitea-http.gitea.svc:3000/person/delivery.git"

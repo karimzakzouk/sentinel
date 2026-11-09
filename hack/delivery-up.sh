@@ -16,7 +16,7 @@ deployments=(podinfo delivery-podinfo-helm kustomize-guestbook-ui)
 # the scenarios that commit there.
 if kubectl --context "$ctx" get namespace gitea >/dev/null 2>&1; then
   kubectl --context "$ctx" apply -f "$root/test/apps/git-delivery.yaml"
-  deployments+=(git-podinfo)
+  deployments+=(git-podinfo git-echo git-patched git-images)
 fi
 for d in "${deployments[@]}"; do
   # Each appears once its owner has synced.

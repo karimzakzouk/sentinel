@@ -1,0 +1,10 @@
+# patched: the port comes from this kustomization's patch, not the
+# manifest, as an overlay sets it; a fix belongs in the patch.
+resources:
+  - deployment.yaml
+patches:
+  - target: {kind: Deployment, name: patched}
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/env/0/value
+        value: "8080"

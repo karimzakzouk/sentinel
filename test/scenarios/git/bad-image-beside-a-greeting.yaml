@@ -1,0 +1,25 @@
+id: git-bad-image-beside-a-greeting
+title: One commit points echo at a tag that does not exist and changes its greeting; only the tag broke it
+app: git
+fault:
+  kind: commit
+  target: {apiVersion: kustomize.toolkit.fluxcd.io/v1, kind: Kustomization, namespace: flux-system, name: git-echo}
+  commit:
+    repository: person/delivery
+    path: echo/deployment.yaml
+    old: "agnhost:2.61\n          args: [netexec, \"--http-port=$(PORT)\"]\n          env:\n            - name: GREETING\n              value: hello\n"
+    new: "agnhost:2.61-missing\n          args: [netexec, \"--http-port=$(PORT)\"]\n          env:\n            - name: GREETING\n              value: hi\n"
+    message: Bump agnhost and say hi
+groundTruth:
+  faultClass: deploy.bad-image
+  rootCause: {apiVersion: apps/v1, kind: Deployment, namespace: e2e-delivery, name: git-echo}
+  changeType: image
+  symptoms: [pod.image-pull-error]
+  mitigation: rollout.undo
+  # The right fix restores the tag and leaves the greeting the commit set.
+  fix: {path: echo/deployment.yaml, line: 22}
+manifest:
+  condition: image-pull-error
+  namespace: e2e-delivery
+  selector: app=echo
+  timeout: 4m
