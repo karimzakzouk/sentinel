@@ -61,8 +61,14 @@ case "$network" in
     # kind's node image ships no bridge plugin, and Flannel delegates to it.
     fetch "https://github.com/containernetworking/plugins/releases/download/${CNI_PLUGINS_VERSION}/cni-plugins-linux-amd64-${CNI_PLUGINS_VERSION}.tgz" "$tmp/cni.tgz" "$CNI_PLUGINS_SHA256"
     tar -C "$tmp" -xzf "$tmp/cni.tgz"
+    # A pod reaching a Service backed by a pod on its own node crosses the
+    # bridge, and the reply is un-NATed only if bridged traffic passes
+    # netfilter. Docker no longer loads br_netfilter itself.
+    sudo -n modprobe br_netfilter 2>/dev/null || true
     for node in $(kind get nodes --name "$name"); do
       docker cp "$tmp/bridge" "$node:/opt/cni/bin/bridge"
+      docker exec "$node" sysctl -qw net.bridge.bridge-nf-call-iptables=1 net.bridge.bridge-nf-call-ip6tables=1 ||
+        echo "warning: bridged traffic skips netfilter on $node; Services backed by pods on the same node will not answer" >&2
     done
     fetch "https://github.com/flannel-io/flannel/releases/download/${FLANNEL_VERSION}/kube-flannel.yml" "$tmp/flannel.yaml" "$FLANNEL_SHA256"
     # host-gw needs no VXLAN support in the kernel; kind's nodes share one L2 network.
