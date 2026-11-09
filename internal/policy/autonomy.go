@@ -3,6 +3,7 @@
 package policy
 
 import (
+	"fmt"
 	"slices"
 
 	"github.com/karimzakzouk/sentinel/api/v1alpha1"
@@ -61,4 +62,20 @@ func MaxCapacityRemoval(policies []v1alpha1.SentinelPolicy) int32 {
 		}
 	}
 	return limit
+}
+
+// budgetSpent is the message of a request the hourly budget turned down.
+const budgetSpent = "the namespace's budget of %d actions an hour is spent"
+
+// BudgetSpentMessage is what the actor says of a request a namespace's
+// hourly budget of perHour actions turned down.
+func BudgetSpentMessage(perHour int) string { return fmt.Sprintf(budgetSpent, perHour) }
+
+// BudgetSpent reports whether a rejected request's message says the
+// namespace's hourly budget turned it down: a limit on how often Sentinel
+// acts, not a judgment of the action.
+func BudgetSpent(message string) bool {
+	var n int
+	_, err := fmt.Sscanf(message, budgetSpent, &n)
+	return err == nil && BudgetSpentMessage(n) == message
 }

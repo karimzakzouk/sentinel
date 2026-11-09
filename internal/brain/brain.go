@@ -15,6 +15,7 @@ import (
 	"github.com/karimzakzouk/sentinel/internal/ledger"
 	"github.com/karimzakzouk/sentinel/internal/model"
 	"github.com/karimzakzouk/sentinel/internal/notify"
+	"github.com/karimzakzouk/sentinel/internal/policy"
 	"github.com/karimzakzouk/sentinel/internal/slot"
 	"github.com/karimzakzouk/sentinel/internal/topology"
 	"github.com/karimzakzouk/sentinel/internal/watcher"
@@ -248,7 +249,7 @@ func (b *Brain) Restore(ctx context.Context) (int, error) {
 		}
 	}
 	// Breakers outlive restarts: an action that failed in the last day stays
-	// barred on its workload.
+	// barred on its workload, unless only the hourly budget turned it down.
 	actions, err := ledger.List[model.Action](ctx, b.Ledger, model.KindAction, "")
 	if err != nil {
 		return 0, err
@@ -258,7 +259,8 @@ func (b *Brain) Restore(ctx context.Context) (int, error) {
 		updated[rec.ID] = rec.UpdatedAt
 	}
 	for _, a := range actions {
-		if at, ok := updated[a.IncidentID]; ok && !a.Shadow && a.State == model.ActionFailed && now.Sub(at) < breakerOpen {
+		if at, ok := updated[a.IncidentID]; ok && !a.Shadow && a.State == model.ActionFailed && now.Sub(at) < breakerOpen &&
+			!policy.BudgetSpent(a.Params["result"]) {
 			b.trip(&a, at)
 		}
 	}

@@ -27,3 +27,9 @@ func TestAutonomy(t *testing.T) {
 		}
 	}
 }
+
+func TestBudgetSpentKnowsItsOwnMessage(t *testing.T) {
+	if !BudgetSpent(BudgetSpentMessage(6)) || BudgetSpent("the namespace's policy no longer allows it") || BudgetSpent("") {
+		t.Fatal("BudgetSpent misread a message")
+	}
+}
