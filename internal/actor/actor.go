@@ -76,6 +76,9 @@ type Actor struct {
 	Disabled func() bool
 	// PerHour bounds the actions run per namespace per hour.
 	PerHour int
+	// OnReady, when set, is called once the actor sees every namespace's
+	// requests.
+	OnReady func()
 	// Self lists Sentinel's own identities, which may not approve.
 	Self []string
 	// ArgoCDNamespace is where Argo CD keeps its Applications.
