@@ -215,8 +215,8 @@ func TestAWorkloadsRequestsAreListedNewestFirst(t *testing.T) {
 	if res := get(t, s, "localhost:8090", "/api/traffic/shop/Pod/cart", nil); res.Code != http.StatusBadRequest {
 		t.Fatalf("a pod: %d", res.Code)
 	}
-	if res := get(t, s, "localhost:8090", "/api/traffic/shop/Deployment/other", nil); res.Code != http.StatusOK ||
-		!json.Valid(res.Body.Bytes()) || string(res.Body.Bytes()) == "" || res.Body.String() == `{"requests":null}`+"\n" {
+	var none struct{ Requests []capture.Request }
+	if res := get(t, s, "localhost:8090", "/api/traffic/shop/Deployment/other", &none); res.Code != http.StatusOK || none.Requests == nil {
 		t.Fatalf("none: %d %s", res.Code, res.Body.String())
 	}
 }
