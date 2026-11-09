@@ -140,6 +140,23 @@ capture:
     limits:
       memory: 512Mi
 
+# The console signs people in with their own Kubernetes token. Where the
+# cluster's API server trusts an OIDC identity provider, it signs them in
+# there too: name the provider's issuer and the client the API server
+# accepts ID tokens for, and register the redirect URL, the console's
+# address as people open it, with the provider.
+console:
+  oidc:
+    issuer: ""
+    clientID: ""
+    # A Secret in the release namespace holding the client's secret, if
+    # the provider gives it one.
+    clientSecret:
+      secretName: ""
+      key: client-secret
+    redirectURL: http://localhost:8090/api/session/oidc/callback
+    scopes: [email, groups]
+
 # Where Sentinel tells people what it needs from them or did: approvals,
 # escalations, and actions that cleared an incident. Name a Secret holding a
 # Slack incoming webhook URL; without one, notices stay in the UI.

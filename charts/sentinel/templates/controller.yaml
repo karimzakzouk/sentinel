@@ -111,6 +111,11 @@ spec:
               mountPath: /etc/sentinel-capture
               readOnly: true
             {{- end }}
+            {{- if .Values.console.oidc.clientSecret.secretName }}
+            - name: oidc
+              mountPath: /etc/sentinel-oidc
+              readOnly: true
+            {{- end }}
       volumes:
         - name: config
           configMap:
@@ -125,6 +130,11 @@ spec:
         - name: capture-token
           secret:
             secretName: sentinel-capture-token
+        {{- end }}
+        {{- with .Values.console.oidc.clientSecret.secretName }}
+        - name: oidc
+          secret:
+            secretName: {{ . }}
         {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:

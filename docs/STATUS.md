@@ -100,10 +100,10 @@ To look at it on a cluster where it runs:
 | More incident classes | Node isolation, DNS failure, certificate expiry and refused connections (decision 79) | Unit tests; a deploy's errors that mention a name still roll back |
 | Merkle audit log | Done (decision 80) | Matches RFC 6962's test vectors; proofs checked for every tree up to 33 events |
 | High availability | Standby replicas for the actor, the Lab and the Fixer (decision 81) | On the development cluster with two of each: one Lease holder each, the fence allowed the Leases, a standby took over a second after the holder was deleted |
-| Console | Sign in with your own token; approve, veto, resume, set policies, as yourself (decision 82) | Unit tests of sign-in, the person's own approval, refusals from another page; on the development cluster a real token signed in, the cluster refused what it may not see, and a bad token got 401 |
+| Console | Sign in with your own token, or through the cluster's identity provider (decision 89); approve, veto, resume, set policies, as yourself (decision 82) | Unit tests of sign-in, the person's own approval, refusals from another page, and of single sign-on's state, nonce and replay checks; on the development cluster a real token signed in, the cluster refused what it may not see, and a bad token got 401; `hack/oidc-live.sh` signs in through a real Dex as a browser would |
 | Fingerprints | fp2 for logged exceptions (decision 84) | One Redis outage logged with two messages is one exception |
 | Traffic capture | Built (decisions 85 and 86): an optional eBPF agent (OpenTelemetry's OBI), a switch per namespace in its SentinelPolicy and the console, request details only, and replay in the Lab | On the development cluster: the agent ran on both nodes with eBPF's capabilities, not privileged; Online Boutique's frontend's requests (`GET /cart`, `/product/<id>`, `POST /cart/checkout`) and its gRPC calls to seven services arrived with methods, paths, statuses and timings; Redis statements, which carry keys, stayed out; the incident page lists them |
-| Own faker, single sign-on, mined fix patterns | Not started | |
+| Own faker, mined fix patterns | Not started | |
 
 ## Acting session
 
@@ -368,7 +368,6 @@ Full reasoning in [decisions.md](decisions.md).
 
 ## Next
 
-- **The console:** single sign-on where the cluster has it.
 - **Phase 3:** the Lab racing a learned memory limit before its pull
   request opens; fakes of outside services from the calls capture
   recorded, and the Lab's certificate authority for copies that serve TLS.

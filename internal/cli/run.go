@@ -62,7 +62,18 @@ func newRunCmd(kf *kube.Flags) *cobra.Command {
 			}
 			ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGTERM, os.Interrupt)
 			defer stop()
-			return runController(ctx, log, cfg, client, dyn, &api.Console{Clients: api.ClientsFor(rc), Namespaces: cfg.Namespaces})
+			console := &api.Console{Clients: api.ClientsFor(rc), Namespaces: cfg.Namespaces}
+			if o := cfg.UI.OIDC; o.Issuer != "" {
+				console.OIDC = &api.OIDC{Issuer: o.Issuer, ClientID: o.ClientID, RedirectURL: o.RedirectURL, Scopes: o.Scopes}
+				if o.ClientSecretFile != "" {
+					secret, err := os.ReadFile(o.ClientSecretFile)
+					if err != nil {
+						return fmt.Errorf("the console's OIDC client secret: %w", err)
+					}
+					console.OIDC.ClientSecret = strings.TrimSpace(string(secret))
+				}
+			}
+			return runController(ctx, log, cfg, client, dyn, console)
 		},
 	}
 	cmd.Flags().StringVar(&configPath, "config", "/etc/sentinel/config.yaml", "path to the controller config file")
