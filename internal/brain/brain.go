@@ -22,6 +22,10 @@ const source = "/brain"
 // ChangeEventType is the Ledger event type of observed changes.
 const ChangeEventType = "sentinel.change.observed"
 
+// newErrorTest is how long after a template change its rollout's new-error
+// test may still report: it reads the new pods one and three minutes in.
+const newErrorTest = 4 * time.Minute
+
 // Brain groups detections into incidents, explains them and records what it
 // would do. In observe mode it never acts: every action it chooses is
 // recorded as a shadow action.
@@ -428,10 +432,14 @@ func (b *Brain) assess(ctx context.Context, inc *incident, workload model.Object
 			}
 		}
 	}
+	var pending []string
 	if latestTemplate >= 0 {
 		candidates[latestTemplate].ProducedNewestRevision = true
+		if b.now().Sub(candidates[latestTemplate].At) < newErrorTest {
+			pending = append(pending, string(watcher.FactNewError))
+		}
 	}
-	classes, err := b.Classify.Decide(ctx, ClassifyInput{Facts: inc.facts, ChangeFields: groups})
+	classes, err := b.Classify.Decide(ctx, ClassifyInput{Facts: inc.facts, ChangeFields: groups, Pending: pending})
 	if err != nil {
 		return nil, nil, err
 	}

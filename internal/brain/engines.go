@@ -52,6 +52,10 @@ type ClassifyInput struct {
 	// ChangeFields holds the field groups of recent changes on the
 	// incident's workloads, such as "image", "resources", "env" or "configmap".
 	ChangeFields []string `json:"changeFields,omitempty"`
+	// Pending lists fact kinds that cannot have been observed yet, such as
+	// the new-error test of a rollout still under way: their absence is not
+	// evidence, so they count neither for nor against a class.
+	Pending []string `json:"pending,omitempty"`
 }
 
 // likelihoods[class][feature] is P(feature is present | class). They are
@@ -114,12 +118,18 @@ func (NaiveBayes) Decide(_ context.Context, in ClassifyInput) (slot.Distribution
 	for _, f := range in.ChangeFields {
 		present[f] = true
 	}
+	pending := map[string]bool{}
+	for _, f := range in.Pending {
+		pending[f] = !present[f]
+	}
 	anyChange := len(in.ChangeFields) > 0
 	logPost := make([]float64, len(Classes))
 	for i, c := range Classes {
 		lp := 0.0
 		for _, f := range factFeatures {
-			lp += logBernoulli(likelihoods[c][f], present[f])
+			if !pending[f] {
+				lp += logBernoulli(likelihoods[c][f], present[f])
+			}
 		}
 		if anyChange {
 			for _, f := range changeFeatures {

@@ -59,6 +59,25 @@ func TestClassifierPicksTheMatchingClass(t *testing.T) {
 	}
 }
 
+// Errors right after a deploy, before its new-error test can report, point
+// to the deploy; the test's silence is not yet evidence against it.
+func TestAPendingTestIsNotEvidence(t *testing.T) {
+	in := ClassifyInput{Facts: map[string]int{"log.errors": 300}, ChangeFields: []string{"config"}}
+	settled, err := NaiveBayes{}.Decide(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in.Pending = []string{"log.new-error"}
+	pending, err := NaiveBayes{}.Decide(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settled.Top().Value != ClassRuntimeErrors || pending.Top().Value != ClassNewErrors {
+		t.Fatalf("top class %s once the test has spoken, %s while it is pending; want runtime errors, then new errors after a deploy",
+			settled.Top().Value, pending.Top().Value)
+	}
+}
+
 func TestAttributionPrefersARelevantTimelyChange(t *testing.T) {
 	classes := classify(t, map[string]int{"pod.image-pull-error": 10}, "image", "config")
 	in := AttributeInput{
