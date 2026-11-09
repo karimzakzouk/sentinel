@@ -405,9 +405,10 @@ func TestACellsStandingSaysWhyItHasNotEarnedAutonomy(t *testing.T) {
 	}
 }
 
-// A person who puts back the revision Sentinel rolled away from reverts the
-// rollback: it counts against the cell, opens the breaker and is told.
-// Sentinel's own change, or a person's new revision, does not.
+// A person who puts back the revision Sentinel rolled away from, which then
+// runs without trouble, reverts the rollback: it counts against the cell,
+// opens the breaker and is told. Sentinel's own change, or a person's new
+// revision, does not.
 func TestAPersonsRevertCountsAgainstTheRollback(t *testing.T) {
 	b, l := newBrain(t)
 	b.Act = &fakeRequester{allow: true}
@@ -458,6 +459,10 @@ func TestAPersonsRevertCountsAgainstTheRollback(t *testing.T) {
 	change("kubectl-client-side-apply", 20*time.Minute)
 	newest = "new"
 	sweep(21 * time.Minute)
+	if reverted() {
+		t.Fatal("the revert counted before the revision had run long enough to judge it")
+	}
+	sweep(30 * time.Minute)
 	if !reverted() {
 		t.Fatal("putting back the revision Sentinel rolled away from was not counted")
 	}
@@ -471,9 +476,103 @@ func TestAPersonsRevertCountsAgainstTheRollback(t *testing.T) {
 	if len(notices) == 0 || !strings.Contains(notices[len(notices)-1].Title, "was reverted by kubectl-client-side-apply") {
 		t.Fatalf("notices = %+v", notices)
 	}
-	sweep(22 * time.Minute)
+	sweep(31 * time.Minute)
 	if rec := b.tracks[key]; rec.Beta != 2 {
 		t.Fatalf("the revert counted %v times", rec.Beta-1)
+	}
+}
+
+// A revision put back that fails again shows the rollback was right: it
+// does not count against it, and Sentinel rolls back again. The third time
+// the same revision comes back, Sentinel stops and says so.
+func TestARevisionThatFailsAgainUpholdsTheRollback(t *testing.T) {
+	b, l := newBrain(t)
+	act := &fakeRequester{allow: true}
+	b.Act = act
+	newest := "new"
+	b.Revisions = func(model.ObjectRef) string { return newest }
+	var notices []notify.Notice
+	b.Notify = func(_ context.Context, n notify.Notice) { notices = append(notices, n) }
+	at := func(d time.Duration) { b.Now = func() time.Time { return onset.Add(d) } }
+	change := func(actor string, d time.Duration) {
+		t.Helper()
+		if err := b.OnChange(ctx, watcher.Change{ID: model.NewID(), Kind: watcher.ChangeTemplate, Object: web,
+			Fields: []string{"image:web"}, At: onset.Add(d), Actor: actor}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sweep := func(d time.Duration) {
+		t.Helper()
+		at(d)
+		if err := b.Sweep(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// fail puts the revision back at d and fails it a minute later.
+	fail := func(d time.Duration) {
+		t.Helper()
+		change("kubectl-client-side-apply", d)
+		newest = "new"
+		sweep(d + 30*time.Second)
+		at(d + time.Minute)
+		if err := b.OnDetection(ctx, watcher.Detection{ID: model.NewID(), Workload: web, Kind: watcher.FactImagePullError,
+			Count: 6, Onset: onset.Add(d + 30*time.Second), At: onset.Add(d + time.Minute), Revisions: map[string]int{"new": 6}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// rolledBack has the actor roll the open incident back at d, and the
+	// incident end and resolve.
+	rolledBack := func(d time.Duration) {
+		t.Helper()
+		inc := b.open[web.String()]
+		if inc == nil {
+			t.Fatal("no incident open on web")
+		}
+		at(d)
+		if err := b.OnActionOutcome(ctx, ActionOutcome{IncidentID: inc.rec.ID, Phase: "Succeeded", Message: "rolled web back"}); err != nil {
+			t.Fatal(err)
+		}
+		change(model.ActorFieldManager, d+10*time.Second)
+		newest = "old"
+		for id := range inc.episodes {
+			if err := b.OnDetection(ctx, watcher.Detection{ID: id, Workload: web, Ended: true, At: onset.Add(d + time.Minute)}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		sweep(d + 10*time.Minute)
+		if len(b.open) != 0 {
+			t.Fatalf("incidents still open: %d", len(b.open))
+		}
+	}
+	reverted := func() bool {
+		events, err := l.Events(ctx, 0, 100000)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return slices.ContainsFunc(events, func(e ledger.Event) bool { return e.Type == "sentinel.action.reverted" })
+	}
+
+	badDeploy(t, b)
+	rolledBack(time.Minute)
+	fail(20 * time.Minute)
+	if len(act.calls) != 2 {
+		t.Fatalf("Sentinel asked %d times; want a second rollback once the revision failed again", len(act.calls))
+	}
+	sweep(40 * time.Minute)
+	if reverted() || !b.breakerUntil(ActionRolloutUndo, web).IsZero() {
+		t.Fatal("a revision that failed again counted against the rollback")
+	}
+	rolledBack(40 * time.Minute)
+	fail(60 * time.Minute)
+	if len(act.calls) != 2 {
+		t.Fatalf("Sentinel asked %d times; want it to stop rolling back a revision that keeps coming back", len(act.calls))
+	}
+	if len(notices) == 0 || !strings.Contains(notices[len(notices)-1].Title, "keeps coming back") {
+		t.Fatalf("notices = %+v", notices)
+	}
+	sweep(80 * time.Minute)
+	if reverted() {
+		t.Fatal("a revision that failed again counted against the rollback")
 	}
 }
 
