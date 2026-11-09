@@ -1,6 +1,6 @@
 # Status
 
-Last updated: Monday 9 November 2026, 17:30 Cairo time (UTC+2).
+Last updated: Monday 9 November 2026, 19:45 Cairo time (UTC+2).
 
 ## Where things stand
 
@@ -68,7 +68,7 @@ To look at it on a cluster where it runs:
 
 | Slice | State | Proof |
 |---|---|---|
-| 1. Restore a bad value through Git | Built for an image set in the files a Flux Kustomization or an Argo CD Application deploys (decisions 67 to 70): the Fixer finds the file or images entry that set it, opens a one-line pull request, follows it until the owner has applied it, and Sentinel checks that it held. Resuming the owner stays a person's (decision 69). Proven through Flux and Argo CD, and scored (below) | `TestTheFixerProposesTheFixInGit` and `TestTheFixerProposesTheFixInGitThroughArgoCD`, in CI and on the development cluster: a bad image committed to the Gitea repository the owner deploys from, Sentinel's rollback, a pull request changing line 17 of `deployment.yaml` with its comment kept, merged, the owner resumed, and "fix held", about 3 minutes after the proposal. The Git scenario session below. Unit tests render overlays with images entries, plain manifests, owners' name prefixes, and the abstentions |
+| 1. Restore a bad value through Git | Built for an image, a command, arguments and environment values set in the files a Flux Kustomization or an Argo CD Application deploys (decisions 67 to 70 and 72): the Fixer finds the file or images entry that set it, opens a one-line pull request, follows it until the owner has applied it, and Sentinel checks that it held. Resuming the owner stays a person's (decision 69). Proven through Flux and Argo CD, and scored (below) | `TestTheFixerProposesTheFixInGit` and `TestTheFixerProposesTheFixInGitThroughArgoCD`, in CI and on the development cluster: a bad image committed to the Gitea repository the owner deploys from, Sentinel's rollback, a pull request changing line 17 of `deployment.yaml` with its comment kept, merged, the owner resumed, and "fix held", about 3 minutes after the proposal. The Git scenario session below. Unit tests render overlays with images entries, plain manifests, owners' name prefixes, and the abstentions |
 | 2. Partial reverts | Not started | |
 | 3. Values of their own | Not started | |
 | 4. Code incidents | Not started | |
@@ -140,18 +140,20 @@ changes, or that proposing none is right:
 
 | Scenario | Sentinel did | Fix |
 |---|---|---|
-| A commit sets a bad image tag | rolled back through Flux, verified after 1m6s | proposed at `deployment.yaml:17`, merged, held ✓ |
-| A commit starts podinfo with a flag it does not know | rolled back, verified after 1m0s | none: the Fixer restores images only so far ✗ |
-| A bad image set on the Kustomization itself | rolled back, verified after 1m5s | none, and none was right: Git does not hold it ✓ |
+| A commit sets a bad image tag | rolled back through Flux, verified after 1m6s | `deployment.yaml:17` set back, merged, held ✓ |
+| A commit starts podinfo with a flag it does not know | rolled back, verified after 59s | the added `command` line removed, merged, held ✓ |
+| A bad image set on the Kustomization itself | rolled back, verified after 1m7s | none, and none was right: Git does not hold it ✓ |
 
 Detection, class, root cause and decision right every time, every fault
-rolled back and verified, no wrong action; one fix proposed, at the right
-line, and it held; no fix that did not hold. Two things the session found
-are fixed: after a person resumed the Kustomization with `sentinel resume`,
-the actor refused every later rollback through it (decision 71); and the
-crash scenario first replaced podinfo's command instead of adding a flag, so
-the container could not start at all, which Sentinel rightly called a
-configuration error; the corrected scenario reads as a crash on start.
+rolled back and verified, no wrong action; both fixes at the right line, and
+both held; no fix that did not hold, no abstention where a fix was right.
+The first runs found three things, all fixed: the Fixer restored images
+only (it now restores commands, arguments and environment values,
+decision 72); after a person resumed the Kustomization with `sentinel
+resume`, the actor refused every later rollback through it (decision 71);
+and the crash scenario first replaced podinfo's command instead of adding a
+flag, so the container could not start at all, which Sentinel rightly
+called a configuration error.
 
 ## Scored session (observe only)
 
@@ -236,11 +238,11 @@ Full reasoning in [decisions.md](decisions.md).
 
 - **Phase 3:** a config value reverted as a second candidate, and slice 4's
   datastores and replay. The gate's repetitions passed (above).
-- **Phase 4 (Fixer)**, planned in [phase-4.md](plan/phase-4.md): restoring
-  more than images (arguments, environment, probes), which the Git session
-  showed is the next gap, then slice 2's partial reverts. The Gitea now in
-  the test cluster will also let the parent-Kustomization test use a real
-  parent.
+- **Phase 4 (Fixer)**, planned in [phase-4.md](plan/phase-4.md): test apps
+  of our own with planted bugs, for faults podinfo shrugs off (it ignores bad
+  environment values) and later for code fixes; values set by a
+  kustomization's patch; slice 2's partial reverts. The Gitea now in the test
+  cluster will also let the parent-Kustomization test use a real parent.
 - **Soak.** A long run with the scenario pool's controls and background
   traffic, to measure false alarms per service per week, the error-rate
   detector's especially. Shorter runs on the development cluster first; the
