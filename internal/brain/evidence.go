@@ -223,18 +223,26 @@ func evidenceRecord(incident model.ID, ev watcher.LogEvidence) model.Evidence {
 }
 
 // describeLogs is a one-line account of a log's errors, from its redacted
-// templates and exceptions.
+// templates and exceptions: each exception by its root cause's type, each
+// error template clipped.
 func describeLogs(ev watcher.LogEvidence) string {
 	parts := []string{fmt.Sprintf("%s logs of %s/%s: %d lines", ev.Reason, ev.Pod, ev.Container, ev.Summary.Lines)}
 	for _, e := range ev.Summary.Exceptions[:min(len(ev.Summary.Exceptions), 2)] {
-		parts = append(parts, fmt.Sprintf("%s ×%d", strings.Join(e.Types, " > "), e.Count))
+		parts = append(parts, fmt.Sprintf("%s ×%d", clipText(e.Types[len(e.Types)-1], 100), e.Count))
 	}
 	shown := 0
 	for _, t := range ev.Summary.Templates {
 		if t.Error && shown < 2 {
-			parts = append(parts, fmt.Sprintf("%q ×%d", t.Template, t.Count))
+			parts = append(parts, fmt.Sprintf("%q ×%d", clipText(t.Template, 120), t.Count))
 			shown++
 		}
 	}
 	return strings.Join(parts, "; ")
+}
+
+func clipText(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return string(r[:n]) + "…"
+	}
+	return s
 }
