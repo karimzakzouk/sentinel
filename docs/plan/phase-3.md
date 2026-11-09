@@ -75,6 +75,42 @@ fidelity difference from production. **Proof**: Online Boutique's frontend
 and its stateless dependencies run in a Lab with none of their production
 peers reachable.
 
+**Design.** An Experiment names its workload and the failing revision; the
+controller fills both from the incident.
+
+- **Reading.** The Lab reads the workload's template at that revision (a
+  Deployment's ReplicaSet, a StatefulSet's ControllerRevision), the image
+  digests its running pods report, the namespace's Services and the
+  ConfigMaps the template references. It never reads a Secret.
+- **Synthesizing.** One bare pod per workload, so one replica. Containers
+  and init containers are kept; mesh sidecars and their init containers are
+  dropped. The service account becomes the Lab namespace's default, without
+  a token. Images are pinned to the digests production runs. Secret values
+  become placeholders and secret volumes empty directories. ConfigMaps are
+  copied. A workload with persistent volumes is refused until slice 4.
+  Services are copied with the same names, selectors and ports, and
+  dependencies follow the topology map, recursively.
+- **Names.** A Lab DNS (CoreDNS with only the hosts plugin, never
+  forwarding, logging every query) answers each copied Service's short, Lab
+  and production names with the Lab copy's address. Pods use it through
+  `dnsConfig`, the production namespace first in their search path, so
+  configuration is not rewritten. Any other name gets NXDOMAIN and is
+  reported: a name the workload needed that the Lab could not provide makes
+  the verdict NOT SURE, which catches dependencies the map missed
+  (ConfigMap and Secret values, which the map does not read).
+- **Proof inside.** With the world up, the matrix runs again, adding each
+  copied Service by its production name as a positive control, which must
+  reach the Lab copy.
+- **Fidelity.** Every difference from production goes in the Experiment's
+  status.
+- **Cleanup.** An Experiment starts and ends by deleting everything the Lab
+  labeled in its namespace; on start the Lab cleans every pool namespace
+  without a running Experiment.
+
+The CI proof uses a small two-tier app beside the smoke workloads; GitHub's
+runners are too small for a second Online Boutique, which waits for the
+self-hosted runner.
+
 ### 3. Reproduce and judge
 
 Run the baseline (the failing revision) twice to learn the noise (A/A);

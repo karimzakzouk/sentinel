@@ -1,0 +1,167 @@
+package lab
+
+import (
+	"slices"
+	"strings"
+	"testing"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/utils/ptr"
+
+	"github.com/karimzakzouk/sentinel/internal/model"
+)
+
+func ref(kind, name string) model.ObjectRef {
+	return model.ObjectRef{Kind: kind, Namespace: "shop", Name: name}
+}
+
+func service(name string, selector map[string]string) corev1.Service {
+	return corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "shop"},
+		Spec: corev1.ServiceSpec{Selector: selector, ClusterIP: "10.96.0.9",
+			Ports: []corev1.ServicePort{{Port: 8080, TargetPort: intstr.FromInt32(8080), NodePort: 30080}}}}
+}
+
+func workload(kind, name string, replicas int32, c corev1.Container) Workload {
+	return Workload{Ref: ref(kind, name), Replicas: replicas, Template: corev1.PodTemplateSpec{
+		ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": name}},
+		Spec:       corev1.PodSpec{Containers: []corev1.Container{c}},
+	}}
+}
+
+// shop is a front that calls a backend, an external API and a database it
+// does not depend on, with everything the Lab must strip or replace.
+func shop() World {
+	front := workload("Deployment", "front", 3, corev1.Container{Name: "front", Image: "shop/front:v2",
+		Env: []corev1.EnvVar{
+			{Name: "BACKEND", Value: "backend:8080"},
+			{Name: "PAYMENTS", Value: "https://api.stripe.com/v1"},
+			{Name: "TOKEN", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
+				LocalObjectReference: corev1.LocalObjectReference{Name: "front-secrets"}, Key: "token"}}},
+			{Name: "MODE", ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
+				LocalObjectReference: corev1.LocalObjectReference{Name: "front-config"}, Key: "mode"}}},
+		},
+		EnvFrom: []corev1.EnvFromSource{{SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "front-env"}}}},
+	})
+	front.Template.Spec.Containers = append(front.Template.Spec.Containers, corev1.Container{Name: "istio-proxy", Image: "istio/proxyv2"})
+	front.Template.Spec.InitContainers = []corev1.Container{{Name: "istio-init", Image: "istio/proxyv2"}}
+	front.Template.Spec.ServiceAccountName = "front"
+	front.Template.Spec.PriorityClassName = "critical"
+	front.Template.Spec.ImagePullSecrets = []corev1.LocalObjectReference{{Name: "registry"}}
+	front.Template.Spec.Volumes = []corev1.Volume{
+		{Name: "tls", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: "front-tls"}}},
+		{Name: "config", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
+			LocalObjectReference: corev1.LocalObjectReference{Name: "front-config"}}}},
+		{Name: "tmp", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+	}
+	backend := workload("Deployment", "backend", 1, corev1.Container{Name: "backend", Image: "shop/backend:v7"})
+	db := workload("StatefulSet", "db", 1, corev1.Container{Name: "db", Image: "postgres:18"})
+	db.Claims = true
+	return World{
+		Namespace: "shop",
+		Workloads: map[model.ObjectRef]Workload{front.Ref: front, backend.Ref: backend, db.Ref: db},
+		Services: []corev1.Service{service("front", map[string]string{"app": "front"}), service("backend", map[string]string{"app": "backend"}),
+			service("db", map[string]string{"app": "db"})},
+		ConfigMaps: map[string]*corev1.ConfigMap{"front-config": {ObjectMeta: metav1.ObjectMeta{Name: "front-config"}, Data: map[string]string{"mode": "live"}}},
+		Digests:    map[string]string{"shop/front:v2": "shop/front@sha256:aaa", "shop/backend:v7": "shop/backend@sha256:bbb"},
+	}
+}
+
+func TestSynthesisCopiesTheWorkloadAndWhatItCalls(t *testing.T) {
+	plan, err := Synthesize(shop(), ref("Deployment", "front"), "sentinel-lab-0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := plan.Workloads; len(got) != 2 || got[0].Name != "front" || got[1].Name != "backend" {
+		t.Fatalf("copied %v; want the front and the backend it calls, not the database", got)
+	}
+	var names []string
+	for _, s := range plan.Services {
+		names = append(names, s.Name)
+		if s.Namespace != "sentinel-lab-0" || s.Spec.ClusterIP != "" || s.Spec.Ports[0].NodePort != 0 || s.Labels[Label] != WorldRole {
+			t.Fatalf("Service %s is not a fresh Lab copy: %+v", s.Name, s)
+		}
+	}
+	if !slices.Equal(names, []string{"front", "backend"}) {
+		t.Fatalf("copied Services %v; want front and backend", names)
+	}
+	if len(plan.ConfigMaps) != 1 || plan.ConfigMaps[0].Data["mode"] != "live" || plan.ConfigMaps[0].Namespace != "sentinel-lab-0" {
+		t.Fatalf("ConfigMaps %+v; want front-config copied", plan.ConfigMaps)
+	}
+
+	front := plan.Pods[0]
+	spec := front.Spec
+	switch {
+	case front.Name != "front-lab" || front.Labels["app"] != "front" || front.Labels[Label] != WorldRole || front.Labels[CopyOf] != "Deployment.front":
+		t.Fatalf("pod %s labels %v", front.Name, front.Labels)
+	case spec.ServiceAccountName != "" || !ptr.Equal(spec.AutomountServiceAccountToken, ptr.To(false)):
+		t.Fatal("the copy keeps production's service account or a token")
+	case spec.PriorityClassName != "" || spec.ImagePullSecrets != nil || spec.DNSPolicy != corev1.DNSNone:
+		t.Fatalf("the copy keeps production's priority, pull secrets or DNS: %+v", spec)
+	case len(spec.Containers) != 1 || len(spec.InitContainers) != 0:
+		t.Fatal("the mesh's containers were copied")
+	case spec.Containers[0].Image != "shop/front@sha256:aaa":
+		t.Fatalf("image %s is not production's digest", spec.Containers[0].Image)
+	case len(spec.Containers[0].EnvFrom) != 0:
+		t.Fatal("a secret's variables were copied")
+	case spec.Volumes[0].Secret != nil || spec.Volumes[0].EmptyDir == nil || spec.Volumes[1].ConfigMap == nil:
+		t.Fatalf("volumes %+v; want the secret emptied and the ConfigMap kept", spec.Volumes)
+	}
+	for _, e := range spec.Containers[0].Env {
+		if e.Name == "TOKEN" && (e.ValueFrom != nil || e.Value != Placeholder) {
+			t.Fatalf("the secret value was not replaced: %+v", e)
+		}
+	}
+	for _, want := range []string{
+		"Deployment/shop/front runs one replica instead of 3",
+		"Deployment/shop/front runs without its service account front or any API token",
+		"Deployment/shop/front runs at the default priority, so it never preempts production",
+		"Deployment/shop/front runs without its service mesh container istio-proxy",
+		"Deployment/shop/front's TOKEN holds a placeholder instead of secret front-secrets",
+		"Deployment/shop/front runs without the variables of secret front-env",
+		"Deployment/shop/front's volume tls is an empty directory instead of secret front-tls",
+		"Deployment/shop/front names api.stripe.com, which is outside the Lab and unreachable there",
+	} {
+		if !slices.Contains(plan.Fidelity, want) {
+			t.Errorf("fidelity lacks %q; got:\n%s", want, strings.Join(plan.Fidelity, "\n"))
+		}
+	}
+}
+
+func TestSynthesisRefusesWhatItCannotCopy(t *testing.T) {
+	cases := map[string]struct {
+		change func(*World)
+		why    string
+	}{
+		"a dependency with persistent state": {func(w *World) {
+			b := w.Workloads[ref("Deployment", "backend")]
+			b.Template.Spec.Containers[0].Env = []corev1.EnvVar{{Name: "DB", Value: "db:5432"}}
+			w.Workloads[b.Ref] = b
+		}, "StatefulSet/shop/db keeps state in persistent volumes"},
+		"the node's network": {func(w *World) {
+			f := w.Workloads[ref("Deployment", "front")]
+			f.Template.Spec.HostNetwork = true
+			w.Workloads[f.Ref] = f
+		}, "shares the node's namespaces"},
+		"a path from the node": {func(w *World) {
+			f := w.Workloads[ref("Deployment", "front")]
+			f.Template.Spec.Volumes = append(f.Template.Spec.Volumes, corev1.Volume{Name: "logs",
+				VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/var/log"}}})
+			w.Workloads[f.Ref] = f
+		}, "mounts a path from the node"},
+		"a missing ConfigMap": {func(w *World) { delete(w.ConfigMaps, "front-config") }, "needs ConfigMap front-config"},
+		"a Service named like the Lab's own": {func(w *World) {
+			w.Services = append(w.Services, service("lab-dns", map[string]string{"app": "front"}))
+		}, "has a name the Lab uses"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			w := shop()
+			tc.change(&w)
+			if _, err := Synthesize(w, ref("Deployment", "front"), "sentinel-lab-0"); err == nil || !strings.Contains(err.Error(), tc.why) {
+				t.Fatalf("got %v; want a refusal saying %q", err, tc.why)
+			}
+		})
+	}
+}
