@@ -51,7 +51,7 @@ e2e-up:
 
 # E2E_RUN narrows the suite to the tests a regular expression names.
 e2e:
-	E2E_CLUSTER=$(E2E_CLUSTER) $(GO) test -count=1 -timeout 30m -tags e2e $(if $(E2E_RUN),-run '$(E2E_RUN)') ./test/e2e/...
+	E2E_CLUSTER=$(E2E_CLUSTER) $(GO) test -v -count=1 -timeout 30m -tags e2e $(if $(E2E_RUN),-run '$(E2E_RUN)') ./test/e2e/...
 
 e2e-down:
 	kind delete cluster --name $(E2E_CLUSTER)
