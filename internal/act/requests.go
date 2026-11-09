@@ -115,7 +115,7 @@ func (r *Requests) Acting() bool {
 	r.mu.Unlock()
 	for _, ns := range namespaces {
 		for _, action := range []string{actor.ActionRolloutUndo, actor.ActionArgoCDRollback, actor.ActionFluxRollback, actor.ActionScale} {
-			if r.Autonomy(ns, action) == v1alpha1.AutonomyAutonomous {
+			if level := r.Autonomy(ns, action); level == v1alpha1.AutonomyAutonomous || level == v1alpha1.AutonomyLabVerified {
 				return true
 			}
 		}
@@ -134,8 +134,13 @@ func RequestAction(brainAction string) (string, bool) {
 	return "", false
 }
 
-// approvalTTL is how long a request that needs a person waits for one.
+// approvalTTL is how long a request that needs a person, or the Lab,
+// waits for one.
 const approvalTTL = time.Hour
+
+// ParamExperiment carries, from the Brain, the Lab Experiment verifying an
+// action; the request names it in an annotation, not in its parameters.
+const ParamExperiment = "experiment"
 
 // Request asks the actor for an action if the target namespace's policy
 // lets Sentinel run it on its own, after a veto window, or once a person
@@ -158,15 +163,21 @@ func (r *Requests) Request(ctx context.Context, a model.Action, reason string) (
 	case v1alpha1.AutonomyAutonomous:
 	case v1alpha1.AutonomyActUnlessVetoed:
 		ttl += actor.VetoWindow
-	case v1alpha1.AutonomyApprove:
+	case v1alpha1.AutonomyApprove, v1alpha1.AutonomyLabVerified:
 		ttl = approvalTTL
 	default:
 		return false, nil
 	}
+	params := maps.Clone(a.Params)
+	var annotations map[string]string
+	if exp := params[ParamExperiment]; exp != "" {
+		annotations = map[string]string{actor.AnnotationExperiment: exp}
+	}
+	delete(params, ParamExperiment)
 	req := &v1alpha1.ActionRequest{
 		TypeMeta:   metav1.TypeMeta{APIVersion: v1alpha1.GroupVersion.String(), Kind: "ActionRequest"},
-		ObjectMeta: metav1.ObjectMeta{Name: requestName(a.IncidentID, action), Namespace: a.Target.Namespace},
-		Spec: v1alpha1.ActionRequestSpec{IncidentID: string(a.IncidentID), Action: action, Params: a.Params, Reason: clip(reason, 2048),
+		ObjectMeta: metav1.ObjectMeta{Name: requestName(a.IncidentID, action), Namespace: a.Target.Namespace, Annotations: annotations},
+		Spec: v1alpha1.ActionRequestSpec{IncidentID: string(a.IncidentID), Action: action, Params: params, Reason: clip(reason, 2048),
 			ExpiresAt: metav1.NewTime(time.Now().Add(ttl)),
 			Target:    v1alpha1.TargetRef{APIVersion: "apps/v1", Kind: a.Target.Kind, Namespace: a.Target.Namespace, Name: a.Target.Name}},
 	}
