@@ -1,0 +1,4 @@
+# A push to main that changes this file runs the Soak workflow on the
+# self-hosted runner, as "Run workflow" does; hours is how long to watch,
+# 1 to 72. The soak holds the runner for that long.
+hours: 72
