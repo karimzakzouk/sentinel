@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -166,9 +167,11 @@ func argoSource(ctx context.Context, dyn dynamic.Interface, ns, name string) (*S
 	return s, nil
 }
 
-// ImageChange finds the one container whose image differs between the
-// revision a Deployment was rolled back from and its current template.
-func ImageChange(ctx context.Context, client kubernetes.Interface, dep *appsv1.Deployment, fromRevision string) (Change, error) {
+// ContainerChange finds the one value that differs between the revision a
+// Deployment was rolled back from and its current template, among those the
+// Fixer restores: a container's image, command and arguments, and its
+// environment variables' literal values.
+func ContainerChange(ctx context.Context, client kubernetes.Interface, dep *appsv1.Deployment, fromRevision string) (Change, error) {
 	list, err := client.AppsV1().ReplicaSets(dep.Namespace).List(ctx, metav1.ListOptions{LabelSelector: "pod-template-hash=" + fromRevision})
 	if err != nil {
 		return Change{}, err
@@ -184,21 +187,72 @@ func ImageChange(ctx context.Context, client kubernetes.Interface, dep *appsv1.D
 	if from == nil {
 		return Change{}, fmt.Errorf("%s has no revision %s any more", dep.Name, fromRevision)
 	}
-	current := map[string]string{}
+	current := map[string]corev1.Container{}
 	for _, c := range append(dep.Spec.Template.Spec.InitContainers, dep.Spec.Template.Spec.Containers...) {
-		current[c.Name] = c.Image
+		current[c.Name] = c
 	}
 	var changes []Change
-	for _, c := range append(from.Spec.Template.Spec.InitContainers, from.Spec.Template.Spec.Containers...) {
-		if now, ok := current[c.Name]; ok && now != c.Image {
-			changes = append(changes, Change{Container: c.Name, Bad: c.Image, Good: now})
+	for _, bad := range append(from.Spec.Template.Spec.InitContainers, from.Spec.Template.Spec.Containers...) {
+		good, ok := current[bad.Name]
+		if !ok {
+			continue
+		}
+		for _, field := range containerFields(bad, good) {
+			b, g := fieldValue(bad, field), fieldValue(good, field)
+			if !sameValue(b, g) {
+				changes = append(changes, Change{Container: bad.Name, Field: field, Bad: b, Good: g})
+			}
+		}
+	}
+	for _, c := range changes {
+		if c.Bad == valueFromSet || c.Good == valueFromSet {
+			return Change{}, fmt.Errorf("%s's %s comes from a ConfigMap, Secret or field in one revision; the Fixer restores literal values only", c.Container, what(c.Field))
 		}
 	}
 	switch len(changes) {
 	case 1:
 		return changes[0], nil
 	case 0:
-		return Change{}, fmt.Errorf("the revision %s was rolled back from runs the same images as now; the Fixer restores images only so far", fromRevision)
+		return Change{}, fmt.Errorf("the revision %s was rolled back from differs from the current one in nothing the Fixer restores "+
+			"(images, commands, arguments, environment values)", fromRevision)
 	}
-	return Change{}, fmt.Errorf("%d containers' images changed in revision %s; the Fixer restores one at a time", len(changes), fromRevision)
+	return Change{}, fmt.Errorf("%d values changed in revision %s; the Fixer restores one at a time", len(changes), fromRevision)
+}
+
+// containerFields lists the fields a fix may restore in two versions of a
+// container: image, command, arguments, and every environment variable
+// either sets.
+func containerFields(a, b corev1.Container) []string {
+	fields := []string{fieldImage, fieldCommand, fieldArgs}
+	seen := map[string]bool{}
+	for _, e := range append(a.Env, b.Env...) {
+		if !seen[e.Name] {
+			seen[e.Name] = true
+			fields = append(fields, envPrefix+e.Name)
+		}
+	}
+	return fields
+}
+
+// fieldValue reads a field of a container as valueIn reads a rendered one.
+func fieldValue(c corev1.Container, field string) any {
+	switch {
+	case field == fieldImage:
+		return c.Image
+	case field == fieldCommand && len(c.Command) > 0:
+		return c.Command
+	case field == fieldArgs && len(c.Args) > 0:
+		return c.Args
+	case strings.HasPrefix(field, envPrefix):
+		for _, e := range c.Env {
+			if e.Name != strings.TrimPrefix(field, envPrefix) {
+				continue
+			}
+			if e.ValueFrom != nil {
+				return valueFromSet
+			}
+			return e.Value
+		}
+	}
+	return nil
 }
