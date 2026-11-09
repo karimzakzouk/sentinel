@@ -1,9 +1,7 @@
-package cli
+package resume
 
 import (
-	"bytes"
 	"context"
-	"io"
 	"maps"
 	"strings"
 	"testing"
@@ -46,9 +44,9 @@ func TestResumeArgoCD(t *testing.T) {
 		"noted":     {`as it was: {"selfHeal":true}`, map[string]any{"selfHeal": true}},
 		"generated": {`as the ApplicationSet argocd/shops sets it: {"prune":true}`, map[string]any{"prune": true}},
 	} {
-		var out bytes.Buffer
-		if err := resumeArgoCD(ctx, &out, dyn, "argocd", name); err != nil || !strings.Contains(out.String(), want.said) {
-			t.Fatalf("%s: %q, %v", name, out.String(), err)
+		said, err := ArgoCD(ctx, dyn, "argocd", name)
+		if err != nil || !strings.Contains(said, want.said) {
+			t.Fatalf("%s: %q, %v", name, said, err)
 		}
 		u, err := dyn.Resource(actor.ApplicationsResource).Namespace("argocd").Get(ctx, name, metav1.GetOptions{})
 		if err != nil {
@@ -59,7 +57,7 @@ func TestResumeArgoCD(t *testing.T) {
 			t.Fatalf("%s: automated %v, annotations %v", name, automated, u.GetAnnotations())
 		}
 	}
-	if err := resumeArgoCD(ctx, io.Discard, dyn, "argocd", "other"); err == nil || !strings.Contains(err.Error(), "carries no note") {
+	if _, err := ArgoCD(ctx, dyn, "argocd", "other"); err == nil || !strings.Contains(err.Error(), "carries no note") {
 		t.Fatalf("an Application Sentinel did not pause was resumed: %v", err)
 	}
 }
