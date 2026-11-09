@@ -25,12 +25,15 @@ vertical slices, each proven before the next starts.
 
 ## Where it can run
 
-The Fixer needs a Git forge with pull requests. Until the test organization
-and GitHub App exist, the test cluster runs one: Gitea (MIT), in a
-namespace of its own, with a repository holding the delivery session's
-manifests that Argo CD and Flux sync from. A forge interface keeps Gitea and
-GitHub interchangeable: push a branch, open, read and comment on a pull
-request. Nothing in this phase needs the self-hosted runner.
+The Fixer needs a Git forge with pull requests. The test cluster runs one:
+Gitea (MIT), in a namespace of its own, with repositories Argo CD and Flux
+sync from. The development pool is test apps with bugs planted on purpose,
+whose right fixes are known, rather than a real organization's code: real
+code has few bugs with known answers, and its pull requests would be
+public. A fresh, private GitHub organization and a GitHub App come in for
+the demo and the outside reviewers (phases 6 and 7); a forge interface keeps
+Gitea and GitHub interchangeable. Nothing in this phase needs the
+self-hosted runner.
 
 ## Slices
 

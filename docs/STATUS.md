@@ -271,9 +271,8 @@ Needed later:
 
 | When | What |
 |---|---|
-| Phase 1 gate | The 72-hour soak itself: the `Soak` workflow runs it on the self-hosted runner (decision 58), on demand |
-| Phase 3 | A steadier or bigger runner for the Lab's statistics suites, if the burstable one (decision 58) runs out of credits on their few hundred repetitions |
-| Phase 4 | A test GitHub organization and a GitHub App, so Sentinel can open real pull requests |
+| Phase 1 gate | The 72-hour soak itself, running on the self-hosted runner (decision 58) |
+| Phase 6 and 7 | A fresh, empty, private GitHub organization and a GitHub App, so outside reviewers and the demo see the Fixer's pull requests on GitHub; until then the Fixer works against test apps with planted bugs on the test cluster's own Git server, which keeps everything private |
 | Phase 6 | Azure for Students credits (managed-cluster run) and outside human evaluators |
 
 ## How to check
