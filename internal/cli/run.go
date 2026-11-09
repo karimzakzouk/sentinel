@@ -82,6 +82,7 @@ func runController(ctx context.Context, log *slog.Logger, cfg *config.Config, cl
 		return err
 	}
 	log.Info("ledger verified", "events", n, "headSeq", seq, "headHash", head, "version", version.Get().Version)
+	go checkpoints(ctx, log, l, time.Hour)
 
 	var ready atomic.Bool
 	srv := &http.Server{Addr: cfg.HealthAddr, Handler: healthHandler(&ready), ReadHeaderTimeout: 5 * time.Second}
@@ -187,4 +188,25 @@ func healthHandler(ready *atomic.Bool) http.Handler {
 		_, _ = w.Write([]byte("ok\n"))
 	})
 	return mux
+}
+
+// checkpoints logs the Ledger's Merkle root every interval. Logs leave the
+// cluster for wherever they are kept, out of Sentinel's reach, so a root
+// written there pins the log: sentinel ledger prove shows any event in it,
+// and that the log at any later root still begins with it.
+func checkpoints(ctx context.Context, log *slog.Logger, l *ledger.Ledger, interval time.Duration) {
+	tick := time.NewTicker(interval)
+	defer tick.Stop()
+	for {
+		if size, root, err := l.Root(ctx, 0); err != nil {
+			log.Error("could not compute the ledger's root", "error", err)
+		} else {
+			log.Info("ledger checkpoint", "size", size, "root", root)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+		}
+	}
 }

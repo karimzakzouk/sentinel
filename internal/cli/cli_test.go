@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -130,5 +131,54 @@ func TestCapabilitiesRequiresNamespaces(t *testing.T) {
 	root.SetArgs([]string{"capabilities"})
 	if err := root.Execute(); err == nil {
 		t.Fatal("capabilities ran without --namespaces")
+	}
+}
+
+// A proof the Ledger prints checks without it against the root it printed,
+// and not against another.
+func TestALedgerProofChecksAgainstItsRoot(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "ledger.db")
+	l, err := ledger.Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range 5 {
+		if _, err := l.Append(ctx, ledger.Draft{Type: "sentinel.test", Source: "/test", Subject: fmt.Sprint(i), Data: i}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = l.Close()
+	run := func(in string, args ...string) (string, error) {
+		t.Helper()
+		root := NewRoot()
+		var out bytes.Buffer
+		root.SetOut(&out)
+		root.SetIn(strings.NewReader(in))
+		root.SetArgs(args)
+		err := root.Execute()
+		return out.String(), err
+	}
+	rootLine, err := run("", "ledger", "root", "--path", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	published := strings.Fields(rootLine)[1]
+	proof, err := run("", "ledger", "prove", "--event", "3", "--path", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out, err := run(proof, "check-proof", "--root", published); err != nil || !strings.Contains(out, "ok: event 3") {
+		t.Fatalf("check-proof: %s, %v", out, err)
+	}
+	if _, err := run(proof, "check-proof", "--root", strings.Repeat("0", 64)); err == nil {
+		t.Fatal("a proof checked against a root it does not lead to")
+	}
+	early, err := run("", "ledger", "prove", "--from", "2", "--path", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out, err := run(early, "check-proof"); err != nil || !strings.Contains(out, "ok: the tree of 2 events") {
+		t.Fatalf("consistency: %s, %v", out, err)
 	}
 }
