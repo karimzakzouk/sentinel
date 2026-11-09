@@ -2,6 +2,7 @@ package brain
 
 import (
 	"context"
+	"math"
 	"slices"
 	"strings"
 	"testing"
@@ -461,8 +462,8 @@ func TestAPersonsRevertCountsAgainstTheRollback(t *testing.T) {
 		t.Fatal("putting back the revision Sentinel rolled away from was not counted")
 	}
 	key := model.TrackKey{Action: ActionRolloutUndo, FaultClass: ClassBadImage, Service: web.String()}
-	if rec := b.tracks[key]; rec == nil || rec.Alpha != 2 || rec.Beta != 2 {
-		t.Fatalf("track record %+v; want the verified rollback and the revert", rec)
+	if rec := b.tracks[key]; rec == nil || math.Abs(rec.Alpha-2) > 0.01 || rec.Beta != 2 {
+		t.Fatalf("track record %+v; want the verified rollback, a little aged, and the revert", rec)
 	}
 	if b.breakerUntil(ActionRolloutUndo, web).IsZero() {
 		t.Fatal("the breaker did not open")
@@ -473,5 +474,43 @@ func TestAPersonsRevertCountsAgainstTheRollback(t *testing.T) {
 	sweep(22 * time.Minute)
 	if rec := b.tracks[key]; rec.Beta != 2 {
 		t.Fatalf("the revert counted %v times", rec.Beta-1)
+	}
+}
+
+// Evidence ages: a success counts half as much after a half-life. And a
+// cell borrows a little from the same action on the same fault elsewhere,
+// enough to reach the bar a few runs sooner, never enough alone.
+func TestTrackRecordsAgeAndBorrowFromSimilarWorkloads(t *testing.T) {
+	b, _ := newBrain(t)
+	key := model.TrackKey{Action: ActionRolloutUndo, FaultClass: ClassBadImage, Service: web.String()}
+	b.track(key, true, "inc", onset)
+	if s, _ := decayed(b.tracks[key], onset.Add(trackHalfLife)); math.Abs(s-0.5) > 1e-9 {
+		t.Fatalf("after a half-life a success counts %v", s)
+	}
+
+	alone := func(n int) bool {
+		b, _ := newBrain(t)
+		for range n {
+			b.track(key, true, "inc", onset)
+		}
+		return b.lowerBound(key, onset) >= trackTarget
+	}
+	pooled := func(n int) bool {
+		b, _ := newBrain(t)
+		other := model.TrackKey{Action: ActionRolloutUndo, FaultClass: ClassBadImage, Service: "Deployment.apps/shop/cart"}
+		for range 40 {
+			b.track(other, true, "inc", onset)
+		}
+		for range n {
+			b.track(key, true, "inc", onset)
+		}
+		return b.lowerBound(key, onset) >= trackTarget
+	}
+	if alone(27) || !alone(28) {
+		t.Fatal("alone, a cell must need 28 straight successes")
+	}
+	if pooled(0) || pooled(24) || !pooled(25) {
+		t.Fatalf("with a similar workload's 40 successes: earned with none of its own = %v, 24 = %v, 25 = %v; want only 25",
+			pooled(0), pooled(24), pooled(25))
 	}
 }

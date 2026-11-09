@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"math"
 	"strings"
 	"time"
 
@@ -230,17 +231,56 @@ func (b *Brain) track(key model.TrackKey, success bool, incident model.ID, now t
 		t = &model.TrackRecord{Key: key, Alpha: 1, Beta: 1}
 		b.tracks[key] = t
 	}
+	successes, failures := decayed(t, now)
 	if success {
-		t.Alpha++
+		successes++
 	} else {
-		t.Beta++
+		failures++
 	}
+	t.Alpha, t.Beta, t.UpdatedAt = 1+successes, 1+failures, now
 	t.Level = model.AutonomyApprove
-	if stats.BetaQuantile(0.05, t.Alpha, t.Beta) >= trackTarget {
+	if b.lowerBound(key, now) >= trackTarget {
 		t.Level = model.AutonomyAutonomous
 	}
-	t.UpdatedAt = now
 	return ledger.RecordDraft(source, model.KindTrackRecord, "updated", TrackID(key), incident, *t)
+}
+
+// trackHalfLife is how long a verified or failed action takes to count half
+// as much: workloads change, and old evidence says less about them.
+const trackHalfLife = 30 * 24 * time.Hour
+
+// poolWeight is the most a cell borrows from the same action on the same
+// fault elsewhere, in runs: enough to move a new workload's record, never
+// enough to earn it autonomy alone.
+const poolWeight = 5.0
+
+// decayed is a record's successes and failures as of now, each halving
+// every trackHalfLife.
+func decayed(t *model.TrackRecord, now time.Time) (float64, float64) {
+	w := 1.0
+	if !t.UpdatedAt.IsZero() && now.After(t.UpdatedAt) {
+		w = math.Exp2(-float64(now.Sub(t.UpdatedAt)) / float64(trackHalfLife))
+	}
+	return (t.Alpha - 1) * w, (t.Beta - 1) * w
+}
+
+// lowerBound is the 5th percentile of a cell's success rate as of now: its
+// own decayed record, with a prior of up to poolWeight runs at the rate the
+// same action shows on the same fault on other workloads. Callers hold b.mu.
+func (b *Brain) lowerBound(key model.TrackKey, now time.Time) float64 {
+	var own, ownFailed, pooled, pooledFailed float64
+	if t := b.tracks[key]; t != nil {
+		own, ownFailed = decayed(t, now)
+	}
+	for k, t := range b.tracks {
+		if k != key && k.Action == key.Action && k.FaultClass == key.FaultClass {
+			s, f := decayed(t, now)
+			pooled, pooledFailed = pooled+s, pooledFailed+f
+		}
+	}
+	rate := (pooled + 1) / (pooled + pooledFailed + 2)
+	weight := math.Min(poolWeight, pooled+pooledFailed)
+	return stats.BetaQuantile(0.05, 1+own+weight*rate, 1+ownFailed+weight*(1-rate))
 }
 
 // TrackID is the Ledger entity a cell's record is kept under.
@@ -259,17 +299,19 @@ const (
 // standing says whether a cell's track record has earned autonomy, and in
 // a sentence for an approver why not. Callers hold b.mu.
 func (b *Brain) standing(key model.TrackKey) (bool, string) {
+	now := b.now()
+	lower := b.lowerBound(key, now)
+	if lower >= trackTarget {
+		return true, ""
+	}
 	t := b.tracks[key]
 	if t == nil || t.Alpha+t.Beta <= 2 {
 		return false, "no " + verb(key.Action, false) + " of this workload for this fault has been verified yet; " +
 			"a person approves until enough are"
 	}
-	if t.Level == model.AutonomyAutonomous {
-		return true, ""
-	}
-	return false, fmt.Sprintf("its track record has not earned autonomy yet: %d verified and %d not, and at least %.0f%% of "+
-		"such actions succeeding is all 95%% confidence allows, short of %.0f%%", int(t.Alpha)-1, int(t.Beta)-1,
-		100*stats.BetaQuantile(0.05, t.Alpha, t.Beta), 100*trackTarget)
+	successes, failures := decayed(t, now)
+	return false, fmt.Sprintf("its track record has not earned autonomy yet: %.0f verified and %.0f not, and at least %.0f%% of "+
+		"such actions succeeding is all 95%% confidence allows, short of %.0f%%", successes, failures, 100*lower, 100*trackTarget)
 }
 
 // askLab asks the Lab, once per incident, whether rolling back fixes it:
