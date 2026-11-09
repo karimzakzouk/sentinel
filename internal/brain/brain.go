@@ -447,7 +447,8 @@ func (b *Brain) assess(ctx context.Context, inc *incident, workload model.Object
 	latestTemplate := -1
 	for _, c := range b.changes {
 		related := c.Object == workload || (c.Kind == watcher.ChangeConfigMap && c.Object.Namespace == workload.Namespace)
-		if !related || c.At.After(inc.rec.OpenedAt.Add(time.Minute)) {
+		// Sentinel's own actions mitigate incidents; they never explain one.
+		if !related || c.At.After(inc.rec.OpenedAt.Add(time.Minute)) || c.Actor == model.ActorFieldManager {
 			continue
 		}
 		if c.Kind == watcher.ChangeTemplate && c.Object == workload {

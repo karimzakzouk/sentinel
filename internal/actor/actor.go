@@ -24,6 +24,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/karimzakzouk/sentinel/api/v1alpha1"
+	"github.com/karimzakzouk/sentinel/internal/model"
 	"github.com/karimzakzouk/sentinel/internal/policy"
 )
 
@@ -49,7 +50,7 @@ const (
 )
 
 // FieldManager names the actor's writes in managedFields.
-const FieldManager = "sentinel-actor"
+const FieldManager = model.ActorFieldManager
 
 // People approve or veto a request with these annotations. The fence makes
 // each one name the identity that sets it, and RBAC decides who may update
