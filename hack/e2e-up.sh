@@ -6,7 +6,9 @@
 #
 # E2E_ARGOCD=1 also installs Argo CD (the core install, without its UI) and
 # lets the actor pause its Applications; E2E_FLUX=1 installs Flux and lets
-# the actor suspend its Kustomizations. Safe to rerun.
+# the actor suspend its Kustomizations. E2E_GITEA=1, with E2E_FLUX=1, runs a
+# Gitea in the cluster and the Fixer, which proposes fixes to its
+# repository. Safe to rerun.
 set -euo pipefail
 
 cluster=${E2E_CLUSTER:-sentinel-e2e}
@@ -41,12 +43,19 @@ if [ -n "${E2E_FLUX:-}" ]; then
   kubectl --context "$ctx" -n flux-system rollout status deployment/kustomize-controller --timeout 5m
   flux=(--set owners.flux.enabled=true)
 fi
+fixer=()
+if [ -n "${E2E_GITEA:-}" ]; then
+  "$root/hack/gitea-up.sh"
+  fixer=(--set fixer.enabled=true --set fixer.forge.web=http://gitea-http.gitea.svc:3000
+    --set fixer.forge.api=http://gitea-http.gitea.svc:3000/api/v1 --set fixer.forge.secretName=sentinel-fixer-forge)
+fi
 
 helm --kube-context "$ctx" upgrade --install sentinel-crds "$root/charts/sentinel-crds" --wait
 helm --kube-context "$ctx" upgrade --install sentinel "$root/charts/sentinel" \
   --namespace sentinel --create-namespace \
   -f "$root/test/e2e/values-sentinel.yaml" \
-  --set image.repository="${image%:*}" --set image.tag="${image##*:}" --set image.pullPolicy=Never "${argocd[@]}" "${flux[@]}" \
+  --set image.repository="${image%:*}" --set image.tag="${image##*:}" --set image.pullPolicy=Never \
+  "${argocd[@]}" "${flux[@]}" "${fixer[@]}" \
   --wait --timeout 5m
 helm --kube-context "$ctx" upgrade --install sentinel-fence "$root/charts/sentinel-fence" \
   -f "$root/test/e2e/values-fence.yaml" ${E2E_ARGOCD:+--set argocdNamespace=argocd} ${E2E_FLUX:+--set fluxNamespaces=\{flux-system\}} --wait

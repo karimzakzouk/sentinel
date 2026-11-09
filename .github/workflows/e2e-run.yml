@@ -27,6 +27,11 @@ on:
         required: false
         type: boolean
         default: false
+      gitea:
+        description: with flux, run a Gitea in the cluster and the Fixer, which proposes fixes to its repository
+        required: false
+        type: boolean
+        default: false
       run:
         description: regular expression naming the tests to run; empty runs the suite
         required: false
@@ -82,6 +87,7 @@ jobs:
       KIND_NODE_IMAGE: ${{ inputs.node-image }}
       E2E_ARGOCD: ${{ inputs.argocd && '1' || '' }}
       E2E_FLUX: ${{ inputs.flux && '1' || '' }}
+      E2E_GITEA: ${{ inputs.gitea && '1' || '' }}
       E2E_RUN: ${{ inputs.run }}
       E2E_SKIP: ${{ inputs.skip }}
     steps:
