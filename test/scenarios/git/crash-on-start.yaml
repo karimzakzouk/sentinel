@@ -7,8 +7,10 @@ fault:
   commit:
     repository: person/delivery
     path: deployment.yaml
+    # The image starts podinfo with CMD, so args alone would replace the
+    # command, and the container could not start: a configuration error.
     old: "          ports:\n"
-    new: "          args: [--no-such-flag]\n          ports:\n"
+    new: "          command: [./podinfo, --no-such-flag]\n          ports:\n"
     message: Turn on the new flag
 groundTruth:
   faultClass: deploy.crash-on-start
