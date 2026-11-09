@@ -9,3 +9,12 @@ apiVersion: v1
 kind: Namespace
 metadata:
   name: boutique
+---
+# Workloads a GitOps controller deploys from public examples, which run as
+# root: the baseline standard admits them.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: e2e-gitops
+  labels:
+    pod-security.kubernetes.io/enforce: baseline

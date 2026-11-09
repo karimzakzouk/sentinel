@@ -87,7 +87,8 @@ func (a *Actor) pauseArgoCD(ctx context.Context, meta metav1.ObjectMeta, dryRun 
 	if _, err := apps.Patch(ctx, name, types.MergePatchType, patch, opts); err != nil {
 		return "", fmt.Errorf("pause Argo CD Application %s/%s: %w", ns, name, err)
 	}
-	return fmt.Sprintf("paused Argo CD Application %s/%s's automated sync (resume it once Git is fixed)", ns, name), nil
+	return fmt.Sprintf("paused Argo CD Application %s/%s's automated sync; once Git is fixed, resume it with "+
+		"`sentinel resume argocd %s/%s`", ns, name, ns, name), nil
 }
 
 func unstructuredMap(obj map[string]any, path ...string) (map[string]any, bool, error) {

@@ -17,6 +17,16 @@ on:
         required: false
         type: string
         default: ""
+      argocd:
+        description: install Argo CD and let the actor pause its Applications
+        required: false
+        type: boolean
+        default: false
+      run:
+        description: regular expression naming the tests to run; empty runs the suite
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -30,6 +40,8 @@ jobs:
       E2E_CLUSTER: sentinel-e2e
       E2E_NETWORK: ${{ inputs.network }}
       KIND_NODE_IMAGE: ${{ inputs.node-image }}
+      E2E_ARGOCD: ${{ inputs.argocd && '1' || '' }}
+      E2E_RUN: ${{ inputs.run }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
