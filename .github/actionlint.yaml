@@ -1,0 +1,5 @@
+# Labels of the self-hosted Azure runner (decision 58).
+self-hosted-runner:
+  labels:
+    - azure
+    - sentinel-lab
