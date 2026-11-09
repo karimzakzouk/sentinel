@@ -18,6 +18,7 @@ start)
     --set detection.warmUp=30m --set logs.sampleInterval=1m --set capabilities.interval=10m --wait
   kubectl --context "$ctx" -n sentinel rollout restart deploy/sentinel
   kubectl --context "$ctx" -n sentinel rollout status deploy/sentinel --timeout 3m
+  mkdir -p "$(dirname "$state")"
   date -u +%Y-%m-%dT%H:%M:%SZ | tee "$state"
   ;;
 report)
