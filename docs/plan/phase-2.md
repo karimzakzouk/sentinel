@@ -73,6 +73,16 @@ the actor makes. Phase 2 keeps that split and makes the actor a process:
   kill and the misspelled address's first minutes see no wrong action; the
   scorer adds time to recovery and wrong actions.
 
+As built (decisions 40 to 42): the actor is `sentinel actor`, one replica
+running requests one at a time; it marks a request Executing before it runs
+it, so a restart never runs one twice. The controller verifies an action
+when every signal of its incident has ended within ten minutes, and records
+it as unverified, left to people, otherwise; it does not undo automatically
+yet. The quiet period after a person's edit is the actor's precondition
+that the workload is still as the decision saw it, because a bad deploy is
+itself a person's edit. `TestAssistModeRollsBackABadImage` is the proof end
+to end; the scored pool is in `docs/STATUS.md`.
+
 ### 2. Guards
 
 Token buckets per scope; a cap on capacity removed per window; a circuit
@@ -80,12 +90,28 @@ breaker per (action, workload) that opens on a failed verification; no
 restarts under overload; the kill switch as a field of the actor's own
 configuration that only the actor's namespace can change.
 
+As built: the hourly budget per namespace and the kill switch are the
+actor's (`actor.actions` in the chart); the capacity cap reads the
+policy's `maxCapacityRemovalPercent`; the breaker is the controller's,
+opens for a day on a failure, a veto or an unverified action, and is
+rebuilt from the Ledger at start. Until owner adapters exist, the actor
+refuses plain actions on workloads Argo CD or Flux keeps in sync (decision
+43).
+
 ### 3. Approval
 
 `approve` and `act-unless-vetoed`: a person approves or vetoes a request
 with an annotation, and the actor checks, with a SubjectAccessReview, that
 whoever set it may approve requests in that namespace. Escalations and
 approvals reach people through Slack or GitHub.
+
+As built: no SubjectAccessReview is needed. The `sentinel-fence-approvals`
+policy makes each annotation name the identity that sets it, RBAC decides
+who may update requests (the CRD chart folds approving into namespace
+admins' and editors' roles), and the actor refuses Sentinel's own
+identities. `sentinel approve` and `sentinel veto` set the annotation as
+the caller. An act-unless-vetoed request runs two minutes after it is
+made. Slack and GitHub notifications are still to come.
 
 ### 4. Owner adapters
 
