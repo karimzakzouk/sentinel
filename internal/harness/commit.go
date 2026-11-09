@@ -93,6 +93,9 @@ func (in *Injector) refresh(ctx context.Context, owner Target) error {
 // the owner to apply it. Whatever happened, the file ends as it was and the
 // owner resumed, so the next run starts clean.
 func (in *Injector) revertCommit(ctx context.Context, run *Run) error {
+	if in.Forge == nil {
+		return errors.New("reverting a commit fault needs the forge: give the harness --forge-api, as hack/run-scenarios.sh does")
+	}
 	var was committed
 	if err := json.Unmarshal(run.Before, &was); err != nil {
 		return fmt.Errorf("decode the file as it was: %w", err)
