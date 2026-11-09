@@ -1,6 +1,6 @@
 # Status
 
-Last updated: Tuesday 10 November 2026, 00:15 Cairo time (UTC+2).
+Last updated: Tuesday 10 November 2026, 01:25 Cairo time (UTC+2).
 
 ## Where things stand
 
@@ -20,11 +20,16 @@ It finds the value in a manifest, an images entry or a kustomization's
 patch, fixes only the value the fault is blamed on when one commit changed
 several, proposes a memory limit learned from healthy use rather than the
 old one, and merges its own fix where a policy grants it and its record has
-earned it. Code fixes are the slice left. **Phase 5 (Extend and harden) has
-started:** four more fault classes, a Merkle tree over the Ledger, standby
-replicas for the actor, the Lab and the Fixer, and a console in the UI
-where a person signs in as themselves to approve, veto, resume and set
-policies.
+earned it. For a crash a new image brought, it also proposes the crashing
+function back as it was, in the image's source, and has the Lab race the
+image the source's pipeline builds from it: proven on the development
+cluster with a release of a Go service (below). It works with GitHub,
+Gitea, GitLab and Bitbucket. **Phase 5 (Extend and harden) has started:**
+four more fault classes, a Merkle tree over the Ledger, standby replicas
+for the actor, the Lab and the Fixer, a console in the UI where a person
+signs in as themselves to approve, veto, resume and set policies, and
+optional traffic capture, whose recorded reads the Lab replays to its
+copies.
 
 To look at it on a cluster where it runs:
 
@@ -75,7 +80,7 @@ To look at it on a cluster where it runs:
 | 2. Synthesize the stateless world | The world built and proven: synthesis, the Lab DNS (decision 51), production's images under the fence's bounds (decision 50), the seal proven before the world starts and again with it running; Online Boutique's frontend and the ten services it calls ran in a Lab on the development cluster, every copy ready within 95 seconds and answering by its production name, once copies were fitted to Pod Security `restricted` (decision 59) | `TestTheLabBuildsAWorkloadsStatelessWorld`, as the Lab's identity: a front and the backend it calls answer by their production names, the API server's name resolves to nothing, and a canary Secret never reaches the Lab. `TestALabReproductionRunsTheWorldBehindAProvenSeal` in CI's enforcing clusters |
 | 3. Reproduce and judge | Races and verdicts built (decisions 52 and 53): reproduce and verify-fix Experiments, the previous revision as the first candidate, a deletion control. The gate's repetitions passed on the self-hosted runner under Calico | `TestTheLabTellsAFixFromTheFailure` on the development cluster: against a front that crashes as it starts, its previous revision passed after 15 blocks (15 of 15 against 0 of 15), the deletion control failed. Through the Lab in CI, on Calico and Cilium: "the previous revision front-9964bb8bd fixes it: it worked in 15 of 15 runs where the failing revision failed in 15 of 15", and a healthy front's failure "did not reproduce"; kindnet and Flannel were refused. Unit simulations: 3.4% false PASS at the null's edge for α = 5%. The `Lab gate` workflow's first round, on the development cluster: the fix passed in 15 blocks, a revision that still crashes and a deletion-style candidate failed in 3, and a flaky revision raced against itself ran out of its 60 blocks, NOT SURE. The `Lab gate` workflow on the self-hosted runner, Calico, 10 races of each kind at α = 5%: a fix passed 10 of 10 (median 15 blocks); a revision that still crashes and a deletion that does nothing failed 10 of 10 (3 blocks); a flaky revision against itself failed 7 and was NOT SURE 3 (51 blocks). No false PASS in 30 races that must not pass. Beside it, Online Boutique's frontend and the ten services it calls were copied into a sealed world, every copy ready and every name the world asked for provided |
 | Verified rollbacks | The controller asks the Lab about each proposed rollback (decision 54); the verdict joins the incident and its notices; at `lab-verified` it carries the rollback out (decision 57) | On the development cluster a bad image on `web` opened an incident, the controller asked the Lab, and the Lab, refusing a cluster without enforcement, answered NOT SURE within 35 seconds; the verdict shows on the incident page. In CI on Calico and Cilium, a request at `lab-verified` waited while the Lab raced a crashing revision of the front against its predecessor (15 of 15 against 15 of 15), then the actor rolled the front back, approved by the Lab |
-| 4. Datastores and replay | Part built: datastores run empty in the Lab with production's engine and version (decision 78), each secret key has its own placeholder, so a name looked up from one says which secret the world lacks, and a second candidate, the failing revision with its configuration reverted, is raced beside the previous revision (decision 77). Replay, fakes of outside services and the Lab's certificate authority wait for traffic capture | Unit tests; the race and the Lab's end-to-end tests run on the self-hosted runner, which the soak holds until Thursday |
+| 4. Datastores and replay | Part built: datastores run empty in the Lab with production's engine and version (decision 78), each secret key has its own placeholder, so a name looked up from one says which secret the world lacks, and a second candidate, the failing revision with its configuration reverted, is raced beside the previous revision (decision 77). With traffic capture on, each run replays up to 20 reads production answered to its copy, which must answer them all (decision 86). Fakes of outside services and the Lab's certificate authority are next | Unit tests, among them a race against a fake cluster where the deletion control stays ready but answers nothing and fails; the replay's script run in the probe image against a server answering 200, 404, 503 and a panic. The race and the Lab's end-to-end tests run on the self-hosted runner, which the soak holds until Thursday |
 
 ## Phase 4 progress
 
@@ -84,8 +89,9 @@ To look at it on a cluster where it runs:
 | 1. Restore a bad value through Git | Built for an image, a command, arguments and environment values set in the files a Flux Kustomization or an Argo CD Application deploys (decisions 67 to 70 and 72), and in a kustomization's patches (decision 73): the Fixer finds the file, images entry or patch that set it, opens a pull request, follows it until the owner has applied it, and Sentinel checks that it held. Resuming the owner stays a person's (decision 69). Proven through Flux and Argo CD, and scored (below) | `TestTheFixerProposesTheFixInGit` and `TestTheFixerProposesTheFixInGitThroughArgoCD`, in CI and on the development cluster: a bad image committed to the Gitea repository the owner deploys from, Sentinel's rollback, a pull request changing line 17 of `deployment.yaml` with its comment kept, merged, the owner resumed, and "fix held", about 3 minutes after the proposal. The Git scenario session below. Unit tests render overlays with images entries, plain manifests, owners' name prefixes, and the abstentions |
 | 2. Partial reverts | Built (decision 74): of several values a revision changed, the one the fault class blames is fixed and the rest stay, said in the pull request | The pool's bad tag beside a greeting (below): the tag fixed, the greeting kept; unit tests for every class |
 | 3. Values of their own | Built for memory limits (decision 75): a limit learned from healthy use, never above the one that held. The Lab racing it before the pull request is next | Unit tests; the pool's memory-limit scenario (below) |
-| 4. Code incidents | Part built: for a crash a new image brought, the Fixer resolves the commits both images were built from, by labels and a tag or version that agree, and proposes the crash's function back as it was, in the image's source, Go first; then finds the image the source's pipeline builds from it, has the Lab race that image against the failing one, and says the verdict on the pull request. Left: a test pipeline and a Go app with a bug in its code, to prove it on a cluster; Python and JavaScript | `TestACrashInCodeGetsAFixInItsSource`: a pull request to the source puts the crashing function back and keeps the commit's other change, the built image is found, and the Lab's verdict is said on the pull request; `TestAFixToTheCodeIsRacedOnceBuilt` for the controller's side; unit tests of the resolution and the frames |
+| 4. Code incidents | Built for Go: for a crash a new image brought, the Fixer resolves the commits both images were built from, by labels and a tag or version that agree, and proposes the crash's function back as it was, in the image's source; then finds the image the source's pipeline builds from it, has the Lab race that image against the failing one, and says the verdict on the pull request. Left: Python and JavaScript | The release session below, on the development cluster: a release of shop panicked as it started; rolled back, a pull request to its source put `load` back, the test pipeline built it, the Lab was asked and its answer said on the pull request. `TestACrashInCodeGetsAFixInItsSource`, `TestAFixToTheCodeIsRacedOnceBuilt`, `TestAFixToTheCodeBuiltBeforeARestartIsRaced` |
 | 5. Delivery tiers | Built (decision 76): `fix.merge` at `autonomous`, earned by the record of fixes that held; the Fixer checks the grant before it merges | Unit tests of the grant, the record and the merge on Gitea and GitHub |
+| Forges | GitHub, Gitea, GitLab, Bitbucket Cloud and Bitbucket Data Center (`fixer.forge.kind`, decision 87) | Fake-server tests of each forge's API; `hack/forge-live.sh` against a real GitLab CE: a branch pushed as the Fixer pushes, a merge request under a subgroup opened, commented on, merged, and its merge commit found on main, with merge commits and fast-forward |
 
 ## Phase 5 progress
 
@@ -96,7 +102,8 @@ To look at it on a cluster where it runs:
 | High availability | Standby replicas for the actor, the Lab and the Fixer (decision 81) | On the development cluster with two of each: one Lease holder each, the fence allowed the Leases, a standby took over a second after the holder was deleted |
 | Console | Sign in with your own token; approve, veto, resume, set policies, as yourself (decision 82) | Unit tests of sign-in, the person's own approval, refusals from another page; on the development cluster a real token signed in, the cluster refused what it may not see, and a bad token got 401 |
 | Fingerprints | fp2 for logged exceptions (decision 84) | One Redis outage logged with two messages is one exception |
-| Traffic capture, own faker, single sign-on, mined fix patterns | Not started | |
+| Traffic capture | Built (decisions 85 and 86): an optional eBPF agent (OpenTelemetry's OBI), a switch per namespace in its SentinelPolicy and the console, request details only, and replay in the Lab | On the development cluster: the agent ran on both nodes with eBPF's capabilities, not privileged; Online Boutique's frontend's requests (`GET /cart`, `/product/<id>`, `POST /cart/checkout`) and its gRPC calls to seven services arrived with methods, paths, statuses and timings; Redis statements, which carry keys, stayed out; the incident page lists them |
+| Own faker, single sign-on, mined fix patterns | Not started | |
 
 ## Acting session
 
@@ -228,6 +235,35 @@ and the crash scenario first replaced podinfo's command instead of adding a
 flag, so the container could not start at all, which Sentinel rightly
 called a configuration error.
 
+### Release of a code bug (`shop`)
+
+A Go service of our own, `shop` (`test/apps/shop-src`), lives in the test
+Gitea as `person/shop-src`; `hack/ci.sh` plays its pipeline, building an
+image of each commit into a registry in the cluster, labelled with the
+commit and tagged with its first seven characters, and building every
+open pull request's head as it appears. Flux deploys it from
+`person/delivery` (`hack/shop-up.sh`). The release scenario commits a
+change that builds the catalog into a nil map, builds it, and moves the
+deploy repository's tag to the build. On Monday night, Cairo time:
+
+| When | What happened |
+|---|---|
+| 01:04:56 | The scenario committed the bug to `person/shop-src`, built it, and moved the tag in `person/delivery`; Flux deployed it, and shop panicked as it started ("assignment to entry in nil map") |
+| 01:05:03 | Incident: crash on start (85%), the image change to blame (98%), crash logs attached |
+| 01:05:04 | Rolled back through Flux, its Kustomization suspended |
+| 01:06:03 | Verified: the signals cleared a minute after the rollback; the Fixer asked |
+| 01:06:04 | Two pull requests: `shop/deployment.yaml:22` pinned back in `person/delivery`, and in `person/shop-src` "Put load back as it was before c2fe9e2bcce8", one line |
+| 01:06:34 | The test pipeline had built the pull request's head; the Fixer found the image |
+| 01:12:59 | The Lab asked to race it (after the fix below); NOT SURE, as kind's network plugin does not enforce NetworkPolicy, said on the pull request |
+
+The person merged the pin and resumed Flux; the fix held. The run found
+three things, all fixed: the controller asked the Lab about fixes to code
+only where it also verifies rollbacks, so the image was never raced while
+the Fixer said it would be; a fix built before a restart was never asked
+about; and the bot's token could not comment, so the Fixer kept asking and
+the verdict never reached the fix's status. The race itself runs where
+NetworkPolicy is enforced, on the self-hosted runner after the soak.
+
 ## Scored session (observe only)
 
 Twelve scenarios on the development cluster (kind, Kubernetes 1.37,
@@ -267,6 +303,14 @@ minutes later, instead of opening incidents of their own.
 
 ## Things building found
 
+- **The capture agent leaves zeros out.** Its JSON names a gRPC call's
+  status code with no value when the code is 0, as protobuf's JSON does,
+  so every successful call read without a status until a valueless
+  attribute counted as zero.
+- **Docker pushes an index.** The test registry held each image as an OCI
+  index, so asking for a plain manifest found nothing; and kind cannot load
+  an image pulled for several platforms, so the scripts save the nodes'
+  platform alone.
 - **A refusal by the hourly budget locked a workload for a day.** The Git
   pool's session ran seven rollbacks in one namespace within an hour; the
   budget refused the next two, and each refusal opened the 24-hour breaker
@@ -324,23 +368,11 @@ Full reasoning in [decisions.md](decisions.md).
 
 ## Next
 
-- **Code fixes (Phase 4 slice 4), the rest:** the Fixer proposes, for a
-  crash a new image brought, the crashing function back as it was in the
-  image's source, finds the image the source's pipeline builds, has the Lab
-  race it and says the verdict on the pull request. Left: a test pipeline
-  next to Gitea (a registry and a builder) that plays a customer's, a Go
-  test app with a planted bug in its code and a scenario that releases it;
-  then Python and JavaScript.
-- **Traffic capture:** an optional agent, off until a namespace turns it on
-  (in the console or its SentinelPolicy), recording request details, and
-  bodies only for services named, redacted; then Lab replay, fakes of
-  outside services from what they answered, and the Lab's certificate
-  authority for copies that serve TLS. Sentinel works as now without it.
-- **The console:** single sign-on where the cluster has it, and capture's
-  switch per namespace.
-- **GitLab and Bitbucket** in the Fixer, beside GitHub and Gitea.
+- **The console:** single sign-on where the cluster has it.
 - **Phase 3:** the Lab racing a learned memory limit before its pull
-  request opens.
+  request opens; fakes of outside services from the calls capture
+  recorded, and the Lab's certificate authority for copies that serve TLS.
+- **Code fixes in Python and JavaScript**, beside Go.
 - **After the soak ends on Thursday:** its report, the network-plugin
   matrix and the Lab's end-to-end tests on the runner, and whether daily
   cycles call for seasonal baselines.
@@ -366,9 +398,9 @@ Nothing blocks the work. When you have time:
   laptop, and say what reads badly in the UI; sign in to the console with
   a token for your own identity.
 
-Settled with you on Monday night: fixes to code are built by the source's
-own pipeline, which a test pipeline next to Gitea plays in our tests; traffic
-capture is built, off until a namespace turns it on; the console acts as
+Settled with you on Monday night, and now built: fixes to code are built by
+the source's own pipeline, which `hack/ci.sh` plays in our tests; traffic
+capture is optional, off until a namespace turns it on; the console acts as
 the person signed in.
 
 Needed later:
