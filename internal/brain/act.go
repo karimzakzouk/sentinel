@@ -392,44 +392,95 @@ func labVerdictWord(phase string) string {
 // against the rollback.
 const revertWindow = 24 * time.Hour
 
+// revertJudge is how long a revision someone put back must run without
+// trouble before putting it back counts against Sentinel's rollback of it.
+// One that fails again shows the rollback was right: a pipeline that
+// redeploys a broken change, or an owner resumed before Git was fixed, puts
+// back revisions too.
+const revertJudge = 10 * time.Minute
+
+// maxRollbacksOfARevision is how many times within the revert window
+// Sentinel rolls a workload away from one revision. Past that, whoever
+// keeps putting it back is told to fix it at its source instead of Sentinel
+// taking turns with them.
+const maxRollbacksOfARevision = 2
+
 // rollback is a rollback Sentinel carried out: its cell, and the revision it
-// rolled away from.
+// rolled away from. revertedAt is when someone put that revision back, by
+// revertedBy; judged is set once the revert has been judged either way.
 type rollback struct {
-	key      model.TrackKey
-	action   model.Action
-	incident model.ID
-	from     string
-	at       time.Time
+	key        model.TrackKey
+	action     model.Action
+	incident   model.ID
+	from       string
+	at         time.Time
+	revertedAt time.Time
+	revertedBy string
+	judged     bool
 }
 
-// reverts finds rollbacks a person undid: within a day, the workload's newest
+// rollbacksOf counts the rollbacks within the revert window that rolled a
+// workload away from a revision. Callers hold b.mu.
+func (b *Brain) rollbacksOf(target model.ObjectRef, revision string) int {
+	n := 0
+	for _, r := range b.rollbacks {
+		if r.action.Target == target && r.from == revision && b.now().Sub(r.at) <= revertWindow {
+			n++
+		}
+	}
+	return n
+}
+
+// reverts finds rollbacks someone undid: within a day, the workload's newest
 // revision is again the one Sentinel rolled away from, and its template was
-// last changed by someone else. Each counts against its cell, opens its
-// breaker and is told. Callers hold b.mu.
+// last changed by someone else. Once the revision has run for revertJudge
+// without the Watcher detecting trouble on the workload, the revert counts
+// against its cell, opens its breaker and is told; if trouble comes back,
+// the rollback stands. Callers hold b.mu.
 func (b *Brain) reverts(ctx context.Context, now time.Time) []ledger.Draft {
 	var drafts []ledger.Draft
+	for key, at := range b.troubledAt {
+		if now.Sub(at) > revertWindow {
+			delete(b.troubledAt, key)
+		}
+	}
 	kept := b.rollbacks[:0]
-	for _, r := range b.rollbacks {
-		target := r.action.Target
-		last, changed := b.lastTemplate[target.String()]
-		switch {
-		case now.Sub(r.at) > revertWindow:
-			continue
-		case !changed || !last.At.After(r.at) || last.Actor == model.ActorFieldManager || b.revision(target) != r.from:
-			kept = append(kept, r)
+	for _, each := range b.rollbacks {
+		if now.Sub(each.at) > revertWindow {
 			continue
 		}
-		a := r.action
-		a.Params = maps.Clone(a.Params)
-		a.Params["revertedBy"] = cmp.Or(last.Actor, "someone")
-		drafts = append(drafts, ledger.RecordDraft(source, model.KindAction, "reverted", a.ID, r.incident, a),
-			b.track(r.key, false, r.incident, now))
-		b.trip(&a, now)
-		b.Log.Warn("a person reverted Sentinel's rollback", "incident", r.incident, "target", target.String(), "by", a.Params["revertedBy"])
-		if b.Notify != nil {
-			b.Notify(ctx, notify.Notice{Kind: notify.KindEscalation, Incident: r.incident, Workload: target,
-				Title:  "Sentinel's rollback of " + target.String() + " was reverted by " + a.Params["revertedBy"],
-				Detail: "Sentinel counts it against rolling back this workload for this fault, and will not roll it back on its own for a day."})
+		kept = append(kept, each)
+		r := &kept[len(kept)-1]
+		target := r.action.Target
+		if r.revertedAt.IsZero() {
+			last, changed := b.lastTemplate[target.String()]
+			if !changed || !last.At.After(r.at) || last.Actor == model.ActorFieldManager || b.revision(target) != r.from {
+				continue
+			}
+			r.revertedAt, r.revertedBy = last.At, cmp.Or(last.Actor, "someone")
+			b.Log.Info("someone put back the revision Sentinel rolled away from; Sentinel watches whether it fails again",
+				"incident", r.incident, "target", target.String(), "by", r.revertedBy)
+		}
+		switch {
+		case r.judged:
+		case b.troubledAt[target.String()].After(r.revertedAt):
+			r.judged = true
+			b.Log.Info("the revision Sentinel rolled away from failed again once put back; the rollback stands",
+				"incident", r.incident, "target", target.String(), "by", r.revertedBy)
+		case now.Sub(r.revertedAt) >= revertJudge:
+			r.judged = true
+			a := r.action
+			a.Params = maps.Clone(a.Params)
+			a.Params["revertedBy"] = r.revertedBy
+			drafts = append(drafts, ledger.RecordDraft(source, model.KindAction, "reverted", a.ID, r.incident, a),
+				b.track(r.key, false, r.incident, now))
+			b.trip(&a, now)
+			b.Log.Warn("a person reverted Sentinel's rollback", "incident", r.incident, "target", target.String(), "by", r.revertedBy)
+			if b.Notify != nil {
+				b.Notify(ctx, notify.Notice{Kind: notify.KindEscalation, Incident: r.incident, Workload: target,
+					Title:  "Sentinel's rollback of " + target.String() + " was reverted by " + r.revertedBy,
+					Detail: "The revision Sentinel rolled away from has run without trouble since. Sentinel counts it against rolling back this workload for this fault, and will not roll it back on its own for a day."})
+			}
 		}
 	}
 	b.rollbacks = kept

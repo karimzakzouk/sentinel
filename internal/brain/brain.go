@@ -98,9 +98,11 @@ type Brain struct {
 	tracks map[model.TrackKey]*model.TrackRecord
 	// rollbacks are the rollbacks Sentinel carried out in the last day,
 	// which a person may yet revert; lastTemplate is each workload's last
-	// template change.
+	// template change, and troubledAt when the Watcher last detected
+	// trouble on it.
 	rollbacks    []rollback
 	lastTemplate map[string]watcher.Change
+	troubledAt   map[string]time.Time
 }
 
 type incident struct {
@@ -298,6 +300,10 @@ func (b *Brain) OnDetection(ctx context.Context, d watcher.Detection) error {
 		return nil
 	}
 
+	if b.troubledAt == nil {
+		b.troubledAt = map[string]time.Time{}
+	}
+	b.troubledAt[key] = d.At
 	verb := "updated"
 	if inc == nil {
 		if up := b.upstreamIncident(ctx, d); up != nil {
@@ -587,9 +593,16 @@ func (b *Brain) assess(ctx context.Context, inc *incident, workload model.Object
 		verb := "proposed"
 		args := actionArgs(decision.Action, top, b.revision(workload))
 		if until := b.breakerUntil(decision.Action, decision.Target); b.Act != nil && args != nil && !until.IsZero() {
-			a.Params["breaker"] = "the same action failed on this workload recently; Sentinel will not try it again before " +
+			a.Params["breaker"] = "the same action failed or was reverted on this workload recently; Sentinel will not try it again before " +
 				until.Format(time.RFC3339)
 			args = nil
+		}
+		if n := b.rollbacksOf(decision.Target, args[argFromTemplateHash]); b.Act != nil && args != nil && n >= maxRollbacksOfARevision {
+			a.Params["breaker"] = fmt.Sprintf("Sentinel rolled %s away from this revision %d times today and it keeps coming back; fix it where it is deployed from",
+				decision.Target.Name, n)
+			args = nil
+			b.notice(ctx, inc, notify.KindEscalation, "A revision Sentinel rolled "+decision.Target.String()+" away from keeps coming back",
+				a.Params["breaker"])
 		}
 		if b.Act != nil && inc.action == nil && args != nil {
 			params := maps.Clone(args)
