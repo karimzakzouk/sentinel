@@ -449,6 +449,24 @@ func TestAParentThatSetsSuspendIsLeftToPeople(t *testing.T) {
 	}
 }
 
+// A person who resumed the Kustomization once, with sentinel resume or flux
+// resume, updated spec.suspend but does not set it again: the next rollback
+// suspends it as the first did.
+func TestAPersonsResumeDoesNotBlockTheNextRollback(t *testing.T) {
+	a, client, _ := newActor(t, 3, sentinelPolicy(v1alpha1.AutonomyAutonomous, ActionFluxRollback))
+	fluxShop(t, a, client, "")
+	ks := a.Dynamic.Resource(KustomizationsResource).Namespace("flux-system")
+	k, _ := ks.Get(ctx, "shop", metav1.GetOptions{})
+	k.SetManagedFields([]metav1.ManagedFieldsEntry{{Manager: "sentinel-cli", Operation: metav1.ManagedFieldsOperationUpdate,
+		FieldsType: "FieldsV1", FieldsV1: metav1.NewFieldsV1(`{"f:spec":{"f:suspend":{}}}`)}})
+	if _, err := ks.Update(ctx, k, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if phase, msg := a.Handle(ctx, request(ActionFluxRollback, map[string]string{ParamFromTemplateHash: "bbb"})); phase != v1alpha1.ActionSucceeded {
+		t.Fatalf("%s: %s", phase, msg)
+	}
+}
+
 func TestRollbackActionFollowsTheOwner(t *testing.T) {
 	for want, meta := range map[string]metav1.ObjectMeta{
 		ActionRolloutUndo:    {},
