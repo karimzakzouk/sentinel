@@ -27,12 +27,19 @@ type Source struct {
 	Owner                  string
 	URL, Branch, Path      string
 	NamePrefix, NameSuffix string
+	// Resume is the command a person runs to resume the owner.
+	Resume string
 
 	revision func(context.Context) (string, error)
+	applied  func(context.Context) (bool, string, error)
 }
 
 // Revision is the commit the owner's source last fetched.
 func (s *Source) Revision(ctx context.Context) (string, error) { return s.revision(ctx) }
+
+// Applied reports whether the owner syncs again, no longer paused, and the
+// commit it last applied.
+func (s *Source) Applied(ctx context.Context) (bool, string, error) { return s.applied(ctx) }
 
 var commitHash = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
@@ -83,7 +90,7 @@ func fluxSource(ctx context.Context, dyn dynamic.Interface, ns, name string) (*S
 	if branch == "" {
 		branch = "master"
 	}
-	s := &Source{Owner: owner, URL: url, Branch: branch}
+	s := &Source{Owner: owner, URL: url, Branch: branch, Resume: "sentinel resume flux " + ns + "/" + name}
 	s.Path, _, _ = unstructured.NestedString(k.Object, "spec", "path")
 	s.NamePrefix, _, _ = unstructured.NestedString(k.Object, "spec", "namePrefix")
 	s.NameSuffix, _, _ = unstructured.NestedString(k.Object, "spec", "nameSuffix")
@@ -95,6 +102,16 @@ func fluxSource(ctx context.Context, dyn dynamic.Interface, ns, name string) (*S
 		rev, _, _ := unstructured.NestedString(repo.Object, "status", "artifact", "revision")
 		_, sha, _ := strings.Cut(rev, ":")
 		return sha, nil
+	}
+	s.applied = func(ctx context.Context) (bool, string, error) {
+		k, err := dyn.Resource(actor.KustomizationsResource).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return false, "", err
+		}
+		suspended, _, _ := unstructured.NestedBool(k.Object, "spec", "suspend")
+		rev, _, _ := unstructured.NestedString(k.Object, "status", "lastAppliedRevision")
+		_, sha, _ := strings.Cut(rev, ":")
+		return !suspended, sha, nil
 	}
 	return s, nil
 }
@@ -121,7 +138,7 @@ func argoSource(ctx context.Context, dyn dynamic.Interface, ns, name string) (*S
 	case commitHash.MatchString(branch):
 		return nil, fmt.Errorf("the Argo CD %s pins commit %s, so a pull request would not change what it deploys", owner, branch)
 	}
-	s := &Source{Owner: owner, URL: url, Branch: branch}
+	s := &Source{Owner: owner, URL: url, Branch: branch, Resume: "sentinel resume argocd " + ns + "/" + name}
 	s.Path, _ = src["path"].(string)
 	s.NamePrefix, _, _ = unstructured.NestedString(src, "kustomize", "namePrefix")
 	s.NameSuffix, _, _ = unstructured.NestedString(src, "kustomize", "nameSuffix")
@@ -132,6 +149,19 @@ func argoSource(ctx context.Context, dyn dynamic.Interface, ns, name string) (*S
 		}
 		rev, _, _ := unstructured.NestedString(app.Object, "status", "sync", "revision")
 		return rev, nil
+	}
+	s.applied = func(ctx context.Context) (bool, string, error) {
+		app, err := apps.Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return false, "", err
+		}
+		_, automated, _ := unstructured.NestedMap(app.Object, "spec", "syncPolicy", "automated")
+		status, _, _ := unstructured.NestedString(app.Object, "status", "sync", "status")
+		rev, _, _ := unstructured.NestedString(app.Object, "status", "sync", "revision")
+		if status != "Synced" {
+			rev = ""
+		}
+		return automated, rev, nil
 	}
 	return s, nil
 }
