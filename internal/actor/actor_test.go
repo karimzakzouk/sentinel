@@ -91,9 +91,22 @@ func newActor(t *testing.T, replicas int32, policies ...*v1alpha1.SentinelPolicy
 		}
 		objects = append(objects, &unstructured.Unstructured{Object: u})
 	}
+	objects = append(objects, &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "argoproj.io/v1alpha1", "kind": "Application",
+		"metadata": map[string]any{"name": "shop-app", "namespace": "argocd"},
+		"spec": map[string]any{"project": "default",
+			"syncPolicy": map[string]any{"automated": map[string]any{"prune": true, "selfHeal": true}}},
+	}})
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
-		map[schema.GroupVersionResource]string{PoliciesResource: "SentinelPolicyList", RequestsResource: "ActionRequestList"}, objects...)
-	a := &Actor{Client: client, Dynamic: dyn, Namespaces: []string{"shop"}, PerHour: 5,
+		map[schema.GroupVersionResource]string{PoliciesResource: "SentinelPolicyList", RequestsResource: "ActionRequestList",
+			ApplicationsResource: "ApplicationList"}, objects...)
+	dyn.PrependReactor("patch", "*", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		if p, ok := action.(k8stesting.PatchActionImpl); ok && len(p.PatchOptions.DryRun) > 0 {
+			return true, &unstructured.Unstructured{Object: map[string]any{}}, nil
+		}
+		return false, nil, nil
+	})
+	a := &Actor{Client: client, Dynamic: dyn, Namespaces: []string{"shop"}, PerHour: 5, ArgoCDNamespace: "argocd",
 		Log: slog.New(slog.NewTextHandler(io.Discard, nil)), Now: func() time.Time { return t0 }}
 	return a, client, &scale
 }
@@ -306,6 +319,54 @@ func TestReconciledWorkloadsAreLeftToPeople(t *testing.T) {
 			if phase, msg := a.Handle(ctx, req); phase != v1alpha1.ActionFailed || !strings.Contains(msg, "kept in sync by "+owner) {
 				t.Fatalf("%s on a workload %s keeps in sync: %s: %s", req.Spec.Action, owner, phase, msg)
 			}
+		}
+	}
+}
+
+// Through Argo CD, a rollback first pauses the Application's automated sync,
+// keeping what it was, so the rollback holds.
+func TestAnArgoCDRollbackPausesTheApplicationFirst(t *testing.T) {
+	a, client, _ := newActor(t, 3, sentinelPolicy(v1alpha1.AutonomyAutonomous, ActionArgoCDRollback))
+	dep, _ := client.AppsV1().Deployments("shop").Get(ctx, "web", metav1.GetOptions{})
+	dep.Annotations = map[string]string{"argocd.argoproj.io/tracking-id": "shop-app:apps/Deployment:shop/web"}
+	if _, err := client.AppsV1().Deployments("shop").Update(ctx, dep, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	phase, msg := a.Handle(ctx, request(ActionArgoCDRollback, map[string]string{ParamFromTemplateHash: "bbb"}))
+	if phase != v1alpha1.ActionSucceeded || !strings.Contains(msg, "paused Argo CD Application argocd/shop-app") ||
+		!strings.Contains(msg, "revision 2 to revision 1") {
+		t.Fatalf("%s: %s", phase, msg)
+	}
+	app, err := a.Dynamic.Resource(ApplicationsResource).Namespace("argocd").Get(ctx, "shop-app", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, found, _ := unstructuredMap(app.Object, "spec", "syncPolicy", "automated"); found {
+		t.Fatal("the Application still syncs on its own")
+	}
+	if was := app.GetAnnotations()[AnnotationPausedSync]; !strings.Contains(was, `"selfHeal":true`) {
+		t.Fatalf("paused-sync annotation = %q, want the automated policy it had", was)
+	}
+	got, _ := client.AppsV1().Deployments("shop").Get(ctx, "web", metav1.GetOptions{})
+	if img := got.Spec.Template.Spec.Containers[0].Image; img != "shop/web:1" {
+		t.Fatalf("image = %s, want the rollback", img)
+	}
+
+	plain, _, _ := newActor(t, 3, sentinelPolicy(v1alpha1.AutonomyAutonomous, ActionArgoCDRollback))
+	if phase, msg := plain.Handle(ctx, request(ActionArgoCDRollback, map[string]string{ParamFromTemplateHash: "bbb"})); phase != v1alpha1.ActionFailed ||
+		!strings.Contains(msg, "not kept in sync by Argo CD") {
+		t.Fatalf("on a plain workload: %s: %s", phase, msg)
+	}
+}
+
+func TestArgoApplicationFromTrackingID(t *testing.T) {
+	for id, want := range map[string][2]string{
+		"shop-app:apps/Deployment:shop/web":        {"argocd", "shop-app"},
+		"team-a_shop-app:apps/Deployment:shop/web": {"team-a", "shop-app"},
+	} {
+		ns, name, ok := argoApplication(metav1.ObjectMeta{Annotations: map[string]string{"argocd.argoproj.io/tracking-id": id}}, "argocd")
+		if !ok || ns != want[0] || name != want[1] {
+			t.Errorf("%q: %s/%s, want %s/%s", id, ns, name, want[0], want[1])
 		}
 	}
 }

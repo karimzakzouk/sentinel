@@ -78,8 +78,10 @@ type Actor struct {
 	PerHour int
 	// Self lists Sentinel's own identities, which may not approve.
 	Self []string
-	Log  *slog.Logger
-	Now  func() time.Time
+	// ArgoCDNamespace is where Argo CD keeps its Applications.
+	ArgoCDNamespace string
+	Log             *slog.Logger
+	Now             func() time.Time
 
 	mu     sync.Mutex
 	recent map[string][]time.Time
@@ -164,6 +166,8 @@ func (a *Actor) execute(ctx context.Context, req *v1alpha1.ActionRequest, polici
 	switch req.Spec.Action {
 	case ActionRolloutUndo:
 		run = a.rolloutUndo
+	case ActionArgoCDRollback:
+		run = a.argoCDRollback
 	case ActionScale:
 		maxRemoval := policy.MaxCapacityRemoval(policies)
 		run = func(ctx context.Context, req *v1alpha1.ActionRequest, dryRun bool) (string, error) {
@@ -262,17 +266,50 @@ func refuseReconciled(meta metav1.ObjectMeta, what string) error {
 // must still be the Deployment's newest. The template comes from the
 // Deployment's own ReplicaSet, never from the request.
 func (a *Actor) rolloutUndo(ctx context.Context, req *v1alpha1.ActionRequest, dryRun bool) (string, error) {
-	t := req.Spec.Target
-	if t.Kind != "Deployment" {
-		return "", fmt.Errorf("%s applies to Deployments only", ActionRolloutUndo)
-	}
-	dep, err := a.Client.AppsV1().Deployments(t.Namespace).Get(ctx, t.Name, metav1.GetOptions{})
+	dep, err := a.deployment(ctx, req)
 	if err != nil {
 		return "", err
 	}
 	if err := refuseReconciled(dep.ObjectMeta, "a rollback"); err != nil {
 		return "", err
 	}
+	return a.undoTemplate(ctx, req, dep, dryRun)
+}
+
+// argoCDRollback pauses the Argo CD Application that keeps the Deployment in
+// sync, then rolls the Deployment back. If the rollback fails, the
+// Application stays paused: that is the safe side.
+func (a *Actor) argoCDRollback(ctx context.Context, req *v1alpha1.ActionRequest, dryRun bool) (string, error) {
+	dep, err := a.deployment(ctx, req)
+	if err != nil {
+		return "", err
+	}
+	if owner := reconciler(dep.ObjectMeta); owner != "Argo CD" {
+		return "", fmt.Errorf("%s is not kept in sync by Argo CD", dep.Name)
+	}
+	paused, err := a.pauseArgoCD(ctx, dep.ObjectMeta, dryRun)
+	if err != nil {
+		return "", err
+	}
+	undone, err := a.undoTemplate(ctx, req, dep, dryRun)
+	if err != nil {
+		return "", fmt.Errorf("%s, but the rollback failed: %w", paused, err)
+	}
+	return paused + "; " + undone, nil
+}
+
+func (a *Actor) deployment(ctx context.Context, req *v1alpha1.ActionRequest) (*appsv1.Deployment, error) {
+	t := req.Spec.Target
+	if t.Kind != "Deployment" {
+		return nil, fmt.Errorf("%s applies to Deployments only", req.Spec.Action)
+	}
+	return a.Client.AppsV1().Deployments(t.Namespace).Get(ctx, t.Name, metav1.GetOptions{})
+}
+
+// undoTemplate writes the template of the revision before the newest, once
+// the newest is the one the request names.
+func (a *Actor) undoTemplate(ctx context.Context, req *v1alpha1.ActionRequest, dep *appsv1.Deployment, dryRun bool) (string, error) {
+	t := req.Spec.Target
 	rss, err := a.Client.AppsV1().ReplicaSets(t.Namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return "", err

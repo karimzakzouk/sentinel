@@ -20,6 +20,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/dynamic/dynamicinformer"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 
 	"github.com/karimzakzouk/sentinel/api/v1alpha1"
@@ -41,6 +42,8 @@ type Outcome struct {
 
 // Requests creates action requests and follows them.
 type Requests struct {
+	// Client reads the workloads to act on, to tell whose they are.
+	Client     kubernetes.Interface
 	Dynamic    dynamic.Interface
 	Namespaces []string
 	// TTL is how long a request may wait for the actor before it lapses.
@@ -111,7 +114,7 @@ func (r *Requests) Acting() bool {
 	namespaces := slices.Collect(maps.Keys(r.policies))
 	r.mu.Unlock()
 	for _, ns := range namespaces {
-		for _, action := range []string{actor.ActionRolloutUndo, actor.ActionScale} {
+		for _, action := range []string{actor.ActionRolloutUndo, actor.ActionArgoCDRollback, actor.ActionScale} {
 			if r.Autonomy(ns, action) == v1alpha1.AutonomyAutonomous {
 				return true
 			}
@@ -142,6 +145,13 @@ func (r *Requests) Request(ctx context.Context, a model.Action, reason string) (
 	action, ok := RequestAction(a.Type)
 	if !ok {
 		return false, nil
+	}
+	if action == actor.ActionRolloutUndo && r.Client != nil && a.Target.Kind == "Deployment" {
+		dep, err := r.Client.AppsV1().Deployments(a.Target.Namespace).Get(ctx, a.Target.Name, metav1.GetOptions{})
+		if err != nil {
+			return false, err
+		}
+		action = actor.RollbackAction(dep.ObjectMeta)
 	}
 	ttl := r.TTL
 	switch r.Autonomy(a.Target.Namespace, action) {

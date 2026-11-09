@@ -19,3 +19,7 @@ namespaces: []
 replicas:
   min: 1
   max: 20
+
+# Where Argo CD keeps its Applications, if the actor may pause them before a
+# rollback; empty means it may not.
+argocdNamespace: ""

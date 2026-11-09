@@ -156,3 +156,35 @@ subjects:
     namespace: {{ $.Values.actor.namespace }}
 {{- end }}
 {{- end }}
+{{- if and .Values.actor.enabled .Values.owners.argocd.enabled }}
+---
+# Pausing an Argo CD Application's automated sync before a rollback; the
+# fence allows that change and no other.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Release.Name }}-act-argocd
+  namespace: {{ .Values.owners.argocd.namespace }}
+  labels:
+    {{- $labels | nindent 4 }}
+rules:
+  - apiGroups: [argoproj.io]
+    resources: [applications]
+    verbs: [get, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Release.Name }}-act-argocd
+  namespace: {{ .Values.owners.argocd.namespace }}
+  labels:
+    {{- $labels | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ .Release.Name }}-act-argocd
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.actor.serviceAccount }}
+    namespace: {{ .Values.actor.namespace }}
+{{- end }}
