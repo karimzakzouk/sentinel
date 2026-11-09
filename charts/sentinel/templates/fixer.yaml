@@ -10,6 +10,7 @@ author:
   email: {{ .Values.fixer.author.email | quote }}
 argocdNamespace: {{ .Values.owners.argocd.namespace }}
 healthAddr: ":8081"
+{{- include "sentinel.leaderElection" (dict "values" .Values.fixer "namespace" .Release.Namespace "name" "sentinel-fixer") }}
 {{- end }}
 {{- if .Values.fixer.enabled }}
 {{- if or (not .Values.fixer.forge.web) (not .Values.fixer.forge.api) (not .Values.fixer.forge.secretName) }}
@@ -55,9 +56,8 @@ metadata:
     {{- $labels | nindent 4 }}
     app.kubernetes.io/component: fixer
 spec:
-  replicas: 1
-  strategy:
-    type: Recreate
+  # A standby replica waits for the Fixer's Lease.
+  {{- include "sentinel.workerRollout" .Values.fixer | nindent 2 }}
   selector:
     matchLabels:
       app.kubernetes.io/name: sentinel-fixer
@@ -84,6 +84,8 @@ spec:
           image: {{ include "sentinel.image" . }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args: [fixer, --config, /etc/sentinel-fixer/config.yaml]
+          env:
+            {{- include "sentinel.podNameEnv" . | nindent 12 }}
           ports:
             - name: health
               containerPort: 8081
@@ -261,4 +263,5 @@ roleRef:
 subjects:
   - {{ toJson $fixer }}
 {{- end }}
+{{- include "sentinel.leaseRBAC" (dict "values" .Values.fixer "namespace" .Release.Namespace "name" "sentinel-fixer" "serviceAccount" "sentinel-fixer" "labels" (include "sentinel.labels" .)) }}
 {{- end }}

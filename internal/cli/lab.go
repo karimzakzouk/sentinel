@@ -20,6 +20,7 @@ import (
 	"github.com/karimzakzouk/sentinel/internal/capability"
 	"github.com/karimzakzouk/sentinel/internal/kube"
 	"github.com/karimzakzouk/sentinel/internal/lab"
+	"github.com/karimzakzouk/sentinel/internal/lead"
 	"github.com/karimzakzouk/sentinel/internal/version"
 )
 
@@ -32,6 +33,9 @@ type LabConfig struct {
 	// ClusterDomain is the cluster's DNS domain.
 	ClusterDomain string `json:"clusterDomain,omitempty"`
 	HealthAddr    string `json:"healthAddr,omitempty"`
+	// LeaderElection, when set, has replicas hold this Lease in turn; only
+	// its holder works.
+	LeaderElection *lead.Config `json:"leaderElection,omitempty"`
 }
 
 func loadLabConfig(path string) (LabConfig, error) {
@@ -95,6 +99,13 @@ func newLabCmd(kf *kube.Flags) *cobra.Command {
 				}
 			}()
 			defer func() { _ = srv.Close() }()
+			if c := cfg.LeaderElection; c != nil {
+				c.Identity = podName()
+				// A replica standing by is ready: it takes over when the
+				// holder stops renewing the Lease.
+				ready.Store(true)
+				return lead.Run(ctx, client, *c, log, l.Run)
+			}
 			return l.Run(ctx)
 		},
 	}

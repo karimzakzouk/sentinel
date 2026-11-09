@@ -19,6 +19,12 @@ spec:
   matchConditions:
     - name: is-sentinel-actor
       expression: request.userInfo.username == "{{ include "fence.actorUser" . }}"
+    # The Lease replicas take in turn, so that one acts at a time, is the
+    # only object outside these rules it may write.
+    - name: not-its-lease
+      expression: >-
+        !(request.resource.group == 'coordination.k8s.io' && request.resource.resource == 'leases' &&
+          request.namespace == '{{ .Values.actor.namespace }}' && request.name == 'sentinel-actor')
   variables:
     {{- include "fence.requestVariables" . | nindent 4 }}
     - name: workload

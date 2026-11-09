@@ -18,6 +18,7 @@ import (
 
 	"github.com/karimzakzouk/sentinel/internal/actor"
 	"github.com/karimzakzouk/sentinel/internal/kube"
+	"github.com/karimzakzouk/sentinel/internal/lead"
 	"github.com/karimzakzouk/sentinel/internal/version"
 )
 
@@ -39,6 +40,9 @@ type ActorConfig struct {
 	// LabNamespaces are where the Lab's verdicts may come from.
 	LabNamespaces []string `json:"labNamespaces,omitempty"`
 	HealthAddr    string   `json:"healthAddr,omitempty"`
+	// LeaderElection, when set, has replicas hold this Lease in turn; only
+	// its holder works.
+	LeaderElection *lead.Config `json:"leaderElection,omitempty"`
 }
 
 func loadActorConfig(path string) (ActorConfig, error) {
@@ -110,9 +114,26 @@ func newActorCmd(kf *kube.Flags) *cobra.Command {
 				}
 			}()
 			defer func() { _ = srv.Close() }()
+			if c := cfg.LeaderElection; c != nil {
+				c.Identity = podName()
+				// A replica standing by is ready: it takes over when the
+				// holder stops renewing the Lease.
+				ready.Store(true)
+				return lead.Run(ctx, client, *c, log, a.Run)
+			}
 			return a.Run(ctx)
 		},
 	}
 	cmd.Flags().StringVar(&configPath, "config", "/etc/sentinel-actor/config.yaml", "path to the actor's configuration")
 	return cmd
+}
+
+// podName is the name a replica holds its Lease as: its pod's, from the
+// downward API, or the host's.
+func podName() string {
+	if name := os.Getenv("POD_NAME"); name != "" {
+		return name
+	}
+	name, _ := os.Hostname()
+	return name
 }

@@ -3,6 +3,7 @@ pool: {{ include "sentinel.labNamespaces" . }}
 twins: {{ toJson .Values.watch.namespaces }}
 clusterDomain: {{ .Values.lab.clusterDomain }}
 healthAddr: ":8081"
+{{- include "sentinel.leaderElection" (dict "values" .Values.lab "namespace" .Release.Namespace "name" "sentinel-lab") }}
 {{- end }}
 {{- if .Values.lab.enabled }}
 {{- $labels := include "sentinel.labels" . }}
@@ -41,10 +42,9 @@ metadata:
     {{- $labels | nindent 4 }}
     app.kubernetes.io/component: lab
 spec:
-  # One Lab runs experiments one at a time.
-  replicas: 1
-  strategy:
-    type: Recreate
+  # The Lab runs experiments one at a time; a standby replica waits for its
+  # Lease.
+  {{- include "sentinel.workerRollout" .Values.lab | nindent 2 }}
   selector:
     matchLabels:
       app.kubernetes.io/name: sentinel-lab
@@ -71,6 +71,8 @@ spec:
           image: {{ include "sentinel.image" . }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args: [lab, --config, /etc/sentinel-lab/config.yaml]
+          env:
+            {{- include "sentinel.podNameEnv" . | nindent 12 }}
           ports:
             - name: health
               containerPort: 8081
@@ -269,4 +271,5 @@ roleRef:
 subjects:
   - {{ toJson $lab }}
 {{- end }}
+{{- include "sentinel.leaseRBAC" (dict "values" .Values.lab "namespace" .Release.Namespace "name" "sentinel-lab" "serviceAccount" "sentinel-lab" "labels" (include "sentinel.labels" .)) }}
 {{- end }}

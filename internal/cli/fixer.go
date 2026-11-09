@@ -21,6 +21,7 @@ import (
 	"github.com/karimzakzouk/sentinel/internal/fixer"
 	"github.com/karimzakzouk/sentinel/internal/forge"
 	"github.com/karimzakzouk/sentinel/internal/kube"
+	"github.com/karimzakzouk/sentinel/internal/lead"
 	"github.com/karimzakzouk/sentinel/internal/version"
 )
 
@@ -44,6 +45,9 @@ type FixerConfig struct {
 	ArgoCDNamespace string        `json:"argocdNamespace,omitempty"`
 	Poll            time.Duration `json:"poll,omitempty"`
 	HealthAddr      string        `json:"healthAddr,omitempty"`
+	// LeaderElection, when set, has replicas hold this Lease in turn; only
+	// its holder works.
+	LeaderElection *lead.Config `json:"leaderElection,omitempty"`
 }
 
 func loadFixerConfig(path string) (FixerConfig, error) {
@@ -124,6 +128,13 @@ func newFixerCmd(kf *kube.Flags) *cobra.Command {
 				}
 			}()
 			defer func() { _ = srv.Close() }()
+			if c := cfg.LeaderElection; c != nil {
+				c.Identity = podName()
+				// A replica standing by is ready: it takes over when the
+				// holder stops renewing the Lease.
+				ready.Store(true)
+				return lead.Run(ctx, client, *c, log, f.Run)
+			}
 			return f.Run(ctx)
 		},
 	}
