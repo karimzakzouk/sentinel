@@ -79,27 +79,44 @@ func (l *Lab) Handle(ctx context.Context, exp *v1alpha1.Experiment) (v1alpha1.Ex
 	if err != nil {
 		return PhaseNotSure, fmt.Sprintf("could not prove the seal: %v", err)
 	}
-	var leaks, silent []string
+	phase, msg, sealed := sealVerdict(results)
+	if !sealed || exp.Spec.Purpose == "prove" {
+		return phase, msg
+	}
+	return PhaseNotSure, "the Lab is sealed, but reproducing incidents comes with phase 3's next slice"
+}
+
+// sealVerdict reads the matrix: the seal holds when every forbidden
+// destination was refused and every control answered.
+func sealVerdict(results []Result) (v1alpha1.ExperimentPhase, string, bool) {
+	var inside, outside, silent []string
 	refused := 0
 	for _, r := range results {
 		switch {
 		case r.Allowed && !r.Reached:
 			silent = append(silent, r.Name)
+		case !r.Allowed && r.Reached && r.Outside:
+			outside = append(outside, r.Name)
 		case !r.Allowed && r.Reached:
-			leaks = append(leaks, r.Name)
+			inside = append(inside, r.Name)
 		case !r.Allowed:
 			refused++
 		}
 	}
 	switch {
-	case len(leaks) > 0:
-		return PhaseFailed, "the seal leaks to " + strings.Join(leaks, ", ")
+	case len(inside) > 0:
+		msg := "the seal leaks to " + strings.Join(inside, ", ")
+		if len(outside) > 0 {
+			msg += ", and outside the cluster to " + strings.Join(outside, ", ")
+		}
+		return PhaseFailed, msg, false
+	case len(outside) > 0:
+		return PhaseFailed, "the seal leaks outside the cluster to " + strings.Join(outside, ", ") +
+			": the network plugin lets pods reach them despite the policy, so block them at the nodes before using the Lab here", false
 	case len(silent) > 0:
-		return PhaseNotSure, "the positive controls did not answer (" + strings.Join(silent, ", ") + "), so a refusal means nothing"
-	case exp.Spec.Purpose == "prove":
-		return PhasePassed, fmt.Sprintf("sealed: %d forbidden destinations refused and the controls answered", refused)
+		return PhaseNotSure, "the positive controls did not answer (" + strings.Join(silent, ", ") + "), so a refusal means nothing", false
 	}
-	return PhaseNotSure, "the Lab is sealed, but reproducing incidents comes with phase 3's next slice"
+	return PhasePassed, fmt.Sprintf("sealed: %d forbidden destinations refused and the controls answered", refused), true
 }
 
 func (l *Lab) enforced(ctx context.Context, ns string) (bool, string) {
