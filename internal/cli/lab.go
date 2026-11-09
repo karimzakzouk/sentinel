@@ -28,8 +28,10 @@ type LabConfig struct {
 	// Pool lists the Lab namespaces created at install.
 	Pool []string `json:"pool"`
 	// Twins are the watched namespaces, which no Lab may reach.
-	Twins      []string `json:"twins"`
-	HealthAddr string   `json:"healthAddr,omitempty"`
+	Twins []string `json:"twins"`
+	// ClusterDomain is the cluster's DNS domain.
+	ClusterDomain string `json:"clusterDomain,omitempty"`
+	HealthAddr    string `json:"healthAddr,omitempty"`
 }
 
 func loadLabConfig(path string) (LabConfig, error) {
@@ -46,6 +48,9 @@ func loadLabConfig(path string) (LabConfig, error) {
 	}
 	if c.HealthAddr == "" {
 		c.HealthAddr = ":8081"
+	}
+	if c.ClusterDomain == "" {
+		c.ClusterDomain = "cluster.local"
 	}
 	return c, nil
 }
@@ -74,7 +79,7 @@ func newLabCmd(kf *kube.Flags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			l := &lab.Lab{Prover: &lab.Prover{Client: client, Twins: cfg.Twins, Timeout: 3 * time.Minute}, Dynamic: dyn, Pool: cfg.Pool, Log: log,
+			l := &lab.Lab{Prover: &lab.Prover{Client: client, Twins: cfg.Twins, Timeout: 3 * time.Minute}, Dynamic: dyn, Pool: cfg.Pool, Domain: cfg.ClusterDomain, Log: log,
 				Enforced: func(ctx context.Context, ns string) (bool, string) {
 					r := capability.NetworkPolicyProbe{Client: client, Namespace: ns, Settle: 30 * time.Second}.Run(ctx)
 					return r.Status == capability.Available, r.Detail

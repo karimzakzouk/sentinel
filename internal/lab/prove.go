@@ -147,9 +147,17 @@ func (p *Prover) Matrix(ctx context.Context, ns string, echo *corev1.Pod, echoSe
 
 func hostPort(host string, port int) string { return net.JoinHostPort(host, strconv.Itoa(port)) }
 
+// Inside is a running world, seen by the matrix: the controls it adds, and
+// the DNS the prober must ask, as the world's pods do.
+type Inside struct {
+	Probes []Probe
+	DNS    *corev1.PodDNSConfig
+}
+
 // Prove starts the echo control and the prober in a sealed namespace and
-// returns what every probe found. It removes what it started.
-func (p *Prover) Prove(ctx context.Context, ns string) ([]Result, error) {
+// returns what every probe found; inside, when not nil, is the world
+// running there. It removes what it started, and leaves the world.
+func (p *Prover) Prove(ctx context.Context, ns string, inside *Inside) ([]Result, error) {
 	defer p.Teardown(context.WithoutCancel(ctx), ns)
 	echo, svc, err := p.startEcho(ctx, ns)
 	if err != nil {
@@ -160,6 +168,13 @@ func (p *Prover) Prove(ctx context.Context, ns string) ([]Result, error) {
 		return nil, err
 	}
 	prober := proberPod(ns, probes)
+	if inside != nil {
+		probes = append(probes, inside.Probes...)
+		prober = proberPod(ns, probes)
+		if inside.DNS != nil {
+			prober.Spec.DNSPolicy, prober.Spec.DNSConfig = corev1.DNSNone, inside.DNS
+		}
+	}
 	if _, err := p.Client.CoreV1().Pods(ns).Create(ctx, prober, metav1.CreateOptions{}); err != nil {
 		return nil, fmt.Errorf("start the prober: %w", err)
 	}

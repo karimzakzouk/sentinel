@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/karimzakzouk/sentinel/api/v1alpha1"
@@ -17,6 +19,11 @@ func experiment(ns, labNS, purpose string) *v1alpha1.Experiment {
 		Spec: v1alpha1.ExperimentSpec{IncidentID: "inc", Purpose: purpose, LabNamespace: labNS}}
 }
 
+func withWorkload(e *v1alpha1.Experiment, ns, name string) *v1alpha1.Experiment {
+	e.Spec.Workload = &v1alpha1.TargetRef{APIVersion: "apps/v1", Kind: "Deployment", Namespace: ns, Name: name}
+	return e
+}
+
 // The Lab runs only in its own namespaces, and only where NetworkPolicy
 // enforcement is proven; it never seals or starts anything otherwise.
 func TestTheLabRefusesBeforeItStartsAnything(t *testing.T) {
@@ -25,21 +32,32 @@ func TestTheLabRefusesBeforeItStartsAnything(t *testing.T) {
 		enforced bool
 		why      string
 	}{
-		"outside the pool":             {experiment("shop", "shop", "prove"), true, "not one of the Lab's namespaces"},
-		"in another namespace":         {experiment("sentinel-lab-1", "sentinel-lab-0", "prove"), true, "must live in the Lab namespace"},
-		"where policy is not enforced": {experiment("sentinel-lab-0", "sentinel-lab-0", "prove"), false, "the Lab stays off"},
+		"outside the pool":                  {experiment("shop", "shop", "prove"), true, "not one of the Lab's namespaces"},
+		"in another namespace":              {experiment("sentinel-lab-1", "sentinel-lab-0", "prove"), true, "must live in the Lab namespace"},
+		"where policy is not enforced":      {experiment("sentinel-lab-0", "sentinel-lab-0", "prove"), false, "the Lab stays off"},
+		"a reproduction without a workload": {experiment("sentinel-lab-0", "sentinel-lab-0", "reproduce"), true, "names no workload"},
+		"a copy from an unwatched namespace": {withWorkload(experiment("sentinel-lab-0", "sentinel-lab-0", "reproduce"), "kube-system", "coredns"), true,
+			"only from the namespaces Sentinel watches"},
+		"a copy the Lab cannot make": {withWorkload(experiment("sentinel-lab-0", "sentinel-lab-0", "reproduce"), "shop", "agent"), true,
+			"mounts a path from the node"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			client := cluster()
-			l := &Lab{Prover: &Prover{Client: client}, Pool: []string{"sentinel-lab-0", "sentinel-lab-1"},
+			agent := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "agent", Namespace: "shop"}, Spec: appsv1.DeploymentSpec{
+				Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "agent", Image: "agent:1"}},
+					Volumes: []corev1.Volume{{Name: "logs", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/var/log"}}}}}}}}
+			if _, err := client.AppsV1().Deployments("shop").Create(ctx, agent, metav1.CreateOptions{}); err != nil {
+				t.Fatal(err)
+			}
+			l := &Lab{Prover: &Prover{Client: client, Twins: []string{"shop"}}, Pool: []string{"sentinel-lab-0", "sentinel-lab-1"},
 				Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
 				Enforced: func(context.Context, string) (bool, string) {
 					return tc.enforced, "the probe's deny policy did not block traffic"
 				}}
-			phase, msg := l.Handle(ctx, tc.exp)
-			if phase != PhaseFailed || !strings.Contains(msg, tc.why) {
-				t.Fatalf("%s: %s; want Failed mentioning %q", phase, msg, tc.why)
+			v := l.Handle(ctx, tc.exp)
+			if v.Phase != PhaseFailed || !strings.Contains(v.Message, tc.why) {
+				t.Fatalf("%s: %s; want Failed mentioning %q", v.Phase, v.Message, tc.why)
 			}
 			if nps, _ := client.NetworkingV1().NetworkPolicies("sentinel-lab-0").List(ctx, metav1.ListOptions{}); len(nps.Items) != 0 {
 				t.Fatal("the Lab sealed a namespace it refused to use")
