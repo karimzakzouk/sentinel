@@ -1,0 +1,4 @@
+# A push to main that changes this file runs the Lab gate workflow on the
+# self-hosted runner, as "Run workflow" does; races is how many rounds of
+# its four races to run (about 30 minutes a round).
+races: 10
