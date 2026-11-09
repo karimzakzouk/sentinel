@@ -91,6 +91,9 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          # The self-hosted runner keeps its Go caches on disk; restoring
+          # GitHub's copy over them only fails file by file.
+          cache: ${{ !inputs.self-hosted }}
       - name: Install pinned tools
         run: hack/install-tools.sh
       # A self-hosted runner keeps what earlier jobs left, and kind-up.sh
