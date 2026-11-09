@@ -90,6 +90,34 @@ func TestAnIncidentsHistory(t *testing.T) {
 	}
 }
 
+func TestActionsListEachActionAtItsLatestStage(t *testing.T) {
+	s, open, _ := newServer(t)
+	ctx := context.Background()
+	web := model.ObjectRef{Group: "apps", Kind: "Deployment", Namespace: "shop", Name: "web"}
+	taken := model.Action{ID: model.NewID(), IncidentID: open.ID, Type: "rollout.undo", Target: web, State: model.ActionExecuting}
+	shadow := model.Action{ID: model.NewID(), IncidentID: open.ID, Type: "scale.restore", Target: web, Shadow: true, State: model.ActionProposed}
+	for _, step := range []struct {
+		verb string
+		a    model.Action
+	}{{"requested", taken}, {"proposed", shadow}, {"executed", taken}, {"verified", taken}} {
+		if _, err := s.Ledger.Append(ctx, ledger.RecordDraft("/test", model.KindAction, step.verb, step.a.ID, open.ID, step.a)); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	if _, err := s.Ledger.Append(ctx, ledger.Draft{Type: "sentinel.actionable.other", Source: "/test", Data: map[string]string{}}); err != nil {
+		t.Fatal(err)
+	}
+	var out struct{ Actions []ActionSummary }
+	if res := get(t, s, "localhost", "/api/actions", &out); res.Code != http.StatusOK {
+		t.Fatalf("status %d", res.Code)
+	}
+	if len(out.Actions) != 2 || out.Actions[0].Action.ID != taken.ID || out.Actions[0].Stage != "verified" ||
+		!out.Actions[0].Since.Before(out.Actions[0].At) || out.Actions[1].Stage != "proposed" {
+		t.Fatalf("actions = %+v", out.Actions)
+	}
+}
+
 // A name an attacker controls, pointed at 127.0.0.1, must not reach the API.
 func TestOnlyLoopbackHostsAreServed(t *testing.T) {
 	s, _, _ := newServer(t)

@@ -634,3 +634,9 @@ summary {
   color: var(--muted);
   font-size: 12.5px;
 }
+
+.table.actions td.detail {
+  color: var(--muted);
+  font-size: 12.5px;
+  max-width: 420px;
+}

@@ -322,6 +322,20 @@ func (l *Ledger) Latest(ctx context.Context, eventType string, limit int) ([]Eve
 	return l.queryEvents(ctx, `SELECT `+eventColumns+` FROM events WHERE type = ? ORDER BY seq DESC LIMIT ?`, eventType, limit)
 }
 
+// LatestOfTypes returns up to limit events whose type starts with prefix,
+// newest first; a prefix such as "sentinel.action." names a family of
+// types.
+func (l *Ledger) LatestOfTypes(ctx context.Context, prefix string, limit int) ([]Event, error) {
+	// Every type with the prefix sorts at or after it and before the prefix
+	// with its last byte raised, which the type index serves as a range.
+	if prefix == "" {
+		return nil, fmt.Errorf("an empty prefix names every type")
+	}
+	upper := prefix[:len(prefix)-1] + string(prefix[len(prefix)-1]+1)
+	return l.queryEvents(ctx, `SELECT `+eventColumns+` FROM events WHERE type >= ? AND type < ? ORDER BY seq DESC LIMIT ?`,
+		prefix, upper, limit)
+}
+
 const eventColumns = `seq, id, type, source, subject, time, entity_kind, entity_id, incident_id, data, prev_hash, hash`
 
 // queryEvents runs one of the constant event queries above.

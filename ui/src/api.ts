@@ -117,11 +117,21 @@ export interface Hypothesis {
 }
 
 export interface Action {
+  id: string;
+  incidentId: string;
   type: string;
   target: ObjectRef;
   params?: Record<string, string>;
+  state: string;
   shadow?: boolean;
   reversible: boolean;
+}
+
+export interface ActionSummary {
+  action: Action;
+  stage: string;
+  since: string;
+  at: string;
 }
 
 export interface TemplateCount {
@@ -177,4 +187,5 @@ export const api = {
   incidents: () => get<{ incidents: Incident[] | null }>("/api/incidents").then((r) => r.incidents ?? []),
   incident: (id: string) => get<IncidentDetail>(`/api/incidents/${encodeURIComponent(id)}`),
   capabilities: () => get<CapabilityReport>("/api/capabilities"),
+  actions: () => get<{ actions: ActionSummary[] | null }>("/api/actions").then((r) => r.actions ?? []),
 };

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, type Incident, type Summary } from "./api";
+import { Actions } from "./Actions";
 import { Capabilities } from "./Capabilities";
 import { ago, classLabel, isOpen, workload } from "./format";
 import { IncidentView } from "./IncidentView";
@@ -92,7 +93,7 @@ export function App() {
   const [route, go] = useRoute();
   const summary = usePoll(api.summary, []);
   const incidents = usePoll(api.incidents, []);
-  const view = route.startsWith("/capabilities") ? "capabilities" : "incidents";
+  const view = route.startsWith("/capabilities") ? "capabilities" : route.startsWith("/actions") ? "actions" : "incidents";
   const all = (incidents.data ?? []).filter((i) => !i.mergedInto);
   const open = all.filter(isOpen);
   const done = all.filter((i) => !isOpen(i));
@@ -106,6 +107,9 @@ export function App() {
           <div className="tabs" role="tablist">
             <button className="tab" role="tab" aria-selected={view === "incidents"} onClick={() => go("/")}>
               Incidents
+            </button>
+            <button className="tab" role="tab" aria-selected={view === "actions"} onClick={() => go("/actions")}>
+              Actions
             </button>
             <button className="tab" role="tab" aria-selected={view === "capabilities"} onClick={() => go("/capabilities")}>
               Capabilities
@@ -131,6 +135,8 @@ export function App() {
         <main className="main">
           {view === "capabilities" ? (
             <Capabilities />
+          ) : view === "actions" ? (
+            <Actions onOpen={(id) => go(`/incidents/${id}`)} />
           ) : selected ? (
             <IncidentView id={selected} onOpen={(id) => go(`/incidents/${id}`)} />
           ) : !incidents.data ? (
