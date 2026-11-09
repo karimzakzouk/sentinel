@@ -109,7 +109,10 @@ Argo CD's guestbook with automated sync, delivers a bad image through it,
 and shows Sentinel pause the Application's sync and roll back; Argo CD then
 reports the Application out of sync instead of undoing the rollback. Fix
 Git, then `bin/sentinel resume argocd argocd/<application>`. Flux works the
-same way with `E2E_FLUX=1` and `-run TestFlux`.
+same way with `E2E_FLUX=1` and `-run TestFlux`, for a Kustomization
+(`bin/sentinel resume flux flux-system/<kustomization>`) and a HelmRelease
+(`bin/sentinel resume helmrelease flux-system/<release>`); a HelmRelease that
+rolls failed upgrades back itself is left to helm-controller.
 
 ## 8. Ask the Lab
 
