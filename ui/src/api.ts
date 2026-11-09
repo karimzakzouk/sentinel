@@ -127,6 +127,19 @@ export interface Action {
   reversible: boolean;
 }
 
+export interface Experiment {
+  id: string;
+  incidentId: string;
+  purpose: string;
+  target: ObjectRef;
+  revision?: string;
+  lab?: string;
+  phase?: string;
+  message?: string;
+  runs?: number;
+  fidelity?: string[];
+}
+
 export interface TrackRecord {
   key: { action: string; faultClass: string; service: string };
   successes: number;
@@ -197,4 +210,5 @@ export const api = {
   capabilities: () => get<CapabilityReport>("/api/capabilities"),
   actions: () => get<{ actions: ActionSummary[] | null }>("/api/actions").then((r) => r.actions ?? []),
   trackRecords: () => get<{ trackRecords: TrackRecord[] | null }>("/api/trackrecords").then((r) => r.trackRecords ?? []),
+  experiments: () => get<{ experiments: Experiment[] | null }>("/api/experiments").then((r) => r.experiments ?? []),
 };

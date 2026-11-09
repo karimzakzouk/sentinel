@@ -3,12 +3,26 @@ import {
   api,
   type Action,
   type Evidence,
+  type Experiment,
   type Hypothesis,
   type Incident,
   type LedgerEvent,
   type Signal,
 } from "./api";
-import { actionLabel, actionStages, actionVerb, ago, classLabel, clock, duration, isOpen, pct, reading, workload } from "./format";
+import {
+  actionLabel,
+  actionStages,
+  actionVerb,
+  ago,
+  classLabel,
+  clock,
+  duration,
+  isOpen,
+  labStages,
+  pct,
+  reading,
+  workload,
+} from "./format";
 import { usePoll } from "./usePoll";
 
 const signalLabels: Record<string, string> = {
@@ -172,6 +186,31 @@ function TimelineEvent({ event }: { event: LedgerEvent }) {
       );
     }
     default: {
+      const lab = labStages[event.type];
+      if (lab) {
+        const e = event.data as Experiment;
+        return (
+          <li className="event action">
+            {when}
+            <div className="what">
+              {lab.title}
+              {event.type === "sentinel.experiment.requested" && ` ${workload(e.target)} from ${e.revision}`}{" "}
+              <span className={`pill ${lab.tone}`}>{lab.pill}</span>
+            </div>
+            {e.message && event.type !== "sentinel.experiment.requested" && <div className="detail">{e.message}</div>}
+            {e.fidelity && e.fidelity.length > 0 && (
+              <details className="fidelity">
+                <summary>How the Lab's copy differed from production ({e.fidelity.length})</summary>
+                <ul>
+                  {e.fidelity.map((f) => (
+                    <li key={f}>{f}</li>
+                  ))}
+                </ul>
+              </details>
+            )}
+          </li>
+        );
+      }
       const stage = actionStages[event.type];
       if (!stage) return null;
       const a = event.data as Action;
@@ -210,6 +249,8 @@ export function IncidentView({ id, onOpen }: { id: string; onOpen: (id: string) 
   const action = lastOf<Action>(events, "sentinel.action.proposed") ?? lastOf<Action>(events, "sentinel.action.requested");
   const stageEvent = [...events].reverse().find((e) => actionStages[e.type]);
   const stage = stageEvent && actionStages[stageEvent.type];
+  const labEvent = [...events].reverse().find((e) => labStages[e.type]);
+  const lab = labEvent && labStages[labEvent.type];
   const factors = hypotheses[0]?.ratios ?? [];
   const symptoms = incident.objects?.slice(1) ?? [];
 
@@ -254,6 +295,12 @@ export function IncidentView({ id, onOpen }: { id: string; onOpen: (id: string) 
                 )}
               </div>
               {action?.params?.reason && <p className="note">{action.params.reason}</p>}
+              {lab && labEvent && (
+                <p className="note lab-verdict">
+                  <span className={`pill ${lab.tone}`}>Lab: {lab.pill}</span>{" "}
+                  {(labEvent.data as Experiment).message ?? "The Lab is copying the workload to try it."}
+                </p>
+              )}
             </>
           ) : (
             <p className="note">Not assessed yet.</p>

@@ -27,6 +27,15 @@ export const actionLabel = (a?: string) => (a && actions[a]?.label) || a || "";
 export const actionVerb = (a?: string) => (a && actions[a]?.verb) || a || "";
 
 // What became of an action Sentinel asked the actor for, by Ledger event.
+// What the Lab said about a proposed rollback, by Ledger event.
+export const labStages: Record<string, { title: string; pill: string; tone: string }> = {
+  "sentinel.experiment.requested": { title: "Asked the Lab to verify rolling back", pill: "in the Lab", tone: "accent" },
+  "sentinel.experiment.passed": { title: "The Lab verified the rollback", pill: "fixes it", tone: "green" },
+  "sentinel.experiment.failed": { title: "The Lab found the rollback does not help", pill: "does not fix it", tone: "red" },
+  "sentinel.experiment.notsure": { title: "The Lab could not tell", pill: "not sure", tone: "amber" },
+  "sentinel.experiment.aborted": { title: "The Lab stopped before a verdict", pill: "stopped", tone: "amber" },
+};
+
 export const actionStages: Record<string, { title: string; pill: string; tone: string }> = {
   "sentinel.action.requested": { title: "Asked the actor to", pill: "requested", tone: "accent" },
   "sentinel.action.awaiting": { title: "Waiting for a person", pill: "needs approval", tone: "amber" },

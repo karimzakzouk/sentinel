@@ -9,6 +9,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -51,6 +52,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/capabilities", s.capabilities)
 	mux.HandleFunc("GET /api/actions", s.actions)
 	mux.HandleFunc("GET /api/trackrecords", s.trackRecords)
+	mux.HandleFunc("GET /api/experiments", s.experiments)
 	mux.HandleFunc("GET /api/", func(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusNotFound, errors.New("no such API route"))
 	})
@@ -197,6 +199,17 @@ func (s *Server) trackRecords(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Alpha+out[i].Beta > out[j].Alpha+out[j].Beta })
 	writeJSON(w, map[string]any{"trackRecords": out})
+}
+
+// experiments lists the Lab's verdicts on proposed rollbacks, newest first.
+func (s *Server) experiments(w http.ResponseWriter, r *http.Request) {
+	records, err := ledger.List[model.Experiment](r.Context(), s.Ledger, model.KindExperiment, "")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	slices.Reverse(records)
+	writeJSON(w, map[string]any{"experiments": records})
 }
 
 // IncidentDetail is an incident and everything recorded about it, in order.
