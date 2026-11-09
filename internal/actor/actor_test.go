@@ -99,7 +99,7 @@ func newActor(t *testing.T, replicas int32, policies ...*v1alpha1.SentinelPolicy
 	}})
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
 		map[schema.GroupVersionResource]string{PoliciesResource: "SentinelPolicyList", RequestsResource: "ActionRequestList",
-			ApplicationsResource: "ApplicationList"}, objects...)
+			ApplicationsResource: "ApplicationList", ApplicationSetsResource: "ApplicationSetList"}, objects...)
 	dyn.PrependReactor("patch", "*", func(action k8stesting.Action) (bool, runtime.Object, error) {
 		if p, ok := action.(k8stesting.PatchActionImpl); ok && len(p.PatchOptions.DryRun) > 0 {
 			return true, &unstructured.Unstructured{Object: map[string]any{}}, nil
@@ -356,6 +356,45 @@ func TestAnArgoCDRollbackPausesTheApplicationFirst(t *testing.T) {
 	if phase, msg := plain.Handle(ctx, request(ActionArgoCDRollback, map[string]string{ParamFromTemplateHash: "bbb"})); phase != v1alpha1.ActionFailed ||
 		!strings.Contains(msg, "not kept in sync by Argo CD") {
 		t.Fatalf("on a plain workload: %s: %s", phase, msg)
+	}
+}
+
+// An ApplicationSet rewrites the Applications it generates; unless it is
+// told to leave their sync policy alone, it would undo the pause.
+func TestAnApplicationSetMustLeaveThePauseAlone(t *testing.T) {
+	for name, tc := range map[string]struct {
+		ignore []any
+		want   v1alpha1.ActionPhase
+	}{
+		"rewrites the sync policy": {nil, v1alpha1.ActionFailed},
+		"ignores the sync policy":  {[]any{map[string]any{"jsonPointers": []any{"/spec/syncPolicy"}}}, v1alpha1.ActionSucceeded},
+	} {
+		t.Run(name, func(t *testing.T) {
+			a, client, _ := newActor(t, 3, sentinelPolicy(v1alpha1.AutonomyAutonomous, ActionArgoCDRollback))
+			dep, _ := client.AppsV1().Deployments("shop").Get(ctx, "web", metav1.GetOptions{})
+			dep.Annotations = map[string]string{"argocd.argoproj.io/tracking-id": "shop-app:apps/Deployment:shop/web"}
+			if _, err := client.AppsV1().Deployments("shop").Update(ctx, dep, metav1.UpdateOptions{}); err != nil {
+				t.Fatal(err)
+			}
+			apps := a.Dynamic.Resource(ApplicationsResource).Namespace("argocd")
+			app, _ := apps.Get(ctx, "shop-app", metav1.GetOptions{})
+			app.SetOwnerReferences([]metav1.OwnerReference{{APIVersion: "argoproj.io/v1alpha1", Kind: "ApplicationSet", Name: "shops", UID: "set"}})
+			if _, err := apps.Update(ctx, app, metav1.UpdateOptions{}); err != nil {
+				t.Fatal(err)
+			}
+			set := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "argoproj.io/v1alpha1", "kind": "ApplicationSet",
+				"metadata": map[string]any{"name": "shops", "namespace": "argocd"}, "spec": map[string]any{}}}
+			if tc.ignore != nil {
+				set.Object["spec"] = map[string]any{"ignoreApplicationDifferences": tc.ignore}
+			}
+			if _, err := a.Dynamic.Resource(ApplicationSetsResource).Namespace("argocd").Create(ctx, set, metav1.CreateOptions{}); err != nil {
+				t.Fatal(err)
+			}
+			phase, msg := a.Handle(ctx, request(ActionArgoCDRollback, map[string]string{ParamFromTemplateHash: "bbb"}))
+			if phase != tc.want {
+				t.Fatalf("%s: %s", phase, msg)
+			}
+		})
 	}
 }
 
