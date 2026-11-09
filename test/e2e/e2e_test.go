@@ -582,6 +582,37 @@ func TestTheLabVerifiesTheRollbackOfACrashingRevision(t *testing.T) {
 		}
 		return failing != "", nil
 	})
+	// At lab-verified the actor waits for the Lab, then rolls back on its
+	// verdict alone.
+	admin := dynamicAs(t, "")
+	policies := schema.GroupVersionResource{Group: "sentinel.karimzakzouk.github.io", Version: "v1alpha1", Resource: "sentinelpolicies"}
+	requests := schema.GroupVersionResource{Group: "sentinel.karimzakzouk.github.io", Version: "v1alpha1", Resource: "actionrequests"}
+	policy := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "sentinel.karimzakzouk.github.io/v1alpha1", "kind": "SentinelPolicy",
+		"metadata": map[string]any{"name": "e2e-lab-verified", "namespace": smokeNS},
+		"spec":     map[string]any{"autonomy": []any{map[string]any{"action": "rollout.undo", "level": "lab-verified"}}},
+	}}
+	if _, err := admin.Resource(policies).Namespace(smokeNS).Create(ctx, policy, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = admin.Resource(policies).Namespace(smokeNS).Delete(ctx, "e2e-lab-verified", metav1.DeleteOptions{})
+	})
+	request := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "sentinel.karimzakzouk.github.io/v1alpha1", "kind": "ActionRequest",
+		"metadata": map[string]any{"name": "e2e-lab-verified", "namespace": smokeNS,
+			"annotations": map[string]any{"sentinel.karimzakzouk.github.io/experiment": labNS + "/verify-front"}},
+		"spec": map[string]any{"incidentId": "e2e", "action": "rollout.undo", "reason": "the Lab verifies it",
+			"params":    map[string]any{"fromTemplateHash": strings.TrimPrefix(failing, "front-")},
+			"expiresAt": time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
+			"target":    map[string]any{"apiVersion": "apps/v1", "kind": "Deployment", "namespace": smokeNS, "name": "front"}},
+	}}
+	if _, err := admin.Resource(requests).Namespace(smokeNS).Create(ctx, request, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = admin.Resource(requests).Namespace(smokeNS).Delete(ctx, "e2e-lab-verified", metav1.DeleteOptions{})
+	})
 	phase, msg, _ := runExperimentSpec(t, "verify-front", map[string]any{"incidentId": "e2e", "purpose": "verify-fix", "labNamespace": labNS,
 		"workload": map[string]any{"apiVersion": "apps/v1", "kind": "Deployment", "namespace": smokeNS, "name": "front"}, "revision": failing})
 	if pluginLimit(phase, msg) {
@@ -589,6 +620,19 @@ func TestTheLabVerifiesTheRollbackOfACrashingRevision(t *testing.T) {
 	}
 	if phase != lab.PhasePassed || !strings.HasPrefix(msg, "the previous revision ") || !strings.Contains(msg, " fixes it: ") {
 		t.Fatalf("the verification ended %s: %s", phase, msg)
+	}
+	var outcome, approvedBy string
+	eventually(t, 2*time.Minute, "the actor to roll back on the Lab's verdict", func() (bool, error) {
+		u, err := admin.Resource(requests).Namespace(smokeNS).Get(ctx, "e2e-lab-verified", metav1.GetOptions{})
+		if err != nil {
+			return false, err
+		}
+		outcome, _, _ = unstructured.NestedString(u.Object, "status", "phase")
+		approvedBy, _, _ = unstructured.NestedString(u.Object, "status", "approvedBy")
+		return outcome == "Succeeded" || outcome == "Failed" || outcome == "Rejected", nil
+	})
+	if outcome != "Succeeded" || approvedBy != "the Lab, "+labNS+"/verify-front" {
+		t.Fatalf("the request ended %s, approved by %q; want the Lab's verdict to carry it out", outcome, approvedBy)
 	}
 }
 
