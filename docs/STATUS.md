@@ -189,8 +189,8 @@ Needed later:
 
 | When | What |
 |---|---|
-| Phase 1 gate | A machine that can run a 72-hour soak (the self-hosted runner below would do) |
-| Phase 3 | A bigger machine (about 8 CPUs, 32 GB) as a self-hosted CI runner for the Lab's statistics suites |
+| Phase 1 gate | The 72-hour soak itself: the `Soak` workflow runs it on the self-hosted runner (decision 58), on demand |
+| Phase 3 | A steadier or bigger runner for the Lab's statistics suites, if the burstable one (decision 58) runs out of credits on their few hundred repetitions |
 | Phase 4 | A test GitHub organization and a GitHub App, so Sentinel can open real pull requests |
 | Phase 6 | Azure for Students credits (managed-cluster run) and outside human evaluators |
 
@@ -198,9 +198,12 @@ Needed later:
 
 - **History:** commits on `main`; milestones are tagged `v2.0.0-alpha.N`.
 - **CI:** the Actions tab. `CI` runs on every push, `E2E` on code changes,
-  `E2E Kubernetes versions` on code changes and weekly, and `E2E network
-  plugins` and `Capability report across distributions` when the probe's
-  code changes and weekly.
+  `E2E Kubernetes versions` on code changes and weekly, all on GitHub's
+  runners and without the Lab's tests. `E2E network plugins` runs the whole
+  suite on each of four network plugins on the self-hosted Azure runner when
+  the probe's, the Lab's or the actor's code changes, and weekly; `Soak` runs
+  there on demand; `Capability report across distributions` runs when the
+  probe's code changes and weekly.
 - **Run it yourself:** `make e2e-up && make e2e` brings up a kind cluster with
   Sentinel and runs the end-to-end suite; `hack/run-scenarios.sh
   test/scenarios/smoke/*.yaml` runs the scenario pool against it, and
