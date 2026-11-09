@@ -518,8 +518,20 @@ summary {
   gap: 3px;
 }
 
-.lab-verdict .pill {
+.lab-verdict .pill,
+.fix-step .pill {
   margin-right: 4px;
+}
+
+.event span.detail {
+  display: block;
+}
+
+.change-line {
+  display: block;
+  margin-top: 2px;
+  font-size: 12.5px;
+  word-break: break-all;
 }
 
 /* Capabilities */
