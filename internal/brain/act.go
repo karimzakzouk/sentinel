@@ -8,6 +8,7 @@ import (
 	"github.com/karimzakzouk/sentinel/internal/ledger"
 	"github.com/karimzakzouk/sentinel/internal/model"
 	"github.com/karimzakzouk/sentinel/internal/notify"
+	"github.com/karimzakzouk/sentinel/internal/stats"
 	"github.com/karimzakzouk/sentinel/internal/watcher"
 )
 
@@ -197,5 +198,43 @@ func (b *Brain) verify(inc *incident) []ledger.Draft {
 			"; the incident cleared", a.Params["verification"])
 	}
 	b.Log.Info("action "+step, "incident", inc.rec.ID, "action", a.Type, "verification", a.Params["verification"])
-	return []ledger.Draft{ledger.RecordDraft(source, model.KindAction, step, a.ID, inc.rec.ID, *a)}
+	drafts := []ledger.Draft{ledger.RecordDraft(source, model.KindAction, step, a.ID, inc.rec.ID, *a)}
+	if inc.rec.Assessment != nil {
+		key := model.TrackKey{Action: a.Type, FaultClass: inc.rec.Assessment.Class, Service: inc.primary.String()}
+		drafts = append(drafts, b.track(key, a.State == model.ActionVerified, inc.rec.ID, now))
+	}
+	return drafts
 }
+
+// trackTarget is the success rate whose 5th percentile a cell must clear to
+// support autonomy: 28 straight verified successes under the uniform prior.
+const trackTarget = 0.9
+
+// track adds a verified success or a failed verification to a cell's Beta
+// record, which starts uniform. Refusals and approvals do not count: they say
+// nothing about whether the action works. The level is what the record
+// supports; phase 5 lets it gate autonomy. Callers hold b.mu.
+func (b *Brain) track(key model.TrackKey, success bool, incident model.ID, now time.Time) ledger.Draft {
+	if b.tracks == nil {
+		b.tracks = map[model.TrackKey]*model.TrackRecord{}
+	}
+	t := b.tracks[key]
+	if t == nil {
+		t = &model.TrackRecord{Key: key, Alpha: 1, Beta: 1}
+		b.tracks[key] = t
+	}
+	if success {
+		t.Alpha++
+	} else {
+		t.Beta++
+	}
+	t.Level = model.AutonomyApprove
+	if stats.BetaQuantile(0.05, t.Alpha, t.Beta) >= trackTarget {
+		t.Level = model.AutonomyAutonomous
+	}
+	t.UpdatedAt = now
+	return ledger.RecordDraft(source, model.KindTrackRecord, "updated", TrackID(key), incident, *t)
+}
+
+// TrackID is the Ledger entity a cell's record is kept under.
+func TrackID(key model.TrackKey) model.ID { return model.ID("track/" + key.String()) }

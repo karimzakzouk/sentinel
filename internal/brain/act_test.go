@@ -256,6 +256,53 @@ func TestPeopleAreToldOnceWhatSentinelNeedsOrDid(t *testing.T) {
 	}
 }
 
+// Every verification adds to its cell's track record; 28 straight verified
+// successes support autonomy, and the records outlive a restart.
+func TestTrackRecordsCountVerifications(t *testing.T) {
+	b, l := newBrain(t)
+	b.Act = &fakeRequester{allow: true}
+	det := badDeploy(t, b)
+	inc := incidents(t, l)[0]
+	if err := b.OnActionOutcome(ctx, ActionOutcome{IncidentID: inc.ID, Phase: "Succeeded"}); err != nil {
+		t.Fatal(err)
+	}
+	det.Ended, det.At = true, onset.Add(2*time.Minute)
+	if err := b.OnDetection(ctx, det); err != nil {
+		t.Fatal(err)
+	}
+	b.Now = func() time.Time { return onset.Add(3 * time.Minute) }
+	if err := b.Sweep(ctx); err != nil {
+		t.Fatal(err)
+	}
+	records, err := ledger.List[model.TrackRecord](ctx, l, model.KindTrackRecord, "")
+	key := model.TrackKey{Action: ActionRolloutUndo, FaultClass: ClassBadImage, Service: web.String()}
+	if err != nil || len(records) != 1 || records[0].Key != key || records[0].Alpha != 2 || records[0].Beta != 1 ||
+		records[0].Level != model.AutonomyApprove {
+		t.Fatalf("records = %+v, %v", records, err)
+	}
+
+	// One verified success so far; 26 more make 27, and the 28th clears 90%.
+	b.mu.Lock()
+	for i := range 26 {
+		b.track(key, true, inc.ID, onset.Add(time.Duration(i)*time.Hour))
+	}
+	level27 := b.tracks[key].Level
+	b.track(key, true, inc.ID, onset.Add(30*time.Hour))
+	level28 := b.tracks[key].Level
+	b.mu.Unlock()
+	if level27 != model.AutonomyApprove || level28 != model.AutonomyAutonomous {
+		t.Fatalf("levels after 27 and 28 successes: %s and %s; want the 28th straight success to support autonomy", level27, level28)
+	}
+
+	restarted := &Brain{Ledger: l, Log: b.Log, Classify: b.Classify, Attribute: b.Attribute, Decide: b.Decide, Gap: b.Gap, Now: b.Now}
+	if _, err := restarted.Restore(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := restarted.tracks[key]; got == nil || got.Alpha != 2 {
+		t.Fatalf("restored record = %+v, want the one in the Ledger", got)
+	}
+}
+
 func TestScaleRestoreArgsComeFromTheChange(t *testing.T) {
 	args := actionArgs(ActionScaleRestore, &RankedChange{Change: CandidateChange{Kind: string(watcher.ChangeScale),
 		Fields: []string{"replicas:3->0"}}}, "")

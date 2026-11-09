@@ -127,6 +127,14 @@ export interface Action {
   reversible: boolean;
 }
 
+export interface TrackRecord {
+  key: { action: string; faultClass: string; service: string };
+  successes: number;
+  failures: number;
+  lower: number;
+  level: string;
+}
+
 export interface ActionSummary {
   action: Action;
   stage: string;
@@ -188,4 +196,5 @@ export const api = {
   incident: (id: string) => get<IncidentDetail>(`/api/incidents/${encodeURIComponent(id)}`),
   capabilities: () => get<CapabilityReport>("/api/capabilities"),
   actions: () => get<{ actions: ActionSummary[] | null }>("/api/actions").then((r) => r.actions ?? []),
+  trackRecords: () => get<{ trackRecords: TrackRecord[] | null }>("/api/trackrecords").then((r) => r.trackRecords ?? []),
 };
