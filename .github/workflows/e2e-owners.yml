@@ -1,7 +1,8 @@
 # Runs the owner adapters' end-to-end tests: Argo CD or Flux is installed
 # in a kind cluster, deploys a public example, and Sentinel rolls back a bad
-# image delivered through it. It runs when the adapters change, weekly, and
-# on demand, so the main suite stays fast.
+# image delivered through it. It runs when the adapters or the Brain that
+# decides on them change, weekly, and on demand, so the main suite stays
+# fast.
 name: E2E owners
 
 on:
@@ -10,6 +11,7 @@ on:
     paths:
       - internal/actor/**
       - internal/act/**
+      - internal/brain/**
       - charts/sentinel/templates/rbac.yaml
       - charts/sentinel-fence/**
       - test/e2e/argocd_test.go
