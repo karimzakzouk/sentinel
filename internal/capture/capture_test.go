@@ -135,6 +135,15 @@ func TestGRPCCallsAreKeptAndDatastoreStatementsAreNot(t *testing.T) {
 	if got := Replayable([]Request{current}, 5); len(got) != 0 {
 		t.Fatalf("a gRPC call is replayable: %+v", got)
 	}
+	zero, ok := requestOf(span{Kind: kindClient, Attributes: []attribute{attr("rpc.system", "grpc"), attr("rpc.method", "/a.B/C"),
+		{Key: "rpc.grpc.status_code"}, attr("server.address", "b")}})
+	if !ok || zero.GRPC != "OK" || zero.Status != 200 {
+		t.Fatalf("a status left out as zero %+v", zero)
+	}
+	unknown, _ := requestOf(span{Kind: kindClient, Attributes: []attribute{attr("rpc.system", "grpc"), attr("rpc.method", "/a.B/C"), attr("server.address", "b")}})
+	if unknown.GRPC != "" || unknown.Status != 0 {
+		t.Fatalf("no status at all %+v", unknown)
+	}
 	if q, ok := requestOf(span{Kind: kindClient, Attributes: []attribute{attr("db.system.name", "redis"),
 		attr("db.query.text", "HMGET 9d336a7e-70c1-4102-bd4b-2e70643bce47 data"), attr("server.address", "redis-cart")}}); ok {
 		t.Fatalf("kept a datastore's statement: %+v", q)

@@ -229,6 +229,8 @@ const (
 	kindClient = 3
 )
 
+// attrs reads attributes as strings. One with no value is kept empty: a
+// zero, which protobuf's JSON leaves out.
 func attrs(list []attribute) map[string]string {
 	out := map[string]string{}
 	for _, a := range list {
@@ -237,6 +239,8 @@ func attrs(list []attribute) map[string]string {
 			out[a.Key] = *a.Value.String
 		case a.Value.Int != "":
 			out[a.Key] = a.Value.Int.String()
+		default:
+			out[a.Key] = ""
 		}
 	}
 	return out
@@ -298,8 +302,11 @@ func grpcOf(sp span, a map[string]string) (Request, bool) {
 	if method == "" {
 		return Request{}, false
 	}
-	code, ok := grpcCode(cmp.Or(a["rpc.status_code"], a["rpc.grpc.status_code"]))
-	if ok {
+	status, found := a["rpc.status_code"]
+	if !found {
+		status, found = a["rpc.grpc.status_code"]
+	}
+	if code, ok := grpcCode(cmp.Or(status, "0")); found && ok {
 		q.GRPC, q.Status = grpcNames[code], grpcHTTP[code]
 	}
 	return addressed(q, a, "/"+strings.TrimPrefix(method, "/"))
