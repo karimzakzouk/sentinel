@@ -79,3 +79,80 @@ healthAddr: ":8081"
 {{- end -}}
 {{- end -}}
 {{- end }}
+
+{{/*
+A worker's replicas and rollout: one, replaced by Recreate, or several that
+hold a Lease in turn, rolled one at a time. Takes the worker's values.
+*/}}
+{{- define "sentinel.workerRollout" -}}
+replicas: {{ int .replicas }}
+strategy:
+{{- if gt (int .replicas) 1 }}
+  type: RollingUpdate
+  rollingUpdate: {maxUnavailable: 1, maxSurge: 0}
+{{- else }}
+  type: Recreate
+{{- end }}
+{{- end }}
+
+{{/*
+A worker's Lease, in its config, when it runs more than one replica. Takes
+a dict of the worker's values, its namespace and its Lease's name.
+*/}}
+{{- define "sentinel.leaderElection" -}}
+{{- if gt (int .values.replicas) 1 }}
+leaderElection:
+  namespace: {{ .namespace }}
+  name: {{ .name }}
+{{- end }}
+{{- end }}
+
+{{/*
+Lets a worker that runs more than one replica hold its Lease. Takes a dict
+of the worker's values, its namespace, its Lease's name, its service
+account and the chart's labels.
+*/}}
+{{- define "sentinel.leaseRBAC" -}}
+{{- if gt (int .values.replicas) 1 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .name }}-lease
+  namespace: {{ .namespace }}
+  labels:
+    {{- .labels | nindent 4 }}
+rules:
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [create]
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    resourceNames: [{{ .name }}]
+    verbs: [get, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .name }}-lease
+  namespace: {{ .namespace }}
+  labels:
+    {{- .labels | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ .name }}-lease
+subjects:
+  - kind: ServiceAccount
+    name: {{ .serviceAccount }}
+    namespace: {{ .namespace }}
+{{- end }}
+{{- end }}
+
+{{/* The pod's own name, which a worker holds its Lease as. */}}
+{{- define "sentinel.podNameEnv" -}}
+- name: POD_NAME
+  valueFrom:
+    fieldRef:
+      fieldPath: metadata.name
+{{- end }}

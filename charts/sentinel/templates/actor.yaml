@@ -14,6 +14,7 @@ argoCDNamespace: {{ .Values.owners.argocd.namespace }}
 # only from its own namespaces.
 labNamespaces: {{ include "sentinel.labNamespaces" . }}
 healthAddr: ":8081"
+{{- include "sentinel.leaderElection" (dict "values" .Values.actor "namespace" .Values.actor.namespace "name" "sentinel-actor") }}
 {{- end }}
 {{- if .Values.actor.enabled }}
 # The actor carries out the controller's action requests, as its own
@@ -39,10 +40,9 @@ metadata:
     {{- include "sentinel.labels" . | nindent 4 }}
     app.kubernetes.io/component: actor
 spec:
-  # One actor runs requests one at a time; a second would race it.
-  replicas: 1
-  strategy:
-    type: Recreate
+  # The actor runs requests one at a time; a standby replica waits for its
+  # Lease and never races it.
+  {{- include "sentinel.workerRollout" .Values.actor | nindent 2 }}
   selector:
     matchLabels:
       app.kubernetes.io/name: sentinel-actor
@@ -69,6 +69,8 @@ spec:
           image: {{ include "sentinel.image" . }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args: [actor, --config, /etc/sentinel-actor/config.yaml]
+          env:
+            {{- include "sentinel.podNameEnv" . | nindent 12 }}
           ports:
             - name: health
               containerPort: 8081
@@ -133,4 +135,5 @@ spec:
     - ports:
         - port: 443
         - port: 6443
+{{- include "sentinel.leaseRBAC" (dict "values" .Values.actor "namespace" .Values.actor.namespace "name" "sentinel-actor" "serviceAccount" .Values.actor.serviceAccount "labels" (include "sentinel.labels" .)) }}
 {{- end }}
