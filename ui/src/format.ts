@@ -69,8 +69,14 @@ export function duration(from: string, to: string): string {
   return m < 90 ? `${m} min` : `${Math.round(m / 60)} h`;
 }
 
-// What Sentinel would say about an incident, in a sentence or two.
-export function reading(i: Incident): string {
+const done: Record<string, string> = {
+  "rollout.undo": "rolled back",
+  "scale.restore": "restored the replica count of",
+};
+
+// What Sentinel would say about an incident, in a sentence or two; did names
+// the event of the last step of an action Sentinel carried out, if any.
+export function reading(i: Incident, did?: { type: string; event: string }): string {
   const a: Assessment | undefined = i.assessment;
   const where = workload(i.objects?.[0]);
   if (!a) return `Sentinel saw trouble on ${where} and is still assessing it.`;
@@ -83,9 +89,22 @@ export function reading(i: Incident): string {
   if (top && workload(top.object) !== where) {
     s += ` The root cause looks upstream, in ${workload(top.object)} (${pct(top.p)}).`;
   }
+  const target = workload(a.culprit?.object ?? i.objects?.[0]);
   const act = actions[a.decision];
-  if (act && a.decision !== "none") {
-    s += ` Sentinel would ${act.verb} ${a.decision === "escalate" ? "it" : workload(a.culprit?.object ?? i.objects?.[0])}.`;
+  if (did && did.event !== "sentinel.action.requested" && did.event !== "sentinel.action.failed") {
+    const outcome =
+      did.event === "sentinel.action.verified"
+        ? ", and the incident's signals cleared"
+        : did.event === "sentinel.action.unverified"
+          ? ", but the incident's signals did not clear; it is left to people"
+          : "; it is checking that the incident clears";
+    s += ` Sentinel ${done[did.type] ?? did.type} ${target}${outcome}.`;
+  } else if (did?.event === "sentinel.action.failed") {
+    s += ` Sentinel asked to ${act?.verb ?? did.type} ${target}, but the actor did not; it is left to people.`;
+  } else if (did) {
+    s += ` Sentinel has asked to ${act?.verb ?? did.type} ${target}.`;
+  } else if (act && a.decision !== "none") {
+    s += ` Sentinel would ${act.verb} ${a.decision === "escalate" ? "it" : target}.`;
   }
   return s;
 }

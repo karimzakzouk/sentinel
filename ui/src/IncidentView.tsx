@@ -228,7 +228,9 @@ export function IncidentView({ id, onOpen }: { id: string; onOpen: (id: string) 
       <div className="grid">
         <section className="card">
           <h2>Sentinel's reading</h2>
-          <p className="reading">{reading(incident)}</p>
+          <p className="reading">
+            {reading(incident, stageEvent && { type: (stageEvent.data as Action).type, event: stageEvent.type })}
+          </p>
         </section>
         <section className="card">
           <h2>{stage ? "What it did" : "What it would do"}</h2>
