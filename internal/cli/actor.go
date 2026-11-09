@@ -100,7 +100,7 @@ func newActorCmd(kf *kube.Flags) *cobra.Command {
 			ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGTERM, os.Interrupt)
 			defer stop()
 			var ready atomic.Bool
-			ready.Store(true)
+			a.OnReady = func() { ready.Store(true) }
 			srv := &http.Server{Addr: cfg.HealthAddr, Handler: healthHandler(&ready), ReadHeaderTimeout: 5 * time.Second}
 			go func() {
 				if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {

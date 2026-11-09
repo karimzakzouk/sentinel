@@ -3,6 +3,7 @@ package actor
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -43,8 +44,19 @@ func (a *Actor) Run(ctx context.Context) error {
 		synced = append(synced, inf.HasSynced)
 		f.Start(ctx.Done())
 	}
-	if !cache.WaitForCacheSync(ctx.Done(), synced...) {
-		return fmt.Errorf("action request caches did not sync")
+	wait, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	if !cache.WaitForCacheSync(wait.Done(), synced...) {
+		var stuck []string
+		for i, ns := range a.Namespaces {
+			if !synced[i]() {
+				stuck = append(stuck, ns)
+			}
+		}
+		return fmt.Errorf("action requests in %s did not sync within a minute: the actor may lack permission there", strings.Join(stuck, ", "))
+	}
+	if a.OnReady != nil {
+		a.OnReady()
 	}
 	a.Log.Info("actor started", "namespaces", a.Namespaces, "perHour", a.PerHour)
 	go func() {

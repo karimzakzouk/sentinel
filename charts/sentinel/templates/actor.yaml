@@ -1,3 +1,17 @@
+{{- define "sentinel.actorConfig" -}}
+namespaces: {{ toJson .Values.watch.namespaces }}
+# The kill switch: false rejects every request. An edit to this ConfigMap
+# takes effect within a minute without a restart; a Helm upgrade restarts
+# the actor.
+enabled: {{ .Values.actor.actions.enabled }}
+perHour: {{ .Values.actor.actions.perHour }}
+# Sentinel's own identities may not approve its actions.
+self:
+  - system:serviceaccount:{{ .Release.Namespace }}:sentinel
+  - system:serviceaccount:{{ .Values.actor.namespace }}:{{ .Values.actor.serviceAccount }}
+argoCDNamespace: {{ .Values.owners.argocd.namespace }}
+healthAddr: ":8081"
+{{- end }}
 {{- if .Values.actor.enabled }}
 # The actor carries out the controller's action requests, as its own
 # identity, in its own namespace, after checking each one again. The
@@ -11,17 +25,7 @@ metadata:
     {{- include "sentinel.labels" . | nindent 4 }}
 data:
   config.yaml: |
-    namespaces: {{ toJson .Values.watch.namespaces }}
-    # The kill switch: false rejects every request, within a minute of the
-    # change, without a restart.
-    enabled: {{ .Values.actor.actions.enabled }}
-    perHour: {{ .Values.actor.actions.perHour }}
-    # Sentinel's own identities may not approve its actions.
-    self:
-      - system:serviceaccount:{{ .Release.Namespace }}:sentinel
-      - system:serviceaccount:{{ .Values.actor.namespace }}:{{ .Values.actor.serviceAccount }}
-    argoCDNamespace: {{ .Values.owners.argocd.namespace }}
-    healthAddr: ":8081"
+    {{- include "sentinel.actorConfig" . | nindent 4 }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -42,6 +46,8 @@ spec:
       app.kubernetes.io/instance: {{ .Release.Name }}
   template:
     metadata:
+      annotations:
+        checksum/config: {{ include "sentinel.actorConfig" . | sha256sum | trunc 16 }}
       labels:
         app.kubernetes.io/name: sentinel-actor
         app.kubernetes.io/instance: {{ .Release.Name }}
