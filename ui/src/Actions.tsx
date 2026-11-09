@@ -177,7 +177,8 @@ export function Actions({ onOpen }: { onOpen: (id: string) => void }) {
           <>
             <p className="note">
               Each verified action counts for its cell. A cell supports acting on its own once the success rate is at least
-              90% with 95% confidence: 28 straight successes from a uniform prior. For now this is shown, not enforced.
+              90% with 95% confidence: 28 straight successes from a uniform prior. Where a SentinelPolicy sets{" "}
+              <code>earned: true</code> for an action, a person approves it until its cell gets there.
             </p>
             <Records records={records.data} />
           </>
