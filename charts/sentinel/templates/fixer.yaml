@@ -1,6 +1,9 @@
 {{- define "sentinel.fixerConfig" -}}
 namespace: {{ .Release.Namespace }}
 forge:
+  {{- with .Values.fixer.forge.kind }}
+  kind: {{ . | quote }}
+  {{- end }}
   web: {{ .Values.fixer.forge.web | quote }}
   api: {{ .Values.fixer.forge.api | quote }}
   tokenFile: /var/run/sentinel-fixer/token

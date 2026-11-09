@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -180,5 +181,29 @@ func TestALedgerProofChecksAgainstItsRoot(t *testing.T) {
 	}
 	if out, err := run(early, "check-proof"); err != nil || !strings.Contains(out, "ok: the tree of 2 events") {
 		t.Fatalf("consistency: %s, %v", out, err)
+	}
+}
+
+// The Fixer's forge is one it knows, and Git pushes as the name that
+// forge's tokens need unless told otherwise.
+func TestTheFixersForgeKindAndGitUser(t *testing.T) {
+	load := func(kind, user string) (FixerConfig, error) {
+		path := filepath.Join(t.TempDir(), "fixer.yaml")
+		body := fmt.Sprintf("namespace: sentinel\nforge: {kind: %q, web: https://x, api: https://x/api, tokenFile: /t, user: %q}\n", kind, user)
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return loadFixerConfig(path)
+	}
+	for kind, want := range map[string]string{"": "sentinel", "gitlab": "oauth2", "bitbucket": "x-token-auth", "bitbucket-server": "x-token-auth"} {
+		if c, err := load(kind, ""); err != nil || c.Forge.User != want {
+			t.Errorf("%q: user %q, %v; want %q", kind, c.Forge.User, err, want)
+		}
+	}
+	if c, err := load("bitbucket", "deploy-bot"); err != nil || c.Forge.User != "deploy-bot" {
+		t.Errorf("a named user: %q, %v", c.Forge.User, err)
+	}
+	if _, err := load("sourcehut", ""); err == nil {
+		t.Error("an unknown forge was accepted")
 	}
 }
