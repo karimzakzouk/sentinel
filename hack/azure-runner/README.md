@@ -248,6 +248,13 @@ REMOVE=1 hack/azure-runner/vm-run.sh install-credentials.sh REMOVE
 hack/azure-runner/vm-run.sh test-idle-check.sh   # "the managed identity may deallocate"
 ```
 
+Removing the file does not take the secret back: any job may have copied it,
+and the run-command extension keeps every request it ran, the one that
+stored the file included, under
+`/var/lib/waagent/Microsoft.CPlat.Core.RunCommandLinux-*/config/`,
+encrypted with a key that root can read. So rotate the service principal's
+secret afterwards, and update the repository secret `AZURE_CLIENT_SECRET`.
+
 ## Re-register
 
 When the runner was removed from the repository or lost its credentials:
@@ -259,7 +266,9 @@ GH_TOKEN=... hack/azure-runner/register.sh
 
 It takes over the name `sentinel-azure-1`. The registration token, like the
 service principal above, travels in the run-command request body, never on a
-command line, and the copy run-command leaves on the VM is deleted.
+command line, and the plain-text copy run-command leaves on the VM is
+deleted. The extension's encrypted copy stays (see Identity), but the token
+expires after an hour.
 
 ## Cost
 
