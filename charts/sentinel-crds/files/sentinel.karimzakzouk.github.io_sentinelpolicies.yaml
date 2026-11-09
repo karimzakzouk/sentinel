@@ -60,6 +60,12 @@ spec:
                       maxLength: 63
                       minLength: 1
                       type: string
+                    earned:
+                      description: |-
+                        Earned holds the action at approve, wherever Level is higher, until
+                        its track record on the workload and fault class at hand clears the
+                        target; a failure sends it back.
+                      type: boolean
                     level:
                       description: |-
                         Level is the highest autonomy the action may reach. Track records can

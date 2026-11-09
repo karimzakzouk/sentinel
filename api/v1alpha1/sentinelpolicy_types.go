@@ -28,6 +28,11 @@ type ActionAutonomy struct {
 	// Level is the highest autonomy the action may reach. Track records can
 	// only raise an action up to this level, never past it.
 	Level AutonomyLevel `json:"level"`
+	// Earned holds the action at approve, wherever Level is higher, until
+	// its track record on the workload and fault class at hand clears the
+	// target; a failure sends it back.
+	// +optional
+	Earned bool `json:"earned,omitempty"`
 }
 
 // RiskBudgets bound how much risk Sentinel may take in the namespace. They

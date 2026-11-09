@@ -31,6 +31,22 @@ func Autonomy(policies []v1alpha1.SentinelPolicy, action string) v1alpha1.Autono
 
 func rank(l v1alpha1.AutonomyLevel) int { return slices.Index(ladder, l) }
 
+// Above reports whether level a is less strict than level b.
+func Above(a, b v1alpha1.AutonomyLevel) bool { return rank(a) > rank(b) }
+
+// Earned reports whether any of a namespace's policies holds an action at
+// approve until its track record earns its level; the strictest wins.
+func Earned(policies []v1alpha1.SentinelPolicy, action string) bool {
+	for _, p := range policies {
+		for _, a := range p.Spec.Autonomy {
+			if a.Action == action && a.Earned {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // DefaultMaxCapacityRemoval is the share of replicas, in percent, an action
 // may take away when no policy says.
 const DefaultMaxCapacityRemoval = 20
