@@ -613,3 +613,31 @@ func TestTrackRecordsAgeAndBorrowFromSimilarWorkloads(t *testing.T) {
 			pooled(0), pooled(24), pooled(25))
 	}
 }
+
+// A request the hourly budget turned down is escalated, but does not stop
+// Sentinel asking for the action on the workload later; one the actor
+// refused for anything else does.
+func TestASpentBudgetDoesNotOpenTheBreaker(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		budget      bool
+		wantBreaker bool
+	}{
+		{"the budget", true, false},
+		{"anything else", false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b, l := newBrain(t)
+			b.Act = &fakeRequester{allow: true}
+			badDeploy(t, b)
+			inc := incidents(t, l)[0]
+			if err := b.OnActionOutcome(ctx, ActionOutcome{IncidentID: inc.ID, Phase: "Rejected", BudgetSpent: tc.budget,
+				Message: "the namespace's budget of 6 actions an hour is spent"}); err != nil {
+				t.Fatal(err)
+			}
+			if open := !b.breakerUntil(ActionRolloutUndo, web).IsZero(); open != tc.wantBreaker {
+				t.Fatalf("breaker open %v, want %v", open, tc.wantBreaker)
+			}
+		})
+	}
+}
