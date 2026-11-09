@@ -1,8 +1,8 @@
 # Starts Sentinel's self-hosted runner, an Azure VM that deallocates itself
-# when idle, and waits until Azure reports it running; the queued job then
-# reaches the runner once it is back online. The calling step provides the
-# service principal as AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_TENANT_ID
-# and AZURE_SUBSCRIPTION_ID.
+# when idle, through hack/azure-runner/wake.sh, which the checkout must
+# include; the queued job then reaches the runner once it is back online.
+# The calling step provides the service principal as AZURE_CLIENT_ID,
+# AZURE_CLIENT_SECRET, AZURE_TENANT_ID and AZURE_SUBSCRIPTION_ID.
 name: Wake the Azure runner
 description: Start the self-hosted runner's VM if it is stopped, and wait until it runs.
 inputs:
@@ -18,23 +18,11 @@ runs:
     - name: Start the VM
       shell: bash
       env:
-        RG: ${{ inputs.resource-group }}
-        VM: ${{ inputs.vm-name }}
+        RUNNER_RESOURCE_GROUP: ${{ inputs.resource-group }}
+        RUNNER_VM_NAME: ${{ inputs.vm-name }}
       run: |
         set -euo pipefail
         az login --service-principal --username "$AZURE_CLIENT_ID" --password "$AZURE_CLIENT_SECRET" \
           --tenant "$AZURE_TENANT_ID" --output none
         az account set --subscription "$AZURE_SUBSCRIPTION_ID"
-        # A VM still deallocating refuses to start, so keep asking.
-        for _ in $(seq 1 40); do
-          state=$(az vm get-instance-view -g "$RG" -n "$VM" \
-            --query "instanceView.statuses[?starts_with(code, 'PowerState/')].code | [0]" -o tsv)
-          echo "power state: ${state:-unknown}"
-          case "$state" in
-            PowerState/running) exit 0 ;;
-            PowerState/deallocated | PowerState/stopped) az vm start -g "$RG" -n "$VM" --no-wait || true ;;
-          esac
-          sleep 15
-        done
-        echo "::error::the runner's VM did not start within ten minutes"
-        exit 1
+        hack/azure-runner/wake.sh
