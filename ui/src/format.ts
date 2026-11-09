@@ -43,6 +43,7 @@ export const actionStages: Record<string, { title: string; pill: string; tone: s
   "sentinel.action.failed": { title: "The actor did not act", pill: "not done", tone: "red" },
   "sentinel.action.verified": { title: "Verified", pill: "done and verified", tone: "green" },
   "sentinel.action.unverified": { title: "Not verified", pill: "left to people", tone: "red" },
+  "sentinel.action.reverted": { title: "A person reverted it", pill: "reverted", tone: "red" },
 };
 
 export const workload = (o?: ObjectRef) => (o ? (o.namespace ? `${o.namespace}/${o.name}` : o.name) : "");

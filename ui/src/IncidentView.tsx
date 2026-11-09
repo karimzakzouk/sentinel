@@ -214,7 +214,12 @@ function TimelineEvent({ event }: { event: LedgerEvent }) {
       const stage = actionStages[event.type];
       if (!stage) return null;
       const a = event.data as Action;
-      const said = event.type === "sentinel.action.requested" ? a.params?.reason : (a.params?.verification ?? a.params?.result);
+      const said =
+        event.type === "sentinel.action.requested"
+          ? a.params?.reason
+          : event.type === "sentinel.action.reverted"
+            ? `Reverted by ${a.params?.revertedBy}. Sentinel counts it against this action on this workload, and holds off for a day.`
+            : (a.params?.verification ?? a.params?.result);
       return (
         <li className="event action">
           {when}
