@@ -20,6 +20,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	authenticationv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -32,6 +33,7 @@ import (
 	"k8s.io/client-go/restmapper"
 	"k8s.io/utils/ptr"
 
+	"github.com/karimzakzouk/sentinel/api/v1alpha1"
 	"github.com/karimzakzouk/sentinel/internal/capability"
 	"github.com/karimzakzouk/sentinel/internal/harness"
 	"github.com/karimzakzouk/sentinel/internal/kube"
@@ -44,6 +46,7 @@ const (
 	labNS          = "sentinel-lab-0"
 	controllerUser = "system:serviceaccount:sentinel:sentinel"
 	actorUser      = "system:serviceaccount:sentinel-actor:sentinel-actor"
+	labUser        = "system:serviceaccount:sentinel:sentinel-lab"
 )
 
 func env(key, def string) string {
@@ -286,6 +289,83 @@ func TestTheLabSealHoldsOnlyWherePolicyIsEnforced(t *testing.T) {
 	}
 }
 
+// An Experiment runs only behind a proven seal: the Lab passes it where the
+// cluster enforces NetworkPolicy, and elsewhere stays off and says why
+// rather than running unsealed. Where it is enforced, a policy someone else
+// added that opens the namespace must fail the next experiment: the Lab
+// trusts traffic, not the policies it reads. Either way it leaves nothing
+// behind.
+func TestALabExperimentRunsOnlyBehindAProvenSeal(t *testing.T) {
+	ctx := context.Background()
+	client := clientAs(t, "")
+	phase, msg := runExperiment(t, "prove-seal")
+	enforced := capability.NetworkPolicyProbe{Client: client, Namespace: labNS, Settle: 30 * time.Second}.Run(ctx)
+	switch enforced.Status {
+	case capability.Available:
+		if phase != lab.PhasePassed {
+			t.Fatalf("NetworkPolicy is enforced, yet the experiment ended %s: %s", phase, msg)
+		}
+		leak := &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: "e2e-leak", Namespace: labNS},
+			Spec: networkingv1.NetworkPolicySpec{PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeEgress},
+				Egress: []networkingv1.NetworkPolicyEgressRule{{To: []networkingv1.NetworkPolicyPeer{{IPBlock: &networkingv1.IPBlock{CIDR: "0.0.0.0/0"}}}}}}}
+		if _, err := client.NetworkingV1().NetworkPolicies(labNS).Create(ctx, leak, metav1.CreateOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			_ = client.NetworkingV1().NetworkPolicies(labNS).Delete(ctx, leak.Name, metav1.DeleteOptions{})
+		})
+		phase, msg = runExperiment(t, "prove-leaky-seal")
+		if phase != lab.PhaseFailed || !strings.Contains(msg, "the seal leaks") {
+			t.Fatalf("a policy opened the Lab, yet the experiment ended %s: %s", phase, msg)
+		}
+	case capability.Unavailable:
+		if phase != lab.PhaseFailed || !strings.Contains(msg, "the Lab stays off") {
+			t.Fatalf("NetworkPolicy is not enforced, yet the experiment ended %s: %s", phase, msg)
+		}
+	default:
+		t.Fatalf("the NetworkPolicy probe could not decide: %s", enforced.Detail)
+	}
+	if _, err := client.NetworkingV1().NetworkPolicies(labNS).Get(ctx, "lab-internal", metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("the seal outlived the experiment (%v)", err)
+	}
+	eventually(t, time.Minute, "the Lab's pods to go", func() (bool, error) {
+		pods, err := client.CoreV1().Pods(labNS).List(ctx, metav1.ListOptions{LabelSelector: lab.Label})
+		return err == nil && len(pods.Items) == 0, err
+	})
+}
+
+// runExperiment creates a prove Experiment in the Lab namespace and waits
+// for its verdict.
+func runExperiment(t *testing.T, name string) (v1alpha1.ExperimentPhase, string) {
+	t.Helper()
+	ctx := context.Background()
+	exps := dynamicAs(t, "").Resource(lab.ExperimentsResource).Namespace(labNS)
+	_ = exps.Delete(ctx, name, metav1.DeleteOptions{})
+	exp := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "sentinel.karimzakzouk.github.io/v1alpha1", "kind": "Experiment",
+		"metadata": map[string]any{"name": name, "namespace": labNS},
+		"spec":     map[string]any{"incidentId": "e2e", "purpose": "prove", "labNamespace": labNS},
+	}}
+	if _, err := exps.Create(ctx, exp, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = exps.Delete(ctx, name, metav1.DeleteOptions{}) })
+	var phase v1alpha1.ExperimentPhase
+	var msg string
+	eventually(t, 8*time.Minute, "experiment "+name+" to finish", func() (bool, error) {
+		u, err := exps.Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return false, err
+		}
+		p, _, _ := unstructured.NestedString(u.Object, "status", "phase")
+		msg, _, _ = unstructured.NestedString(u.Object, "status", "message")
+		phase = v1alpha1.ExperimentPhase(p)
+		return phase == lab.PhasePassed || phase == lab.PhaseFailed || phase == lab.PhaseNotSure || phase == lab.PhaseAborted, nil
+	})
+	t.Logf("%s: %s: %s", name, phase, msg)
+	return phase, msg
+}
+
 func TestFenceBlocksForbiddenWrites(t *testing.T) {
 	ctx := context.Background()
 	actor, controller := clientAs(t, actorUser), clientAs(t, controllerUser)
@@ -356,12 +436,43 @@ func TestFenceBlocksForbiddenWrites(t *testing.T) {
 			return err
 		}
 	}
+	labClient := clientAs(t, labUser)
+	labPod := func(ns, image string, token bool) func() error {
+		return func() error {
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Name: "fence-test", Namespace: ns},
+				Spec: corev1.PodSpec{AutomountServiceAccountToken: ptr.To(token),
+					SecurityContext: &corev1.PodSecurityContext{RunAsNonRoot: ptr.To(true), RunAsUser: ptr.To(int64(65532)),
+						SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}},
+					Containers: []corev1.Container{{Name: "c", Image: image, SecurityContext: &corev1.SecurityContext{
+						AllowPrivilegeEscalation: ptr.To(false), Capabilities: &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}}}}}},
+			}
+			_, err := labClient.CoreV1().Pods(ns).Create(ctx, pod, metav1.CreateOptions{DryRun: []string{metav1.DryRunAll}})
+			return err
+		}
+	}
+	labPolicy := func(peer networkingv1.NetworkPolicyPeer) func() error {
+		return func() error {
+			np := &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: "fence-test", Namespace: labNS},
+				Spec: networkingv1.NetworkPolicySpec{PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeEgress},
+					Egress: []networkingv1.NetworkPolicyEgressRule{{To: []networkingv1.NetworkPolicyPeer{peer}}}}}
+			_, err := labClient.NetworkingV1().NetworkPolicies(labNS).Create(ctx, np, metav1.CreateOptions{DryRun: []string{metav1.DryRunAll}})
+			return err
+		}
+	}
 	cases := []struct {
 		name string
 		do   func() error
 		// fence means the write must be refused by a sentinel-fence policy, not merely by RBAC.
 		allowed, fence bool
 	}{
+		{"lab starts a probe pod", labPod(labNS, capability.ProbeImage, false), true, false},
+		{"lab starts a pod with another image", labPod(labNS, "registry.k8s.io/pause:3.10", false), false, true},
+		{"lab starts a pod that carries a token", labPod(labNS, capability.ProbeImage, true), false, true},
+		{"lab starts a pod outside its pool", labPod(smokeNS, capability.ProbeImage, false), false, false},
+		{"lab seals its namespace", labPolicy(networkingv1.NetworkPolicyPeer{PodSelector: &metav1.LabelSelector{}}), true, false},
+		{"lab opens its seal to an address", labPolicy(networkingv1.NetworkPolicyPeer{IPBlock: &networkingv1.IPBlock{CIDR: "0.0.0.0/0"}}), false, true},
+		{"lab opens its seal to another namespace", labPolicy(networkingv1.NetworkPolicyPeer{NamespaceSelector: &metav1.LabelSelector{}}), false, true},
 		{"a person approves as themselves", approveAs(me.Status.UserInfo.Username), true, false},
 		{"a person approves in someone else's name", approveAs("mallory"), false, true},
 		{"actor scales within bounds", patch(actor, smokeNS, "deployment", "web", `{"spec":{"replicas":2}}`), true, false},

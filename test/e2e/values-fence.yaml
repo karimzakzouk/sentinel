@@ -2,3 +2,7 @@ namespaces: [e2e-smoke, boutique, e2e-gitops]
 replicas:
   min: 1
   max: 5
+
+# The Lab may act only in its pool.
+lab:
+  pool: [sentinel-lab-0]
