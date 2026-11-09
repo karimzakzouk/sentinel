@@ -91,6 +91,13 @@ blamed fields, keeping its other changes; escalate when later commits touch
 the same lines. **Proof**: scenarios whose culprit commit also changes
 something harmless, which must survive the fix.
 
+**Built** (decision 74): the fault class picks which of the values a
+revision changed is to blame, and the Fixer edits that value at the head
+rather than reverting hunks, so later commits are never undone. Values a
+kustomization's patch sets are fixed in the patch (decision 73). In the
+pool, a bad tag committed beside a harmless greeting: the tag fixed, the
+greeting kept.
+
 ### 3. Values of their own: limits, timeouts, probes
 
 For memory limits, timeouts and probe thresholds, a restored value can be
@@ -98,6 +105,11 @@ as wrong as the new one. Propose a value from quantiles of normal runs
 instead (tier T1), and let the Lab race it before the pull request opens.
 **Proof**: the memory-limit scenarios, fixed by a learned limit the Lab
 passes.
+
+**Built** for memory limits (decision 75): the 99th percentile of what each
+container used while healthy, with room to spare, never above the limit
+that held. In the pool, echo's limit cut to 6Mi came back as 15Mi at the
+line the commit changed, and held. The Lab racing it first is next.
 
 ### 4. Code incidents
 
@@ -108,11 +120,26 @@ stacks, templates for the most common faults, builds with the build-parity
 check, and the Lab as the oracle. Go first, then Python and
 JavaScript/TypeScript.
 
+**Part built**: the source resolved from the image's labels when its tag or
+version agrees; among the crash's own frames, the function the failing
+commit changed, put back as it was, the commit's other changes kept, as a
+pull request to the source; the image the source's pipeline builds from it
+found in the registry. Building is the source's own pipeline's, not
+Sentinel's: no build code runs inside Sentinel, and the image is built the
+way production's are. Next: the Lab racing that image, and a test pipeline
+next to Gitea.
+
 ### 5. Delivery tiers
 
 Auto-merge for tiers that have earned it, per repository and namespace, by
 the same kind of track record as phase 2's autonomy: a canary, and an
 automatic Git revert when it fails.
+
+**Built** (decision 76): `fix.merge` in a SentinelPolicy, at `autonomous`,
+earned by the record of fixes that held; the Fixer checks the grant before
+it merges. No automatic revert: before the fix Git held the bad value, so
+reverting it would deploy that again; Sentinel's rollback catches a fix
+that fails, which counts against the record.
 
 ## Gate
 

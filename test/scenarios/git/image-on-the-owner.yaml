@@ -6,7 +6,7 @@ fault:
   target: {apiVersion: kustomize.toolkit.fluxcd.io/v1, kind: Kustomization, namespace: flux-system, name: git-podinfo}
   patch:
     type: merge
-    content: '{"spec":{"images":[{"name":"ghcr.io/stefanprodan/podinfo","newTag":"does-not-exist"}]}}'
+    content: '{"spec":{"images":[{"name":"ghcr.io/stefanprodan/podinfo","newTag":"set-on-the-owner"}]}}'
 groundTruth:
   faultClass: deploy.bad-image
   rootCause: {apiVersion: apps/v1, kind: Deployment, namespace: e2e-delivery, name: git-podinfo}

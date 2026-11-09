@@ -185,6 +185,13 @@ authority with per-runtime trust injection; shape-preserving fake Secrets
 carrying honeytokens, searched for in the Lab DNS log and the tripwire.
 **Proof**: the Redis scenario reproduces in a Lab with a seeded Redis.
 
+**Part built** (decisions 77 and 78): datastores run empty with
+production's engine and version; each secret key has a placeholder of its
+own, which names the secret when the world looks a name up from it; and
+the failing revision with its configuration reverted is raced beside the
+previous revision. Seeding, replay, fakes and the certificate authority
+wait for traffic capture.
+
 ## Gate
 
 - False-PASS rate at or below α on labeled good, bad and deletion-style
