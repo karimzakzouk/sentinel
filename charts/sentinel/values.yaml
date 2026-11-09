@@ -30,6 +30,8 @@ lab:
   enabled: false
   namespacePrefix: sentinel-lab-
   poolSize: 2
+  # The cluster's DNS domain, which a world's copies use to name each other.
+  clusterDomain: cluster.local
   quota:
     pods: "20"
     requests.cpu: "4"
