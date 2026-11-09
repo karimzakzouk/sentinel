@@ -15,6 +15,7 @@ func TestAddToSchemeRegistersEveryKind(t *testing.T) {
 		"SentinelPolicy", "SentinelPolicyList",
 		"ActionRequest", "ActionRequestList",
 		"Experiment", "ExperimentList",
+		"Fix", "FixList",
 	} {
 		if !s.Recognizes(GroupVersion.WithKind(kind)) {
 			t.Errorf("scheme does not recognize %s", kind)

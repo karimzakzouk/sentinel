@@ -518,7 +518,7 @@ func TestArgoApplicationFromTrackingID(t *testing.T) {
 		"shop-app:apps/Deployment:shop/web":        {"argocd", "shop-app"},
 		"team-a_shop-app:apps/Deployment:shop/web": {"team-a", "shop-app"},
 	} {
-		ns, name, ok := argoApplication(metav1.ObjectMeta{Annotations: map[string]string{"argocd.argoproj.io/tracking-id": id}}, "argocd")
+		ns, name, ok := ArgoApplication(metav1.ObjectMeta{Annotations: map[string]string{"argocd.argoproj.io/tracking-id": id}}, "argocd")
 		if !ok || ns != want[0] || name != want[1] {
 			t.Errorf("%q: %s/%s, want %s/%s", id, ns, name, want[0], want[1])
 		}

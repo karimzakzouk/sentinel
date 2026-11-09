@@ -2,6 +2,7 @@ package fixer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/go-git/go-git/v5/plumbing/storer"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/go-git/go-git/v5/storage/memory"
 	"sigs.k8s.io/kustomize/kyaml/filesys"
@@ -26,28 +28,60 @@ const maxRepoBytes = 64 << 20
 
 // Checkout is the head of a branch, checked out in memory.
 type Checkout struct {
-	repo   *git.Repository
-	tree   billy.Filesystem
-	branch string
-	auth   transport.AuthMethod
-	// Head is the commit checked out.
-	Head string
+	repo *git.Repository
+	tree billy.Filesystem
+	auth transport.AuthMethod
+	// Branch is the branch checked out, and Head its commit.
+	Branch, Head string
 }
 
-// Clone checks out the head of a branch in memory, without its history.
+// Clone checks out the head of a branch in memory, without its history;
+// the repository's default branch when branch is empty.
 func Clone(ctx context.Context, url, branch string, auth transport.AuthMethod) (*Checkout, error) {
 	tree := memfs.New()
-	repo, err := git.CloneContext(ctx, memory.NewStorage(), tree, &git.CloneOptions{
-		URL: url, Auth: auth, ReferenceName: plumbing.NewBranchReferenceName(branch), SingleBranch: true, Depth: 1,
-	})
+	opts := &git.CloneOptions{URL: url, Auth: auth, SingleBranch: true, Depth: 1}
+	if branch != "" {
+		opts.ReferenceName = plumbing.NewBranchReferenceName(branch)
+	}
+	repo, err := git.CloneContext(ctx, memory.NewStorage(), tree, opts)
 	if err != nil {
-		return nil, fmt.Errorf("clone %s at %s: %w", url, branch, err)
+		return nil, fmt.Errorf("clone %s at %q: %w", url, branch, err)
 	}
 	head, err := repo.Head()
 	if err != nil {
 		return nil, err
 	}
-	return &Checkout{repo: repo, tree: tree, branch: branch, auth: auth, Head: head.Hash().String()}, nil
+	return &Checkout{repo: repo, tree: tree, auth: auth, Branch: head.Name().Short(), Head: head.Hash().String()}, nil
+}
+
+// Contains reports whether commit is head or one of its ancestors on a
+// branch, looking back at most depth commits.
+func Contains(ctx context.Context, url, branch, head, commit string, depth int, auth transport.AuthMethod) (bool, error) {
+	if head == commit {
+		return true, nil
+	}
+	repo, err := git.CloneContext(ctx, memory.NewStorage(), nil, &git.CloneOptions{
+		URL: url, Auth: auth, ReferenceName: plumbing.NewBranchReferenceName(branch), SingleBranch: true, Depth: depth, NoCheckout: true,
+	})
+	if err != nil {
+		return false, fmt.Errorf("clone %s at %s: %w", url, branch, err)
+	}
+	log, err := repo.Log(&git.LogOptions{From: plumbing.NewHash(head)})
+	if err != nil {
+		return false, err
+	}
+	found := false
+	err = log.ForEach(func(c *object.Commit) error {
+		if c.Hash.String() == commit {
+			found = true
+			return storer.ErrStop
+		}
+		return nil
+	})
+	if errors.Is(err, plumbing.ErrObjectNotFound) {
+		err = nil
+	}
+	return found, err
 }
 
 // Files copies the checkout into a filesystem Kustomize reads, with the
@@ -77,7 +111,9 @@ func (c *Checkout) Files() (filesys.FileSystem, error) {
 }
 
 // Push commits the edit on a new branch from the checked out head, as
-// author, and pushes the branch. It returns the commit.
+// author, and pushes the branch, over one of the same name left by an
+// attempt that stopped before its pull request: the branch is Sentinel's.
+// It returns the commit.
 func (c *Checkout) Push(ctx context.Context, edit *Edit, branch, message string, author object.Signature) (string, error) {
 	w, err := c.repo.Worktree()
 	if err != nil {
@@ -99,7 +135,7 @@ func (c *Checkout) Push(ctx context.Context, edit *Edit, branch, message string,
 	if err != nil {
 		return "", err
 	}
-	spec := config.RefSpec("refs/heads/" + branch + ":refs/heads/" + branch)
+	spec := config.RefSpec("+refs/heads/" + branch + ":refs/heads/" + branch)
 	if err := c.repo.PushContext(ctx, &git.PushOptions{RemoteName: "origin", RefSpecs: []config.RefSpec{spec}, Auth: c.auth}); err != nil {
 		return "", fmt.Errorf("push %s: %w", branch, err)
 	}
