@@ -58,4 +58,65 @@ metadata:
 spec:
   policyName: sentinel-fence-actor-flux
   validationActions: [Deny]
+---
+# The same for a HelmRelease: the actor may suspend it and note that, and
+# change nothing that is rendered, from where or as whom.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: sentinel-fence-actor-flux-helm
+  labels:
+    {{- include "fence.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [helm.toolkit.fluxcd.io]
+        apiVersions: ["*"]
+        operations: [UPDATE]
+        resources: [helmreleases]
+  matchConditions:
+    - name: is-sentinel-actor
+      expression: request.userInfo.username == "{{ include "fence.actorUser" . }}"
+  variables:
+    - name: newObjectAnnotations
+      expression: "object.metadata.?annotations.orValue({})"
+    - name: oldObjectAnnotations
+      expression: "oldObject.metadata.?annotations.orValue({})"
+  validations:
+    - expression: "object.spec.?suspend.orValue(false) == true"
+      message: "Sentinel may suspend a HelmRelease, never resume one"
+      reason: Forbidden
+    - expression: >-
+        object.spec.?chart == oldObject.spec.?chart && object.spec.?chartRef == oldObject.spec.?chartRef &&
+        object.spec.?values == oldObject.spec.?values && object.spec.?valuesFrom == oldObject.spec.?valuesFrom &&
+        object.spec.?postRenderers == oldObject.spec.?postRenderers && object.spec.?releaseName == oldObject.spec.?releaseName &&
+        object.spec.?targetNamespace == oldObject.spec.?targetNamespace && object.spec.?storageNamespace == oldObject.spec.?storageNamespace &&
+        object.spec.?serviceAccountName == oldObject.spec.?serviceAccountName && object.spec.?kubeConfig == oldObject.spec.?kubeConfig &&
+        object.spec.?install == oldObject.spec.?install && object.spec.?upgrade == oldObject.spec.?upgrade &&
+        object.spec.?test == oldObject.spec.?test && object.spec.?rollback == oldObject.spec.?rollback &&
+        object.spec.?uninstall == oldObject.spec.?uninstall && object.spec.?driftDetection == oldObject.spec.?driftDetection &&
+        object.spec.?dependsOn == oldObject.spec.?dependsOn && object.spec.?interval == oldObject.spec.?interval &&
+        object.spec.?timeout == oldObject.spec.?timeout && object.spec.?maxHistory == oldObject.spec.?maxHistory &&
+        object.spec.?persistentClient == oldObject.spec.?persistentClient && object.spec.?commonMetadata == oldObject.spec.?commonMetadata
+      message: "Sentinel may only suspend a HelmRelease"
+      reason: Forbidden
+    - expression: "object.metadata.?labels == oldObject.metadata.?labels"
+      message: "Sentinel may not change a HelmRelease's labels"
+      reason: Forbidden
+    - expression: >-
+        variables.newObjectAnnotations.all(k, k.startsWith('sentinel.karimzakzouk.github.io/') || (k in variables.oldObjectAnnotations && variables.oldObjectAnnotations[k] == variables.newObjectAnnotations[k])) &&
+        variables.oldObjectAnnotations.all(k, k.startsWith('sentinel.karimzakzouk.github.io/') || k in variables.newObjectAnnotations)
+      message: "Sentinel may only change its own annotations on a HelmRelease"
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: sentinel-fence-actor-flux-helm
+  labels:
+    {{- include "fence.labels" . | nindent 4 }}
+spec:
+  policyName: sentinel-fence-actor-flux-helm
+  validationActions: [Deny]
 {{- end }}

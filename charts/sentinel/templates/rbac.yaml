@@ -195,8 +195,8 @@ subjects:
 {{- if and .Values.actor.enabled .Values.owners.flux.enabled }}
 {{- range .Values.owners.flux.namespaces }}
 ---
-# Suspending the Flux Kustomization that applies a workload before a
-# rollback; the fence allows that change and no other.
+# Suspending the Flux Kustomization or HelmRelease that applies a workload
+# before a rollback; the fence allows that change and no other.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -207,6 +207,9 @@ metadata:
 rules:
   - apiGroups: [kustomize.toolkit.fluxcd.io]
     resources: [kustomizations]
+    verbs: [get, patch]
+  - apiGroups: [helm.toolkit.fluxcd.io]
+    resources: [helmreleases]
     verbs: [get, patch]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
