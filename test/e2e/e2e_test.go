@@ -270,11 +270,11 @@ func TestTheLabSealHoldsOnlyWherePolicyIsEnforced(t *testing.T) {
 	}
 	var leaks []string
 	for _, r := range results {
-		t.Logf("%-40s %-22s allowed=%-5v reached=%v", r.Name, r.Address, r.Allowed, r.Reached)
+		t.Logf("%-40s %-22s allowed=%-5v reached=%-5v later=%v", r.Name, r.Address, r.Allowed, r.Reached, r.Later)
 		switch {
 		case r.Allowed && !r.Reached:
 			t.Fatalf("the positive control %s did not answer: a refusal would mean nothing", r.Name)
-		case !r.Allowed && r.Reached:
+		case !r.Holds():
 			leaks = append(leaks, r.Name)
 		}
 	}
@@ -282,7 +282,7 @@ func TestTheLabSealHoldsOnlyWherePolicyIsEnforced(t *testing.T) {
 	case capability.Available:
 		var failing []string
 		for _, r := range results {
-			if !r.Allowed && r.Reached && (!r.Outside || strictEgress()) {
+			if !r.Holds() && !r.Allowed && (strictEgress() || r.Later && !r.Outside) {
 				failing = append(failing, r.Name)
 			}
 		}
@@ -290,7 +290,7 @@ func TestTheLabSealHoldsOnlyWherePolicyIsEnforced(t *testing.T) {
 			t.Fatalf("NetworkPolicy is enforced, yet the seal leaks to %v", failing)
 		}
 		if len(leaks) > 0 {
-			t.Logf("this network plugin lets pods reach %v outside the cluster despite the policy; the Lab refuses to run here", leaks)
+			t.Logf("this network plugin lets pods reach %v, outside the cluster or as they start; the Lab refuses to run here", leaks)
 		}
 	case capability.Unavailable:
 		if len(leaks) == 0 {
@@ -312,8 +312,7 @@ func TestALabExperimentRunsOnlyBehindAProvenSeal(t *testing.T) {
 	enforced := capability.NetworkPolicyProbe{Client: client, Namespace: labNS, Settle: 30 * time.Second}.Run(ctx)
 	switch enforced.Status {
 	case capability.Available:
-		outsideOnly := phase == lab.PhaseFailed && strings.Contains(msg, "the seal leaks outside the cluster") && !strictEgress()
-		if phase != lab.PhasePassed && !outsideOnly {
+		if phase != lab.PhasePassed && !pluginLimit(phase, msg) {
 			t.Fatalf("NetworkPolicy is enforced, yet the experiment ended %s: %s", phase, msg)
 		}
 		leak := &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: "e2e-leak", Namespace: labNS},
@@ -346,9 +345,18 @@ func TestALabExperimentRunsOnlyBehindAProvenSeal(t *testing.T) {
 }
 
 // strictEgress says the network plugin is known to apply egress policy to
-// addresses outside the cluster too, so a leak there is a failure.
+// addresses outside the cluster, and to new pods from their first packet,
+// so any leak is a failure.
 func strictEgress() bool {
 	return os.Getenv("E2E_NETWORK") == "calico" || os.Getenv("E2E_NETWORK") == "cilium"
+}
+
+// pluginLimit says the Lab refused a cluster for a known limit of its
+// network plugin, outside the cluster or as pods start, which only a
+// plugin not known to be strict may have.
+func pluginLimit(phase v1alpha1.ExperimentPhase, msg string) bool {
+	return !strictEgress() && phase == lab.PhaseFailed &&
+		(strings.HasPrefix(msg, "the seal leaks outside the cluster") || strings.HasPrefix(msg, "the seal leaks while a pod starts"))
 }
 
 // runExperiment creates a prove Experiment in the Lab namespace and waits
@@ -483,8 +491,8 @@ func TestALabReproductionRunsTheWorldBehindAProvenSeal(t *testing.T) {
 	}
 	phase, msg, fidelity := runExperimentOn(t, "reproduce-front",
 		map[string]any{"apiVersion": "apps/v1", "kind": "Deployment", "namespace": smokeNS, "name": "front"})
-	if phase == lab.PhaseFailed && strings.Contains(msg, "the seal leaks outside the cluster") && !strictEgress() {
-		t.Skipf("this network plugin lets pods reach addresses outside the cluster, and the Lab refuses it: %s", msg)
+	if pluginLimit(phase, msg) {
+		t.Skipf("the Lab refuses this network plugin: %s", msg)
 	}
 	if phase != lab.PhaseNotSure || !strings.Contains(msg, "the world ran sealed (front ready; backend ready)") {
 		t.Fatalf("the reproduction ended %s: %s", phase, msg)

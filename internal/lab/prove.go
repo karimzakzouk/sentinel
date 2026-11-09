@@ -18,6 +18,7 @@ import (
 	discoveryv1 "k8s.io/api/discovery/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
@@ -44,14 +45,21 @@ type Probe struct {
 	Outside bool `json:"outside,omitempty"`
 }
 
-// Result is what the prober found.
+// Result is what the prober found: Reached as it started, Later once it
+// had run ten seconds, for destinations the seal forbids.
 type Result struct {
 	Probe
 	Reached bool `json:"reached"`
+	Later   bool `json:"later,omitempty"`
 }
 
 // Holds reports whether the result is what the seal requires.
-func (r Result) Holds() bool { return r.Reached == r.Allowed }
+func (r Result) Holds() bool {
+	if r.Allowed {
+		return r.Reached
+	}
+	return !r.Reached && !r.Later
+}
 
 // Prover seals and proves Lab namespaces.
 type Prover struct {
@@ -275,21 +283,37 @@ func labPod(ns, name string, args []string, command []string) *corev1.Pod {
 	}
 }
 
-// proberPod tries each forbidden destination once and each control up to
-// ten times, since a new Service can take a moment to answer, three
-// seconds a try, and writes one line per probe to its termination message.
+// proberPod tries every probe at once as it starts, when some network
+// plugins do not yet apply policy to a new pod, and the forbidden ones
+// again ten seconds later. A forbidden destination gets one try a pass, a
+// control up to ten, since a new Service can take a moment to answer; each
+// try waits three seconds. Every result is a line in the pod's termination
+// message: the pass, reached or refused, and the probe's index.
 func proberPod(ns string, probes []Probe) *corev1.Pod {
 	var script strings.Builder
-	script.WriteString("set +e; : > /dev/termination-log\n")
+	script.WriteString(`set +e; : > /dev/termination-log
+probe() { r=refused; t=1; while [ "$t" -le "$4" ]; do if /agnhost connect "$3" --timeout=3s >/dev/null 2>&1; then r=reached; break; fi; t=$((t+1)); [ "$t" -le "$4" ] && sleep 1; done; echo "$1 $r $2" >> /dev/termination-log; }
+`)
 	for i, pr := range probes {
 		tries := 1
 		if pr.Allowed {
 			tries = 10
 		}
-		fmt.Fprintf(&script, "r=refused; for t in $(seq %d); do if /agnhost connect %s --timeout=3s >/dev/null 2>&1; then r=reached; break; fi; "+
-			"[ \"$t\" -lt %d ] && sleep 1; done; echo \"$r %d\" >> /dev/termination-log\n", tries, pr.Address, tries, i)
+		fmt.Fprintf(&script, "probe 1 %d '%s' %d &\n", i, pr.Address, tries)
 	}
-	return labPod(ns, "lab-prober", nil, []string{"sh", "-c", script.String()})
+	script.WriteString("wait\nsleep 10\n")
+	for i, pr := range probes {
+		if !pr.Allowed {
+			fmt.Fprintf(&script, "probe 2 %d '%s' 1 &\n", i, pr.Address)
+		}
+	}
+	script.WriteString("wait\n")
+	pod := labPod(ns, "lab-prober", nil, []string{"sh", "-c", script.String()})
+	pod.Spec.Containers[0].Resources = corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("128Mi")},
+		Limits:   corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("1Gi")},
+	}
+	return pod
 }
 
 func terminationMessage(pod *corev1.Pod) string {
@@ -301,28 +325,30 @@ func terminationMessage(pod *corev1.Pod) string {
 	return ""
 }
 
-// parse reads the prober's lines; a probe without a line failed to run.
+// parse reads the prober's lines; a probe without its lines failed to run.
 func parse(probes []Probe, message string) ([]Result, error) {
-	reached := map[int]bool{}
-	seen := map[int]bool{}
+	type key struct{ pass, i int }
+	reached, seen := map[key]bool{}, map[key]bool{}
 	for _, line := range strings.Split(strings.TrimSpace(message), "\n") {
-		verdict, index, ok := strings.Cut(line, " ")
-		if !ok {
+		f := strings.Fields(line)
+		if len(f) != 3 {
 			continue
 		}
-		i, err := strconv.Atoi(index)
-		if err != nil || i < 0 || i >= len(probes) {
+		pass, err1 := strconv.Atoi(f[0])
+		i, err2 := strconv.Atoi(f[2])
+		if err1 != nil || err2 != nil || i < 0 || i >= len(probes) {
 			continue
 		}
-		seen[i], reached[i] = true, verdict == "reached"
+		k := key{pass, i}
+		seen[k], reached[k] = true, f[1] == "reached"
 	}
 	results := make([]Result, len(probes))
 	var missing []string
 	for i, pr := range probes {
-		if !seen[i] {
+		if !seen[key{1, i}] || !pr.Allowed && !seen[key{2, i}] {
 			missing = append(missing, pr.Name)
 		}
-		results[i] = Result{Probe: pr, Reached: reached[i]}
+		results[i] = Result{Probe: pr, Reached: reached[key{1, i}], Later: reached[key{2, i}]}
 	}
 	if len(missing) > 0 {
 		sort.Strings(missing)

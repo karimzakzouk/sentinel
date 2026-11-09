@@ -71,13 +71,20 @@ func TestSealAddsTheInternalRuleOnce(t *testing.T) {
 }
 
 func TestParse(t *testing.T) {
-	probes := []Probe{{Name: "echo", Allowed: true}, {Name: "API"}, {Name: "DNS"}}
-	results, err := parse(probes, "reached 0\nrefused 1\nreached 2\n")
-	if err != nil || !results[0].Holds() || !results[1].Holds() || results[2].Holds() {
-		t.Fatalf("results = %+v, %v", results, err)
+	probes := []Probe{{Name: "echo", Allowed: true}, {Name: "API"}, {Name: "DNS"}, {Name: "kubelet"}}
+	results, err := parse(probes, "1 reached 0\n1 refused 1\n1 reached 2\n1 refused 3\n2 refused 1\n2 refused 2\n2 reached 3\n")
+	switch {
+	case err != nil:
+		t.Fatal(err)
+	case !results[0].Holds() || !results[1].Holds():
+		t.Fatalf("the control and the refused destination should hold: %+v", results)
+	case results[2].Holds() || !results[2].Reached || results[2].Later:
+		t.Fatalf("DNS leaked as the prober started: %+v", results[2])
+	case results[3].Holds() || results[3].Reached || !results[3].Later:
+		t.Fatalf("the kubelet leaked later: %+v", results[3])
 	}
-	if _, err := parse(probes, "reached 0\n"); err == nil || !strings.Contains(err.Error(), "API, DNS") {
-		t.Fatalf("missing probes: %v", err)
+	if _, err := parse(probes, "1 reached 0\n1 refused 1\n1 refused 2\n1 refused 3\n2 refused 1\n"); err == nil || !strings.Contains(err.Error(), "DNS, kubelet") {
+		t.Fatalf("probes without a second pass: %v", err)
 	}
 }
 
@@ -85,7 +92,8 @@ func TestTheProberIsRestrictedAndTokenless(t *testing.T) {
 	pod := proberPod("sentinel-lab-0", []Probe{{Name: "x", Address: "10.0.0.1:80"}})
 	c := pod.Spec.Containers[0]
 	if *pod.Spec.AutomountServiceAccountToken || !*pod.Spec.SecurityContext.RunAsNonRoot || *c.SecurityContext.AllowPrivilegeEscalation ||
-		c.SecurityContext.Capabilities.Drop[0] != "ALL" || !strings.Contains(c.Command[2], "/agnhost connect 10.0.0.1:80") {
+		c.SecurityContext.Capabilities.Drop[0] != "ALL" || !strings.Contains(c.Command[2], "/agnhost connect") ||
+		!strings.Contains(c.Command[2], "probe 1 0 '10.0.0.1:80' 1 &") || !strings.Contains(c.Command[2], "probe 2 0 '10.0.0.1:80' 1 &") {
 		t.Fatalf("prober = %+v", pod.Spec)
 	}
 }
