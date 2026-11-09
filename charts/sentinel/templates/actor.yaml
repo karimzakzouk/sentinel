@@ -16,6 +16,10 @@ data:
     # change, without a restart.
     enabled: {{ .Values.actor.actions.enabled }}
     perHour: {{ .Values.actor.actions.perHour }}
+    # Sentinel's own identities may not approve its actions.
+    self:
+      - system:serviceaccount:{{ .Release.Namespace }}:sentinel
+      - system:serviceaccount:{{ .Values.actor.namespace }}:{{ .Values.actor.serviceAccount }}
     healthAddr: ":8081"
 ---
 apiVersion: apps/v1

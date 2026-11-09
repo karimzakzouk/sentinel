@@ -51,6 +51,17 @@ const (
 // FieldManager names the actor's writes in managedFields.
 const FieldManager = "sentinel-actor"
 
+// People approve or veto a request with these annotations. The fence makes
+// each one name the identity that sets it, and RBAC decides who may update
+// requests at all.
+const (
+	AnnotationApprovedBy = "sentinel.karimzakzouk.github.io/approved-by"
+	AnnotationVetoedBy   = "sentinel.karimzakzouk.github.io/vetoed-by"
+)
+
+// VetoWindow is how long a request at act-unless-vetoed waits for a veto.
+const VetoWindow = 2 * time.Minute
+
 const revisionAnnotation = "deployment.kubernetes.io/revision"
 
 // Actor runs action requests.
@@ -64,8 +75,10 @@ type Actor struct {
 	Disabled func() bool
 	// PerHour bounds the actions run per namespace per hour.
 	PerHour int
-	Log     *slog.Logger
-	Now     func() time.Time
+	// Self lists Sentinel's own identities, which may not approve.
+	Self []string
+	Log  *slog.Logger
+	Now  func() time.Time
 
 	mu     sync.Mutex
 	recent map[string][]time.Time
@@ -80,27 +93,72 @@ func (a *Actor) now() time.Time {
 	return time.Now().UTC()
 }
 
-// Handle runs one request and returns its final phase and why.
+// Handle admits and runs one request. It returns the request's phase and
+// why: a final one, or Pending while it waits for a person.
 func (a *Actor) Handle(ctx context.Context, req *v1alpha1.ActionRequest) (v1alpha1.ActionPhase, string) {
+	ok, phase, msg, _, policies := a.admit(ctx, req)
+	if !ok {
+		return phase, msg
+	}
+	return a.execute(ctx, req, policies)
+}
+
+// admit decides whether a request may run now. When it may not, it returns
+// the phase to record (Pending while it waits, with how long until it
+// should be looked at again) and why.
+func (a *Actor) admit(ctx context.Context, req *v1alpha1.ActionRequest) (bool, v1alpha1.ActionPhase, string, time.Duration, []v1alpha1.SentinelPolicy) {
 	now := a.now()
 	t := req.Spec.Target
+	no := func(p v1alpha1.ActionPhase, msg string) (bool, v1alpha1.ActionPhase, string, time.Duration, []v1alpha1.SentinelPolicy) {
+		return false, p, msg, 0, nil
+	}
 	switch {
 	case !req.Spec.ExpiresAt.IsZero() && now.After(req.Spec.ExpiresAt.Time):
-		return v1alpha1.ActionExpired, "the request lapsed before it ran"
+		return no(v1alpha1.ActionExpired, "the request lapsed before it ran")
 	case a.Disabled != nil && a.Disabled():
-		return v1alpha1.ActionRejected, "the kill switch is on"
+		return no(v1alpha1.ActionRejected, "the kill switch is on")
 	case t.Namespace != req.Namespace || !slices.Contains(a.Namespaces, t.Namespace):
-		return v1alpha1.ActionRejected, fmt.Sprintf("Sentinel may not act in namespace %q", t.Namespace)
+		return no(v1alpha1.ActionRejected, fmt.Sprintf("Sentinel may not act in namespace %q", t.Namespace))
 	case t.APIVersion != "apps/v1" || t.Kind != "Deployment" && t.Kind != "StatefulSet":
-		return v1alpha1.ActionRejected, fmt.Sprintf("no contract covers a %s/%s", t.APIVersion, t.Kind)
+		return no(v1alpha1.ActionRejected, fmt.Sprintf("no contract covers a %s/%s", t.APIVersion, t.Kind))
+	}
+	if who := req.Annotations[AnnotationVetoedBy]; who != "" {
+		return no(v1alpha1.ActionRejected, "vetoed by "+who)
 	}
 	policies, err := a.policies(ctx, req.Namespace)
 	if err != nil {
-		return v1alpha1.ActionFailed, fmt.Sprintf("could not read the namespace's policy: %v", err)
+		return no(v1alpha1.ActionFailed, fmt.Sprintf("could not read the namespace's policy: %v", err))
 	}
-	if level := policy.Autonomy(policies, req.Spec.Action); level != v1alpha1.AutonomyAutonomous {
-		return v1alpha1.ActionRejected, fmt.Sprintf("the namespace's policy holds %s at %s", req.Spec.Action, level)
+	untilExpiry := time.Duration(0)
+	if !req.Spec.ExpiresAt.IsZero() {
+		untilExpiry = req.Spec.ExpiresAt.Sub(now) + time.Second
 	}
+	switch level := policy.Autonomy(policies, req.Spec.Action); level {
+	case v1alpha1.AutonomyAutonomous:
+	case v1alpha1.AutonomyActUnlessVetoed:
+		if wait := req.CreationTimestamp.Add(VetoWindow).Sub(now); wait > 0 {
+			return false, v1alpha1.ActionPending, fmt.Sprintf("runs at %s unless someone vetoes it",
+				req.CreationTimestamp.Add(VetoWindow).UTC().Format(time.RFC3339)), wait, nil
+		}
+	case v1alpha1.AutonomyApprove:
+		who := req.Annotations[AnnotationApprovedBy]
+		switch {
+		case who == "":
+			return false, v1alpha1.ActionPending, "waiting for a person to approve it", untilExpiry, nil
+		case slices.Contains(a.Self, who):
+			return no(v1alpha1.ActionRejected, "Sentinel may not approve its own actions")
+		}
+		req.Status.ApprovedBy = who
+	default:
+		return no(v1alpha1.ActionRejected, fmt.Sprintf("the namespace's policy holds %s at %s", req.Spec.Action, level))
+	}
+	return true, "", "", 0, policies
+}
+
+// execute runs an admitted request: the contract's dry run, the budget,
+// then the write.
+func (a *Actor) execute(ctx context.Context, req *v1alpha1.ActionRequest, policies []v1alpha1.SentinelPolicy) (v1alpha1.ActionPhase, string) {
+	now := a.now()
 	var run func(context.Context, *v1alpha1.ActionRequest, bool) (string, error)
 	switch req.Spec.Action {
 	case ActionRolloutUndo:

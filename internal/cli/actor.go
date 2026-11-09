@@ -31,8 +31,10 @@ type ActorConfig struct {
 	// takes effect without a restart.
 	Enabled bool `json:"enabled"`
 	// PerHour bounds the actions per namespace per hour.
-	PerHour    int    `json:"perHour"`
-	HealthAddr string `json:"healthAddr,omitempty"`
+	PerHour int `json:"perHour"`
+	// Self lists Sentinel's own identities, which may not approve actions.
+	Self       []string `json:"self,omitempty"`
+	HealthAddr string   `json:"healthAddr,omitempty"`
 }
 
 func loadActorConfig(path string) (ActorConfig, error) {
@@ -80,7 +82,7 @@ func newActorCmd(kf *kube.Flags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			a := &actor.Actor{Client: client, Dynamic: dyn, Namespaces: cfg.Namespaces, PerHour: cfg.PerHour, Log: log,
+			a := &actor.Actor{Client: client, Dynamic: dyn, Namespaces: cfg.Namespaces, PerHour: cfg.PerHour, Self: cfg.Self, Log: log,
 				Disabled: func() bool {
 					current, err := loadActorConfig(configPath)
 					if err != nil {

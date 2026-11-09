@@ -1,0 +1,42 @@
+# Who may do what with Sentinel's resources, folded into Kubernetes' own
+# roles. Namespace admins opt a namespace in with a SentinelPolicy; admins
+# and editors approve or veto action requests (the annotations must name
+# them, which sentinel-fence checks); viewers read both. A request's spec
+# cannot change and its status is the actor's, so approving is all a person
+# can do to one.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: sentinel-policy-admin
+  labels:
+    {{- include "sentinel-crds.labels" . | nindent 4 }}
+    rbac.authorization.k8s.io/aggregate-to-admin: "true"
+rules:
+  - apiGroups: [sentinel.karimzakzouk.github.io]
+    resources: [sentinelpolicies]
+    verbs: [get, list, watch, create, update, patch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: sentinel-approve
+  labels:
+    {{- include "sentinel-crds.labels" . | nindent 4 }}
+    rbac.authorization.k8s.io/aggregate-to-admin: "true"
+    rbac.authorization.k8s.io/aggregate-to-edit: "true"
+rules:
+  - apiGroups: [sentinel.karimzakzouk.github.io]
+    resources: [actionrequests]
+    verbs: [get, list, watch, update, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: sentinel-view
+  labels:
+    {{- include "sentinel-crds.labels" . | nindent 4 }}
+    rbac.authorization.k8s.io/aggregate-to-view: "true"
+rules:
+  - apiGroups: [sentinel.karimzakzouk.github.io]
+    resources: [actionrequests, sentinelpolicies]
+    verbs: [get, list, watch]

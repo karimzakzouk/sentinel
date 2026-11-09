@@ -18,6 +18,7 @@ import (
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	authenticationv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -298,12 +299,26 @@ func TestFenceBlocksForbiddenWrites(t *testing.T) {
 			metav1.UpdateOptions{DryRun: []string{metav1.DryRunAll}})
 		return err
 	}
+	me, err := clientAs(t, "").AuthenticationV1().SelfSubjectReviews().Create(ctx, &authenticationv1.SelfSubjectReview{}, metav1.CreateOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	approveAs := func(who string) func() error {
+		return func() error {
+			patch := fmt.Sprintf(`{"metadata":{"annotations":{"sentinel.karimzakzouk.github.io/approved-by":%q}}}`, who)
+			_, err := dynamicAs(t, "").Resource(requests).Namespace(smokeNS).Patch(ctx, "fence-test", types.MergePatchType, []byte(patch),
+				metav1.PatchOptions{DryRun: []string{metav1.DryRunAll}})
+			return err
+		}
+	}
 	cases := []struct {
 		name string
 		do   func() error
 		// fence means the write must be refused by a sentinel-fence policy, not merely by RBAC.
 		allowed, fence bool
 	}{
+		{"a person approves as themselves", approveAs(me.Status.UserInfo.Username), true, false},
+		{"a person approves in someone else's name", approveAs("mallory"), false, true},
 		{"actor scales within bounds", patch(actor, smokeNS, "deployment", "web", `{"spec":{"replicas":2}}`), true, false},
 		{"actor restarts a Deployment", patch(actor, smokeNS, "deployment", "web", restart), true, false},
 		{"actor scales a StatefulSet within bounds", patch(actor, smokeNS, "statefulset", "store", `{"spec":{"replicas":3}}`, "scale"), true, false},

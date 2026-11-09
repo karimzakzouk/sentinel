@@ -3,6 +3,7 @@ package actor
 import (
 	"context"
 	"fmt"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -55,29 +56,36 @@ func (a *Actor) Run(ctx context.Context) error {
 		if quit {
 			return nil
 		}
-		if err := a.process(ctx, stores, key); err != nil {
+		retry, err := a.process(ctx, stores, key)
+		switch {
+		case err != nil:
 			a.Log.Error("could not process an action request", "request", key, "error", err)
 			queue.AddRateLimited(key)
-		} else {
+		case retry > 0:
+			queue.Forget(key)
+			queue.AddAfter(key, retry)
+		default:
 			queue.Forget(key)
 		}
 		queue.Done(key)
 	}
 }
 
-func (a *Actor) process(ctx context.Context, stores map[string]cache.Store, key string) error {
+// process handles one request and returns how long until it should be
+// looked at again, when it waits for a person or a veto window.
+func (a *Actor) process(ctx context.Context, stores map[string]cache.Store, key string) (time.Duration, error) {
 	ns, _, err := cache.SplitMetaNamespaceKey(key)
 	if err != nil {
-		return nil
+		return 0, nil
 	}
 	obj, exists, err := stores[ns].GetByKey(key)
 	if err != nil || !exists {
-		return err
+		return 0, err
 	}
 	u := obj.(*unstructured.Unstructured).DeepCopy()
 	var req v1alpha1.ActionRequest
 	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(u.Object, &req); err != nil {
-		return err
+		return 0, err
 	}
 	a.mu.Lock()
 	handled := a.handled[req.UID]
@@ -85,12 +93,27 @@ func (a *Actor) process(ctx context.Context, stores map[string]cache.Store, key 
 	switch {
 	case req.Status.Phase.Done() || handled:
 		// The cache can still hold the Executing status this process wrote.
-		return nil
+		return 0, nil
 	case req.Status.Phase == v1alpha1.ActionExecuting:
-		return a.setStatus(ctx, &req, v1alpha1.ActionFailed, "the actor stopped while it ran; check the workload before asking again")
+		return 0, a.setStatus(ctx, &req, v1alpha1.ActionFailed, "the actor stopped while it ran; check the workload before asking again")
+	}
+	ok, phase, msg, retry, policies := a.admit(ctx, &req)
+	if !ok {
+		if phase != v1alpha1.ActionPending {
+			a.Log.Info("action request done", "request", key, "action", req.Spec.Action, "target", req.Spec.Target.Name,
+				"incident", req.Spec.IncidentID, "phase", phase, "message", msg)
+			return 0, a.setStatus(ctx, &req, phase, msg)
+		}
+		if req.Status.Phase != phase || req.Status.Message != msg {
+			a.Log.Info("action request waits", "request", key, "action", req.Spec.Action, "target", req.Spec.Target.Name, "message", msg)
+			if err := a.setStatus(ctx, &req, phase, msg); err != nil {
+				return 0, err
+			}
+		}
+		return retry, nil
 	}
 	if err := a.setStatus(ctx, &req, v1alpha1.ActionExecuting, "running"); err != nil {
-		return err
+		return 0, err
 	}
 	a.mu.Lock()
 	if a.handled == nil {
@@ -98,10 +121,10 @@ func (a *Actor) process(ctx context.Context, stores map[string]cache.Store, key 
 	}
 	a.handled[req.UID] = true
 	a.mu.Unlock()
-	phase, msg := a.Handle(ctx, &req)
+	phase, msg = a.execute(ctx, &req, policies)
 	a.Log.Info("action request done", "request", key, "action", req.Spec.Action, "target", req.Spec.Target.Name,
-		"incident", req.Spec.IncidentID, "phase", phase, "message", msg)
-	return a.setStatus(ctx, &req, phase, msg)
+		"incident", req.Spec.IncidentID, "phase", phase, "approvedBy", req.Status.ApprovedBy, "message", msg)
+	return 0, a.setStatus(ctx, &req, phase, msg)
 }
 
 // setStatus writes the request's status and keeps req current.

@@ -128,7 +128,8 @@ func newObserver(ctx context.Context, log *slog.Logger, cfg *config.Config, clie
 		// Acting is optional: without the custom resources, Sentinel observes.
 		requests := &act.Requests{Dynamic: dyn, Namespaces: cfg.Namespaces, TTL: 10 * time.Minute, Log: log,
 			OnOutcome: func(ctx context.Context, o act.Outcome) {
-				if err := b.OnActionOutcome(ctx, brain.ActionOutcome{IncidentID: o.IncidentID, Phase: string(o.Phase), Message: o.Message}); err != nil {
+				if err := b.OnActionOutcome(ctx, brain.ActionOutcome{IncidentID: o.IncidentID, Request: o.Request, Phase: string(o.Phase),
+					Message: o.Message, ApprovedBy: o.ApprovedBy}); err != nil {
 					log.Error("could not record an action's outcome", "request", o.Request, "error", err)
 				}
 			}}

@@ -28,13 +28,15 @@ import (
 	"github.com/karimzakzouk/sentinel/internal/policy"
 )
 
-// Outcome is what became of a request.
+// Outcome is what became of a request: its final phase, or Pending while it
+// waits for a person or a veto window.
 type Outcome struct {
 	IncidentID model.ID
 	Request    string
 	Action     string
 	Phase      v1alpha1.ActionPhase
 	Message    string
+	ApprovedBy string
 }
 
 // Requests creates action requests and follows them.
@@ -129,19 +131,33 @@ func RequestAction(brainAction string) (string, bool) {
 	return "", false
 }
 
+// approvalTTL is how long a request that needs a person waits for one.
+const approvalTTL = time.Hour
+
 // Request asks the actor for an action if the target namespace's policy
-// lets Sentinel run it on its own, and reports whether it asked. Asking twice
-// for one incident and action is asking once.
+// lets Sentinel run it on its own, after a veto window, or once a person
+// approves; it reports whether it asked. Asking twice for one incident and
+// action is asking once.
 func (r *Requests) Request(ctx context.Context, a model.Action, reason string) (bool, error) {
 	action, ok := RequestAction(a.Type)
-	if !ok || r.Autonomy(a.Target.Namespace, action) != v1alpha1.AutonomyAutonomous {
+	if !ok {
+		return false, nil
+	}
+	ttl := r.TTL
+	switch r.Autonomy(a.Target.Namespace, action) {
+	case v1alpha1.AutonomyAutonomous:
+	case v1alpha1.AutonomyActUnlessVetoed:
+		ttl += actor.VetoWindow
+	case v1alpha1.AutonomyApprove:
+		ttl = approvalTTL
+	default:
 		return false, nil
 	}
 	req := &v1alpha1.ActionRequest{
 		TypeMeta:   metav1.TypeMeta{APIVersion: v1alpha1.GroupVersion.String(), Kind: "ActionRequest"},
 		ObjectMeta: metav1.ObjectMeta{Name: requestName(a.IncidentID, action), Namespace: a.Target.Namespace},
 		Spec: v1alpha1.ActionRequestSpec{IncidentID: string(a.IncidentID), Action: action, Params: a.Params, Reason: clip(reason, 2048),
-			ExpiresAt: metav1.NewTime(time.Now().Add(r.TTL)),
+			ExpiresAt: metav1.NewTime(time.Now().Add(ttl)),
 			Target:    v1alpha1.TargetRef{APIVersion: "apps/v1", Kind: a.Target.Kind, Namespace: a.Target.Namespace, Name: a.Target.Name}},
 	}
 	obj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(req)
@@ -167,7 +183,8 @@ func (r *Requests) observe(ctx context.Context, obj any) {
 		return
 	}
 	var req v1alpha1.ActionRequest
-	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(u.Object, &req); err != nil || !req.Status.Phase.Done() {
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(u.Object, &req); err != nil ||
+		!req.Status.Phase.Done() && req.Status.Phase != v1alpha1.ActionPending {
 		return
 	}
 	key := req.Namespace + "/" + req.Name
@@ -179,7 +196,7 @@ func (r *Requests) observe(ctx context.Context, obj any) {
 		return
 	}
 	r.OnOutcome(ctx, Outcome{IncidentID: model.ID(req.Spec.IncidentID), Request: key, Action: req.Spec.Action,
-		Phase: req.Status.Phase, Message: req.Status.Message})
+		Phase: req.Status.Phase, Message: req.Status.Message, ApprovedBy: req.Status.ApprovedBy})
 }
 
 // requestName is the same for every request of one action on one incident.

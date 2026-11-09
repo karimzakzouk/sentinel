@@ -1,0 +1,43 @@
+# An approval or a veto of an action request names the identity that makes
+# it: whoever sets the annotation must be the identity in its value. RBAC
+# decides who may update requests at all; the actor refuses Sentinel's own
+# identities as approvers.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: sentinel-fence-approvals
+  labels:
+    {{- include "fence.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [sentinel.karimzakzouk.github.io]
+        apiVersions: ["*"]
+        operations: [CREATE, UPDATE]
+        resources: [actionrequests]
+  variables:
+    - name: old
+      expression: "oldObject == null ? {} : oldObject.metadata.?annotations.orValue({})"
+    - name: new
+      expression: "object.metadata.?annotations.orValue({})"
+  validations:
+    {{- range list "approved-by" "vetoed-by" }}
+    - expression: >-
+        !('sentinel.karimzakzouk.github.io/{{ . }}' in variables.new) ||
+        ('sentinel.karimzakzouk.github.io/{{ . }}' in variables.old &&
+         variables.old['sentinel.karimzakzouk.github.io/{{ . }}'] == variables.new['sentinel.karimzakzouk.github.io/{{ . }}']) ||
+        variables.new['sentinel.karimzakzouk.github.io/{{ . }}'] == request.userInfo.username
+      message: "sentinel.karimzakzouk.github.io/{{ . }} must name the identity that sets it"
+      reason: Forbidden
+    {{- end }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: sentinel-fence-approvals
+  labels:
+    {{- include "fence.labels" . | nindent 4 }}
+spec:
+  policyName: sentinel-fence-approvals
+  validationActions: [Deny]
