@@ -355,7 +355,7 @@ func strictEgress() bool {
 // network plugin, outside the cluster or as pods start, which only a
 // plugin not known to be strict may have.
 func pluginLimit(phase v1alpha1.ExperimentPhase, msg string) bool {
-	return !strictEgress() && phase == lab.PhaseFailed &&
+	return !strictEgress() && (phase == lab.PhaseFailed || phase == lab.PhaseNotSure) &&
 		(strings.HasPrefix(msg, "the seal leaks outside the cluster") || strings.HasPrefix(msg, "the seal leaks while a pod starts"))
 }
 
@@ -703,12 +703,28 @@ func TestFenceBlocksForbiddenWrites(t *testing.T) {
 			return err
 		}
 	}
+	askLab := func(ns, purpose string) func() error {
+		return func() error {
+			exp := &unstructured.Unstructured{Object: map[string]any{
+				"apiVersion": "sentinel.karimzakzouk.github.io/v1alpha1", "kind": "Experiment",
+				"metadata": map[string]any{"name": "fence-test", "namespace": ns},
+				"spec": map[string]any{"incidentId": "fence-test", "purpose": purpose, "labNamespace": ns,
+					"workload": map[string]any{"apiVersion": "apps/v1", "kind": "Deployment", "namespace": smokeNS, "name": "front"}},
+			}}
+			_, err := dynamicAs(t, controllerUser).Resource(lab.ExperimentsResource).Namespace(ns).Create(ctx, exp,
+				metav1.CreateOptions{DryRun: []string{metav1.DryRunAll}})
+			return err
+		}
+	}
 	cases := []struct {
 		name string
 		do   func() error
 		// fence means the write must be refused by a sentinel-fence policy, not merely by RBAC.
 		allowed, fence bool
 	}{
+		{"controller asks the Lab to verify a rollback", askLab(labNS, "verify-fix"), true, false},
+		{"controller starts a Lab experiment that is no verification", askLab(labNS, "prove"), false, true},
+		{"controller asks for an experiment outside the Lab", askLab(smokeNS, "verify-fix"), false, false},
 		{"lab starts a probe pod", labPod(labNS, capability.ProbeImage, false), true, false},
 		{"lab starts a copy of a production pod", labPod(labNS, "registry.k8s.io/pause:3.10", false), true, false},
 		{"lab starts a pod that carries a token", labPod(labNS, capability.ProbeImage, true), false, true},

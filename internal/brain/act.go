@@ -238,3 +238,76 @@ func (b *Brain) track(key model.TrackKey, success bool, incident model.ID, now t
 
 // TrackID is the Ledger entity a cell's record is kept under.
 func TrackID(key model.TrackKey) model.ID { return model.ID("track/" + key.String()) }
+
+// askLab asks the Lab, once per incident, whether rolling back fixes it:
+// for a rollback of the Deployment revision blamed for the incident,
+// whether or not policy lets Sentinel act. Callers hold b.mu.
+func (b *Brain) askLab(ctx context.Context, inc *incident, decision Decision, args map[string]string) []ledger.Draft {
+	hash := args[argFromTemplateHash]
+	if b.Lab == nil || inc.labAsked || decision.Action != ActionRolloutUndo || decision.Target.Kind != "Deployment" || hash == "" {
+		return nil
+	}
+	revision := decision.Target.Name + "-" + hash
+	experiment, asked, err := b.Lab.Verify(ctx, inc.rec.ID, decision.Target, revision)
+	switch {
+	case err != nil:
+		b.Log.Error("could not ask the Lab to verify a rollback", "incident", inc.rec.ID, "error", err)
+		return nil
+	case !asked:
+		return nil
+	}
+	inc.labAsked = true
+	e := model.Experiment{ID: model.ExperimentID(inc.rec.ID), IncidentID: inc.rec.ID, Purpose: "verify-fix", Target: decision.Target,
+		Revision: revision, Lab: experiment, Phase: "Requested"}
+	return []ledger.Draft{ledger.RecordDraft(source, model.KindExperiment, "requested", e.ID, inc.rec.ID, e)}
+}
+
+// LabVerdict is the Lab's verdict on an incident's proposed rollback.
+type LabVerdict struct {
+	IncidentID model.ID
+	Experiment string
+	Phase      string
+	Message    string
+	Runs       int32
+	Fidelity   []string
+}
+
+// OnLabVerdict records the Lab's verdict, and tells whoever is asked to
+// approve the rollback.
+func (b *Brain) OnLabVerdict(ctx context.Context, v LabVerdict) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	records, err := ledger.List[model.Experiment](ctx, b.Ledger, model.KindExperiment, "")
+	if err != nil {
+		return err
+	}
+	var e *model.Experiment
+	for i := range records {
+		if records[i].ID == model.ExperimentID(v.IncidentID) {
+			e = &records[i]
+		}
+	}
+	if e == nil {
+		b.Log.Info("a Lab verdict arrived for an experiment Sentinel did not ask for", "experiment", v.Experiment, "phase", v.Phase)
+		return nil
+	}
+	e.Lab, e.Phase, e.Message, e.Runs, e.Fidelity = v.Experiment, v.Phase, v.Message, v.Runs, v.Fidelity
+	b.Log.Info("the Lab judged a rollback", "incident", v.IncidentID, "phase", v.Phase, "message", v.Message, "runs", v.Runs)
+	for _, inc := range b.open {
+		if inc.rec.ID == v.IncidentID && inc.action != nil && inc.actedAt.IsZero() && !inc.verdict {
+			b.notice(ctx, inc, notify.KindApproval, "The Lab on rolling back "+inc.action.Target.String()+": "+labVerdictWord(v.Phase), v.Message)
+		}
+	}
+	_, err = b.Ledger.Append(ctx, ledger.RecordDraft(source, model.KindExperiment, strings.ToLower(v.Phase), e.ID, v.IncidentID, *e))
+	return err
+}
+
+func labVerdictWord(phase string) string {
+	switch phase {
+	case "Passed":
+		return "it fixes the failure"
+	case "Failed":
+		return "it does not fix the failure"
+	}
+	return "not sure"
+}

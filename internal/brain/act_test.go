@@ -310,3 +310,61 @@ func TestScaleRestoreArgsComeFromTheChange(t *testing.T) {
 		t.Fatalf("args = %v", args)
 	}
 }
+
+type fakeLab struct {
+	asks []string
+	busy bool
+}
+
+func (f *fakeLab) Verify(_ context.Context, incident model.ID, target model.ObjectRef, revision string) (string, bool, error) {
+	if f.busy {
+		return "", false, nil
+	}
+	f.asks = append(f.asks, target.Name+"@"+revision)
+	return "lab-0/sentinel-" + string(incident)[:4] + "-verify", true, nil
+}
+
+// A proposed rollback goes to the Lab once, whatever the policy, naming the
+// revision the change produced; its verdict is recorded on the incident and
+// reaches whoever must approve.
+func TestTheLabVerifiesAProposedRollbackOnce(t *testing.T) {
+	b, l := newBrain(t)
+	lab := &fakeLab{busy: true}
+	b.Lab = lab
+	det := badDeploy(t, b)
+	if len(lab.asks) != 0 {
+		t.Fatalf("asks = %v; the Lab was busy", lab.asks)
+	}
+	lab.busy = false
+	det.Count, det.At = 9, det.At.Add(15*time.Second)
+	if err := b.OnDetection(ctx, det); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.OnDetection(ctx, det); err != nil {
+		t.Fatal(err)
+	}
+	if len(lab.asks) != 1 || lab.asks[0] != "web@web-new" {
+		t.Fatalf("asks = %v; want one, of web's failing revision", lab.asks)
+	}
+	inc := incidents(t, l)[0]
+	exps, err := ledger.List[model.Experiment](ctx, l, model.KindExperiment, "")
+	if err != nil || len(exps) != 1 || exps[0].Phase != "Requested" || exps[0].IncidentID != inc.ID {
+		t.Fatalf("experiments = %+v, %v", exps, err)
+	}
+
+	b.Act = &fakeRequester{allow: true}
+	b.open[web.String()].action = &model.Action{Type: ActionRolloutUndo, Target: web, Params: map[string]string{}}
+	var notices []notify.Notice
+	b.Notify = func(_ context.Context, n notify.Notice) { notices = append(notices, n) }
+	if err := b.OnLabVerdict(ctx, LabVerdict{IncidentID: inc.ID, Experiment: "lab-0/x", Phase: "Passed",
+		Message: "the previous revision fixes it", Runs: 15, Fidelity: []string{"runs one replica instead of 3"}}); err != nil {
+		t.Fatal(err)
+	}
+	exps, _ = ledger.List[model.Experiment](ctx, l, model.KindExperiment, "")
+	if len(exps) != 1 || exps[0].Phase != "Passed" || exps[0].Runs != 15 || len(exps[0].Fidelity) != 1 {
+		t.Fatalf("experiments = %+v; want the verdict recorded", exps)
+	}
+	if len(notices) != 1 || !strings.Contains(notices[0].Title, "it fixes the failure") {
+		t.Fatalf("notices = %+v; want the approver told", notices)
+	}
+}

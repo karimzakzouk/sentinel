@@ -32,6 +32,8 @@ lab:
   poolSize: 2
   # The cluster's DNS domain, which a world's copies use to name each other.
   clusterDomain: cluster.local
+  # Ask the Lab whether each proposed rollback fixes its incident.
+  verifyRollbacks: true
   quota:
     pods: "20"
     requests.cpu: "4"

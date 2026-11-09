@@ -34,6 +34,13 @@ type Requester interface {
 	Request(ctx context.Context, a model.Action, reason string) (bool, error)
 }
 
+// Verifier asks the Lab whether rolling back to the revision before a
+// failing one fixes an incident. It says which Experiment answers, and
+// whether it asked: not while the Lab is busy.
+type Verifier interface {
+	Verify(ctx context.Context, incident model.ID, target model.ObjectRef, revision string) (string, bool, error)
+}
+
 // verifyWithin is how long an action has to clear its incident's signals.
 const verifyWithin = 10 * time.Minute
 
@@ -67,6 +74,8 @@ type Brain struct {
 	// Act, when set, asks the actor for the reversible actions policies
 	// allow; their outcomes come back through OnActionOutcome.
 	Act Requester
+	// Lab, when set, verifies proposed rollbacks before anyone acts on them.
+	Lab Verifier
 	// Notify, when set, tells people what Sentinel needs from them or did.
 	// It must not block.
 	Notify func(context.Context, notify.Notice)
@@ -114,6 +123,8 @@ type incident struct {
 	verdict bool
 	// notified holds the notices already sent about the incident.
 	notified map[string]bool
+	// labAsked is set once the Lab is asked to verify the incident's fix.
+	labAsked bool
 }
 
 // factsOf returns the facts an incident holds for one of its workloads.
@@ -200,6 +211,17 @@ func (b *Brain) Restore(ctx context.Context) (int, error) {
 	b.tracks = map[model.TrackKey]*model.TrackRecord{}
 	for i := range records {
 		b.tracks[records[i].Key] = &records[i]
+	}
+	experiments, err := ledger.List[model.Experiment](ctx, b.Ledger, model.KindExperiment, "")
+	if err != nil {
+		return 0, err
+	}
+	for _, e := range experiments {
+		for _, inc := range b.open {
+			if inc.rec.ID == e.IncidentID {
+				inc.labAsked = true
+			}
+		}
 	}
 	// Breakers outlive restarts: an action that failed in the last day stays
 	// barred on its workload.
@@ -562,6 +584,7 @@ func (b *Brain) assess(ctx context.Context, inc *incident, workload model.Object
 		}
 	}
 	inc.lastAction = decision.Action
+	drafts = append(drafts, b.askLab(ctx, inc, decision, actionArgs(decision.Action, top, b.revision(workload)))...)
 
 	a := &model.Assessment{Class: classes.Top().Value, ClassP: round(classes.Top().P), Decision: decision.Action}
 	summary := []any{"class", a.Class, "classP", a.ClassP, "decision", decision.Action}

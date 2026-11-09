@@ -39,6 +39,7 @@ const (
 	KindVerdict     Kind = "verdict"
 	KindFix         Kind = "fix"
 	KindTrackRecord Kind = "trackrecord"
+	KindExperiment  Kind = "experiment"
 )
 
 // ObjectRef points at a Kubernetes object.
@@ -329,6 +330,25 @@ type TrackKey struct {
 func (k TrackKey) String() string {
 	return k.Action + "|" + k.FaultClass + "|" + k.Service
 }
+
+// Experiment is a Lab run the controller asked for, and its verdict.
+type Experiment struct {
+	ID         ID        `json:"id"`
+	IncidentID ID        `json:"incidentId"`
+	Purpose    string    `json:"purpose"`
+	Target     ObjectRef `json:"target"`
+	// Revision is the failing revision the Lab copies.
+	Revision string `json:"revision,omitempty"`
+	// Lab is the Experiment's namespace and name.
+	Lab      string   `json:"lab,omitempty"`
+	Phase    string   `json:"phase,omitempty"`
+	Message  string   `json:"message,omitempty"`
+	Runs     int32    `json:"runs,omitempty"`
+	Fidelity []string `json:"fidelity,omitempty"`
+}
+
+// ExperimentID is the one Experiment per incident.
+func ExperimentID(incident ID) ID { return "experiment/" + incident }
 
 // TrackRecord is the Beta posterior of an action's success rate in one cell.
 type TrackRecord struct {

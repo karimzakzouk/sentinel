@@ -19,6 +19,7 @@ import (
 	"github.com/karimzakzouk/sentinel/internal/notify"
 	"github.com/karimzakzouk/sentinel/internal/slot"
 	"github.com/karimzakzouk/sentinel/internal/topology"
+	"github.com/karimzakzouk/sentinel/internal/verify"
 	"github.com/karimzakzouk/sentinel/internal/watcher"
 )
 
@@ -147,6 +148,21 @@ func newObserver(ctx context.Context, log *slog.Logger, cfg *config.Config, clie
 			b.Act = requests
 			acting = requests
 			log.Info("acting is on where a SentinelPolicy allows it", "namespaces", cfg.Namespaces)
+		}
+	}
+	if cfg.VerifyRollbacks && len(cfg.LabNamespaces) > 0 && dyn != nil {
+		lab := &verify.Lab{Dynamic: dyn, Pool: cfg.LabNamespaces, Watched: cfg.Namespaces, Log: log,
+			OnVerdict: func(ctx context.Context, v verify.Verdict) {
+				if err := b.OnLabVerdict(ctx, brain.LabVerdict{IncidentID: v.IncidentID, Experiment: v.Experiment, Phase: string(v.Phase),
+					Message: v.Message, Runs: v.Runs, Fidelity: v.Fidelity}); err != nil {
+					log.Error("could not record the Lab's verdict", "experiment", v.Experiment, "error", err)
+				}
+			}}
+		if err := lab.Start(ctx); err != nil {
+			log.Warn("the Lab does not verify rollbacks", "reason", err)
+		} else {
+			b.Lab = lab
+			log.Info("the Lab verifies proposed rollbacks", "pool", cfg.LabNamespaces)
 		}
 	}
 	w.OnTick = func(ctx context.Context) {

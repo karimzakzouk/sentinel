@@ -25,6 +25,9 @@ type Config struct {
 	AgentNamespace string `json:"agentNamespace,omitempty"`
 	// LabNamespaces is the pool of namespaces created at install for Lab runs.
 	LabNamespaces []string `json:"labNamespaces,omitempty"`
+	// VerifyRollbacks asks the Lab whether each proposed rollback fixes its
+	// incident.
+	VerifyRollbacks bool `json:"verifyRollbacks,omitempty"`
 	// ActorUser is the identity that executes actions.
 	ActorUser    string                 `json:"actorUser,omitempty"`
 	Ledger       Ledger                 `json:"ledger"`
