@@ -159,7 +159,28 @@ EOF
 kubectl -n sentinel-lab-0 get experiments -w
 ```
 
-## 9. Score a session
+## 9. Fix it in Git
+
+A rollback through Flux or Argo CD leaves the bad change in Git, and the
+owner paused. With `E2E_GITEA=1` the cluster also runs a Gitea, holding a
+repository Flux can deploy, and the Fixer, which proposes the fix there:
+
+```bash
+E2E_FLUX=1 E2E_GITEA=1 make e2e-up
+go test -tags e2e ./test/e2e/ -run TestTheFixer -v
+```
+
+The test commits a bad image to the repository; once Sentinel has rolled
+podinfo back and verified it, the Fixer opens a pull request that sets the
+image back on the very line that changed it, keeping that line's comment,
+and says why there. Merge it, resume the owner as the pull request says
+(`bin/sentinel resume flux flux-system/<kustomization>`), and Sentinel
+checks that the workload kept the good image. `kubectl -n sentinel get
+fixes` shows each step; when the Fixer cannot place a change (the bad value
+was set on the owner itself, say), the Fix says why, and Sentinel tells you
+to fix it by hand.
+
+## 10. Score a session
 
 ```bash
 date -u +%Y-%m-%dT%H:%M:%SZ > /tmp/start
