@@ -1,6 +1,6 @@
 # Status
 
-Last updated: Monday 9 November 2026, 04:05 Cairo time (UTC+2).
+Last updated: Monday 9 November 2026, 04:45 Cairo time (UTC+2).
 
 ## Where things stand
 
@@ -47,6 +47,14 @@ To look at it on a cluster where it runs:
 | 3. Approval, veto and notices | Done | `TestAnApprovedRollbackRunsAndNamesItsApprover`; the fence refuses an approval in someone else's name; Slack notices when a webhook is set |
 | 4. Owner adapters | Argo CD and Flux Kustomizations done; Flux HelmReleases left to people (decision 45) | `TestArgoCDRollbackPausesTheApplication` and `TestFluxRollbackSuspendsTheKustomization` in the E2E owners workflow |
 | 5. Track records and autonomy | Not started | |
+
+## Phase 3 progress
+
+| Slice | State | Proof |
+|---|---|---|
+| 0. An enforcing development cluster | Not possible on the development VM (decision 46); Lab tests run in CI | The network plugins workflow, now with Cilium |
+| 1. Seal and prove | The seal and the probe matrix done; the Experiment lifecycle next | `TestTheLabSealHoldsOnlyWherePolicyIsEnforced`: on Flannel the matrix caught 16 leaks, as it must; in CI's enforcing clusters none may leak |
+| 2. to 4. | Not started | |
 
 ## Acting session
 
