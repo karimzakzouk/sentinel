@@ -13,3 +13,9 @@ The controller also records every change in its capability report in the Ledger:
   kubectl -n {{ .Release.Namespace }} logs deploy/sentinel | grep "capability report"
 
 Install the sentinel-fence chart (as a cluster admin) to bound what Sentinel itself may change.
+{{- if .Values.lab.enabled }}
+The Lab acts only once the fence knows its pool:
+
+  helm upgrade --install sentinel-fence charts/sentinel-fence --reuse-values \
+    --set lab.namespace={{ .Release.Namespace }} --set 'lab.pool={{ "{" }}{{ join "," (include "sentinel.labNamespaces" . | fromJsonArray) }}{{ "}" }}'
+{{- end }}

@@ -27,3 +27,10 @@ argocdNamespace: ""
 # Where Flux keeps the Kustomizations the actor may suspend before a
 # rollback; empty means it may not.
 fluxNamespaces: []
+
+# The Lab's identity and its pool of namespaces; empty means the Lab may
+# change nothing.
+lab:
+  namespace: sentinel
+  serviceAccount: sentinel-lab
+  pool: []
