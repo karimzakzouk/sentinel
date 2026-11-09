@@ -111,7 +111,47 @@ reports the Application out of sync instead of undoing the rollback. Fix
 Git, then `bin/sentinel resume argocd argocd/<application>`. Flux works the
 same way with `E2E_FLUX=1` and `-run TestFlux`.
 
-## 8. Score a session
+## 8. Ask the Lab
+
+The Lab copies the failing workload and what it calls into a sealed
+namespace and races the revision before the bad one against it. It runs only
+where it can prove the seal with live traffic: Calico and Cilium on a normal
+kernel. It refuses Flannel, which ignores NetworkPolicy, and kindnet on cloud
+VMs, which lets pods reach the cloud's metadata service. Bring the cluster up
+with Calico, and let Sentinel ask the Lab about every rollback it proposes
+(the end-to-end values turn that off, since the tests drive the Lab
+themselves):
+
+```bash
+E2E_NETWORK=calico make e2e-up
+helm upgrade sentinel charts/sentinel -n sentinel --reuse-values --set lab.verifyRollbacks=true
+hack/run-scenarios.sh test/scenarios/smoke/bad-image.yaml
+```
+
+The incident's timeline shows Sentinel asking the Lab, and within about ten
+minutes its verdict: **fixes it** ("it worked in 15 of 15 runs where the
+failing revision failed in 15 of 15"), **does not fix it**, or **not sure**,
+with the reason and how the Lab's copy differed from production. A verdict
+passes only once the failure has reproduced in the copy and a deletion
+control, a copy that starts but does nothing, has failed; it holds its error
+rate at 5% however early the Lab stops. To ask by hand:
+
+```bash
+kubectl apply -f - <<'EOF'
+apiVersion: sentinel.karimzakzouk.github.io/v1alpha1
+kind: Experiment
+metadata: {name: verify-web, namespace: sentinel-lab-0}
+spec:
+  incidentId: by-hand
+  purpose: verify-fix
+  labNamespace: sentinel-lab-0
+  workload: {apiVersion: apps/v1, kind: Deployment, namespace: e2e-smoke, name: web}
+  revision: web-<hash of the bad ReplicaSet>
+EOF
+kubectl -n sentinel-lab-0 get experiments -w
+```
+
+## 9. Score a session
 
 ```bash
 date -u +%Y-%m-%dT%H:%M:%SZ > /tmp/start
