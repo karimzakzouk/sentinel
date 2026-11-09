@@ -125,6 +125,9 @@ type ActionOutcome struct {
 	Phase      string
 	Message    string
 	ApprovedBy string
+	// BudgetSpent marks a request the namespace's hourly budget turned
+	// down, which says nothing against the action.
+	BudgetSpent bool
 }
 
 // OnActionOutcome records what the actor did with the incident's action. A
@@ -167,7 +170,11 @@ func (b *Brain) OnActionOutcome(ctx context.Context, o ActionOutcome) error {
 		inc.verdict = true
 		b.Log.Warn("the actor did not run the action; escalating", "incident", inc.rec.ID, "action", a.Type,
 			"phase", o.Phase, "message", o.Message)
-		b.trip(a, b.now())
+		// A spent budget limits how often Sentinel acts; it is no reason to
+		// stop asking for this action on this workload once the hour passes.
+		if !o.BudgetSpent {
+			b.trip(a, b.now())
+		}
 		b.notice(ctx, inc, notify.KindEscalation, "Sentinel could not "+verb(a.Type, false)+" "+a.Target.String(), o.Message)
 	}
 	b.Log.Info("action "+step, "incident", inc.rec.ID, "action", a.Type, "target", a.Target.String(), "message", o.Message)

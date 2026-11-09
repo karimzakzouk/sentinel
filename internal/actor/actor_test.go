@@ -2,6 +2,7 @@ package actor
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"strings"
@@ -630,5 +631,11 @@ func TestARequestHeldForItsTrackRecordWaitsForAPerson(t *testing.T) {
 	a, _, _ = newActor(t, 3, sentinelPolicy(v1alpha1.AutonomyRecommend, ActionRolloutUndo))
 	if phase, msg := a.Handle(ctx, held("alice")); phase != v1alpha1.ActionRejected {
 		t.Fatalf("under recommend: %s: %s; the mark may not loosen a stricter policy", phase, msg)
+	}
+}
+
+func TestBudgetSpentKnowsItsOwnMessage(t *testing.T) {
+	if !BudgetSpent(fmt.Sprintf(budgetSpent, 6)) || BudgetSpent("the namespace's policy no longer allows it") || BudgetSpent("") {
+		t.Fatal("BudgetSpent misread a message")
 	}
 }
