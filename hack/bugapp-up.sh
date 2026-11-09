@@ -16,7 +16,7 @@ k() { kubectl --context "$ctx" "$@"; }
 build=$(mktemp -d)
 trap 'rm -rf "$build"' EXIT
 CGO_ENABLED=0 go build -C "$root" -o "$build/bugapp" ./test/planted/bugapp
-cp "$roo./test/planted/bugapp/Dockerfile" "$build/"
+cp "$root/test/planted/bugapp/Dockerfile" "$build/"
 docker build --quiet -t sentinel-bugapp:1 "$build" >/dev/null
 kind load docker-image sentinel-bugapp:1 --name "$cluster"
 
