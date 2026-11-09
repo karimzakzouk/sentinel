@@ -36,6 +36,23 @@ export const labStages: Record<string, { title: string; pill: string; tone: stri
   "sentinel.experiment.aborted": { title: "The Lab stopped before a verdict", pill: "stopped", tone: "amber" },
 };
 
+// How the fix at the source went, by Ledger event.
+export const fixStages: Record<string, { title: string; pill: string; tone: string }> = {
+  "sentinel.fix.requested": { title: "Asked the Fixer to make the rollback hold in Git", pill: "in the Fixer", tone: "accent" },
+  "sentinel.fix.proposed": { title: "The Fixer opened a pull request", pill: "fix proposed", tone: "accent" },
+  "sentinel.fix.merged": { title: "Someone merged the fix", pill: "merged", tone: "accent" },
+  "sentinel.fix.ready": { title: "The fix is in the owner's source", pill: "resume the owner", tone: "amber" },
+  "sentinel.fix.applied": { title: "The owner is resumed and has applied the fix", pill: "applied, checking", tone: "accent" },
+  "sentinel.fix.held": { title: "Fixed at the source", pill: "fixed", tone: "green" },
+  "sentinel.fix.notheld": { title: "The fix did not hold", pill: "did not hold", tone: "red" },
+  "sentinel.fix.abstained": { title: "The Fixer has no fix to propose", pill: "fix it by hand", tone: "amber" },
+  "sentinel.fix.failed": { title: "The Fixer could not propose a fix", pill: "fix it by hand", tone: "red" },
+  "sentinel.fix.declined": { title: "The fix was closed without merging", pill: "declined", tone: "amber" },
+};
+
+// webLink is a URL safe to link to: http or https only.
+export const webLink = (u?: string) => (u && /^https?:\/\//.test(u) ? u : undefined);
+
 export const actionStages: Record<string, { title: string; pill: string; tone: string }> = {
   "sentinel.action.requested": { title: "Asked the actor to", pill: "requested", tone: "accent" },
   "sentinel.action.awaiting": { title: "Waiting for a person", pill: "needs approval", tone: "amber" },

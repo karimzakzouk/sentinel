@@ -140,6 +140,21 @@ export interface Experiment {
   fidelity?: string[];
 }
 
+export interface Fix {
+  id: string;
+  incidentId: string;
+  target: ObjectRef;
+  fromRevision?: string;
+  phase: string;
+  message?: string;
+  owner?: string;
+  resume?: string;
+  repository?: string;
+  change?: string[];
+  pullRequest?: string;
+  mergeCommit?: string;
+}
+
 export interface TrackRecord {
   key: { action: string; faultClass: string; service: string };
   successes: number;

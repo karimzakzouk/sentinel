@@ -4,6 +4,7 @@ import {
   type Action,
   type Evidence,
   type Experiment,
+  type Fix,
   type Hypothesis,
   type Incident,
   type LedgerEvent,
@@ -17,10 +18,12 @@ import {
   classLabel,
   clock,
   duration,
+  fixStages,
   isOpen,
   labStages,
   pct,
   reading,
+  webLink,
   workload,
 } from "./format";
 import { usePoll } from "./usePoll";
@@ -39,6 +42,44 @@ const signalLabels: Record<string, string> = {
   "log.new-error": "New errors in the logs",
   "log.errors": "Errors in the logs",
 };
+
+// FixDetail says what a step of the fix at the source needs or found: the
+// pull request and what it changes, the command to resume the owner, or
+// why there is no fix. Brief, it fits in a line.
+function FixDetail({ fix, type, brief }: { fix: Fix; type: string; brief?: boolean }) {
+  const pr = webLink(fix.pullRequest);
+  switch (type) {
+    case "sentinel.fix.requested":
+      return brief ? <span className="detail">the Fixer is looking for where the change was made.</span> : null;
+    case "sentinel.fix.proposed":
+    case "sentinel.fix.merged":
+    case "sentinel.fix.applied":
+      return (
+        <span className="detail">
+          {pr ? (
+            <a href={pr} target="_blank" rel="noreferrer noopener">
+              {brief ? "the pull request" : fix.pullRequest}
+            </a>
+          ) : (
+            fix.pullRequest
+          )}
+          {!brief &&
+            fix.change?.map((c) => (
+              <span key={c} className="mono change-line">
+                {c}
+              </span>
+            ))}
+        </span>
+      );
+    case "sentinel.fix.ready":
+      return (
+        <span className="detail">
+          resume it with <code>{fix.resume}</code>; Sentinel then checks that the fix held.
+        </span>
+      );
+  }
+  return fix.message ? <span className="detail">{fix.message}</span> : null;
+}
 
 function Bar({ label, p, dim, title }: { label: ReactNode; p: number; dim?: boolean; title?: string }) {
   return (
@@ -186,6 +227,19 @@ function TimelineEvent({ event }: { event: LedgerEvent }) {
       );
     }
     default: {
+      const fixStage = fixStages[event.type];
+      if (fixStage) {
+        const f = event.data as Fix;
+        return (
+          <li className="event action">
+            {when}
+            <div className="what">
+              {fixStage.title} <span className={`pill ${fixStage.tone}`}>{fixStage.pill}</span>
+            </div>
+            <FixDetail fix={f} type={event.type} />
+          </li>
+        );
+      }
       const lab = labStages[event.type];
       if (lab) {
         const e = event.data as Experiment;
@@ -256,6 +310,8 @@ export function IncidentView({ id, onOpen }: { id: string; onOpen: (id: string) 
   const stage = stageEvent && actionStages[stageEvent.type];
   const labEvent = [...events].reverse().find((e) => labStages[e.type]);
   const lab = labEvent && labStages[labEvent.type];
+  const fixEvent = [...events].reverse().find((e) => fixStages[e.type]);
+  const fixStage = fixEvent && fixStages[fixEvent.type];
   const factors = hypotheses[0]?.ratios ?? [];
   const symptoms = incident.objects?.slice(1) ?? [];
 
@@ -305,6 +361,12 @@ export function IncidentView({ id, onOpen }: { id: string; onOpen: (id: string) 
                   <span className={`pill ${lab.tone}`}>Lab: {lab.pill}</span>{" "}
                   {(labEvent.data as Experiment).message ?? "The Lab is copying the workload to try it."}
                 </p>
+              )}
+              {fixStage && fixEvent && (
+                <div className="note fix-step">
+                  <span className={`pill ${fixStage.tone}`}>Fix: {fixStage.pill}</span>{" "}
+                  <FixDetail fix={fixEvent.data as Fix} type={fixEvent.type} brief />
+                </div>
               )}
             </>
           ) : (
