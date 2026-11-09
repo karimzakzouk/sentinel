@@ -88,8 +88,11 @@ spec:
                 minimum: 1
                 type: integer
               purpose:
-                description: Purpose says what the experiment tests.
+                description: |-
+                  Purpose says what the experiment tests: prove seals the Lab and
+                  proves its isolation, and runs no workload.
                 enum:
+                - prove
                 - reproduce
                 - verify-fix
                 - verify-config
