@@ -98,19 +98,23 @@ func (in *Injector) revertCommit(ctx context.Context, run *Run) error {
 		return fmt.Errorf("decode the file as it was: %w", err)
 	}
 	var did []string
-	fix, err := in.awaitFix(ctx, run, "Proposed", "Abstained", "Failed")
+	fix, err := in.awaitFix(ctx, run, "Proposed", "Merged", "Ready", "Abstained", "Failed")
 	switch {
 	case err != nil:
 		return err
 	case fix == nil:
 		did = append(did, "Sentinel proposed no fix")
-	case fix.Status.Phase != "Proposed":
+	case fix.Status.Phase == "Abstained" || fix.Status.Phase == "Failed":
 		did = append(did, "Sentinel's fix "+strings.ToLower(string(fix.Status.Phase))+": "+fix.Status.Message)
 	default:
-		if err := in.Forge.merge(ctx, was.Repository, int(fix.Status.Number)); err != nil {
-			return fmt.Errorf("merge Sentinel's fix: %w", err)
+		if fix.Status.Phase == "Proposed" {
+			if err := in.Forge.merge(ctx, was.Repository, int(fix.Status.Number)); err != nil {
+				return fmt.Errorf("merge Sentinel's fix: %w", err)
+			}
+			did = append(did, fmt.Sprintf("merged Sentinel's fix #%d", fix.Status.Number))
+		} else {
+			did = append(did, fmt.Sprintf("Sentinel merged its fix #%d itself", fix.Status.Number))
 		}
-		did = append(did, fmt.Sprintf("merged Sentinel's fix #%d", fix.Status.Number))
 		if err := in.refresh(ctx, run.Target); err != nil {
 			return err
 		}

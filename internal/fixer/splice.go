@@ -22,9 +22,14 @@ func splice(src []byte, node *yaml.Node, value string) ([]byte, error) {
 	}
 	line := lines[node.Line-1]
 	start := byteOffset(line, node.Column-1)
-	old, err := scalarText(node.Value, node.Style)
-	if err != nil {
-		return nil, err
+	// A plain scalar is written as its value; a number such as 6291456
+	// would come back quoted from a string's marshalling.
+	old := node.Value
+	if node.Style != 0 {
+		var err error
+		if old, err = scalarText(node.Value, node.Style); err != nil {
+			return nil, err
+		}
 	}
 	if start < 0 || !bytes.HasPrefix(line[start:], []byte(old)) {
 		return nil, fmt.Errorf("line %d does not hold %s where the YAML parser places it", node.Line, old)

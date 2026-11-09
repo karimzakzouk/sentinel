@@ -11,10 +11,14 @@ import (
 	"github.com/karimzakzouk/sentinel/internal/notify"
 )
 
-type fakeFixer struct{ asked []string }
+type fakeFixer struct {
+	asked    []string
+	requests []FixRequest
+}
 
-func (f *fakeFixer) Fix(_ context.Context, incident model.ID, target model.ObjectRef, from string) (string, error) {
-	f.asked = append(f.asked, string(incident)+" "+target.String()+" "+from)
+func (f *fakeFixer) Fix(_ context.Context, r FixRequest) (string, error) {
+	f.asked = append(f.asked, string(r.Incident)+" "+r.Target.String()+" "+r.FromRevision)
+	f.requests = append(f.requests, r)
 	return "sentinel/fix", nil
 }
 
@@ -96,6 +100,70 @@ func TestAVerifiedRollbackIsFixedAtItsSource(t *testing.T) {
 			if fixes[0].Phase != tc.want || notices[len(notices)-1].Kind != tc.wantKind {
 				t.Fatalf("fix %s, last notice %+v; want %s and a %s notice", fixes[0].Phase, notices[len(notices)-1], tc.want, tc.wantKind)
 			}
+			// The fix's track record counts it: for when it held, against when not.
+			track := b.tracks[fixTrack(fixes[0])]
+			if track == nil || (tc.want == "Held") != (track.Alpha > track.Beta) {
+				t.Fatalf("track record %+v after a fix that %s", track, tc.want)
+			}
 		})
+	}
+}
+
+// The Fixer is told the incident's class, and for a memory limit the limit
+// learned from what each container used outside the revision that failed.
+func TestTheFixerIsToldTheClassAndALearnedLimit(t *testing.T) {
+	b, _ := newBrain(t)
+	fixer := &fakeFixer{}
+	b.Fixer = fixer
+	var except string
+	b.MemoryUse = func(_ model.ObjectRef, rev string) map[string][]float64 {
+		except = rev
+		used := make([]float64, 40)
+		for i := range used {
+			used[i] = 6 << 20
+		}
+		return map[string][]float64{"web": used, "sidecar": used[:3]}
+	}
+	inc := &incident{rec: model.Incident{ID: "inc-1", Assessment: &model.Assessment{Class: ClassMemoryLimit}}}
+	a := &model.Action{Type: ActionRolloutUndo, Target: web, Params: map[string]string{argFromTemplateHash: "bad"}}
+	if drafts := b.askFix(ctx, inc, a); len(drafts) != 1 || len(fixer.requests) != 1 {
+		t.Fatalf("drafts %d, requests %d", len(drafts), len(fixer.requests))
+	}
+	r := fixer.requests[0]
+	if r.FaultClass != ClassMemoryLimit || except != "bad" || r.MemoryLimits["web"] != "14Mi" || len(r.MemoryLimits) != 1 {
+		t.Fatalf("request %+v, learned outside %q", r, except)
+	}
+}
+
+// Where a policy grants fix.merge at autonomous but makes fixes earn it, a
+// person merges until fixes of that fault on that workload have held often
+// enough; then the Fixer may. A fix that held counts for it.
+func TestAFixEarnsItsOwnMerge(t *testing.T) {
+	b, _ := newBrain(t)
+	fixer := &fakeFixer{}
+	b.Fixer = fixer
+	b.MergePolicy = func(string) (model.AutonomyLevel, bool) { return model.AutonomyAutonomous, true }
+	ask := func(id model.ID) FixRequest {
+		t.Helper()
+		inc := &incident{rec: model.Incident{ID: id, Assessment: &model.Assessment{Class: ClassBadImage}}}
+		a := &model.Action{Type: ActionRolloutUndo, Target: web, Params: map[string]string{argFromTemplateHash: "bad"}}
+		if len(b.askFix(ctx, inc, a)) != 1 {
+			t.Fatal("no fix asked for")
+		}
+		return fixer.requests[len(fixer.requests)-1]
+	}
+	if r := ask("inc-1"); r.Merge {
+		t.Fatal("a fix merged itself before any fix had held")
+	}
+	key := fixTrack(model.Fix{FaultClass: ClassBadImage, Target: web})
+	for range 28 {
+		b.track(key, true, "inc-0", b.now())
+	}
+	if r := ask("inc-2"); !r.Merge {
+		t.Fatal("28 fixes held and the next still waits for a person")
+	}
+	b.MergePolicy = func(string) (model.AutonomyLevel, bool) { return model.AutonomyApprove, false }
+	if r := ask("inc-3"); r.Merge {
+		t.Fatal("a fix merged itself where the policy grants approve")
 	}
 }

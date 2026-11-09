@@ -44,6 +44,12 @@ func TestOpenAndGetAPullRequest(t *testing.T) {
 			_, _ = w.Write([]byte(`{"number": 7, "html_url": "http://gitea/sentinel/delivery/pulls/7", "state": "open", "merged": false}`))
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/repos/sentinel/delivery/pulls/7":
 			_, _ = w.Write([]byte(`{"number": 7, "state": "closed", "merged": true, "merge_commit_sha": "abc123"}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/repos/sentinel/delivery/pulls/7/merge":
+			var body map[string]string
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if body["Do"] != "merge" {
+				http.Error(w, "no merge style", http.StatusUnprocessableEntity)
+			}
 		default:
 			http.NotFound(w, r)
 		}
@@ -54,6 +60,9 @@ func TestOpenAndGetAPullRequest(t *testing.T) {
 	pr, err := c.Open(ctx, "sentinel", "delivery", "sentinel/fix-1", "main", "Fix", "Because")
 	if err != nil || pr.Number != 7 || opened["head"] != "sentinel/fix-1" || opened["base"] != "main" {
 		t.Fatalf("Open = %+v, %v; sent %v", pr, err, opened)
+	}
+	if err := c.Merge(ctx, "sentinel", "delivery", 7); err != nil {
+		t.Fatalf("Merge: %v", err)
 	}
 	pr, err = c.Get(ctx, "sentinel", "delivery", 7)
 	if err != nil || !pr.Merged || pr.MergeCommit != "abc123" {

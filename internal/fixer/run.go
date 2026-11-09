@@ -19,7 +19,9 @@ import (
 	"k8s.io/client-go/util/workqueue"
 
 	"github.com/karimzakzouk/sentinel/api/v1alpha1"
+	"github.com/karimzakzouk/sentinel/internal/actor"
 	"github.com/karimzakzouk/sentinel/internal/forge"
+	"github.com/karimzakzouk/sentinel/internal/policy"
 )
 
 // FixesResource is the Fix custom resource.
@@ -144,6 +146,20 @@ func (f *Fixer) process(ctx context.Context, store cache.Store, key string, trie
 		switch {
 		case err != nil:
 			return 0, err
+		case !pr.Merged && pr.State == "open" && fix.Spec.Merge:
+			granted, err := f.mergeGranted(ctx, fix.Spec.Workload.Namespace)
+			switch {
+			case err != nil:
+				return 0, err
+			case !granted:
+				f.Log.Info("not merging a fix: the namespace's policy no longer grants fix.merge", "fix", key)
+				return poll, nil
+			}
+			if err := f.Forge.Merge(ctx, owner, repo, int(fix.Status.Number)); err != nil {
+				return 0, err
+			}
+			f.Log.Info("merged a fix as policy grants", "fix", key, "pullRequest", fix.Status.PullRequest)
+			return time.Second, nil
 		case pr.Merged:
 			fix.Status.MergeCommit = pr.MergeCommit
 			f.Log.Info("fix merged", "fix", key, "incident", fix.Spec.IncidentID, "commit", pr.MergeCommit)
@@ -187,6 +203,24 @@ func (f *Fixer) process(ctx context.Context, store cache.Store, key string, trie
 	return 0, nil
 }
 
+// mergeGranted reports whether the namespace's policies grant fix.merge at
+// autonomous. The controller decides whether a fix has earned it; the
+// Fixer, which holds the forge's credential, checks the grant itself.
+func (f *Fixer) mergeGranted(ctx context.Context, namespace string) (bool, error) {
+	list, err := f.Dynamic.Resource(actor.PoliciesResource).Namespace(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return false, err
+	}
+	var policies []v1alpha1.SentinelPolicy
+	for _, u := range list.Items {
+		var p v1alpha1.SentinelPolicy
+		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(u.Object, &p); err == nil {
+			policies = append(policies, p)
+		}
+	}
+	return policy.Autonomy(policies, "fix.merge") == v1alpha1.AutonomyAutonomous, nil
+}
+
 // holds reports whether a commit of the fix's branch is the merge or comes
 // after it.
 func (f *Fixer) holds(ctx context.Context, fix *v1alpha1.Fix, commit string) (bool, error) {
@@ -208,7 +242,7 @@ func (f *Fixer) propose(ctx context.Context, fix *v1alpha1.Fix) (v1alpha1.FixPha
 	if err != nil {
 		return "", "", err
 	}
-	change, err := ContainerChange(ctx, f.Client, dep, fix.Spec.FromRevision)
+	change, kept, err := ChangeFor(ctx, f.Client, dep, fix.Spec)
 	if err != nil {
 		return PhaseAbstained, err.Error(), nil
 	}
@@ -237,7 +271,10 @@ func (f *Fixer) propose(ctx context.Context, fix *v1alpha1.Fix) (v1alpha1.FixPha
 	field := what(change.field())
 	fix.Status.Change = []string{fmt.Sprintf("%s:%d: %s's %s %s -> %s", edit.Path, edit.Line, change.Container, field, shown(change.Bad), shown(change.Good))}
 	title := fmt.Sprintf("Set %s's %s back to %s", change.Container, field, shown(change.Good))
-	if change.Good == nil {
+	switch {
+	case change.field() == fieldMemoryLimit:
+		title = fmt.Sprintf("Set %s's memory limit to %s", change.Container, shown(change.Good))
+	case change.Good == nil:
 		title = fmt.Sprintf("Remove %s's %s", change.Container, field)
 	}
 	why := strings.ToUpper(edit.Why[:1]) + edit.Why[1:]
@@ -246,7 +283,7 @@ func (f *Fixer) propose(ctx context.Context, fix *v1alpha1.Fix) (v1alpha1.FixPha
 	if _, err := co.Push(ctx, edit, branch, message, f.Author); err != nil {
 		return "", "", err
 	}
-	pr, err := f.Forge.Open(ctx, owner, repo, branch, co.Branch, title, body(fix, src, edit, change))
+	pr, err := f.Forge.Open(ctx, owner, repo, branch, co.Branch, title, body(fix, src, edit, change, kept))
 	if err != nil {
 		return "", "", err
 	}
@@ -254,26 +291,35 @@ func (f *Fixer) propose(ctx context.Context, fix *v1alpha1.Fix) (v1alpha1.FixPha
 	return PhaseProposed, edit.Why, nil
 }
 
-func body(fix *v1alpha1.Fix, src *Source, edit *Edit, change Change) string {
+func body(fix *v1alpha1.Fix, src *Source, edit *Edit, change Change, kept []Change) string {
 	w := fix.Spec.Workload
 	field := what(change.field())
 	code := func(v any) string { return "`" + shown(v) + "`" }
 	back := fmt.Sprintf("%s's %s goes back to %s, as the workload ran before", change.Container, field, code(change.Good))
-	if change.Good == nil {
+	switch {
+	case change.field() == fieldMemoryLimit:
+		back = fmt.Sprintf("%s's memory limit becomes %s, learned from what it used while healthy: putting back the old limit "+
+			"can be as wrong as the new one, so this sets the least that held with room to spare", change.Container, code(change.Good))
+	case change.Good == nil:
 		back = fmt.Sprintf("%s's %s goes, as the workload ran before it was set", change.Container, field)
+	}
+	also := ""
+	if len(kept) > 0 {
+		also = fmt.Sprintf("\n- **Left as it is**: the same revision also changed %s; a %s fault is not blamed on that, so it stays.",
+			listed(kept), fix.Spec.FaultClass)
 	}
 	return fmt.Sprintf(`Sentinel rolled **%s/%s** back from the revision that set container %s's %s to %s, and paused the %s so the rollback holds.
 
 This pull request makes the fix last: %s.
 
 - **What changes**: %s, line %d.
-- **Why there**: %s.
+- **Why there**: %s.%s
 
 Once this is merged and the %s has fetched it, resume it with `+"`%s`"+`; Sentinel then checks that %s keeps running the revision it rolled back to.
 
 Incident %s.
 `, w.Namespace, w.Name, change.Container, field, code(change.Bad), src.Owner, back,
-		"`"+edit.Path+"`", edit.Line, edit.Why, src.Owner, src.Resume, w.Name, fix.Spec.IncidentID)
+		"`"+edit.Path+"`", edit.Line, edit.Why, also, src.Owner, src.Resume, w.Name, fix.Spec.IncidentID)
 }
 
 func shortID(incident string) string {

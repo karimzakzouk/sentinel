@@ -198,6 +198,11 @@ rules:
   - apiGroups: [apps]
     resources: [replicasets]
     verbs: [list]
+  # To check, before it merges a fix itself, that the namespace's policy
+  # still grants fix.merge.
+  - apiGroups: [sentinel.karimzakzouk.github.io]
+    resources: [sentinelpolicies]
+    verbs: [list]
 {{- range .Values.watch.namespaces }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1

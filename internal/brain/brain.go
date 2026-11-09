@@ -65,7 +65,13 @@ type Brain struct {
 	// Deviations, when set, reports how far a workload's resource use is
 	// from its usual.
 	Deviations func(model.ObjectRef) []watcher.Deviation
-	Localize   *slot.Slot[LocalizeInput, slot.Ranking[Suspect]]
+	// MemoryUse, when set, reports per container the working sets a
+	// workload had in revisions other than the one given, in bytes.
+	MemoryUse func(model.ObjectRef, string) map[string][]float64
+	// MergePolicy, when set, reports the level a namespace's policies grant
+	// fix.merge, and whether they make fixes earn it.
+	MergePolicy func(namespace string) (model.AutonomyLevel, bool)
+	Localize    *slot.Slot[LocalizeInput, slot.Ranking[Suspect]]
 	// Lookback is how long changes are kept as candidate causes.
 	Lookback time.Duration
 	// Gap is how long an incident stays open after its last signal goes

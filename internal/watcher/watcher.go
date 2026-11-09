@@ -283,6 +283,11 @@ func (w *Watcher) pollMetrics(ctx context.Context, now time.Time) {
 	}
 	usage := map[string]map[string]ContainerUsage{}
 	totals := map[string][2]float64{}
+	type sample struct {
+		workload, container, revision string
+		bytes                         float64
+	}
+	var samples []sample
 	for ns, l := range w.ns {
 		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		list, err := w.Metrics.Usage(ctx, ns)
@@ -301,14 +306,18 @@ func (w *Watcher) pollMetrics(ctx context.Context, now time.Time) {
 			if err != nil {
 				continue
 			}
-			workload, _ := l.owners.Resolve(pod)
+			workload, rev := l.owners.Resolve(pod)
 			t := totals[workload.String()]
 			totals[workload.String()] = [2]float64{t[0] + u.CPU, t[1] + u.Memory}
+			samples = append(samples, sample{workload.String(), u.Container, rev, u.Memory})
 		}
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.usage = usage
+	for _, s := range samples {
+		m.addMemory(s.workload, s.container, s.revision, s.bytes)
+	}
 	if m.history == nil {
 		m.history = map[string]*usageHistory{}
 	}
@@ -337,6 +346,23 @@ func (w *Watcher) Deviations(ref model.ObjectRef) []Deviation {
 		return h.deviations()
 	}
 	return nil
+}
+
+// MemoryUse reports, per container of a workload, the working sets its pods
+// had in revisions other than except, in bytes: what it used while
+// healthy, for learning a memory limit once except has failed.
+func (w *Watcher) MemoryUse(ref model.ObjectRef, except string) map[string][]float64 {
+	w.metrics.mu.Lock()
+	defer w.metrics.mu.Unlock()
+	out := map[string][]float64{}
+	for container, samples := range w.metrics.memory[ref.String()] {
+		for _, s := range samples {
+			if s.revision != except {
+				out[container] = append(out[container], s.bytes)
+			}
+		}
+	}
+	return out
 }
 
 // forget ends a deleted workload's episodes and rollout.

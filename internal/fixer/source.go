@@ -3,17 +3,20 @@ package fixer
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"regexp"
 	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 
+	"github.com/karimzakzouk/sentinel/api/v1alpha1"
 	"github.com/karimzakzouk/sentinel/internal/actor"
 )
 
@@ -172,9 +175,98 @@ func argoSource(ctx context.Context, dyn dynamic.Interface, ns, name string) (*S
 // Fixer restores: a container's image, command and arguments, and its
 // environment variables' literal values.
 func ContainerChange(ctx context.Context, client kubernetes.Interface, dep *appsv1.Deployment, fromRevision string) (Change, error) {
+	c, _, err := ChangeFor(ctx, client, dep, v1alpha1.FixSpec{FromRevision: fromRevision})
+	return c, err
+}
+
+// ChangeFor finds the value a fix sets: of the values the revision the
+// Deployment was rolled back from changed, the one the incident's fault
+// class blames. The others it returns as kept, for the fix to leave as that
+// revision set them. A memory limit gets the value Sentinel learned, not
+// the old one.
+func ChangeFor(ctx context.Context, client kubernetes.Interface, dep *appsv1.Deployment, spec v1alpha1.FixSpec) (Change, []Change, error) {
+	changes, err := revisionChanges(ctx, client, dep, spec.FromRevision)
+	if err != nil {
+		return Change{}, nil, err
+	}
+	if len(changes) == 0 {
+		return Change{}, nil, fmt.Errorf("the revision %s was rolled back from differs from the current one in nothing the Fixer restores "+
+			"(images, commands, arguments, environment values, memory limits)", spec.FromRevision)
+	}
+	var blamed, kept []Change
+	for _, c := range changes {
+		if blames(spec.FaultClass, c.field()) {
+			blamed = append(blamed, c)
+		} else {
+			kept = append(kept, c)
+		}
+	}
+	switch {
+	case len(blamed) == 0:
+		return Change{}, nil, fmt.Errorf("revision %s changed %s, none of which a %s fault is blamed on", spec.FromRevision, listed(changes), spec.FaultClass)
+	case len(blamed) > 1 && spec.FaultClass == "":
+		return Change{}, nil, fmt.Errorf("%d values changed in revision %s (%s); the Fixer restores one at a time", len(blamed), spec.FromRevision, listed(blamed))
+	case len(blamed) > 1:
+		return Change{}, nil, fmt.Errorf("%d values changed in revision %s that a %s fault could be blamed on (%s); the Fixer restores one at a time",
+			len(blamed), spec.FromRevision, spec.FaultClass, listed(blamed))
+	}
+	c := blamed[0]
+	if c.Bad == valueFromSet || c.Good == valueFromSet {
+		return Change{}, nil, fmt.Errorf("%s's %s comes from a ConfigMap, Secret or field in one revision; the Fixer restores literal values only", c.Container, what(c.Field))
+	}
+	if c.field() == fieldMemoryLimit {
+		learned, ok := spec.MemoryLimits[c.Container]
+		if !ok {
+			return Change{}, nil, fmt.Errorf("revision %s changed %s's memory limit; putting the old limit back can be as wrong as the new one, "+
+				"and Sentinel has not measured enough of what %s uses to learn one", spec.FromRevision, c.Container, c.Container)
+		}
+		if !lessQuantity(c.Good, learned) {
+			c.Good = learned
+		}
+	}
+	return c, kept, nil
+}
+
+// blames reports whether a fault of a class is blamed on a field: a bad
+// image on the image, a memory limit on the limit, a crash or an error on
+// what the container runs. A class it does not know blames every field.
+func blames(class, field string) bool {
+	switch class {
+	case "deploy.bad-image":
+		return field == fieldImage
+	case "resource.memory-limit":
+		return field == fieldMemoryLimit
+	case "deploy.crash-on-start", "config.error", "deploy.new-errors", "runtime.crash":
+		return field != fieldMemoryLimit
+	}
+	return true
+}
+
+func listed(cs []Change) string {
+	var out []string
+	for _, c := range cs {
+		out = append(out, c.Container+"'s "+what(c.field()))
+	}
+	return strings.Join(out, ", ")
+}
+
+// lessQuantity reports whether quantity a is set and smaller than b.
+func lessQuantity(a any, b string) bool {
+	as, ok := a.(string)
+	if !ok {
+		return false
+	}
+	aq, aerr := resource.ParseQuantity(as)
+	bq, berr := resource.ParseQuantity(b)
+	return aerr == nil && berr == nil && aq.Cmp(bq) < 0
+}
+
+// revisionChanges lists the values the Fixer restores that differ between
+// the revision a Deployment was rolled back from and its current template.
+func revisionChanges(ctx context.Context, client kubernetes.Interface, dep *appsv1.Deployment, fromRevision string) ([]Change, error) {
 	list, err := client.AppsV1().ReplicaSets(dep.Namespace).List(ctx, metav1.ListOptions{LabelSelector: "pod-template-hash=" + fromRevision})
 	if err != nil {
-		return Change{}, err
+		return nil, err
 	}
 	var from *appsv1.ReplicaSet
 	for i, rs := range list.Items {
@@ -185,7 +277,7 @@ func ContainerChange(ctx context.Context, client kubernetes.Interface, dep *apps
 		}
 	}
 	if from == nil {
-		return Change{}, fmt.Errorf("%s has no revision %s any more", dep.Name, fromRevision)
+		return nil, fmt.Errorf("%s has no revision %s any more", dep.Name, fromRevision)
 	}
 	current := map[string]corev1.Container{}
 	for _, c := range append(dep.Spec.Template.Spec.InitContainers, dep.Spec.Template.Spec.Containers...) {
@@ -198,32 +290,21 @@ func ContainerChange(ctx context.Context, client kubernetes.Interface, dep *apps
 			continue
 		}
 		for _, field := range containerFields(bad, good) {
-			b, g := fieldValue(bad, field), fieldValue(good, field)
-			if !sameValue(b, g) {
-				changes = append(changes, Change{Container: bad.Name, Field: field, Bad: b, Good: g})
+			c := Change{Container: bad.Name, Field: field, Bad: fieldValue(bad, field), Good: fieldValue(good, field)}
+			// Two values taken from elsewhere differ by where they come from.
+			if !c.same(c.Bad, c.Good) || c.Bad == valueFromSet && !reflect.DeepEqual(envVar(bad, field), envVar(good, field)) {
+				changes = append(changes, c)
 			}
 		}
 	}
-	for _, c := range changes {
-		if c.Bad == valueFromSet || c.Good == valueFromSet {
-			return Change{}, fmt.Errorf("%s's %s comes from a ConfigMap, Secret or field in one revision; the Fixer restores literal values only", c.Container, what(c.Field))
-		}
-	}
-	switch len(changes) {
-	case 1:
-		return changes[0], nil
-	case 0:
-		return Change{}, fmt.Errorf("the revision %s was rolled back from differs from the current one in nothing the Fixer restores "+
-			"(images, commands, arguments, environment values)", fromRevision)
-	}
-	return Change{}, fmt.Errorf("%d values changed in revision %s; the Fixer restores one at a time", len(changes), fromRevision)
+	return changes, nil
 }
 
 // containerFields lists the fields a fix may restore in two versions of a
 // container: image, command, arguments, and every environment variable
 // either sets.
 func containerFields(a, b corev1.Container) []string {
-	fields := []string{fieldImage, fieldCommand, fieldArgs}
+	fields := []string{fieldImage, fieldCommand, fieldArgs, fieldMemoryLimit}
 	seen := map[string]bool{}
 	for _, e := range append(a.Env, b.Env...) {
 		if !seen[e.Name] {
@@ -232,6 +313,15 @@ func containerFields(a, b corev1.Container) []string {
 		}
 	}
 	return fields
+}
+
+func envVar(c corev1.Container, field string) *corev1.EnvVar {
+	for i := range c.Env {
+		if envPrefix+c.Env[i].Name == field {
+			return &c.Env[i]
+		}
+	}
+	return nil
 }
 
 // fieldValue reads a field of a container as valueIn reads a rendered one.
@@ -252,6 +342,10 @@ func fieldValue(c corev1.Container, field string) any {
 				return valueFromSet
 			}
 			return e.Value
+		}
+	case field == fieldMemoryLimit:
+		if q, ok := c.Resources.Limits[corev1.ResourceMemory]; ok {
+			return q.String()
 		}
 	}
 	return nil

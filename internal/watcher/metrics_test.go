@@ -67,3 +67,20 @@ func TestDeviationsNeedHistoryAndScoreTheLatestSample(t *testing.T) {
 		t.Fatalf("history length %d, want the bound of %d", len(h.cpu), usageHistoryLen)
 	}
 }
+
+// What a workload used while healthy leaves out the revision that failed,
+// and only the latest samples are kept.
+func TestMemoryUseLeavesOutTheFailedRevision(t *testing.T) {
+	w := &Watcher{}
+	for i := range memorySamples + 10 {
+		w.metrics.addMemory(web.String(), "web", "good", float64(i))
+	}
+	w.metrics.addMemory(web.String(), "web", "bad", 1)
+	use := w.MemoryUse(web, "bad")["web"]
+	if len(use) != memorySamples-1 || use[0] != 11 {
+		t.Fatalf("kept %d samples from %v; want %d from 11", len(use), use[0], memorySamples-1)
+	}
+	if all := w.MemoryUse(web, "")["web"]; len(all) != memorySamples {
+		t.Fatalf("kept %d samples, want %d", len(all), memorySamples)
+	}
+}
