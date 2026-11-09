@@ -1,0 +1,20 @@
+id: delivery-flux-kustomization-crash-on-start
+title: Flux passes podinfo a flag it does not understand, through a patch in its Kustomization, so it exits at start
+app: delivery
+fault:
+  kind: patch
+  target: {apiVersion: kustomize.toolkit.fluxcd.io/v1, kind: Kustomization, namespace: flux-system, name: delivery-podinfo}
+  patch:
+    type: merge
+    content: '{"spec":{"patches":[{"target":{"kind":"Deployment","name":"podinfo"},"patch":"[{\"op\":\"add\",\"path\":\"/spec/template/spec/containers/0/args\",\"value\":[\"--no-such-flag\"]}]"}]}}'
+groundTruth:
+  faultClass: deploy.crash-on-start
+  rootCause: {apiVersion: apps/v1, kind: Deployment, namespace: e2e-delivery, name: podinfo}
+  changeType: config
+  symptoms: [pod.crash-loop]
+  mitigation: rollout.undo
+manifest:
+  condition: crash-loop
+  namespace: e2e-delivery
+  selector: app=podinfo
+  timeout: 4m

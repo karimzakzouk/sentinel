@@ -1,0 +1,20 @@
+id: delivery-flux-helmrelease-bad-image
+title: Flux upgrades podinfo's Helm release onto an image tag that does not exist, through the release's values
+app: delivery
+fault:
+  kind: patch
+  target: {apiVersion: helm.toolkit.fluxcd.io/v2, kind: HelmRelease, namespace: flux-system, name: delivery-podinfo-helm}
+  patch:
+    type: merge
+    content: '{"spec":{"values":{"replicaCount":1,"image":{"tag":"0.0.0-does-not-exist"}}}}'
+groundTruth:
+  faultClass: deploy.bad-image
+  rootCause: {apiVersion: apps/v1, kind: Deployment, namespace: e2e-delivery, name: delivery-podinfo-helm}
+  changeType: image
+  symptoms: [pod.image-pull-error]
+  mitigation: rollout.undo
+manifest:
+  condition: image-pull-error
+  namespace: e2e-delivery
+  selector: app.kubernetes.io/name=delivery-podinfo-helm
+  timeout: 4m

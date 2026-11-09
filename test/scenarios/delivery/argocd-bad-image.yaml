@@ -1,0 +1,20 @@
+id: delivery-argocd-bad-image
+title: Argo CD syncs the guestbook onto an image tag that does not exist, through its Application's image override
+app: delivery
+fault:
+  kind: patch
+  target: {apiVersion: argoproj.io/v1alpha1, kind: Application, namespace: argocd, name: delivery-guestbook}
+  patch:
+    type: merge
+    content: '{"spec":{"source":{"kustomize":{"images":["gcr.io/google-samples/gb-frontend:does-not-exist"]}}}}'
+groundTruth:
+  faultClass: deploy.bad-image
+  rootCause: {apiVersion: apps/v1, kind: Deployment, namespace: e2e-delivery, name: kustomize-guestbook-ui}
+  changeType: image
+  symptoms: [pod.image-pull-error]
+  mitigation: rollout.undo
+manifest:
+  condition: image-pull-error
+  namespace: e2e-delivery
+  selector: app=guestbook-ui
+  timeout: 4m

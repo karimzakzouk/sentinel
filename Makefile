@@ -6,7 +6,7 @@ E2E_CLUSTER ?= sentinel-e2e
 E2E_TIMEOUT ?= 45m
 LDFLAGS := -s -w -X github.com/karimzakzouk/sentinel/internal/version.Version=$(VERSION)
 
-.PHONY: all build test lint fmt vuln generate verify image helm-lint scenarios e2e-up e2e e2e-down tidy boutique-up score ui
+.PHONY: all build test lint fmt vuln generate verify image helm-lint scenarios e2e-up e2e e2e-down tidy boutique-up delivery-up score ui
 
 all: build
 
@@ -60,6 +60,10 @@ e2e-down:
 
 boutique-up:
 	E2E_CLUSTER=$(E2E_CLUSTER) hack/boutique-up.sh
+
+# Workloads Argo CD and Flux deliver, for the GitOps acting session.
+delivery-up:
+	E2E_CLUSTER=$(E2E_CLUSTER) hack/delivery-up.sh
 
 # Build the web UI into internal/ui/dist, where the binary embeds it.
 ui:
