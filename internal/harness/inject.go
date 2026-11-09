@@ -36,6 +36,12 @@ type Run struct {
 	DeletedPods []string `json:"deletedPods,omitempty"`
 }
 
+// Quiet reports a run during which Sentinel should raise nothing: a control,
+// or a fault that heals itself, whose mitigation is to do nothing.
+func (r *Run) Quiet() bool {
+	return r.FaultKind == FaultNone || r.GroundTruth.FaultClass == "none" || r.GroundTruth.Mitigation == "none"
+}
+
 // Injector applies scenarios to a cluster.
 type Injector struct {
 	Client  kubernetes.Interface
