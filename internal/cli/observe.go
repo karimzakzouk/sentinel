@@ -132,7 +132,7 @@ func newObserver(ctx context.Context, log *slog.Logger, cfg *config.Config, clie
 	}
 	if cfg.ActorUser != "" && dyn != nil {
 		// Acting is optional: without the custom resources, Sentinel observes.
-		requests := &act.Requests{Dynamic: dyn, Namespaces: cfg.Namespaces, TTL: 10 * time.Minute, Log: log,
+		requests := &act.Requests{Client: client, Dynamic: dyn, Namespaces: cfg.Namespaces, TTL: 10 * time.Minute, Log: log,
 			OnOutcome: func(ctx context.Context, o act.Outcome) {
 				if err := b.OnActionOutcome(ctx, brain.ActionOutcome{IncidentID: o.IncidentID, Request: o.Request, Phase: string(o.Phase),
 					Message: o.Message, ApprovedBy: o.ApprovedBy}); err != nil {

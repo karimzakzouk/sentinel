@@ -22,15 +22,21 @@ spec:
     {{- include "fence.requestVariables" . | nindent 4 }}
     - name: workload
       expression: "request.resource.group == 'apps' && request.resource.resource in ['deployments', 'statefulsets']"
+    - name: argoApplication
+      expression: "request.resource.group == 'argoproj.io' && request.resource.resource == 'applications'"
   validations:
-    - expression: "request.resource.group in ['authorization.k8s.io', 'authentication.k8s.io'] || variables.requestNamespace in {{ include "fence.namespaces" . }}"
+    - expression: >-
+        request.resource.group in ['authorization.k8s.io', 'authentication.k8s.io'] ||
+        variables.requestNamespace in {{ include "fence.namespaces" . }}{{ if .Values.argocdNamespace }} ||
+        (variables.argoApplication && variables.requestNamespace == '{{ .Values.argocdNamespace }}'){{ end }}
       message: "Sentinel may act only in its allowlisted namespaces"
       reason: Forbidden
     - expression: >-
         request.resource.group in ['authorization.k8s.io', 'authentication.k8s.io'] ||
         (request.operation == 'UPDATE' && variables.workload && variables.subResource in ['', 'scale']) ||
         (request.operation == 'UPDATE' && request.resource.group == 'sentinel.karimzakzouk.github.io' &&
-         request.resource.resource == 'actionrequests' && variables.subResource == 'status')
+         request.resource.resource == 'actionrequests' && variables.subResource == 'status'){{ if .Values.argocdNamespace }} ||
+        (request.operation == 'UPDATE' && variables.argoApplication && variables.subResource == ''){{ end }}
       message: "Sentinel may only update existing Deployments and StatefulSets, or their scale, and the status of action requests"
       reason: Forbidden
     - expression: "variables.subResource != 'scale' || (object.spec.?replicas.orValue(0) >= {{ .Values.replicas.min }} && object.spec.?replicas.orValue(0) <= {{ .Values.replicas.max }})"

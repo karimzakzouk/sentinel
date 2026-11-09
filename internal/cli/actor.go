@@ -33,8 +33,10 @@ type ActorConfig struct {
 	// PerHour bounds the actions per namespace per hour.
 	PerHour int `json:"perHour"`
 	// Self lists Sentinel's own identities, which may not approve actions.
-	Self       []string `json:"self,omitempty"`
-	HealthAddr string   `json:"healthAddr,omitempty"`
+	Self []string `json:"self,omitempty"`
+	// ArgoCDNamespace is where Argo CD keeps its Applications; argocd by default.
+	ArgoCDNamespace string `json:"argoCDNamespace,omitempty"`
+	HealthAddr      string `json:"healthAddr,omitempty"`
 }
 
 func loadActorConfig(path string) (ActorConfig, error) {
@@ -54,6 +56,9 @@ func loadActorConfig(path string) (ActorConfig, error) {
 	}
 	if c.HealthAddr == "" {
 		c.HealthAddr = ":8081"
+	}
+	if c.ArgoCDNamespace == "" {
+		c.ArgoCDNamespace = "argocd"
 	}
 	return c, nil
 }
@@ -82,7 +87,8 @@ func newActorCmd(kf *kube.Flags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			a := &actor.Actor{Client: client, Dynamic: dyn, Namespaces: cfg.Namespaces, PerHour: cfg.PerHour, Self: cfg.Self, Log: log,
+			a := &actor.Actor{Client: client, Dynamic: dyn, Namespaces: cfg.Namespaces, PerHour: cfg.PerHour, Self: cfg.Self,
+				ArgoCDNamespace: cfg.ArgoCDNamespace, Log: log,
 				Disabled: func() bool {
 					current, err := loadActorConfig(configPath)
 					if err != nil {

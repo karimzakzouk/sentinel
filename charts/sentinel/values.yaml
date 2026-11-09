@@ -56,6 +56,14 @@ logs:
   # Between the tick and the window; 0s turns sampling off.
   sampleInterval: 1m
 
+# GitOps controllers the actor may pause to roll back through, once a
+# SentinelPolicy allows it (argocd.rollback). Off by default; the
+# sentinel-fence chart must name the same namespace.
+owners:
+  argocd:
+    enabled: false
+    namespace: argocd
+
 # Where Sentinel tells people what it needs from them or did: approvals,
 # escalations, and actions that cleared an incident. Name a Secret holding a
 # Slack incoming webhook URL; without one, notices stay in the UI.

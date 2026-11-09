@@ -20,6 +20,7 @@ data:
     self:
       - system:serviceaccount:{{ .Release.Namespace }}:sentinel
       - system:serviceaccount:{{ .Values.actor.namespace }}:{{ .Values.actor.serviceAccount }}
+    argoCDNamespace: {{ .Values.owners.argocd.namespace }}
     healthAddr: ":8081"
 ---
 apiVersion: apps/v1
