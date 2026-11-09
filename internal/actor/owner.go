@@ -63,7 +63,7 @@ func (a *Actor) pauseArgoCD(ctx context.Context, meta metav1.ObjectMeta, dryRun 
 	apps := a.Dynamic.Resource(ApplicationsResource).Namespace(ns)
 	app, err := apps.Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
-		return "", fmt.Errorf("Argo CD Application %s/%s: %w", ns, name, err)
+		return "", fmt.Errorf("the Argo CD Application %s/%s: %w", ns, name, err)
 	}
 	automated, found, _ := unstructuredMap(app.Object, "spec", "syncPolicy", "automated")
 	if !found {
