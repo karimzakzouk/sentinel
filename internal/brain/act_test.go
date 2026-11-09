@@ -126,6 +126,45 @@ func TestNothingIsRequestedWithoutPolicyOrSomethingToUndo(t *testing.T) {
 	}
 }
 
+// After an action fails on a workload, Sentinel does not ask for it there
+// again for a day, restarts included.
+func TestAFailedActionOpensItsBreaker(t *testing.T) {
+	b, l := newBrain(t)
+	req := &fakeRequester{allow: true}
+	b.Act = req
+	det := badDeploy(t, b)
+	inc := incidents(t, l)[0]
+	if err := b.OnActionOutcome(ctx, ActionOutcome{IncidentID: inc.ID, Phase: "Failed", Message: "web changed since the decision"}); err != nil {
+		t.Fatal(err)
+	}
+	det.Ended, det.At = true, onset.Add(2*time.Minute)
+	if err := b.OnDetection(ctx, det); err != nil {
+		t.Fatal(err)
+	}
+	b.Now = func() time.Time { return onset.Add(time.Hour) }
+	if err := b.Sweep(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	restarted := &Brain{Ledger: l, Log: b.Log, Classify: b.Classify, Attribute: b.Attribute, Decide: b.Decide,
+		Revisions: b.Revisions, Lookback: 2 * time.Hour, Gap: b.Gap, Now: b.Now, Act: req}
+	if _, err := restarted.Restore(ctx); err != nil {
+		t.Fatal(err)
+	}
+	again := watcher.Detection{ID: model.NewID(), Workload: web, Kind: watcher.FactImagePullError, Count: 6,
+		Onset: onset.Add(time.Hour), At: onset.Add(time.Hour)}
+	if err := restarted.OnChange(ctx, watcher.Change{ID: model.NewID(), Kind: watcher.ChangeTemplate, Object: web,
+		Fields: []string{"image:web"}, At: onset.Add(time.Hour - time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.OnDetection(ctx, again); err != nil {
+		t.Fatal(err)
+	}
+	if len(req.calls) != 1 {
+		t.Fatalf("%d requests; the breaker should have stopped the second", len(req.calls))
+	}
+}
+
 func TestScaleRestoreArgsComeFromTheChange(t *testing.T) {
 	args := actionArgs(ActionScaleRestore, &RankedChange{Change: CandidateChange{Kind: string(watcher.ChangeScale),
 		Fields: []string{"replicas:3->0"}}}, "")

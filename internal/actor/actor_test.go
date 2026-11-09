@@ -230,6 +230,19 @@ func TestTheActorRunsARequestAndRecordsItsOutcome(t *testing.T) {
 	}
 }
 
+// Restoring replicas after a scale-up takes capacity away; the policy's cap
+// bounds how much.
+func TestScaleTakesAwayNoMoreCapacityThanThePolicyAllows(t *testing.T) {
+	a, _, scale := newActor(t, 5, sentinelPolicy(v1alpha1.AutonomyAutonomous, ActionScale))
+	phase, msg := a.Handle(ctx, request(ActionScale, map[string]string{ParamReplicas: "2", ParamFromReplicas: "5"}))
+	if phase != v1alpha1.ActionFailed || !strings.Contains(msg, "60% of its capacity") || *scale != 5 {
+		t.Fatalf("%s: %s; replicas %d", phase, msg, *scale)
+	}
+	if phase, msg := a.Handle(ctx, request(ActionScale, map[string]string{ParamReplicas: "4", ParamFromReplicas: "5"})); phase != v1alpha1.ActionSucceeded {
+		t.Fatalf("taking away one of five: %s: %s", phase, msg)
+	}
+}
+
 // The strictest policy in a namespace wins.
 func TestTheStrictestPolicyWins(t *testing.T) {
 	a, _, _ := newActor(t, 3, sentinelPolicy(v1alpha1.AutonomyAutonomous, ActionRolloutUndo), func() *v1alpha1.SentinelPolicy {

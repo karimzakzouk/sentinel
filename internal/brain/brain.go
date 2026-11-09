@@ -77,6 +77,9 @@ type Brain struct {
 	// resolvedAt holds when each workload's last incident resolved.
 	resolvedAt map[string]time.Time
 	evidence   map[string][]*pendingEvidence
+	// breakers hold, by action and workload, until when Sentinel will not
+	// ask for an action that failed there.
+	breakers map[string]time.Time
 }
 
 type incident struct {
@@ -180,6 +183,21 @@ func (b *Brain) Restore(ctx context.Context) (int, error) {
 	if len(drafts) > 0 {
 		if _, err := b.Ledger.Append(ctx, drafts...); err != nil {
 			return 0, err
+		}
+	}
+	// Breakers outlive restarts: an action that failed in the last day stays
+	// barred on its workload.
+	actions, err := ledger.List[model.Action](ctx, b.Ledger, model.KindAction, "")
+	if err != nil {
+		return 0, err
+	}
+	updated := map[model.ID]time.Time{}
+	for _, rec := range incidents {
+		updated[rec.ID] = rec.UpdatedAt
+	}
+	for _, a := range actions {
+		if at, ok := updated[a.IncidentID]; ok && !a.Shadow && a.State == model.ActionFailed && now.Sub(at) < breakerOpen {
+			b.trip(&a, at)
 		}
 	}
 	return len(open) - len(drafts), nil
@@ -502,7 +520,13 @@ func (b *Brain) assess(ctx context.Context, inc *incident, workload model.Object
 			Params: map[string]string{"reason": decision.Reason}, Owner: "kubernetes", State: model.ActionProposed,
 			Reversible: slices.Contains(ReversibleActions, decision.Action), DecidedBy: b.Decide.Champion(), Shadow: true}
 		verb := "proposed"
-		if args := actionArgs(decision.Action, top, b.revision(workload)); b.Act != nil && inc.action == nil && args != nil {
+		args := actionArgs(decision.Action, top, b.revision(workload))
+		if until := b.breakerUntil(decision.Action, decision.Target); b.Act != nil && args != nil && !until.IsZero() {
+			a.Params["breaker"] = "the same action failed on this workload recently; Sentinel will not try it again before " +
+				until.Format(time.RFC3339)
+			args = nil
+		}
+		if b.Act != nil && inc.action == nil && args != nil {
 			requested, err := b.Act.Request(ctx, model.Action{ID: a.ID, IncidentID: a.IncidentID, Type: a.Type, Target: a.Target,
 				Params: args}, decision.Reason)
 			switch {

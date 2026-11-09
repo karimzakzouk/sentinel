@@ -27,3 +27,19 @@ func Autonomy(policies []v1alpha1.SentinelPolicy, action string) v1alpha1.Autono
 }
 
 func rank(l v1alpha1.AutonomyLevel) int { return slices.Index(ladder, l) }
+
+// DefaultMaxCapacityRemoval is the share of replicas, in percent, an action
+// may take away when no policy says.
+const DefaultMaxCapacityRemoval = 20
+
+// MaxCapacityRemoval returns the share of a workload's replicas, in percent,
+// an action may take away: the lowest any policy sets.
+func MaxCapacityRemoval(policies []v1alpha1.SentinelPolicy) int32 {
+	limit, found := int32(DefaultMaxCapacityRemoval), false
+	for _, p := range policies {
+		if v := p.Spec.Budgets.MaxCapacityRemovalPercent; v != nil && (!found || *v < limit) {
+			limit, found = *v, true
+		}
+	}
+	return limit
+}
