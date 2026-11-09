@@ -95,16 +95,24 @@ fixer:
     insecureRegistries: []
     platform: amd64
   forge:
-    # The forge's address, which its repositories' clone URLs start with
-    # (https://github.com, or a Gitea server's root URL), and its API's base
-    # URL (https://api.github.com, or the Gitea root URL with /api/v1).
+    # github, gitea, gitlab, bitbucket (Cloud) or bitbucket-server (Data
+    # Center); empty is GitHub at api.github.com and Gitea anywhere else.
+    kind: ""
+    # The forge's address, which its repositories' clone URLs start with,
+    # and its API's base URL:
+    #   GitHub              https://github.com, https://api.github.com
+    #   Gitea               its root URL, and that with /api/v1
+    #   GitLab              https://gitlab.com, or a server's root URL, and that with /api/v4
+    #   Bitbucket Cloud     https://bitbucket.org, https://api.bitbucket.org/2.0
+    #   Bitbucket DC        its root URL, and that with /rest/api/1.0
     web: ""
     api: ""
     # A Secret in the release namespace holding the forge token, and the
-    # user Git pushes as.
+    # user Git pushes as: by default sentinel, oauth2 on GitLab, and
+    # x-token-auth, which Bitbucket's access tokens require.
     secretName: ""
     key: token
-    user: sentinel
+    user: ""
   # The author of the Fixer's commits.
   author:
     name: Sentinel

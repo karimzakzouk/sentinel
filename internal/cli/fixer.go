@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -31,6 +32,10 @@ type FixerConfig struct {
 	// Namespace is where Fix requests live.
 	Namespace string `json:"namespace"`
 	Forge     struct {
+		// Kind is the forge's API: github, gitea, gitlab, bitbucket or
+		// bitbucket-server; empty means GitHub at api.github.com and Gitea
+		// anywhere else.
+		Kind forge.Kind `json:"kind,omitempty"`
 		// Web is the forge's address, which its repositories' URLs start
 		// with, and API its API's base URL.
 		Web string `json:"web"`
@@ -76,9 +81,11 @@ func loadFixerConfig(path string) (FixerConfig, error) {
 		return FixerConfig{}, errors.New("forge.web and forge.api must name the forge the Fixer proposes changes on")
 	case c.Forge.TokenFile == "":
 		return FixerConfig{}, errors.New("forge.tokenFile is empty: the Fixer needs a token to push and open pull requests")
+	case c.Forge.Kind != "" && !slices.Contains(forge.Kinds, c.Forge.Kind):
+		return FixerConfig{}, fmt.Errorf("forge.kind %q is none of %v", c.Forge.Kind, forge.Kinds)
 	}
 	if c.Forge.User == "" {
-		c.Forge.User = "sentinel"
+		c.Forge.User = gitUsers[c.Forge.Kind]
 	}
 	if c.Author.Name == "" {
 		c.Author.Name = "Sentinel"
@@ -91,6 +98,11 @@ func loadFixerConfig(path string) (FixerConfig, error) {
 	}
 	return c, nil
 }
+
+// gitUsers are the names Git pushes as with a forge's tokens, by default:
+// Bitbucket's access tokens take only x-token-auth, and GitLab's any name.
+var gitUsers = map[forge.Kind]string{"": "sentinel", forge.GitHub: "sentinel", forge.Gitea: "sentinel",
+	forge.GitLab: "oauth2", forge.Bitbucket: "x-token-auth", forge.BitbucketServer: "x-token-auth"}
 
 func newFixerCmd(kf *kube.Flags) *cobra.Command {
 	var configPath string
@@ -124,7 +136,8 @@ func newFixerCmd(kf *kube.Flags) *cobra.Command {
 				return err
 			}
 			f := &fixer.Fixer{Client: client, Dynamic: dyn, Namespace: cfg.Namespace, GitUser: cfg.Forge.User,
-				Forge:           &forge.Client{Web: cfg.Forge.Web, API: cfg.Forge.API, Token: strings.TrimSpace(string(token)), HTTP: &http.Client{Timeout: time.Minute}},
+				Forge: &forge.Client{Kind: cfg.Forge.Kind, Web: cfg.Forge.Web, API: cfg.Forge.API, Token: strings.TrimSpace(string(token)),
+					HTTP: &http.Client{Timeout: time.Minute}},
 				Author:          object.Signature{Name: cfg.Author.Name, Email: cfg.Author.Email},
 				ArgoCDNamespace: cfg.ArgoCDNamespace, Poll: cfg.Poll, Log: log}
 			if c := cfg.Code; c != nil {
