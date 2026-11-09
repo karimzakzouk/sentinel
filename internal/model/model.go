@@ -15,6 +15,10 @@ import (
 	"github.com/google/uuid"
 )
 
+// ActorFieldManager names the actor's writes in managedFields, so that a
+// change Sentinel made is told from the changes it explains.
+const ActorFieldManager = "sentinel-actor"
+
 // ID identifies a record. IDs are UUIDv7, so they sort by creation time.
 type ID string
 

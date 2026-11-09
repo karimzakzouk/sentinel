@@ -188,6 +188,28 @@ func TestAnActionWaitsForItsApprover(t *testing.T) {
 	}
 }
 
+// Sentinel's own rollback is a change to the workload too; it must not
+// compete with the change it undid for the blame.
+func TestSentinelsOwnChangeIsNeverTheCulprit(t *testing.T) {
+	b, l := newBrain(t)
+	b.Act = &fakeRequester{allow: true}
+	det := badDeploy(t, b)
+	rollback := watcher.Change{ID: model.NewID(), Kind: watcher.ChangeTemplate, Object: web, Fields: []string{"image:web"},
+		At: onset.Add(31 * time.Second), Actor: model.ActorFieldManager}
+	if err := b.OnChange(ctx, rollback); err != nil {
+		t.Fatal(err)
+	}
+	more := det
+	more.ID, more.Kind, more.At = model.NewID(), watcher.FactCrashLoop, onset.Add(40*time.Second)
+	if err := b.OnDetection(ctx, more); err != nil {
+		t.Fatal(err)
+	}
+	a := incidents(t, l)[0].Assessment
+	if a == nil || a.Culprit == nil || a.Culprit.ChangeID == rollback.ID || a.Culprit.P < 0.9 || a.Decision != ActionRolloutUndo {
+		t.Fatalf("assessment = %+v, culprit %+v; want the bad deploy still blamed, firmly", a, a.Culprit)
+	}
+}
+
 func TestScaleRestoreArgsComeFromTheChange(t *testing.T) {
 	args := actionArgs(ActionScaleRestore, &RankedChange{Change: CandidateChange{Kind: string(watcher.ChangeScale),
 		Fields: []string{"replicas:3->0"}}}, "")
