@@ -23,3 +23,7 @@ replicas:
 # Where Argo CD keeps its Applications, if the actor may pause them before a
 # rollback; empty means it may not.
 argocdNamespace: ""
+
+# Where Flux keeps the Kustomizations the actor may suspend before a
+# rollback; empty means it may not.
+fluxNamespaces: []

@@ -99,7 +99,7 @@ func newActor(t *testing.T, replicas int32, policies ...*v1alpha1.SentinelPolicy
 	}})
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
 		map[schema.GroupVersionResource]string{PoliciesResource: "SentinelPolicyList", RequestsResource: "ActionRequestList",
-			ApplicationsResource: "ApplicationList", ApplicationSetsResource: "ApplicationSetList"}, objects...)
+			ApplicationsResource: "ApplicationList", ApplicationSetsResource: "ApplicationSetList", KustomizationsResource: "KustomizationList"}, objects...)
 	dyn.PrependReactor("patch", "*", func(action k8stesting.Action) (bool, runtime.Object, error) {
 		if p, ok := action.(k8stesting.PatchActionImpl); ok && len(p.PatchOptions.DryRun) > 0 {
 			return true, &unstructured.Unstructured{Object: map[string]any{}}, nil
@@ -395,6 +395,73 @@ func TestAnApplicationSetMustLeaveThePauseAlone(t *testing.T) {
 				t.Fatalf("%s: %s", phase, msg)
 			}
 		})
+	}
+}
+
+// fluxShop labels web as applied by the Flux Kustomization flux-system/shop
+// and creates that Kustomization, its spec.suspend set by setBy if any.
+func fluxShop(t *testing.T, a *Actor, client *fake.Clientset, setBy string) {
+	t.Helper()
+	dep, _ := client.AppsV1().Deployments("shop").Get(ctx, "web", metav1.GetOptions{})
+	dep.Labels = map[string]string{"kustomize.toolkit.fluxcd.io/name": "shop", "kustomize.toolkit.fluxcd.io/namespace": "flux-system"}
+	if _, err := client.AppsV1().Deployments("shop").Update(ctx, dep, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	k := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "kustomize.toolkit.fluxcd.io/v1", "kind": "Kustomization",
+		"metadata": map[string]any{"name": "shop", "namespace": "flux-system"},
+		"spec":     map[string]any{"path": "./shop", "prune": true}}}
+	if setBy != "" {
+		k.SetManagedFields([]metav1.ManagedFieldsEntry{{Manager: setBy, Operation: metav1.ManagedFieldsOperationApply,
+			FieldsType: "FieldsV1", FieldsV1: metav1.NewFieldsV1(`{"f:spec":{"f:path":{},"f:suspend":{}}}`)}})
+	}
+	if _, err := a.Dynamic.Resource(KustomizationsResource).Namespace("flux-system").Create(ctx, k, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAFluxRollbackSuspendsTheKustomizationFirst(t *testing.T) {
+	a, client, _ := newActor(t, 3, sentinelPolicy(v1alpha1.AutonomyAutonomous, ActionFluxRollback))
+	fluxShop(t, a, client, "")
+	phase, msg := a.Handle(ctx, request(ActionFluxRollback, map[string]string{ParamFromTemplateHash: "bbb"}))
+	if phase != v1alpha1.ActionSucceeded || !strings.Contains(msg, "suspended the Flux Kustomization flux-system/shop") ||
+		!strings.Contains(msg, "sentinel resume flux flux-system/shop") {
+		t.Fatalf("%s: %s", phase, msg)
+	}
+	k, _ := a.Dynamic.Resource(KustomizationsResource).Namespace("flux-system").Get(ctx, "shop", metav1.GetOptions{})
+	if suspended, _, _ := unstructuredBool(k.Object, "spec", "suspend"); !suspended || k.GetAnnotations()[AnnotationPausedSync] == "" {
+		t.Fatalf("Kustomization = %v", k.Object)
+	}
+	got, _ := client.AppsV1().Deployments("shop").Get(ctx, "web", metav1.GetOptions{})
+	if img := got.Spec.Template.Spec.Containers[0].Image; img != "shop/web:1" {
+		t.Fatalf("image = %s, want the rollback", img)
+	}
+}
+
+// A parent Kustomization that sets the child's spec.suspend would resume
+// it; the actor leaves that to people.
+func TestAParentThatSetsSuspendIsLeftToPeople(t *testing.T) {
+	a, client, _ := newActor(t, 3, sentinelPolicy(v1alpha1.AutonomyAutonomous, ActionFluxRollback))
+	fluxShop(t, a, client, "kustomize-controller")
+	if phase, msg := a.Handle(ctx, request(ActionFluxRollback, map[string]string{ParamFromTemplateHash: "bbb"})); phase != v1alpha1.ActionFailed ||
+		!strings.Contains(msg, "kustomize-controller sets") {
+		t.Fatalf("%s: %s", phase, msg)
+	}
+}
+
+func TestRollbackActionFollowsTheOwner(t *testing.T) {
+	for want, meta := range map[string]metav1.ObjectMeta{
+		ActionRolloutUndo:    {},
+		ActionArgoCDRollback: {Annotations: map[string]string{"argocd.argoproj.io/tracking-id": "app:apps/Deployment:shop/web"}},
+		ActionFluxRollback: {Labels: map[string]string{"kustomize.toolkit.fluxcd.io/name": "shop",
+			"kustomize.toolkit.fluxcd.io/namespace": "flux-system"}},
+	} {
+		if got := RollbackAction(meta); got != want {
+			t.Errorf("RollbackAction(%+v) = %s, want %s", meta, got, want)
+		}
+	}
+	helm := metav1.ObjectMeta{Labels: map[string]string{"helm.toolkit.fluxcd.io/name": "shop", "helm.toolkit.fluxcd.io/namespace": "flux-system"}}
+	if got := RollbackAction(helm); got != ActionRolloutUndo {
+		t.Errorf("a HelmRelease's workload: %s, want rollout.undo, which the actor refuses", got)
 	}
 }
 

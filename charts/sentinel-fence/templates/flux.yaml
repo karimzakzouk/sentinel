@@ -1,0 +1,61 @@
+{{- if .Values.fluxNamespaces }}
+# Before a rollback through Flux, the actor suspends the Kustomization that
+# applies the workload and notes it. It may make that change and no other:
+# not what is applied, from where or as whom.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: sentinel-fence-actor-flux
+  labels:
+    {{- include "fence.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [kustomize.toolkit.fluxcd.io]
+        apiVersions: ["*"]
+        operations: [UPDATE]
+        resources: [kustomizations]
+  matchConditions:
+    - name: is-sentinel-actor
+      expression: request.userInfo.username == "{{ include "fence.actorUser" . }}"
+  variables:
+    - name: newObjectAnnotations
+      expression: "object.metadata.?annotations.orValue({})"
+    - name: oldObjectAnnotations
+      expression: "oldObject.metadata.?annotations.orValue({})"
+  validations:
+    - expression: "object.spec.?suspend.orValue(false) == true"
+      message: "Sentinel may suspend a Kustomization, never resume one"
+      reason: Forbidden
+    - expression: >-
+        object.spec.?sourceRef == oldObject.spec.?sourceRef && object.spec.?path == oldObject.spec.?path &&
+        object.spec.?images == oldObject.spec.?images && object.spec.?patches == oldObject.spec.?patches &&
+        object.spec.?postBuild == oldObject.spec.?postBuild && object.spec.?components == oldObject.spec.?components &&
+        object.spec.?targetNamespace == oldObject.spec.?targetNamespace && object.spec.?serviceAccountName == oldObject.spec.?serviceAccountName &&
+        object.spec.?kubeConfig == oldObject.spec.?kubeConfig && object.spec.?decryption == oldObject.spec.?decryption &&
+        object.spec.?prune == oldObject.spec.?prune && object.spec.?force == oldObject.spec.?force &&
+        object.spec.?namePrefix == oldObject.spec.?namePrefix && object.spec.?nameSuffix == oldObject.spec.?nameSuffix &&
+        object.spec.?commonMetadata == oldObject.spec.?commonMetadata && object.spec.?dependsOn == oldObject.spec.?dependsOn &&
+        object.spec.?interval == oldObject.spec.?interval && object.spec.?deletionPolicy == oldObject.spec.?deletionPolicy
+      message: "Sentinel may only suspend a Kustomization"
+      reason: Forbidden
+    - expression: "object.metadata.?labels == oldObject.metadata.?labels"
+      message: "Sentinel may not change a Kustomization's labels"
+      reason: Forbidden
+    - expression: >-
+        variables.newObjectAnnotations.all(k, k.startsWith('sentinel.karimzakzouk.github.io/') || (k in variables.oldObjectAnnotations && variables.oldObjectAnnotations[k] == variables.newObjectAnnotations[k])) &&
+        variables.oldObjectAnnotations.all(k, k.startsWith('sentinel.karimzakzouk.github.io/') || k in variables.newObjectAnnotations)
+      message: "Sentinel may only change its own annotations on a Kustomization"
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: sentinel-fence-actor-flux
+  labels:
+    {{- include "fence.labels" . | nindent 4 }}
+spec:
+  policyName: sentinel-fence-actor-flux
+  validationActions: [Deny]
+{{- end }}

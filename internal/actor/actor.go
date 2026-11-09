@@ -168,6 +168,8 @@ func (a *Actor) execute(ctx context.Context, req *v1alpha1.ActionRequest, polici
 		run = a.rolloutUndo
 	case ActionArgoCDRollback:
 		run = a.argoCDRollback
+	case ActionFluxRollback:
+		run = a.fluxRollback
 	case ActionScale:
 		maxRemoval := policy.MaxCapacityRemoval(policies)
 		run = func(ctx context.Context, req *v1alpha1.ActionRequest, dryRun bool) (string, error) {
@@ -288,6 +290,28 @@ func (a *Actor) argoCDRollback(ctx context.Context, req *v1alpha1.ActionRequest,
 		return "", fmt.Errorf("%s is not kept in sync by Argo CD", dep.Name)
 	}
 	paused, err := a.pauseArgoCD(ctx, dep.ObjectMeta, dryRun)
+	if err != nil {
+		return "", err
+	}
+	undone, err := a.undoTemplate(ctx, req, dep, dryRun)
+	if err != nil {
+		return "", fmt.Errorf("%s, but the rollback failed: %w", paused, err)
+	}
+	return paused + "; " + undone, nil
+}
+
+// fluxRollback suspends the Flux Kustomization that applies the Deployment,
+// then rolls the Deployment back. If the rollback fails, the Kustomization
+// stays suspended.
+func (a *Actor) fluxRollback(ctx context.Context, req *v1alpha1.ActionRequest, dryRun bool) (string, error) {
+	dep, err := a.deployment(ctx, req)
+	if err != nil {
+		return "", err
+	}
+	if fluxKustomization(dep.ObjectMeta) == "" {
+		return "", fmt.Errorf("%s is not applied by a Flux Kustomization", dep.Name)
+	}
+	paused, err := a.pauseFlux(ctx, dep.ObjectMeta, dryRun)
 	if err != nil {
 		return "", err
 	}
