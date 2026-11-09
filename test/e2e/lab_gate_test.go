@@ -102,7 +102,7 @@ func TestTheLabsVerdictsHoldTheirErrorRates(t *testing.T) {
 			race := lab.NewRace(0.05, []string{"candidate"}, []string{"deletion control"})
 			variants := []lab.Variant{{Name: "candidate", Slug: "cand", Pod: k.candidate},
 				{Name: "deletion control", Slug: "del", Pod: lab.DeletionControl(k.baseline)}}
-			blocks, err := p.RunRace(ctx, labNS, built, dns, k.baseline, variants, race, 60)
+			blocks, err := p.RunRace(ctx, labNS, built, dns, k.baseline, variants, lab.Traffic{}, race, 60)
 			if err != nil {
 				t.Fatalf("%s, race %d: %v", k.name, i+1, err)
 			}

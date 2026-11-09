@@ -539,7 +539,7 @@ func TestTheLabTellsAFixFromTheFailure(t *testing.T) {
 	}
 	variants := []lab.Variant{{Name: "previous revision", Slug: "cand", Pod: fix}, {Name: "deletion control", Slug: "del", Pod: lab.DeletionControl(failing)}}
 	race := lab.NewRace(0.05, []string{"previous revision"}, []string{"deletion control"})
-	blocks, err := p.RunRace(ctx, labNS, built, lab.DNSConfig(built.DNS, smokeNS, "cluster.local"), failing, variants, race, 30)
+	blocks, err := p.RunRace(ctx, labNS, built, lab.DNSConfig(built.DNS, smokeNS, "cluster.local"), failing, variants, lab.Traffic{}, race, 30)
 	if err != nil {
 		t.Fatal(err)
 	}
