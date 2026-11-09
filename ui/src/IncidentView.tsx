@@ -26,6 +26,7 @@ import {
   webLink,
   workload,
 } from "./format";
+import { useAct, useSession } from "./session";
 import { usePoll } from "./usePoll";
 
 const signalLabels: Record<string, string> = {
@@ -75,10 +76,74 @@ function FixDetail({ fix, type, brief }: { fix: Fix; type: string; brief?: boole
       return (
         <span className="detail">
           resume it with <code>{fix.resume}</code>; Sentinel then checks that the fix held.
+          {!brief && <Resume owner={fix.owner} />}
+        </span>
+      );
+    case "sentinel.fix.abstained":
+    case "sentinel.fix.failed":
+    case "sentinel.fix.declined":
+      return (
+        <span className="detail">
+          {fix.message}
+          {!brief && fix.owner && <Resume owner={fix.owner} after="once the change is fixed where it was made" />}
         </span>
       );
   }
   return fix.message ? <span className="detail">{fix.message}</span> : null;
+}
+
+// Decide lets a signed-in person approve or veto an action Sentinel asked
+// for, as themselves; others are shown the commands.
+function Decide({ request }: { request: string }) {
+  const { me } = useSession();
+  const [act, done, error, busy] = useAct();
+  if (!me) {
+    return (
+      <div className="detail">
+        Approve with <code>sentinel approve {request}</code>, or veto with <code>sentinel veto {request}</code>, or sign in to
+        decide here.
+      </div>
+    );
+  }
+  return (
+    <div className="detail decide">
+      {done ? (
+        <span className="ok-banner">{done}</span>
+      ) : (
+        <>
+          <button className="btn primary" disabled={busy} onClick={() => act(`Approve ${request} as ${me.user}`, () => api.decide(request, "approve"))}>
+            Approve
+          </button>
+          <button className="btn danger" disabled={busy} onClick={() => act(`Veto ${request} as ${me.user}`, () => api.decide(request, "veto"))}>
+            Veto
+          </button>
+        </>
+      )}
+      {error && <span className="error-banner">{error}</span>}
+    </div>
+  );
+}
+
+// Resume lets a signed-in person resume the owner Sentinel paused: an
+// owner is written "Kind namespace/name".
+function Resume({ owner, after }: { owner?: string; after?: string }) {
+  const { me } = useSession();
+  const [act, done, error, busy] = useAct();
+  const [kind, ref] = (owner ?? "").split(" ");
+  const [namespace, name] = (ref ?? "").split("/");
+  if (!me || !kind || !namespace || !name) return null;
+  return (
+    <span className="decide">
+      {done ? (
+        <span className="ok-banner">{done}</span>
+      ) : (
+        <button className="btn" disabled={busy} onClick={() => act(`Resume ${owner}${after ? " " + after : ""}`, () => api.resume(kind, namespace, name))}>
+          Resume {kind} {ref}
+        </button>
+      )}
+      {error && <span className="error-banner">{error}</span>}
+    </span>
+  );
 }
 
 function Bar({ label, p, dim, title }: { label: ReactNode; p: number; dim?: boolean; title?: string }) {
@@ -283,12 +348,7 @@ function TimelineEvent({ event }: { event: LedgerEvent }) {
             <span className={`pill ${stage.tone}`}>{stage.pill}</span>
           </div>
           {said && <div className="detail">{said}</div>}
-          {event.type === "sentinel.action.awaiting" && a.params?.request && (
-            <div className="detail">
-              Approve with <code>sentinel approve {a.params.request}</code>, or veto with{" "}
-              <code>sentinel veto {a.params.request}</code>.
-            </div>
-          )}
+          {event.type === "sentinel.action.awaiting" && a.params?.request && <Decide request={a.params.request} />}
           {event.type === "sentinel.action.executed" && a.params?.approvedBy && (
             <div className="detail">Approved by {a.params.approvedBy}.</div>
           )}

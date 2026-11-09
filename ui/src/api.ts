@@ -218,7 +218,73 @@ async function get<T>(path: string): Promise<T> {
   return (await res.json()) as T;
 }
 
+// send makes a change through the console, as the signed-in person. The
+// server takes changes only as JSON from this page.
+async function send<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const res = await fetch(path, {
+    method,
+    credentials: "same-origin",
+    headers: { Accept: "application/json", "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const text = (await res.text()).trim();
+    throw new Error(text || `${res.status} ${res.statusText}`);
+  }
+  return res.status === 204 ? (undefined as T) : ((await res.json()) as T);
+}
+
+export interface Me {
+  user: string;
+  groups?: string[];
+}
+
+export interface AutonomyRule {
+  action: string;
+  level: string;
+  earned?: boolean;
+}
+
+export interface PolicySpec {
+  autonomy?: AutonomyRule[];
+  budgets?: { falseAlarmsPerWeek?: number; alphaPercent?: number; maxCapacityRemovalPercent?: number };
+  quietPeriodAfterHumanEdit?: string;
+}
+
+export interface Policy {
+  metadata: { name: string; namespace: string };
+  spec: PolicySpec;
+}
+
+export interface NamespacePolicies {
+  namespace: string;
+  policies: Policy[];
+  error?: string;
+}
+
+// whoami is who signed in to the console, null when nobody has, and
+// undefined when this Sentinel serves no console.
+async function whoami(): Promise<Me | null | undefined> {
+  const res = await fetch("/api/session", { headers: { Accept: "application/json" }, credentials: "same-origin" });
+  if (res.status === 401) return null;
+  if (!res.ok) return undefined;
+  return (await res.json()) as Me;
+}
+
 export const api = {
+  whoami,
+  signIn: (token: string) => send<Me>("POST", "/api/session", { token }),
+  signOut: () => send<void>("DELETE", "/api/session"),
+  decide: (request: string, decision: "approve" | "veto") => {
+    const [ns = "", name = ""] = request.split("/");
+    return send<{ done: string }>("POST", `/api/requests/${encodeURIComponent(ns)}/${encodeURIComponent(name)}/${decision}`, {});
+  },
+  resume: (kind: string, namespace: string, name: string) => send<{ done: string }>("POST", "/api/resume", { kind, namespace, name }),
+  policies: () => send<NamespacePolicies[]>("GET", "/api/policies"),
+  putPolicy: (namespace: string, name: string, spec: PolicySpec) =>
+    send<{ done: string }>("PUT", `/api/policies/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`, spec),
+  deletePolicy: (namespace: string, name: string) =>
+    send<{ done: string }>("DELETE", `/api/policies/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`),
   summary: () => get<Summary>("/api/summary"),
   incidents: () => get<{ incidents: Incident[] | null }>("/api/incidents").then((r) => r.incidents ?? []),
   incident: (id: string) => get<IncidentDetail>(`/api/incidents/${encodeURIComponent(id)}`),

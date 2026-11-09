@@ -665,3 +665,114 @@ summary {
   font-size: 12.5px;
   max-width: 420px;
 }
+
+/* The console: buttons, fields and the sign-in dialog. */
+.btn {
+  font: inherit;
+  font-weight: 500;
+  padding: 5px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  cursor: pointer;
+}
+.btn:hover:not(:disabled) {
+  background: var(--panel-2);
+}
+.btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.btn.primary:hover:not(:disabled) {
+  filter: brightness(1.08);
+  background: var(--accent);
+}
+.btn.danger {
+  color: var(--red);
+  border-color: var(--red-soft);
+}
+.field {
+  font: inherit;
+  padding: 6px 9px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+}
+textarea.field {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+}
+.account {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgb(10 12 20 / 45%);
+  display: grid;
+  place-items: center;
+  z-index: 10;
+}
+.dialog {
+  width: min(520px, calc(100vw - 32px));
+  background: var(--panel);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 20px 22px;
+}
+.dialog h2 {
+  margin-top: 0;
+}
+.dialog-actions,
+.policy-actions,
+.new-policy,
+.decide {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+.muted {
+  color: var(--muted);
+}
+.ok-banner {
+  color: var(--green);
+  background: var(--green-soft);
+  border-radius: 8px;
+  padding: 6px 10px;
+  margin-top: 8px;
+  display: inline-block;
+}
+.policies {
+  padding: 4px 2px;
+}
+.policies .namespace {
+  margin-bottom: 24px;
+}
+.policy h3 .muted {
+  font-weight: 400;
+}
+.rule {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin: 6px 0;
+}
+.rule .check {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  color: var(--muted);
+}

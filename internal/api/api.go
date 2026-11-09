@@ -1,7 +1,8 @@
-// Package api serves Sentinel's read-only HTTP API and its UI. It listens on
-// localhost inside Sentinel's pod, so the only way in is kubectl
-// port-forward, which Kubernetes RBAC already guards. Everything it serves
-// comes from the Ledger, which holds only redacted content.
+// Package api serves Sentinel's HTTP API and its UI. It listens on localhost
+// inside Sentinel's pod, so the only way in is kubectl port-forward, which
+// Kubernetes RBAC already guards. Everything it reads comes from the Ledger,
+// which holds only redacted content; what a person changes through the
+// console is changed with their own token (console.go).
 package api
 
 import (
@@ -31,6 +32,9 @@ type Server struct {
 	// Acting, when set, reports whether a policy lets Sentinel run actions
 	// on its own somewhere.
 	Acting func() bool
+	// Console, when set, lets a person signed in with their own token act
+	// through the UI.
+	Console *Console
 }
 
 // Verification is a completed check of the Ledger's hash chain.
@@ -53,6 +57,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/actions", s.actions)
 	mux.HandleFunc("GET /api/trackrecords", s.trackRecords)
 	mux.HandleFunc("GET /api/experiments", s.experiments)
+	if s.Console != nil {
+		s.Console.routes(mux)
+	}
 	mux.HandleFunc("GET /api/", func(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusNotFound, errors.New("no such API route"))
 	})
