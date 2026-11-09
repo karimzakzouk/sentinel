@@ -162,6 +162,25 @@ func TestEachWorkloadIsSampledOncePerIntervalFromItsReadyPods(t *testing.T) {
 	}
 }
 
+func TestAPodIsNotSampledDuringItsStartup(t *testing.T) {
+	young := readyWebPod("web-1", true)
+	young.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: "proxy",
+		State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.NewTime(t0)}}}}
+	w, requests := sampleWatcher(t, young)
+	ctx := context.Background()
+	for now := t0; now.Before(t0.Add(5 * time.Minute)); now = now.Add(15 * time.Second) {
+		w.sampleWorkloads(ctx, now)
+	}
+	if len(*requests) == 0 {
+		t.Fatal("a settled pod was never sampled")
+	}
+	for _, r := range *requests {
+		if r.Since.Before(t0.Add(time.Minute)) {
+			t.Fatalf("a sample from %v reads the pod's first minute", r.Since)
+		}
+	}
+}
+
 func TestARefusedSampleIsAskedForAgain(t *testing.T) {
 	w, requests := sampleWatcher(t, readyWebPod("web-1", true))
 	refuse := true

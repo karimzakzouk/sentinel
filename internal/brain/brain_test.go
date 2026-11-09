@@ -302,27 +302,43 @@ func TestIncidentsSurviveARestart(t *testing.T) {
 	}
 }
 
-func errorSample(pod string, at time.Time, count int) watcher.LogEvidence {
+// errorSample is a minute of a pod's logs holding the given error templates,
+// each once, besides its routine requests.
+func errorSample(pod string, at time.Time, errs ...string) watcher.LogEvidence {
+	templates := []logs.TemplateCount{{Template: "GET <*> 200", Count: 90}}
+	for _, e := range errs {
+		templates = append(templates, logs.TemplateCount{Template: e, Count: 1, Error: true, Sample: e})
+	}
 	return watcher.LogEvidence{Workload: web, Pod: pod, Container: "web", Reason: watcher.ReasonSample, CollectedAt: at,
-		Summary: logs.Summary{Lines: 100, SHA256: pod + at.String(), Templates: []logs.TemplateCount{
-			{Template: "GET <*> 200", Count: 100 - count},
-			{Template: "redis: connection refused", Count: count, Error: true, Sample: "redis: connection refused"},
-		}}}
+		Summary: logs.Summary{Lines: 100, SHA256: pod + at.String(), Templates: templates}}
 }
 
-// Errors at an unusual rate with nothing to undo are escalated, and the
-// samples behind them join the incident once while they say the same thing.
-func TestAnErrorRateIncidentIsEscalatedWithItsSamples(t *testing.T) {
+// Errors at an unusual rate with nothing to undo are escalated. A sample
+// joins the incident only when it shows an error the workload did not log
+// before and the incident has not recorded.
+func TestAnErrorRateIncidentIsEscalatedWithItsNewErrors(t *testing.T) {
 	b, l := newBrain(t)
+	const routine, refused, breaker = "env platform is invalid", "redis: connection refused", "circuit breaker open"
+	at := func(d time.Duration) time.Time { return onset.Add(d) }
+	b.Now = func() time.Time { return at(-5 * time.Minute) }
+	if err := b.OnEvidence(ctx, errorSample("web-1", at(-5*time.Minute), routine)); err != nil {
+		t.Fatal(err)
+	}
 	b.Now = func() time.Time { return onset }
 	det := watcher.Detection{ID: model.NewID(), Workload: web, Kind: watcher.FactLogErrors, Count: 400, Onset: onset, At: onset,
 		Window: map[watcher.FactKind]int{watcher.FactLogErrors: 400}}
 	if err := b.OnDetection(ctx, det); err != nil {
 		t.Fatal(err)
 	}
-	for i, pod := range []string{"web-1", "web-2", "web-1"} {
-		if err := b.OnEvidence(ctx, errorSample(pod, onset.Add(time.Duration(i)*time.Minute), 60+i)); err != nil {
-			t.Fatal(err)
+	for i, ev := range []watcher.LogEvidence{
+		errorSample("web-1", at(time.Minute), routine, refused),
+		errorSample("web-2", at(2*time.Minute), routine, refused),
+		errorSample("web-1", at(3*time.Minute), routine),
+		errorSample("web-2", at(5*time.Minute), refused, breaker),
+	} {
+		b.Now = func() time.Time { return ev.CollectedAt }
+		if err := b.OnEvidence(ctx, ev); err != nil {
+			t.Fatalf("sample %d: %v", i, err)
 		}
 	}
 	got := incidents(t, l)
@@ -330,18 +346,13 @@ func TestAnErrorRateIncidentIsEscalatedWithItsSamples(t *testing.T) {
 		got[0].Assessment.Decision != ActionEscalate {
 		t.Fatalf("incident = %+v, want runtime errors, escalated", got)
 	}
-	if ev, _ := ledger.List[model.Evidence](ctx, l, model.KindEvidence, ""); len(ev) != 1 {
-		t.Fatalf("evidence recorded = %d, want one sample: the others hold the same errors", len(ev))
+	evidence, _ := ledger.List[model.Evidence](ctx, l, model.KindEvidence, "")
+	var collected []time.Time
+	for _, e := range evidence {
+		collected = append(collected, e.CollectedAt)
 	}
-	b.Now = func() time.Time { return onset.Add(5 * time.Minute) }
-	changed := errorSample("web-2", onset.Add(5*time.Minute), 80)
-	changed.Summary.Templates = append(changed.Summary.Templates,
-		logs.TemplateCount{Template: "circuit breaker open", Count: 20, Error: true, Sample: "circuit breaker open"})
-	if err := b.OnEvidence(ctx, changed); err != nil {
-		t.Fatal(err)
-	}
-	if ev, _ := ledger.List[model.Evidence](ctx, l, model.KindEvidence, ""); len(ev) != 2 {
-		t.Fatalf("evidence recorded = %d, want a second sample once a new error appears", len(ev))
+	if len(evidence) != 2 || !evidence[0].CollectedAt.Equal(at(time.Minute)) || !evidence[1].CollectedAt.Equal(at(5*time.Minute)) {
+		t.Fatalf("evidence from %v, want the first sample with the refused connections and the one where the breaker opened", collected)
 	}
 }
 
