@@ -126,6 +126,34 @@ Seasonal decomposition with median/MAD residuals, SPOT/DSPOT tail
 probabilities, Benjamini–Hochberg across series, CUSUM persistence and a
 Mann–Kendall "went away" check; cold start from sibling replicas.
 
+The first rate built is the one the scenarios lacked: a workload's error
+rate while its pods stay up. Design as built (decision 36):
+
+- **Error sampling.** Every minute, the last minute of one ready pod's logs
+  per workload, rotating through the pods. One pod at a time keeps the count
+  a per-pod rate, which scaling does not change, and costs one fetch per
+  workload a minute. Samples are low priority: the collector queues them,
+  one per workload, and serves them while its budget keeps five fetches for
+  crashes, readiness flips and rollouts.
+- **`log.errors` facts and exposure.** Each error record in a sample is a
+  fact; each sample also reports the seconds of logs it read. Error series
+  count that exposure instead of the clock, so a sample the budget delays
+  changes how much is known, not the rate, and a window without samples is
+  no evidence either way.
+- **Guards for bursty, workload-specific levels.** The Gamma–Poisson test
+  stays, with a weak prior instead of the pooled one, a 30-minute warm-up,
+  an effect floor (twice the expected count) with hysteresis (the episode
+  ends under one and a half times), and an hour's limit on an episode, after
+  which the level is learned as the new normal.
+- **`runtime.errors`.** Errors at an unusual rate with no change to blame is
+  a class of its own, escalated rather than rolled back.
+- **Proof**: in the Redis scenario, the cart service's and the frontend's
+  errors join Redis's incident instead of opening their own.
+
+Seasonality (SPOT on decomposed residuals) waits for the soak: a daily cycle
+needs days of data to matter, and the soak will say whether the ratio floor
+is enough.
+
 ### 5. Shadow report, CLI and read-only UI
 
 - `sentinel incidents` and `sentinel report shadow`.

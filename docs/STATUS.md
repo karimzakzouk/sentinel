@@ -1,75 +1,113 @@
 # Status
 
-Last updated: Monday 9 November 2026, 01:05 Cairo time (UTC+2).
+Last updated: Monday 9 November 2026, 02:40 Cairo time (UTC+2).
 
 ## Where things stand
 
 **Phase 0 (Foundations) is done and tagged `v2.0.0-alpha.0`.** Phase 1
-(Observe: the Watcher and the Brain in shadow mode) is under way. Slice 1
-(Kubernetes facts into explained incidents) and slice 2 (logs) are done:
-Sentinel now also catches a deploy whose pods stay up but start logging
-errors, which Kubernetes itself cannot see. It records what it would do and
-changes nothing.
+(Observe: the Watcher and the Brain in shadow mode) has all six slices
+built at least in their core, and the first scored session on the
+development pool got every fault right (below). What the gate still needs is
+the 72-hour soak, and the rest of slice 4 waits on what the soak shows.
+Sentinel records what it would do and changes nothing.
+
+To look at it on a cluster where it runs:
+
+- `kubectl -n sentinel port-forward deploy/sentinel 8090`, then open
+  <http://localhost:8090>: incidents, why Sentinel blames what it blames,
+  what it would do, and what it can do on this cluster.
+- `kubectl -n sentinel exec deploy/sentinel -- /sentinel incidents`, and
+  `... /sentinel report shadow --since 24h` for what it would have done.
 
 ## Phase 1 progress
 
 | Slice | State | Proof |
 |---|---|---|
-| 1. Kubernetes facts → signals → incidents | Done | Smoke pool 6 of 6; Online Boutique below; `TestBadImageScenario` in CI |
+| 1. Kubernetes facts → signals → incidents | Done | Scored session below; `TestBadImageScenario` in CI |
 | 2. Logs: evidence, redaction, new errors after a deploy | Done | `TestLeakedSecretsNeverReachTheLedger` in CI; the frontend scenario below |
-| 3. Metrics, dependency map, localization | Under way: Service endpoints, dependency map, impact and root-cause ranking done; metrics next | The Redis scenario below |
-| 4. Rate detectors | | |
-| 5. Shadow report, CLI, read-only UI | | |
-| 6. Scoring (`harness score`) | | |
+| 3. Metrics, dependency map, localization | Done | The Redis and product-catalog memory scenarios below |
+| 4. Rate detectors | Error rates done; seasonal detectors wait for the soak | In the Redis scenario, the cart service's and the frontend's errors join Redis's incident |
+| 5. Shadow report, CLI, read-only UI | Done | `TestTheUIAnswersThroughPortForward` in CI |
+| 6. Scoring (`harness score`) | Done | The session below |
 
-## Scenario results
+## Scored session
 
-Each scenario is injected on the development cluster, observed, and reverted.
-Sentinel's answer is what it logged: the fault class, the change it blames
-and the action it would take.
+Twelve scenarios on the development cluster (kind, Kubernetes 1.37,
+Flannel, Online Boutique and a smoke app), each injected, watched for 150
+seconds and reverted, then scored by `harness score` against each scenario's
+hidden ground truth. Every incident counts once; nothing is adjusted.
 
-| Scenario | Sentinel's answer | Right? |
-|---|---|---|
-| Smoke: bad image | bad image (1.00), blames `image:web` (0.97), roll back | Yes |
-| Smoke: memory limit too low | memory limit (0.999), blames `resources:web` (0.98), roll back | Yes |
-| Smoke: crash on start | crash on start (0.85), blames `args:web` (0.96), roll back | Yes |
-| Smoke: bad readiness probe | probe (0.80, then 0.997), blames `probes:web` (0.98), roll back | Yes |
-| Smoke: a pod deleted | nothing | Yes |
-| Smoke: control | nothing | Yes |
-| Boutique: cart image missing | bad image (1.00), blames `image:server` (0.985), roll back | Yes |
-| Boutique: currency service crashes | crash on start (0.78), blames `env:server` (0.97), roll back | Yes |
-| Boutique: product catalog memory | missed | No: one OOM kill every two minutes never puts two in the one-minute window the development cluster uses (decision 27) |
-| Boutique: Redis scaled to zero | Redis unavailable (0.991), blames `replicas:1->0` (0.98), restore the replicas; impact: cart, checkout, frontend, load generator | Yes, since slice 3: the Service lost its endpoints, and the dependency map names who is hurt. Slice 1 alone missed it: no pod fails |
-| Boutique: control | nothing | Yes |
-| Boutique: frontend's catalog address misspelled (no pod fails; every page logs an error) | new errors after a deploy (0.997), blames `env:server` (0.93), roll back; the new pods' error attached as evidence | Yes, from logs alone: the new revision's error rate against the old one's, p = 1.2×10⁻⁷ |
+| Scenario | Detected | Time to detect | Class | Root cause rank | Would do |
+|---|---|---|---|---|---|
+| Smoke: bad image | yes | 8s | bad image ✓ | 1 | roll back ✓ |
+| Smoke: memory limit too low | yes | 0s | memory limit ✓ | 1 | roll back ✓ |
+| Smoke: crash on start | yes | 5s | crash on start ✓ | 1 | roll back ✓ |
+| Smoke: bad readiness probe | yes | 1s | broken health check ✓ | 1 | roll back ✓ |
+| Smoke: a pod deleted (heals itself) | nothing, rightly | | | | |
+| Smoke: control | nothing, rightly | | | | |
+| Boutique: cart image missing | yes | 7s | bad image ✓ | 1 | roll back ✓ |
+| Boutique: product catalog memory | yes | 0s | memory limit ✓ | 1 | roll back ✓ |
+| Boutique: currency service crashes | yes | 4s | crash on start ✓ | 1 | roll back ✓ |
+| Boutique: Redis scaled to zero | yes | 7s | dependency unavailable ✓ | 1 | restore the replicas ✓ |
+| Boutique: frontend's catalog address misspelled | yes | 1m5s | new errors after a deploy ✓ | 1 | roll back ✓ |
+| Boutique: control | nothing, rightly | | | | |
+
+Detection 9 of 9, precision 1.00, the root cause ranked first every time,
+class, blamed change and decision right every time, a median of 5 seconds
+to detect, and no false alarm in the three quiet runs.
+
+**Read this with care.** These are the scenarios the engines were tuned
+against, so a perfect score shows that nothing regressed, not that Sentinel
+generalizes. Twelve runs give wide intervals, and the misspelled address
+takes a minute because only a rollout comparison sees it. The held-out pool
+and outside evaluators (phase 6) are the honest test.
+
+Since the session, error sampling (decisions 36 to 38) also saw the Redis
+fault where it hurts: rerun, the cart service's errors joined Redis's
+incident five seconds after it opened, and the frontend's under two
+minutes later, instead of opening incidents of their own.
 
 ## Things building found
 
 - **Kubernetes 1.37 shows a crash loop differently.** A crashing container
-  spends its back-off as "terminated", not "CrashLoopBackOff", so crash loops
-  went unnoticed until both Sentinel and the test harness learned the new
-  shape.
+  spends its back-off as "terminated", not "CrashLoopBackOff". Sentinel
+  handles both, and CI also runs the end-to-end suite on Kubernetes 1.34.
 - **One wrong signal can dominate.** Old readiness failures counted as new
   after a restart; a revert took the blame for the incident it fixed; an OOM
-  incident's crash loops taught the baseline that crash loops were normal; a
-  single OOM kill, too rare to alarm alone, was invisible to the classifier.
+  incident's crash loops taught the baseline that crash loops were normal.
   Each is fixed with a regression test (decisions 18 to 23).
-- **Logs need their own permission.** A cluster that denied `pods/log` lost
-  all detection; logs are now a separate capability.
+- **Error logs need their own statistics.** Crash counts are near zero, so
+  any is news; error volumes are a workload's own, large and bursty. A test
+  that is right for one alarms on routine noise in the other, so error
+  series learn their level first, need a doubling as well as significance,
+  and count the seconds of logs read rather than the clock (decision 36).
+- **Every logging library is different.** .NET's console logger puts the
+  message on the line after the level, so the cart service's every Redis
+  failure looked like an information line until Sentinel learned the format.
+- **A rare-event computation spun.** The detector's tail probability summed
+  terms that all underflowed, ran to its cap, and took 39 seconds in a test
+  of a busy workload; it now takes a quarter of a second.
+- **Scoring needs care too.** The first score counted the next scenario's
+  incident as the control's false alarm, and a pod deletion that heals
+  itself as a missed fault (decision 39).
 - **Secrets hide everywhere in logs.** The redactor catches every one of 46
   canary secrets in realistic lines, leaves stack traces and Kubernetes
-  names alone, runs at 20 MB/s, and a second pass never changes its output.
-  Fuzzing found two real bugs in it before they shipped.
-- **Slow faults need longer windows.** See the product catalog row.
+  names alone, and a second pass never changes its output.
 
 Full reasoning in [decisions.md](decisions.md).
 
 ## Next
 
-The rest of slice 3: metrics from metrics-server, scored for deviation and
-fed to the root-cause ranking. Then slice 4: rate detectors over log
-templates, which also let symptoms downstream of a fault (the cart service's
-errors when Redis is gone) join the fault's incident.
+- **Soak.** A long run with the scenario pool's controls and background
+  traffic, to measure false alarms per service per week, the error-rate
+  detector's especially. Shorter runs on the development cluster first; the
+  gate's 72 hours need the machine listed below.
+- **The rest of slice 4,** shaped by the soak: seasonal baselines (SPOT on
+  decomposed residuals) if daily cycles cause false alarms, and dependency
+  edges from connection errors in logs.
+- **Smaller items:** exception fingerprints of logged .NET exceptions
+  split one error into several (a fingerprint version 2), and baselines are
+  relearned after every restart (decision 35).
 
 ## Waiting on you
 
@@ -77,7 +115,8 @@ Nothing blocks Phase 1. When you have time:
 
 - **Click Save on the Environment card** if it is still there. It makes
   future cloud agents start with the toolchain ready.
-- **Review the layout and data model** using [guides/phase-0.md](guides/phase-0.md).
+- **Look at the UI** (above) and the [phase-0 guide](guides/phase-0.md);
+  say what reads badly.
 
 Needed later:
 
@@ -91,9 +130,11 @@ Needed later:
 ## How to check
 
 - **History:** commits on `main`; milestones are tagged `v2.0.0-alpha.N`.
-- **CI:** the Actions tab. `CI` runs on every push, `E2E` on code changes, and
-  `E2E network plugins` and `Capability report across distributions` when the
-  probe's code changes and weekly.
+- **CI:** the Actions tab. `CI` runs on every push, `E2E` on code changes,
+  `E2E Kubernetes versions` on code changes and weekly, and `E2E network
+  plugins` and `Capability report across distributions` when the probe's
+  code changes and weekly.
 - **Run it yourself:** `make e2e-up && make e2e` brings up a kind cluster with
   Sentinel and runs the end-to-end suite; `hack/run-scenarios.sh
-  test/scenarios/smoke/*.yaml` runs the scenario pool against it.
+  test/scenarios/smoke/*.yaml` runs the scenario pool against it, and
+  `make score SINCE=<time>` scores the runs since then.
