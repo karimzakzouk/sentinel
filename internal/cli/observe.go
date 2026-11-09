@@ -155,7 +155,7 @@ func newObserver(ctx context.Context, log *slog.Logger, cfg *config.Config, clie
 			log.Info("acting is on where a SentinelPolicy allows it", "namespaces", cfg.Namespaces)
 		}
 	}
-	if cfg.VerifyRollbacks && len(cfg.LabNamespaces) > 0 && dyn != nil {
+	if len(cfg.LabNamespaces) > 0 && dyn != nil {
 		lab := &verify.Lab{Dynamic: dyn, Pool: cfg.LabNamespaces, Watched: cfg.Namespaces, Log: log,
 			OnVerdict: func(ctx context.Context, v verify.Verdict) {
 				if err := b.OnLabVerdict(ctx, brain.LabVerdict{IncidentID: v.IncidentID, Experiment: v.Experiment, Phase: string(v.Phase),
@@ -172,11 +172,15 @@ func newObserver(ctx context.Context, log *slog.Logger, cfg *config.Config, clie
 				return out
 			}
 		}
-		if err := lab.Start(ctx); err != nil {
-			log.Warn("the Lab does not verify rollbacks", "reason", err)
-		} else {
-			b.Lab = lab
-			log.Info("the Lab verifies proposed rollbacks", "pool", cfg.LabNamespaces)
+		switch err := lab.Start(ctx); {
+		case err != nil:
+			log.Warn("the Lab verifies nothing", "reason", err)
+		case cfg.VerifyRollbacks:
+			b.Lab, b.ImageLab = lab, lab
+			log.Info("the Lab verifies proposed rollbacks and fixes to code", "pool", cfg.LabNamespaces)
+		default:
+			b.ImageLab = lab
+			log.Info("the Lab races fixes to code", "pool", cfg.LabNamespaces)
 		}
 	}
 	if cfg.FixerNamespace != "" && dyn != nil {

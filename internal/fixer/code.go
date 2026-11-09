@@ -103,7 +103,7 @@ func (f *Fixer) codeFix(ctx context.Context, fix *v1alpha1.Fix, change Change) *
 	if err != nil {
 		return say("%v", err)
 	}
-	pr, err := f.Forge.Open(ctx, owner, repo, branch, co.Branch, title, codeBody(fix, patch, good, bad, badSrc))
+	pr, err := f.Forge.Open(ctx, owner, repo, branch, co.Branch, title, codeBody(fix, patch, good, bad, badSrc, len(f.LabNamespaces) > 0))
 	if err != nil {
 		return say("%v", err)
 	}
@@ -155,17 +155,21 @@ func lastPart(fn string) string {
 
 func short(rev string) string { return rev[:min(len(rev), 12)] }
 
-func codeBody(fix *v1alpha1.Fix, p *codefix.Patch, good, bad string, src codefix.Built) string {
+func codeBody(fix *v1alpha1.Fix, p *codefix.Patch, good, bad string, src codefix.Built, raced bool) string {
 	w := fix.Spec.Workload
+	checked := "It is not checked yet: once your pipeline builds an image from this branch, Sentinel races it against the failing one in its Lab and says here whether it fixes the crash."
+	if !raced {
+		checked = "It is not checked: no Lab is installed to race an image built from this branch against the failing one."
+	}
 	return fmt.Sprintf(`Sentinel rolled **%s/%s** back from %s to %s after it crashed. The crash's stack ran through %s, which commit %s changed.
 
-This pull request puts that function back as it was before the commit, and leaves the commit's other changes as they are. It is not checked yet: once your pipeline builds an image from this branch, Sentinel races it against the failing one in its Lab and says here whether it fixes the crash.
+This pull request puts that function back as it was before the commit, and leaves the commit's other changes as they are. %s
 
 - **What changes**: %s, line %d.
 - **Why there**: %s.
 
 Incident %s.
-`, w.Namespace, w.Name, "`"+bad+"`", "`"+good+"`", "`"+p.Function+"`", short(src.Revision), "`"+p.Path+"`", p.Line, p.Why, fix.Spec.IncidentID)
+`, w.Namespace, w.Name, "`"+bad+"`", "`"+good+"`", "`"+p.Function+"`", short(src.Revision), checked, "`"+p.Path+"`", p.Line, p.Why, fix.Spec.IncidentID)
 }
 
 // awaitBuild looks for the image the source's pipeline built from a code
@@ -192,6 +196,9 @@ func (f *Fixer) awaitBuild(ctx context.Context, fix *v1alpha1.Fix, now time.Time
 			continue
 		}
 		cf.Image, cf.Message = image, "built as "+image+"; the Lab races it against the failing image"
+		if len(f.LabNamespaces) == 0 {
+			cf.Message = "built as " + image + "; no Lab is installed to race it, so it is not checked"
+		}
 		return true
 	}
 	if opened := fix.CreationTimestamp.Time; !opened.IsZero() && now.Sub(opened) > buildWait {
