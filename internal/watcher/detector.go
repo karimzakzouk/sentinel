@@ -342,3 +342,56 @@ func (s *series) window() windowSummary {
 	}
 	return ws
 }
+
+// Baseline is one series' learned history: its decayed fact count and
+// exposure, as of At.
+type Baseline struct {
+	Workload string    `json:"workload"`
+	Kind     FactKind  `json:"kind"`
+	Count    float64   `json:"count"`
+	Exposure float64   `json:"exposure"`
+	At       time.Time `json:"at"`
+}
+
+// Baselines are the series' learned histories, for keeping across a
+// restart: series in an episode keep their frozen history.
+func (d *CountDetector) Baselines(now time.Time) []Baseline {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var out []Baseline
+	for key, w := range d.workloads {
+		for kind, s := range w.series {
+			if s.histExp > 0 {
+				out = append(out, Baseline{Workload: key, Kind: kind, Count: s.histCount, Exposure: s.histExp, At: now})
+			}
+		}
+	}
+	return out
+}
+
+// Restore takes back learned histories after a restart, decayed for the time
+// Sentinel was down, so a workload's usual rate need not be learned again
+// before it may alarm. A workload not yet seen is registered with it.
+func (d *CountDetector) Restore(baselines []Baseline, now time.Time) int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	n := 0
+	for _, b := range baselines {
+		ref, err := model.ParseObjectRef(b.Workload)
+		if err != nil || b.Exposure <= 0 || b.Count < 0 {
+			continue
+		}
+		w := d.register(ref)
+		s := w.series[b.Kind]
+		if s == nil {
+			continue
+		}
+		decay := 1.0
+		if d.HalfLife > 0 && now.After(b.At) {
+			decay = math.Pow(0.5, now.Sub(b.At).Seconds()/d.HalfLife.Seconds())
+		}
+		s.histCount, s.histExp = b.Count*decay, b.Exposure*decay
+		n++
+	}
+	return n
+}

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -60,6 +61,22 @@ func (r ObjectRef) String() string {
 		return kind + "/" + r.Name
 	}
 	return kind + "/" + r.Namespace + "/" + r.Name
+}
+
+// ParseObjectRef reads an ObjectRef as String writes it:
+// "Deployment.apps/shop/web", or "Node/n1" without a namespace.
+func ParseObjectRef(s string) (ObjectRef, error) {
+	parts := strings.Split(s, "/")
+	if len(parts) < 2 || len(parts) > 3 || parts[0] == "" || parts[len(parts)-1] == "" {
+		return ObjectRef{}, fmt.Errorf("%q is no object reference", s)
+	}
+	var r ObjectRef
+	r.Kind, r.Group, _ = strings.Cut(parts[0], ".")
+	r.Name = parts[len(parts)-1]
+	if len(parts) == 3 {
+		r.Namespace = parts[1]
+	}
+	return r, nil
 }
 
 // Trust says how far a piece of data can be believed. Text written by

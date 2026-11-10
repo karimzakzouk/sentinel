@@ -76,3 +76,15 @@ func TestNewIDIsTimeOrdered(t *testing.T) {
 		t.Fatalf("IDs are not increasing: %s then %s", a, b)
 	}
 }
+
+func TestAnObjectRefReadsAsItIsWritten(t *testing.T) {
+	for _, r := range []ObjectRef{{Group: "apps", Kind: "Deployment", Namespace: "shop", Name: "web"}, {Kind: "Node", Name: "n1"}, {Kind: "Pod", Namespace: "shop", Name: "web-1"}} {
+		got, err := ParseObjectRef(r.String())
+		if err != nil || got != r {
+			t.Errorf("%s read as %+v (%v)", r, got, err)
+		}
+	}
+	if _, err := ParseObjectRef("web"); err == nil {
+		t.Error("a bare name was read")
+	}
+}
