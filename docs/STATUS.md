@@ -1,6 +1,6 @@
 # Status
 
-Last updated: Tuesday 10 November 2026, 01:25 Cairo time (UTC+2).
+Last updated: Tuesday 10 November 2026, 04:04 Cairo time (UTC+2).
 
 ## Where things stand
 
@@ -20,11 +20,15 @@ It finds the value in a manifest, an images entry or a kustomization's
 patch, fixes only the value the fault is blamed on when one commit changed
 several, proposes a memory limit learned from healthy use rather than the
 old one, and merges its own fix where a policy grants it and its record has
-earned it. For a crash a new image brought, it also proposes the crashing
-function back as it was, in the image's source, and has the Lab race the
-image the source's pipeline builds from it: proven on the development
-cluster with a release of a Go service (below). It works with GitHub,
-Gitea, GitLab and Bitbucket. **Phase 5 (Extend and harden) has started:**
+earned it. For a crash in code, in almost any language, it tries one
+fixer's change after another, each built by the source's own pipeline and
+raced in the Lab before the next: the crashing function put back, a fixed
+template, the culprit commit reverted, and last an optional language
+model's change; proven on the development cluster with a Go and a Python
+service, and with a small local model (below). It works with GitHub,
+Gitea, GitLab and Bitbucket. Where the cluster does not enforce
+NetworkPolicy, every Lab pod now seals itself, so the Lab runs on the
+development cluster too. **Phase 5 (Extend and harden) has started:**
 four more fault classes, a Merkle tree over the Ledger, standby replicas
 for the actor, the Lab and the Fixer, a console in the UI where a person
 signs in as themselves to approve, veto, resume and set policies, and
@@ -88,8 +92,8 @@ To look at it on a cluster where it runs:
 |---|---|---|
 | 1. Restore a bad value through Git | Built for an image, a command, arguments and environment values set in the files a Flux Kustomization or an Argo CD Application deploys (decisions 67 to 70 and 72), and in a kustomization's patches (decision 73): the Fixer finds the file, images entry or patch that set it, opens a pull request, follows it until the owner has applied it, and Sentinel checks that it held. Resuming the owner stays a person's (decision 69). Proven through Flux and Argo CD, and scored (below) | `TestTheFixerProposesTheFixInGit` and `TestTheFixerProposesTheFixInGitThroughArgoCD`, in CI and on the development cluster: a bad image committed to the Gitea repository the owner deploys from, Sentinel's rollback, a pull request changing line 17 of `deployment.yaml` with its comment kept, merged, the owner resumed, and "fix held", about 3 minutes after the proposal. The Git scenario session below. Unit tests render overlays with images entries, plain manifests, owners' name prefixes, and the abstentions |
 | 2. Partial reverts | Built (decision 74): of several values a revision changed, the one the fault class blames is fixed and the rest stay, said in the pull request | The pool's bad tag beside a greeting (below): the tag fixed, the greeting kept; unit tests for every class |
-| 3. Values of their own | Built for memory limits (decision 75): a limit learned from healthy use, never above the one that held. The Lab racing it before the pull request is next | Unit tests; the pool's memory-limit scenario (below) |
-| 4. Code incidents | Built for Go: for a crash a new image brought, the Fixer resolves the commits both images were built from, by labels and a tag or version that agree, and proposes the crash's function back as it was, in the image's source; then finds the image the source's pipeline builds from it, has the Lab race that image against the failing one, and says the verdict on the pull request. Left: Python and JavaScript | The release session below, on the development cluster: a release of shop panicked as it started; rolled back, a pull request to its source put `load` back, the test pipeline built it, the Lab was asked and its answer said on the pull request. `TestACrashInCodeGetsAFixInItsSource`, `TestAFixToTheCodeIsRacedOnceBuilt`, `TestAFixToTheCodeBuiltBeforeARestartIsRaced` |
+| 3. Values of their own | Built for memory limits (decision 75): a limit learned from healthy use, never above the one that held, raced in the Lab before its pull request opens, with the heap settings that no longer fit it (decision 96). Left: CPU, disk, probes, timeouts and replicas | Unit tests of the race, the verdict's path to the pull request, and the heap settings; the pool's memory-limit scenario (below) |
+| 4. Code incidents | Built for Go, Python, JavaScript and TypeScript, Java, Kotlin, Scala, C#, Ruby, PHP, Rust, C, C++ and Swift (decision 91): for a crash a new image brought, or an old bug nothing was rolled back from (decision 95), the Fixer tries fixers in order, each change built by the source's own pipeline and raced in the Lab before the next is tried: the crashing function put back, fifteen templates, the whole commit reverted, and a language model's change last (decisions 92 and 93); without a stack or commit labels too (decision 94) | The release sessions below, on the development cluster: shop's Go crash and pyshop's Python crash each fixed and passed by the Lab, 15 of 15 runs; with a 1.5B local model alone, its first change failed in the Lab and it was asked again. `TestTheCrashingFunctionIsPutBackInEveryLanguage` (twelve languages), `TestTemplatesFixTheCrashesEveryCodebaseHas`, `TestACrashInCodeGetsAFixInItsSource` (restore failed by the Lab, then a revert on the same pull request, then a model's change in a new one after a person closed it), `TestAnOldBugIsFixedFromTheCommitBeforeIt` |
 | 5. Delivery tiers | Built (decision 76): `fix.merge` at `autonomous`, earned by the record of fixes that held; the Fixer checks the grant before it merges | Unit tests of the grant, the record and the merge on Gitea and GitHub |
 | Forges | GitHub, Gitea, GitLab, Bitbucket Cloud and Bitbucket Data Center (`fixer.forge.kind`, decision 87) | Fake-server tests of each forge's API; `hack/forge-live.sh` against a real GitLab CE: a branch pushed as the Fixer pushes, a merge request under a subgroup opened, commented on, merged, and its merge commit found on main, with merge commits and fast-forward |
 
@@ -264,6 +268,31 @@ about; and the bot's token could not comment, so the Fixer kept asking and
 the verdict never reached the fix's status. The race itself runs where
 NetworkPolicy is enforced, on the self-hosted runner after the soak.
 
+Tuesday, with each Lab pod sealing itself (decision 90), the same release
+ran again on the development cluster: the Fixer put `load` back, the
+pipeline built the pull request's head, and the Lab raced the image: "the
+image shop:b0d0f3a fixes it: it worked in 15 of 15 runs where the failing
+revision failed in 15 of 15 runs", said on the pull request.
+
+### Release of a Python bug (`pyshop`)
+
+`pyshop` (`test/apps/pyshop-src`, `hack/shop-up.sh pyshop`) builds its
+catalog at start; its release scenario makes the catalog `None`. On the
+development cluster, Tuesday night, Cairo time: the crash was read with
+where it ran (`/app/catalog.py:14`, decision 91); the Fixer put
+`catalog.load` back in `person/pyshop-src`; the pipeline built it; and the
+Lab passed it, 15 of 15 runs against 15 of 15.
+
+The same release with the Fixer set to its language-model fixer alone, a
+1.5-billion-parameter model (`qwen2.5-coder:1.5b`) served by Ollama in the
+cluster on CPU (`test/apps/ollama.yaml`): the model's first change was a
+guard that skipped the assignment and left the catalog `None`, so pyshop
+still crashed, and the Lab failed it in 3 runs. The Fixer asked the model
+again with that verdict (decisions 92 and 93), pushed its second change,
+`items = {}`, to the same pull request, the pipeline built it, and the Lab
+raced it. The run found that a change moved to the tried list counted
+twice against the model's attempts, so it was not asked again; fixed.
+
 ## Scored session (observe only)
 
 Twelve scenarios on the development cluster (kind, Kubernetes 1.37,
@@ -368,10 +397,19 @@ Full reasoning in [decisions.md](decisions.md).
 
 ## Next
 
+- **Lab realism:** fakes of outside services from captured traffic, the
+  Lab's certificate authority, fake secrets that raise an alarm, and an
+  opt-in recorder of request and response bodies for write replay,
+  response comparison and filled databases.
+- **More rollback kinds:** DaemonSets, Argo Rollouts and Flagger, and
+  StatefulSets with a person's approval.
+- **Hardening:** baselines that survive restarts, a standby controller,
+  dependency links from error logs, and the node agent.
+- **Settings:** every switch in the console as well as the YAML.
+
 - **Phase 3:** the Lab racing a learned memory limit before its pull
   request opens; fakes of outside services from the calls capture
   recorded, and the Lab's certificate authority for copies that serve TLS.
-- **Code fixes in Python and JavaScript**, beside Go.
 - **After the soak ends on Thursday:** its report, the network-plugin
   matrix and the Lab's end-to-end tests on the runner, and whether daily
   cycles call for seasonal baselines.
