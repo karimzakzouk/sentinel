@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
-# Sets up shop, the test service the Fixer fixes the code of: its source
-# (test/apps/shop-src) as the test Gitea's person/shop-src, with the bot
-# sentinel a collaborator; an image of its main branch built by hack/ci.sh;
-# and its manifests (test/apps/shop-deploy) in person/delivery's shop/,
-# which Flux deploys into e2e-delivery as git-shop. Needs the cluster up
-# with E2E_GITEA=1 E2E_FLUX=1 and hack/delivery-up.sh run. Safe to rerun.
+# Sets up a test service the Fixer fixes the code of, shop (Go) by default
+# or pyshop (Python): its source (test/apps/APP-src) as the test Gitea's
+# person/APP-src, with the bot sentinel a collaborator; an image of its main
+# branch built by hack/ci.sh; and its manifests (test/apps/APP-deploy) in
+# person/delivery's APP/, which Flux deploys into e2e-delivery as git-APP.
+# Needs the cluster up with E2E_GITEA=1 E2E_FLUX=1 and hack/delivery-up.sh
+# run. Safe to rerun.
 #
-#   hack/shop-up.sh && hack/ci.sh watch person/shop-src &
+#   hack/shop-up.sh [shop|pyshop] && hack/ci.sh watch person/shop-src &
 #   hack/run-scenarios.sh test/scenarios/git/release-*.yaml
 set -euo pipefail
+
+app=${1:-shop}
 
 cluster=${E2E_CLUSTER:-sentinel-e2e}
 ctx="kind-$cluster"
@@ -44,20 +47,20 @@ commit_files() {
   fi
 }
 
-if ! api "$base/repos/person/shop-src" >/dev/null 2>&1; then
-  api -X POST "$base/user/repos" -d '{"name": "shop-src", "default_branch": "main", "auto_init": true, "readme": "Default"}' >/dev/null
-  api -X PUT "$base/repos/person/shop-src/collaborators/sentinel" -d '{"permission": "write"}' >/dev/null
+if ! api "$base/repos/person/$app-src" >/dev/null 2>&1; then
+  api -X POST "$base/user/repos" -d "{\"name\": \"$app-src\", \"default_branch\": \"main\", \"auto_init\": true, \"readme\": \"Default\"}" >/dev/null
+  api -X PUT "$base/repos/person/$app-src/collaborators/sentinel" -d '{"permission": "write"}' >/dev/null
 fi
-commit_files person/shop-src "$root/test/apps/shop-src" ""
+commit_files "person/$app-src" "$root/test/apps/$app-src" ""
 
-rev=$(api "$base/repos/person/shop-src/branches/main" | jq -r '.commit.id')
-tag=$("$root/hack/ci.sh" build person/shop-src "$rev" | tail -n 1)
-commit_files person/delivery "$root/test/apps/shop-deploy" shop/ "s/shop:TAG/shop:$tag/"
+rev=$(api "$base/repos/person/$app-src/branches/main" | jq -r '.commit.id')
+tag=$("$root/hack/ci.sh" build "person/$app-src" "$rev" | tail -n 1)
+commit_files person/delivery "$root/test/apps/$app-deploy" "$app/" "s/$app:TAG/$app:$tag/"
 
-k apply -f "$root/test/apps/git-shop.yaml" >/dev/null
+k apply -f "$root/test/apps/git-$app.yaml" >/dev/null
 for _ in $(seq 60); do
-  k -n e2e-delivery get deployment git-shop >/dev/null 2>&1 && break
+  k -n e2e-delivery get deployment "git-$app" >/dev/null 2>&1 && break
   sleep 5
 done
-k -n e2e-delivery rollout status deployment/git-shop --timeout 5m
-echo "shop runs in e2e-delivery on $ctx, built from person/shop-src at ${rev:0:7}"
+k -n e2e-delivery rollout status "deployment/git-$app" --timeout 5m
+echo "$app runs in e2e-delivery on $ctx, built from person/$app-src at ${rev:0:7}"

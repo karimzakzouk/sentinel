@@ -4,5 +4,6 @@
 !api/
 !cmd/
 !internal/
+!hack/grammar-tags
 !ui/
 ui/node_modules

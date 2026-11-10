@@ -1,0 +1,29 @@
+id: git-release-crash-python
+title: A release of pyshop builds its catalog into None, so it raises as it starts, and Flux deploys it
+app: git
+fault:
+  kind: release
+  target: {apiVersion: kustomize.toolkit.fluxcd.io/v1, kind: Kustomization, namespace: flux-system, name: git-pyshop}
+  release:
+    source:
+      repository: person/pyshop-src
+      path: catalog.py
+      old: "    items = {}\n"
+      new: "    items = None\n"
+      message: Start the catalog empty
+    deploy: {repository: person/delivery, path: pyshop/deployment.yaml}
+    image: 10.96.200.200:5000/pyshop
+groundTruth:
+  faultClass: deploy.crash-on-start
+  rootCause: {apiVersion: apps/v1, kind: Deployment, namespace: e2e-delivery, name: git-pyshop}
+  changeType: image
+  symptoms: [pod.crash-loop]
+  mitigation: rollout.undo
+  # The fix that holds the rollback pins the image back; the fix to the
+  # code puts load back as it was, in person/pyshop-src.
+  fix: {path: pyshop/deployment.yaml, line: 22}
+manifest:
+  condition: crash-loop
+  namespace: e2e-delivery
+  selector: app=pyshop
+  timeout: 4m

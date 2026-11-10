@@ -1,0 +1,36 @@
+# pyshop, built from person/pyshop-src by hack/ci.sh. hack/shop-up.sh pyshop commits
+# this directory to person/delivery as pyshop/, with the tag of the image it
+# built from main; the release scenarios move the tag.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pyshop
+  labels:
+    app: pyshop
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pyshop
+  template:
+    metadata:
+      labels:
+        app: pyshop
+    spec:
+      containers:
+        - name: pyshop
+          image: 10.96.200.200:5000/pyshop:TAG
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              memory: 96Mi

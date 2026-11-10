@@ -76,7 +76,11 @@ build() {
   git -c "http.extraHeader=Authorization: token $person" clone -q "http://127.0.0.1:$gitea_port/$repo.git" "$dir"
   git -C "$dir" -c advice.detachedHead=false checkout -q "$rev"
   rev=$(git -C "$dir" rev-parse HEAD)
-  (cd "$dir" && CGO_ENABLED=0 go build -trimpath -o "$name" .)
+  # A Go service's binary is built first, so its image pulls no toolchain;
+  # any other builds in its Dockerfile.
+  if [ -f "$dir/go.mod" ]; then
+    (cd "$dir" && CGO_ENABLED=0 go build -trimpath -o "$name" .)
+  fi
   docker build -q -t "$registry/$name:$tag" -t "127.0.0.1:$registry_port/$name:$tag" \
     --label "org.opencontainers.image.source=http://gitea-http.gitea.svc:3000/$repo" \
     --label "org.opencontainers.image.revision=$rev" "$dir" >/dev/null
