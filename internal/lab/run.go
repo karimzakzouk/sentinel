@@ -53,20 +53,47 @@ type Lab struct {
 	// Domain is the cluster's DNS domain.
 	Domain string
 	// Enforced proves that a namespace's NetworkPolicy is enforced, with
-	// live traffic; without it, the Lab never runs.
+	// live traffic. Without it the Lab runs only where it may seal its pods
+	// itself.
 	Enforced func(ctx context.Context, ns string) (bool, string)
-	Log      *slog.Logger
+	// Seal is how the Lab seals a namespace: SealPolicy, SealFirewall or
+	// SealAuto, the default.
+	Seal string
+	// SealImage is the image of the firewall that seals each pod, for
+	// SealFirewall and SealAuto: Sentinel's own.
+	SealImage string
+	Log       *slog.Logger
 	// OnReady, when set, is called once the Lab sees its pool's
 	// Experiments.
 	OnReady func()
 
 	mu      sync.Mutex
-	proven  map[string]time.Time
+	proven  map[string]proof
 	handled map[string]bool
 }
 
-// provenFor is how long a namespace's proof of enforcement is trusted.
+// How the Lab seals its namespaces.
+const (
+	// SealPolicy seals with NetworkPolicy, which the cluster must be
+	// proven to enforce.
+	SealPolicy = "policy"
+	// SealFirewall has every Lab pod seal itself with a firewall it sets
+	// up before anything else in it runs.
+	SealFirewall = "firewall"
+	// SealAuto seals with policy where the cluster enforces it, and with
+	// the firewall elsewhere.
+	SealAuto = "auto"
+)
+
+// provenFor is how long a namespace's proof of enforcement, or of its
+// absence, is trusted.
 const provenFor = 10 * time.Minute
+
+type proof struct {
+	at       time.Time
+	enforced bool
+	why      string
+}
 
 // Verdict is how an experiment ended, why, how its world differed from
 // production, and how many blocks it ran.
@@ -130,48 +157,71 @@ func (l *Lab) handle(ctx context.Context, exp *v1alpha1.Experiment) Verdict {
 	default:
 		return Verdict{Phase: PhaseNotSure, Message: "the Lab cannot " + exp.Spec.Purpose + " yet"}
 	}
-	if ok, why := l.enforced(ctx, ns); !ok {
-		return failed("the Lab stays off: NetworkPolicy enforcement is not proven here (%s)", why)
+	firewall, off := l.sealMode(ctx, ns)
+	if off != "" {
+		return failed("the Lab stays off: %s", off)
 	}
+	p := l.prover(firewall)
 	cleanup := context.WithoutCancel(ctx)
-	if err := l.Prover.Clean(ctx, ns); err != nil {
+	if err := p.Clean(ctx, ns); err != nil {
 		return failed("could not clear %s: %v", ns, err)
 	}
 	defer func() {
-		if err := l.Prover.Clean(cleanup, ns); err != nil {
+		if err := p.Clean(cleanup, ns); err != nil {
 			l.Log.Error("could not clear the Lab namespace", "namespace", ns, "error", err)
 		}
 	}()
-	if err := l.Prover.Seal(ctx, ns); err != nil {
+	if err := p.Seal(ctx, ns); err != nil {
 		return failed("could not seal %s: %v", ns, err)
 	}
 	defer func() {
-		_ = l.Prover.Client.NetworkingV1().NetworkPolicies(ns).Delete(cleanup, "lab-internal", metav1.DeleteOptions{})
+		_ = p.Client.NetworkingV1().NetworkPolicies(ns).Delete(cleanup, "lab-internal", metav1.DeleteOptions{})
 	}()
-	results, err := l.Prover.Prove(ctx, ns, nil)
+	results, err := p.Prove(ctx, ns, nil)
 	if err != nil {
 		return Verdict{Phase: PhaseNotSure, Message: fmt.Sprintf("could not prove the seal: %v", err)}
 	}
 	phase, msg, sealed := sealVerdict(results)
+	if !sealed && !firewall && l.Seal != SealPolicy && l.SealImage != "" {
+		// Policy is enforced here, but not well enough to seal: the pods
+		// seal themselves instead, and do from now on.
+		l.Log.Info("the policy seal leaks; the Lab's pods seal themselves", "namespace", ns, "why", msg)
+		l.remember(ns, false, msg)
+		firewall, p = true, l.prover(true)
+		if results, err = p.Prove(ctx, ns, nil); err != nil {
+			return Verdict{Phase: PhaseNotSure, Message: fmt.Sprintf("could not prove the seal: %v", err)}
+		}
+		phase, msg, sealed = sealVerdict(results)
+	}
+	if firewall {
+		msg = firewallSays(msg, sealed)
+	}
 	if !sealed || plan == nil {
 		return Verdict{Phase: phase, Message: msg}
 	}
 	domain := cmp.Or(l.Domain, "cluster.local")
 	baseline, deps := plan.Split(ref)
-	built, err := l.Prover.Build(ctx, ns, target.Namespace, domain, deps)
+	built, err := p.Build(ctx, ns, target.Namespace, domain, deps)
 	if err != nil {
 		return Verdict{Phase: PhaseNotSure, Message: fmt.Sprintf("could not start the world: %v", err), Fidelity: plan.Fidelity}
 	}
 	dns := DNSConfig(built.DNS, target.Namespace, domain)
 	probes := WorldProbes(readyServices(built, deps), target.Namespace, domain)
-	results, err = l.Prover.Prove(ctx, ns, &Inside{Probes: probes, DNS: dns})
+	results, err = p.Prove(ctx, ns, &Inside{Probes: probes, DNS: dns, Allow: built.Allow})
 	if err != nil {
 		return Verdict{Phase: PhaseNotSure, Message: fmt.Sprintf("could not prove the seal with the world running: %v", err), Fidelity: plan.Fidelity}
 	}
 	if phase, msg, sealed := sealVerdict(results); !sealed {
+		if firewall {
+			msg = firewallSays(msg, sealed)
+		}
 		return Verdict{Phase: phase, Message: "with the world running, " + msg, Fidelity: plan.Fidelity}
 	}
 	fidelity := slices.Clone(plan.Fidelity)
+	if firewall {
+		fidelity = append(fidelity, "this cluster does not enforce NetworkPolicy, so every Lab pod sealed itself with Sentinel's firewall "+
+			"before anything else in it ran: copies reach only the Lab, though the cluster can still reach them")
+	}
 	var variants []Variant
 	var candidates, controls []string
 	if exp.Spec.Purpose == "verify-fix" && exp.Spec.Candidate != "" {
@@ -221,8 +271,8 @@ func (l *Lab) handle(ctx context.Context, exp *v1alpha1.Experiment) Verdict {
 		fidelity = append(fidelity, fmt.Sprintf("each copy is sent %d reads production answered, and must answer every one without a server error",
 			len(traffic.Requests)))
 	}
-	blocks, err := l.Prover.RunRace(ctx, ns, built, dns, baseline, variants, traffic, race, int(cmp.Or(exp.Spec.MaxRuns, 200)))
-	if log, lerr := l.Prover.DNSLog(ctx, ns); lerr == nil {
+	blocks, err := p.RunRace(ctx, ns, built, dns, baseline, variants, traffic, race, int(cmp.Or(exp.Spec.MaxRuns, 200)))
+	if log, lerr := p.DNSLog(ctx, ns); lerr == nil {
 		var own []string
 		for _, p := range probes {
 			if host, _, err := net.SplitHostPort(p.Address); err == nil {
@@ -372,26 +422,78 @@ func sealVerdict(results []Result) (v1alpha1.ExperimentPhase, string, bool) {
 	return PhasePassed, fmt.Sprintf("sealed: %d forbidden destinations refused and the controls answered", refused), true
 }
 
+// firewallSays words a seal verdict for a firewall seal, whose leaks are
+// the firewall's, not the network plugin's.
+func firewallSays(msg string, sealed bool) string {
+	if sealed {
+		return strings.Replace(msg, "sealed:", "sealed by each pod's own firewall:", 1)
+	}
+	msg, _, _ = strings.Cut(msg, ": the network plugin")
+	return "with each pod's own firewall, " + msg
+}
+
+// sealMode says whether this experiment's pods seal themselves with the
+// firewall, or why the Lab may not run at all.
+func (l *Lab) sealMode(ctx context.Context, ns string) (firewall bool, off string) {
+	switch l.Seal {
+	case SealFirewall:
+		if l.SealImage == "" {
+			return false, "the firewall seal has no image configured"
+		}
+		return true, ""
+	case SealPolicy:
+		if ok, why := l.enforced(ctx, ns); !ok {
+			return false, "NetworkPolicy enforcement is not proven here (" + why + ")"
+		}
+		return false, ""
+	}
+	ok, why := l.enforced(ctx, ns)
+	switch {
+	case ok:
+		return false, ""
+	case l.SealImage == "":
+		return false, "NetworkPolicy enforcement is not proven here (" + why + "), and no firewall image is configured"
+	}
+	return true, ""
+}
+
+// prover is the Lab's Prover for one experiment, sealing each pod with the
+// firewall when firewall is set.
+func (l *Lab) prover(firewall bool) *Prover {
+	p := *l.Prover
+	p.SealImage = ""
+	if firewall {
+		p.SealImage = l.SealImage
+	}
+	return &p
+}
+
 func (l *Lab) enforced(ctx context.Context, ns string) (bool, string) {
 	if l.Enforced == nil {
 		return false, "no enforcement check is configured"
 	}
 	l.mu.Lock()
-	at, ok := l.proven[ns]
+	pr, ok := l.proven[ns]
 	l.mu.Unlock()
-	if ok && time.Since(at) < provenFor {
-		return true, ""
+	// A refusal is remembered only where the firewall stands in for policy,
+	// so a policy seal tries again at once once enforcement is fixed.
+	if ok && time.Since(pr.at) < provenFor && (pr.enforced || l.Seal != SealPolicy) {
+		return pr.enforced, pr.why
 	}
 	enforced, why := l.Enforced(ctx, ns)
-	if enforced {
-		l.mu.Lock()
-		if l.proven == nil {
-			l.proven = map[string]time.Time{}
-		}
-		l.proven[ns] = time.Now()
-		l.mu.Unlock()
-	}
+	l.remember(ns, enforced, why)
 	return enforced, why
+}
+
+// remember holds what the Lab learned of a namespace's NetworkPolicy for
+// provenFor.
+func (l *Lab) remember(ns string, enforced bool, why string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.proven == nil {
+		l.proven = map[string]proof{}
+	}
+	l.proven[ns] = proof{at: time.Now(), enforced: enforced, why: why}
 }
 
 // Run watches Experiments in the pool and runs each new one, until ctx ends.

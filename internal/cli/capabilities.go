@@ -62,6 +62,7 @@ short-lived pods and a deny policy in --lab-namespace, then deletes them.`,
 	f.StringSliceVar(&opts.Namespaces, "namespaces", nil, "workload namespaces Sentinel may watch (required)")
 	f.StringVar(&opts.AgentNamespace, "agent-namespace", "", "namespace where Sentinel's own workloads run; node-agent and eBPF probes are dry-run there")
 	f.StringVar(&opts.LabNamespace, "lab-namespace", "", "a Lab pool namespace for the user-namespace and active NetworkPolicy probes")
+	f.StringVar(&opts.LabSeal, "lab-seal", "policy", "how the Lab seals: policy, firewall or auto, as the sentinel chart's lab.seal")
 	f.StringVar(&opts.ActorUser, "actor", "", "identity that executes actions, checked with SubjectAccessReview")
 	f.BoolVar(&active, "active", false, "prove NetworkPolicy enforcement with live traffic")
 	f.DurationVar(&settle, "settle", time.Minute, "how long a deny policy may take to start blocking traffic")

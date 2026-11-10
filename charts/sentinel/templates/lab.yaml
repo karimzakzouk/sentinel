@@ -7,7 +7,14 @@ metadata:
   labels:
     {{- include "sentinel.labels" $ | nindent 4 }}
     app.kubernetes.io/component: lab
+    {{- if eq $.Values.lab.seal "policy" }}
     pod-security.kubernetes.io/enforce: restricted
+    {{- else }}
+    # Each pod's firewall needs NET_ADMIN; sentinel-fence holds every other
+    # container to the restricted level.
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/audit: restricted
+    {{- end }}
 ---
 # Nothing gets in or out unless a Lab experiment adds a narrower allow rule.
 apiVersion: networking.k8s.io/v1

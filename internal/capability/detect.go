@@ -26,6 +26,10 @@ type Options struct {
 	// LabNamespace is one namespace from the Lab pool. The user-namespace
 	// probe and the active NetworkPolicy probe run there.
 	LabNamespace string
+	// LabSeal is how the Lab seals: policy (the default here), firewall or
+	// auto. With firewall or auto, the Lab runs where NetworkPolicy is not
+	// enforced, its pods sealing themselves.
+	LabSeal string
 	// ActorUser is the identity that executes actions, such as
 	// "system:serviceaccount:sentinel:sentinel-actor".
 	ActorUser   string
@@ -328,13 +332,16 @@ func (d *Detector) deriveFeatures(rep *Report, a access, probes probeResults, sa
 		rep.feature("act", true, "reversible actions possible in %d namespace(s): %s", len(actable), strings.Join(actable, ", "))
 	}
 
+	firewall := d.Options.LabSeal == "firewall" || d.Options.LabSeal == "auto"
 	switch {
-	case status(NetworkPolicyCheckID) != Available:
-		rep.feature("lab", false, "the Lab stays off until NetworkPolicy enforcement is proven: %s", detail(rep, NetworkPolicyCheckID))
-	case d.Options.LabNamespace == "":
+	case d.Options.LabNamespace == "" && (firewall || status(NetworkPolicyCheckID) == Available):
 		rep.feature("lab", false, "no Lab namespace is configured")
-	default:
+	case status(NetworkPolicyCheckID) == Available && d.Options.LabSeal != "firewall":
 		rep.feature("lab", true, "NetworkPolicy enforcement is proven by live traffic")
+	case firewall:
+		rep.feature("lab", true, "each Lab pod seals itself with Sentinel's firewall, and the Lab proves the seal with live traffic before every experiment")
+	default:
+		rep.feature("lab", false, "the Lab stays off until NetworkPolicy enforcement is proven: %s", detail(rep, NetworkPolicyCheckID))
 	}
 	rep.feature("lab.user-namespaces", probes.userNamespace == Available, "%s", detail(rep, "probe.user-namespace"))
 	rep.feature("lab.sandbox-runtime", len(sandbox) > 0, "%s", detail(rep, "runtime.sandbox"))

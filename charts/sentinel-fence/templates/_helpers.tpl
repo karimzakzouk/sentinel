@@ -56,6 +56,18 @@ system:serviceaccount:{{ .Values.actor.namespace }}:{{ .Values.actor.serviceAcco
   expression: "request.?namespace.orValue('')"
 {{- end }}
 
+{{- /* CEL: container c of a Lab pod meets the restricted Pod Security level, unless it is the firewall, which its own rule bounds. */ -}}
+{{- define "fence.labRestricted" -}}
+(c.name == 'lab-seal' || (!c.?securityContext.?privileged.orValue(false) &&
+ c.?securityContext.?allowPrivilegeEscalation.orValue(true) == false &&
+ c.?securityContext.?capabilities.?drop.orValue([]).exists(d, d == 'ALL') &&
+ c.?securityContext.?capabilities.?add.orValue([]).all(a, a == 'NET_BIND_SERVICE') &&
+ c.?securityContext.?runAsNonRoot.orValue(object.spec.?securityContext.?runAsNonRoot.orValue(false)) == true &&
+ c.?securityContext.?runAsUser.orValue(object.spec.?securityContext.?runAsUser.orValue(1)) != 0 &&
+ c.?securityContext.?seccompProfile.?type.orValue(object.spec.?securityContext.?seccompProfile.?type.orValue('')) in ['RuntimeDefault', 'Localhost'] &&
+ c.?ports.orValue([]).all(p, p.?hostPort.orValue(0) == 0)))
+{{- end }}
+
 {{- define "fence.workloadVariables" -}}
 - name: newAnnotations
   expression: "object.spec.template.metadata.?annotations.orValue({})"

@@ -40,3 +40,9 @@ lab:
   namespace: sentinel
   serviceAccount: sentinel-lab
   pool: []
+  # The image of the firewall each Lab pod seals itself with where the
+  # cluster does not enforce NetworkPolicy: the sentinel chart's own image,
+  # exactly as it runs it. Only an init container named lab-seal, first in
+  # its pod, from this image and running its seal command, may hold
+  # NET_ADMIN; empty forbids the firewall.
+  sealImage: ""

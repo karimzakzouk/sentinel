@@ -255,8 +255,16 @@ func copyPod(wl Workload, w World, ns string, note func(string, ...any)) (*corev
 	meta := worldMeta(ns, name, wl.Template.Labels)
 	meta.Labels[CopyOf] = ref.Kind + "." + ref.Name
 	meta.Annotations = map[string]string{}
+	scraped := false
 	for k, v := range wl.Template.Annotations {
+		if strings.HasPrefix(k, "prometheus.io/") {
+			scraped = true
+			continue
+		}
 		meta.Annotations[k] = v
+	}
+	if scraped {
+		note("%s's copy drops its prometheus.io annotations, so production's monitoring does not scrape it", ref)
 	}
 	meta.Annotations["sidecar.istio.io/inject"] = "false"
 	meta.Annotations["linkerd.io/inject"] = "disabled"

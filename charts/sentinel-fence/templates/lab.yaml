@@ -46,6 +46,34 @@ spec:
            (has(v.projected) && v.projected.sources.all(p, has(p.configMap) || has(p.downwardAPI)))))
       message: "the Lab's pods carry no service-account token and mount only empty directories, ConfigMaps and their own metadata"
       reason: Forbidden
+    # Where each pod seals itself, the Lab's namespaces must allow the
+    # firewall's NET_ADMIN, so Pod Security's restricted level is held here
+    # for every other container.
+    - expression: >-
+        variables.kind != '/pods' || request.operation == 'DELETE' ||
+        (!object.spec.?hostNetwork.orValue(false) && !object.spec.?hostPID.orValue(false) && !object.spec.?hostIPC.orValue(false) &&
+         object.spec.?securityContext.?sysctls.orValue([]).size() == 0 &&
+         object.spec.containers.all(c, {{ include "fence.labRestricted" . | replace "\n" " " }}) &&
+         object.spec.?initContainers.orValue([]).all(c, {{ include "fence.labRestricted" . | replace "\n" " " }}))
+      message: "every container of a Lab pod but its firewall meets Pod Security's restricted level, and shares nothing with the node"
+      reason: Forbidden
+    - expression: >-
+        variables.kind != '/pods' || request.operation == 'DELETE' ||
+        (object.spec.containers.all(c, c.name != 'lab-seal') &&
+         object.spec.?initContainers.orValue([]).all(c, c.name != 'lab-seal' || (
+           '{{ .Values.lab.sealImage }}' != '' && c.image == '{{ .Values.lab.sealImage }}' &&
+           c.?command.orValue([]) == ['/sentinel'] &&
+           c.?args.orValue([]).size() > 0 && c.args[0] == 'lab-seal' &&
+           c.args.all(a, a == 'lab-seal' || a.startsWith('--allow=')) &&
+           c.?securityContext.?capabilities.?add.orValue([]) == ['NET_ADMIN'] &&
+           c.?securityContext.?capabilities.?drop.orValue([]).exists(d, d == 'ALL') &&
+           !c.?securityContext.?privileged.orValue(false) &&
+           c.?securityContext.?allowPrivilegeEscalation.orValue(true) == false &&
+           c.?securityContext.?readOnlyRootFilesystem.orValue(false) == true &&
+           c.?volumeMounts.orValue([]).size() == 0)) &&
+         (object.spec.?initContainers.orValue([]).all(c, c.name != 'lab-seal') || object.spec.initContainers[0].name == 'lab-seal'))
+      message: "only a Lab pod's first init container, lab-seal, may hold NET_ADMIN, running the seal from Sentinel's own image"
+      reason: Forbidden
     - expression: >-
         variables.kind != 'networking.k8s.io/networkpolicies' || request.operation == 'DELETE' ||
         (object.spec.?egress.orValue([]).all(r, r.?to.orValue([]).all(p, !has(p.ipBlock) && !has(p.namespaceSelector))) &&

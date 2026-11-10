@@ -58,7 +58,8 @@ helm --kube-context "$ctx" upgrade --install sentinel "$root/charts/sentinel" \
   "${argocd[@]}" "${flux[@]}" "${fixer[@]}" \
   --wait --timeout 5m
 helm --kube-context "$ctx" upgrade --install sentinel-fence "$root/charts/sentinel-fence" \
-  -f "$root/test/e2e/values-fence.yaml" ${E2E_ARGOCD:+--set argocdNamespace=argocd} ${E2E_FLUX:+--set fluxNamespaces=\{flux-system\}} --wait
+  -f "$root/test/e2e/values-fence.yaml" --set lab.sealImage="$image" \
+  ${E2E_ARGOCD:+--set argocdNamespace=argocd} ${E2E_FLUX:+--set fluxNamespaces=\{flux-system\}} --wait
 
 kubectl --context "$ctx" apply -f "$root/test/apps/smoke.yaml" -f "$root/test/apps/two-tier.yaml"
 kubectl --context "$ctx" -n e2e-smoke rollout status deployment/web --timeout 3m
