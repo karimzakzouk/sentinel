@@ -28,9 +28,9 @@ report() {
   out=$(kubectl --context "$ctx" -n sentinel exec deploy/sentinel -- /sentinel incidents \
     --since "${elapsed_s}s" 2>&1) || true
   printf '%s\n' "$out"
-  # Incident blocks are separated by blank lines in /sentinel incidents.
-  count=$(printf '%s\n' "$out" | awk 'BEGIN{n=0;b=0} NF{if(!b){n++;b=1}} !NF{b=0} END{print n}')
-  echo "false_alarms=${count:-0}"
+  # Tabular /sentinel incidents: header row then one line per incident.
+  count=$(printf '%s\n' "$out" | awk 'NR>1 && NF {n++} END {print n+0}')
+  echo "false_alarms=${count}"
 }
 
 case "${1:-}" in
