@@ -46,7 +46,7 @@ var meshContainers = map[string]bool{
 }
 
 // reserved are the names the Lab's own objects use in a world.
-var reserved = map[string]bool{"lab-dns": true, "lab-echo": true, "lab-prober": true}
+var reserved = map[string]bool{"lab-dns": true, "lab-echo": true, "lab-prober": true, MITMName: true}
 
 // Workload is a production workload as the Lab copies it.
 type Workload struct {
@@ -218,13 +218,21 @@ func Synthesize(w World, target model.ObjectRef, ns string) (*Plan, error) {
 		}
 	}
 	if httpsFake {
+		p12, err := ca.TrustStorePKCS12()
+		if err != nil {
+			return nil, fmt.Errorf("Lab CA truststore: %w", err)
+		}
 		plan.Secrets = append([]*corev1.Secret{{
 			ObjectMeta: worldMeta(ns, LabCAName, nil),
 			Type:       corev1.SecretTypeOpaque,
-			Data:       map[string][]byte{"ca.crt": ca.CertPEM(), "ca.key": ca.KeyPEM()},
+			Data:       map[string][]byte{"ca.crt": ca.CertPEM(), "ca.key": ca.KeyPEM(), "ca.p12": p12},
 		}}, plan.Secrets...)
+		mitm := mitmOf(ns)
+		plan.Services = append(plan.Services, mitm.Service)
+		plan.Pods = append(plan.Pods, mitm.Pod)
+		note("HTTPS copies reach body-aware fakes through Lab MITM %s (CONNECT) when they honour HTTPS_PROXY", MITMName)
 		for i, pod := range plan.Pods {
-			if pod.Annotations[FakeTLS] == "true" || pod.Labels[CopyOf] == "" {
+			if pod.Annotations[FakeTLS] == "true" || pod.Name == MITMName || pod.Labels[CopyOf] == "" {
 				continue
 			}
 			kind, name, ok := strings.Cut(pod.Labels[CopyOf], ".")
@@ -232,7 +240,7 @@ func Synthesize(w World, target model.ObjectRef, ns string) (*Plan, error) {
 				continue
 			}
 			ref := model.ObjectRef{Kind: kind, Name: name, Namespace: w.Namespace}
-			injectTrust(&plan.Pods[i].Spec, note, ref)
+			injectTrust(&plan.Pods[i].Spec, note, ref, true)
 			if likelyClientAuth(plan.Pods[i].Spec, plan.Fidelity, ref.String()) {
 				note("%s likely presents a client certificate to an HTTPS fake; pinned or mutual TLS is NOT SURE", ref)
 			}
