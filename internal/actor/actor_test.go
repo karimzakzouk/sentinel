@@ -632,3 +632,88 @@ func TestARequestHeldForItsTrackRecordWaitsForAPerson(t *testing.T) {
 		t.Fatalf("under recommend: %s: %s; the mark may not loosen a stricter policy", phase, msg)
 	}
 }
+
+// controllerRevision is a revision of a StatefulSet or DaemonSet, as its
+// controller stores it.
+func controllerRevision(owner, uid, name, hash string, revision int64, image string) *appsv1.ControllerRevision {
+	controller := true
+	data := `{"spec":{"template":{"metadata":{"labels":{"app":"store"}},"spec":{"containers":[{"name":"store","image":"` + image + `"}]},"$patch":"replace"}}}`
+	return &appsv1.ControllerRevision{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "shop", Labels: map[string]string{appsv1.ControllerRevisionHashLabelKey: hash},
+		OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: owner, Name: "store", UID: types.UID(uid), Controller: &controller}}},
+		Revision: revision, Data: runtime.RawExtension{Raw: []byte(data)}}
+}
+
+// A DaemonSet rolls back to its revision before the newest, from its own
+// ControllerRevision, where policy lets it; a StatefulSet waits for a
+// person whatever the policy says, since its revisions may differ in what
+// they do to its data, and rolls back once one approves.
+func TestStatefulSetsAndDaemonSetsRollBackFromTheirRevisions(t *testing.T) {
+	for _, kind := range []string{"DaemonSet", "StatefulSet"} {
+		t.Run(kind, func(t *testing.T) {
+			a, client, _ := newActor(t, 1, sentinelPolicy(v1alpha1.AutonomyAutonomous, ActionRolloutUndo))
+			tmpl := corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "store", Image: "shop/store:2-broken"}}}}
+			apps := client.AppsV1()
+			var err error
+			if kind == "DaemonSet" {
+				_, err = apps.DaemonSets("shop").Create(ctx, &appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{Name: "store", Namespace: "shop", UID: "ds-uid"},
+					Spec: appsv1.DaemonSetSpec{Template: tmpl}}, metav1.CreateOptions{})
+			} else {
+				_, err = apps.StatefulSets("shop").Create(ctx, &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: "store", Namespace: "shop", UID: "ds-uid"},
+					Spec: appsv1.StatefulSetSpec{Template: tmpl}}, metav1.CreateOptions{})
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, cr := range []*appsv1.ControllerRevision{controllerRevision(kind, "ds-uid", "store-111", "111", 1, "shop/store:1"),
+				controllerRevision(kind, "ds-uid", "store-222", "222", 2, "shop/store:2-broken"),
+				controllerRevision(kind, "other-uid", "store-999", "999", 9, "shop/other:9")} {
+				if _, err := apps.ControllerRevisions("shop").Create(ctx, cr, metav1.CreateOptions{}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			image := func() string {
+				if kind == "DaemonSet" {
+					ds, _ := apps.DaemonSets("shop").Get(ctx, "store", metav1.GetOptions{})
+					return ds.Spec.Template.Spec.Containers[0].Image
+				}
+				sts, _ := apps.StatefulSets("shop").Get(ctx, "store", metav1.GetOptions{})
+				return sts.Spec.Template.Spec.Containers[0].Image
+			}
+			req := func(from string) *v1alpha1.ActionRequest {
+				r := request(ActionRolloutUndo, map[string]string{ParamFromTemplateHash: from})
+				r.Spec.Target.Kind, r.Spec.Target.Name = kind, "store"
+				return r
+			}
+			if phase, msg := a.Handle(ctx, req("111")); phase != v1alpha1.ActionFailed && phase != v1alpha1.ActionPending || image() != "shop/store:2-broken" {
+				t.Fatalf("an old revision named: %s %s, image %s", phase, msg, image())
+			}
+			r := req("222")
+			if kind == "StatefulSet" {
+				r.Spec.Params[ParamFromTemplateHash] = "store-222"
+				if phase, msg := a.Handle(ctx, r); phase != v1alpha1.ActionPending || !strings.Contains(msg, "always waits for a person") {
+					t.Fatalf("without approval: %s %s", phase, msg)
+				}
+				r.Annotations = map[string]string{AnnotationApprovedBy: "karim"}
+			}
+			if phase, msg := a.Handle(ctx, r); phase != v1alpha1.ActionSucceeded || image() != "shop/store:1" ||
+				!strings.Contains(msg, "from revision 2 to revision 1") {
+				t.Fatalf("%s %s, image %s", phase, msg, image())
+			}
+		})
+	}
+}
+
+// A Deployment Flagger promotes as a canary's primary is Flagger's to roll
+// back: the actor defers to its analysis.
+func TestAFlaggerPrimaryIsLeftToFlagger(t *testing.T) {
+	a, client, _ := newActor(t, 1, sentinelPolicy(v1alpha1.AutonomyAutonomous, ActionRolloutUndo))
+	dep, _ := client.AppsV1().Deployments("shop").Get(ctx, "web", metav1.GetOptions{})
+	dep.OwnerReferences = []metav1.OwnerReference{{APIVersion: "flagger.app/v1beta1", Kind: "Canary", Name: "web", UID: "canary-uid"}}
+	if _, err := client.AppsV1().Deployments("shop").Update(ctx, dep, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	phase, msg := a.Handle(ctx, request(ActionRolloutUndo, map[string]string{ParamFromTemplateHash: "bbb"}))
+	if phase != v1alpha1.ActionFailed || !strings.Contains(msg, "Flagger's canary web") {
+		t.Fatalf("%s %s", phase, msg)
+	}
+}

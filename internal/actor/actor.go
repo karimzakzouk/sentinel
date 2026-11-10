@@ -7,6 +7,7 @@ package actor
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -144,7 +145,7 @@ func (a *Actor) admit(ctx context.Context, req *v1alpha1.ActionRequest) (bool, v
 		return no(v1alpha1.ActionRejected, "the kill switch is on")
 	case t.Namespace != req.Namespace || !slices.Contains(a.Namespaces, t.Namespace):
 		return no(v1alpha1.ActionRejected, fmt.Sprintf("Sentinel may not act in namespace %q", t.Namespace))
-	case t.APIVersion != "apps/v1" || t.Kind != "Deployment" && t.Kind != "StatefulSet":
+	case t.APIVersion != "apps/v1" || t.Kind != "Deployment" && t.Kind != "StatefulSet" && t.Kind != "DaemonSet":
 		return no(v1alpha1.ActionRejected, fmt.Sprintf("no contract covers a %s/%s", t.APIVersion, t.Kind))
 	}
 	if who := req.Annotations[AnnotationVetoedBy]; who != "" {
@@ -160,6 +161,11 @@ func (a *Actor) admit(ctx context.Context, req *v1alpha1.ActionRequest) (bool, v
 	}
 	level := policy.Autonomy(policies, req.Spec.Action)
 	held := req.Annotations[AnnotationNeedsApproval]
+	if t.Kind == "StatefulSet" && req.Spec.Action == "rollout.undo" && held == "" {
+		// A StatefulSet's revisions may differ in what they do to its
+		// data, so a person approves rolling one back, whatever the policy.
+		held = "rolling back a StatefulSet, which keeps state, always waits for a person"
+	}
 	if held != "" && policy.Above(level, v1alpha1.AutonomyApprove) {
 		level = v1alpha1.AutonomyApprove
 	}
@@ -335,6 +341,14 @@ func reconciler(meta metav1.ObjectMeta) string {
 }
 
 func refuseReconciled(meta metav1.ObjectMeta, what string) error {
+	for _, o := range meta.OwnerReferences {
+		if o.Kind == "Canary" && strings.HasPrefix(o.APIVersion, "flagger.app/") {
+			// Flagger analyses each rollout of its canaries and rolls back
+			// those that fail; a rollback beside it would fight it.
+			return fmt.Errorf("%s is the primary of Flagger's canary %s, which rolls back failed rollouts itself; Sentinel defers to its analysis",
+				meta.Name, o.Name)
+		}
+	}
 	if owner := reconciler(meta); owner != "" {
 		return fmt.Errorf("%s is kept in sync by %s, which would undo %s at its next sync; Sentinel leaves it to people until it can act through %s",
 			meta.Name, owner, what, owner)
@@ -346,6 +360,9 @@ func refuseReconciled(meta metav1.ObjectMeta, what string) error {
 // must still be the Deployment's newest. The template comes from the
 // Deployment's own ReplicaSet, never from the request.
 func (a *Actor) rolloutUndo(ctx context.Context, req *v1alpha1.ActionRequest, dryRun bool) (string, error) {
+	if k := req.Spec.Target.Kind; k == "StatefulSet" || k == "DaemonSet" {
+		return a.undoRevision(ctx, req, dryRun)
+	}
 	dep, err := a.deployment(ctx, req)
 	if err != nil {
 		return "", err
@@ -471,6 +488,109 @@ func previousTemplate(dep *appsv1.Deployment, rss []appsv1.ReplicaSet, fromHash 
 	tmpl := previous.Spec.Template.DeepCopy()
 	delete(tmpl.Labels, appsv1.DefaultDeploymentUniqueLabelKey)
 	return tmpl, revision(current), revision(previous), nil
+}
+
+// undoRevision rolls a StatefulSet or DaemonSet back to the revision before
+// the one the request names, which must still be its newest: the template
+// comes from the workload's own ControllerRevision, never from the request.
+func (a *Actor) undoRevision(ctx context.Context, req *v1alpha1.ActionRequest, dryRun bool) (string, error) {
+	t := req.Spec.Target
+	apps := a.Client.AppsV1()
+	var meta metav1.ObjectMeta
+	switch t.Kind {
+	case "StatefulSet":
+		sts, err := apps.StatefulSets(t.Namespace).Get(ctx, t.Name, metav1.GetOptions{})
+		if err != nil {
+			return "", err
+		}
+		meta = sts.ObjectMeta
+	case "DaemonSet":
+		ds, err := apps.DaemonSets(t.Namespace).Get(ctx, t.Name, metav1.GetOptions{})
+		if err != nil {
+			return "", err
+		}
+		meta = ds.ObjectMeta
+	}
+	if err := refuseReconciled(meta, "a rollback"); err != nil {
+		return "", err
+	}
+	crs, err := apps.ControllerRevisions(t.Namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return "", err
+	}
+	tmpl, from, to, err := previousRevision(meta, crs.Items, req.Spec.Params[ParamFromTemplateHash])
+	if err != nil {
+		return "", err
+	}
+	switch t.Kind {
+	case "StatefulSet":
+		sts, err := apps.StatefulSets(t.Namespace).Get(ctx, t.Name, metav1.GetOptions{})
+		if err != nil {
+			return "", err
+		}
+		sts.Spec.Template = *tmpl
+		_, err = apps.StatefulSets(t.Namespace).Update(ctx, sts, writeOptions(dryRun))
+		if err != nil {
+			return "", err
+		}
+	case "DaemonSet":
+		ds, err := apps.DaemonSets(t.Namespace).Get(ctx, t.Name, metav1.GetOptions{})
+		if err != nil {
+			return "", err
+		}
+		ds.Spec.Template = *tmpl
+		if _, err := apps.DaemonSets(t.Namespace).Update(ctx, ds, writeOptions(dryRun)); err != nil {
+			return "", err
+		}
+	}
+	return fmt.Sprintf("rolled %s back from revision %d to revision %d", t.Name, from, to), nil
+}
+
+// previousRevision finds a StatefulSet's or DaemonSet's newest
+// ControllerRevision, checks that it is the one the request names (by
+// name, as StatefulSet pods carry it, or by hash, as DaemonSet pods do),
+// and returns the template of the revision before it.
+func previousRevision(owner metav1.ObjectMeta, crs []appsv1.ControllerRevision, from string) (*corev1.PodTemplateSpec, int, int, error) {
+	if from == "" {
+		return nil, 0, 0, fmt.Errorf("the request names no revision to undo (%s)", ParamFromTemplateHash)
+	}
+	var current, previous *appsv1.ControllerRevision
+	for i := range crs {
+		cr := &crs[i]
+		if c := metav1.GetControllerOf(cr); c == nil || c.UID != owner.UID {
+			continue
+		}
+		if current == nil || cr.Revision > current.Revision {
+			current = cr
+		}
+	}
+	if current == nil {
+		return nil, 0, 0, fmt.Errorf("%s has no revisions", owner.Name)
+	}
+	if current.Name != from && current.Labels[appsv1.ControllerRevisionHashLabelKey] != from {
+		return nil, 0, 0, fmt.Errorf("%s changed since the decision: its newest revision is %d (%s), not %s", owner.Name, current.Revision, current.Name, from)
+	}
+	for i := range crs {
+		cr := &crs[i]
+		if c := metav1.GetControllerOf(cr); c == nil || c.UID != owner.UID || cr.Revision >= current.Revision {
+			continue
+		}
+		if previous == nil || cr.Revision > previous.Revision {
+			previous = cr
+		}
+	}
+	if previous == nil {
+		return nil, 0, 0, fmt.Errorf("%s has no revision before %d to roll back to", owner.Name, current.Revision)
+	}
+	var data struct {
+		Spec struct {
+			Template corev1.PodTemplateSpec `json:"template"`
+		} `json:"spec"`
+	}
+	if err := json.Unmarshal(previous.Data.Raw, &data); err != nil {
+		return nil, 0, 0, fmt.Errorf("read revision %d of %s: %w", previous.Revision, owner.Name, err)
+	}
+	return &data.Spec.Template, int(current.Revision), int(previous.Revision), nil
 }
 
 // scale sets a workload's replicas, if they are still what the request
