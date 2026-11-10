@@ -31,7 +31,7 @@ rules:
   - apiGroups: [sentinel.karimzakzouk.github.io]
     resources: [sentinelpolicies]
     verbs: [get, list, watch]
-  {{- if .Values.actor.enabled }}
+  {{- if (or .Values.actor.enabled (eq .Values.profile "full")) }}
   # Asking the actor for an action is the controller's only write; the fence
   # holds it to the watched namespaces.
   - apiGroups: [sentinel.karimzakzouk.github.io]
@@ -52,7 +52,7 @@ rules:
   - apiGroups: [node.k8s.io]
     resources: [runtimeclasses]
     verbs: [list]
-  {{- if .Values.actor.enabled }}
+  {{- if (or .Values.actor.enabled (eq .Values.profile "full")) }}
   # Lets the capability report check what the actor may do.
   - apiGroups: [authorization.k8s.io]
     resources: [subjectaccessreviews]
@@ -71,7 +71,7 @@ roleRef:
   name: {{ .Release.Name }}-cluster-read
 subjects:
   - {{ toJson $controller }}
-{{- range .Values.watch.namespaces }}
+{{- range (include "sentinel.watchList" . | fromJsonArray) }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -118,7 +118,7 @@ subjects:
   - {{ toJson $controller }}
 {{- end }}
 {{- end }}
-{{- if .Values.actor.enabled }}
+{{- if (or .Values.actor.enabled (eq .Values.profile "full")) }}
 ---
 # Update existing workloads and their scale, read the revisions a rollback
 # restores, and carry out action requests; never create, delete or read
@@ -150,7 +150,7 @@ rules:
   - apiGroups: [sentinel.karimzakzouk.github.io]
     resources: [actionrequests/status]
     verbs: [update]
-{{- range .Values.watch.namespaces }}
+{{- range (include "sentinel.watchList" . | fromJsonArray) }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -169,7 +169,7 @@ subjects:
     namespace: {{ $.Values.actor.namespace }}
 {{- end }}
 {{- end }}
-{{- if and .Values.actor.enabled .Values.owners.argocd.enabled }}
+{{- if and (or .Values.actor.enabled (eq .Values.profile "full")) .Values.owners.argocd.enabled }}
 ---
 # Pausing an Argo CD Application's automated sync before a rollback; the
 # fence allows that change and no other.
@@ -205,7 +205,7 @@ subjects:
     name: {{ .Values.actor.serviceAccount }}
     namespace: {{ .Values.actor.namespace }}
 {{- end }}
-{{- if and .Values.actor.enabled .Values.owners.flux.enabled }}
+{{- if and (or .Values.actor.enabled (eq .Values.profile "full")) .Values.owners.flux.enabled }}
 {{- range .Values.owners.flux.namespaces }}
 ---
 # Suspending the Flux Kustomization or HelmRelease that applies a workload
@@ -242,7 +242,7 @@ subjects:
     namespace: {{ $.Values.actor.namespace }}
 {{- end }}
 {{- end }}
-{{- if .Values.lab.enabled }}
+{{- if (or .Values.lab.enabled (eq .Values.profile "full")) }}
 ---
 # Asking the Lab to verify a rollback: the controller creates Experiments in
 # the Lab's pool and reads their verdicts; the fence holds it to that.
@@ -256,7 +256,7 @@ rules:
   - apiGroups: [sentinel.karimzakzouk.github.io]
     resources: [experiments]
     verbs: [get, list, watch, create]
-{{- if .Values.actor.enabled }}
+{{- if (or .Values.actor.enabled (eq .Values.profile "full")) }}
 ---
 # Reading the Lab's verdicts: at lab-verified the actor checks the
 # Experiment a request names before it acts.
@@ -272,7 +272,7 @@ rules:
     verbs: [get]
 {{- end }}
 {{- range include "sentinel.labNamespaces" . | fromJsonArray }}
-{{- if $.Values.actor.enabled }}
+{{- if (or $.Values.actor.enabled (eq $.Values.profile "full")) }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -371,7 +371,7 @@ roleRef:
   name: {{ .Release.Name }}-settings
 subjects:
   - {{ toJson $controller }}
-{{- if .Values.actor.enabled }}
+{{- if (or .Values.actor.enabled (eq .Values.profile "full")) }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -465,7 +465,7 @@ roleRef:
   name: {{ .Release.Name }}-capture-mitm-inject
 subjects:
   - {{ toJson $controller }}
-{{- range .Values.watch.namespaces }}
+{{- range (include "sentinel.watchList" . | fromJsonArray) }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role

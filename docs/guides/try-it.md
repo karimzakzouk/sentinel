@@ -5,13 +5,23 @@ half an hour. Run it on a machine with at least 4 CPUs and 12 GB of memory
 (a cloud VM or the CUFE server), not a laptop: the cluster, Online Boutique
 and its load generator need the room.
 
+On a real cluster (not this kind walkthrough), one release is enough:
+
+```bash
+./hack/sentinel-install.sh --namespaces my-app --profile observe
+# or --profile full for actor + Lab
+kubectl -n sentinel port-forward deploy/sentinel 8090
+```
+
+Day-2 (policies, kill switch, Slack/LLM keys, MITM toggles) is the UI.
+
 ## 1. Bring it up
 
 You need Docker, Go, Helm, kind and Node; `hack/install-tools.sh` installs
 the pinned versions of the rest.
 
 ```bash
-make e2e-up        # kind cluster, Sentinel, the fence, the smoke app
+make e2e-up        # kind cluster, one Helm release (CRDs + Sentinel + fence), smoke app
 make boutique-up   # Online Boutique and its load generator
 ```
 

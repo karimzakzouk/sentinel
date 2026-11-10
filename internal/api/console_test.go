@@ -185,6 +185,41 @@ func TestAnApprovalIsThePersonsOwn(t *testing.T) {
 	}
 }
 
+// Slack and LLM secrets are write-only: the console stores them as Secrets
+// and never returns their values, only whether they are set.
+func TestConsoleSecretsAreWriteOnly(t *testing.T) {
+	k := fake.NewClientset()
+	k.PrependReactor("create", "selfsubjectreviews", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, &authenticationv1.SelfSubjectReview{Status: authenticationv1.SelfSubjectReviewStatus{
+			UserInfo: authenticationv1.UserInfo{Username: "alice@example.com"}}}, nil
+	})
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{
+		actor.RequestsResource: "ActionRequestList", actor.PoliciesResource: "SentinelPolicyList"})
+	c := &Console{Namespaces: []string{"shop"}, AgentNamespace: "sentinel", Clients: func(string) (kubernetes.Interface, dynamic.Interface, error) {
+		return k, dyn, nil
+	}}
+	srv := httptest.NewServer((&Server{Console: c}).Handler())
+	t.Cleanup(srv.Close)
+	cookie := signIn(t, srv)
+	if res := call(t, srv, http.MethodPut, "/api/secrets/slack", `{"webhookUrl":"https://hooks.slack.com/services/T/B/x"}`, cookie, nil); res.status != http.StatusOK {
+		t.Fatalf("save slack: %d %s", res.status, res.body)
+	}
+	if res := call(t, srv, http.MethodPut, "/api/secrets/llm", `{"key":"sk-test"}`, cookie, nil); res.status != http.StatusOK {
+		t.Fatalf("save llm: %d %s", res.status, res.body)
+	}
+	var st secretStatus
+	body := call(t, srv, http.MethodGet, "/api/secrets", "", cookie, nil).body
+	if err := json.Unmarshal(body, &st); err != nil || !st.Slack || !st.LLM {
+		t.Fatalf("status %+v body=%s err=%v", st, body, err)
+	}
+	if strings.Contains(string(body), "sk-test") {
+		t.Fatal("secret value leaked in status")
+	}
+	if res := call(t, srv, http.MethodPut, "/api/secrets/slack", `{"webhookUrl":"http://insecure"}`, cookie, nil); res.status != http.StatusBadRequest {
+		t.Fatalf("http webhook: %d", res.status)
+	}
+}
+
 // A policy set in the console is the person's, applied as them, and the
 // console lists it with the namespace's others.
 func TestAPolicySetInTheConsole(t *testing.T) {

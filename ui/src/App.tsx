@@ -193,11 +193,20 @@ export function App() {
             <div className="empty">
               <h2>All quiet</h2>
               <p>
-                Sentinel is watching your apps. When something breaks it opens an incident here in plain language, shows what
-                changed, and records what it would do — or does it, when a{" "}
-                <a href="#/policies">policy</a> allows. Use <a href="#/settings">Settings</a> to turn capture, the Lab, and
-                acting knobs on or off without Helm.
+                Sentinel is watching. When something breaks, an incident shows up here in plain language — what changed, why
+                it thinks so, and what it would do.
               </p>
+              <ol className="muted" style={{ textAlign: "left", maxWidth: 420, margin: "1rem auto", lineHeight: 1.5 }}>
+                <li>
+                  <a href="#/capabilities">Cluster</a> — what this install can see and do
+                </li>
+                <li>
+                  <a href="#/settings">Settings</a> — kill switch, Slack/LLM keys, detection
+                </li>
+                <li>
+                  <a href="#/policies">Policies</a> — let it act in a namespace when you are ready
+                </li>
+              </ol>
             </div>
           )}
         </main>

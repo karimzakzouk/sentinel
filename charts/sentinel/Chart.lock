@@ -1,0 +1,9 @@
+dependencies:
+- name: sentinel-crds
+  repository: file://../sentinel-crds
+  version: 0.1.0
+- name: sentinel-fence
+  repository: file://../sentinel-fence
+  version: 0.1.0
+digest: sha256:64bde100da1758f4327910cb139d90e6c1b0b09ae2e828fce8b74553b7ca0421
+generated: "2026-11-10T10:05:33.424819937Z"

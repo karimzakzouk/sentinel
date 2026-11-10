@@ -6,6 +6,26 @@ image:
   digest: ""
   pullPolicy: IfNotPresent
 
+# One install knob for "what power do I want today":
+#   observe  controller only (default) — watches and records, changes nothing
+#   full     also installs the actor and Lab (rollbacks + sealed verification)
+# The Fixer, capture agent, node agent and transparent MITM stay explicit:
+# they need forge credentials or privileged node access.
+profile: observe
+
+# Install the admission fence as a subchart (recommended). Cluster admins who
+# manage the fence separately can set fence.enabled=false.
+fence:
+  enabled: true
+
+# Shared with the fence subchart so one list of namespaces is enough.
+# Prefer watch.namespaces; when that is set, hack/sentinel-install.sh (and
+# NOTES) copy it here. You can also set only global.watchNamespaces.
+global:
+  watchNamespaces: []
+  labNamespacePrefix: sentinel-lab-
+  labPoolSize: 2
+
 # Namespaces Sentinel may watch. Required: an empty list fails the install,
 # because Sentinel never guesses where it is allowed to look.
 watch:
@@ -127,7 +147,9 @@ fixer:
       format: openai
       url: ""
       model: ""
-      secretName: ""
+      # Default Secret the console can fill from Settings (write-only). Empty
+      # secretName skips the volume mount until you set one.
+      secretName: sentinel-fixer-llm
       key: key
       maxAttempts: 2
   forge:
@@ -247,12 +269,25 @@ console:
     scopes: [email, groups]
 
 # Where Sentinel tells people what it needs from them or did: approvals,
-# escalations, and actions that cleared an incident. Name a Secret holding a
-# Slack incoming webhook URL; without one, notices stay in the UI.
+# escalations, and actions that cleared an incident. The console can create
+# this Secret from Settings (write-only). Without a value, notices stay in the UI.
 notify:
   slack:
-    secretName: ""
+    secretName: sentinel-slack
     key: webhook-url
+
+# Subchart defaults when fence.enabled (one helm install). Namespaces and Lab
+# pool follow global.* / watch.* via the fence helpers.
+sentinel-fence:
+  controller:
+    namespace: "" # filled to the release namespace by hack/sentinel-install.sh
+  namespaces: []
+  lab:
+    namespace: ""
+    pool: []
+    poolSize: 2
+    namespacePrefix: sentinel-lab-
+    sealImage: ""
 
 capabilities:
   interval: 10m

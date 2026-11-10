@@ -24,7 +24,7 @@ spec:
         (request.resource.group == 'sentinel.karimzakzouk.github.io' && request.resource.resource == 'actionrequests' &&
          variables.subResource == '' && request.operation == 'CREATE' && variables.requestNamespace in {{ include "fence.namespaces" . }}) ||
         (request.resource.group == 'sentinel.karimzakzouk.github.io' && request.resource.resource == 'experiments' &&
-         variables.subResource == '' && request.operation == 'CREATE' && variables.requestNamespace in {{ toJson .Values.lab.pool | replace "\"" "'" }} &&
+         variables.subResource == '' && request.operation == 'CREATE' && variables.requestNamespace in {{ include "fence.labPoolCEL" . }} &&
          object.spec.purpose in ['verify-fix', 'reproduce'] && object.spec.labNamespace == variables.requestNamespace) ||
         (request.resource.group == 'sentinel.karimzakzouk.github.io' && request.resource.resource == 'fixes' &&
          variables.subResource == '' && request.operation == 'CREATE' && variables.requestNamespace == '{{ .Values.fixer.namespace }}')

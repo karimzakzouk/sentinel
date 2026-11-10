@@ -16,6 +16,19 @@ v2 is being rebuilt from scratch, phase by phase. See
 [docs/decisions.md](docs/decisions.md) for the decisions made while building,
 and [docs/plan/](docs/plan/) for the full design and build plan.
 
+## Install on a cluster
+
+One Helm release (CRDs + Sentinel + fence):
+
+```sh
+./hack/sentinel-install.sh --namespaces my-app
+# --profile full  also installs the actor and Lab
+kubectl -n sentinel port-forward deploy/sentinel 8090
+```
+
+Day-2 is the UI (policies, kill switch, Slack/LLM secrets). Privileged agents
+and forge tokens stay explicit Helm/`kubectl` steps.
+
 ## Try the capability report
 
 Against any cluster your kubeconfig can reach:

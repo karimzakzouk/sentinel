@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Brings up the end-to-end environment: a kind cluster, Sentinel's image, the
-# three charts and the test workloads.
+# Brings up the end-to-end environment: a kind cluster, Sentinel's image, one
+# Helm release (CRDs + Sentinel + fence) and the test workloads.
 #
 #   E2E_CLUSTER=sentinel-e2e E2E_NETWORK=kindnet IMAGE=sentinel:dev hack/e2e-up.sh
 #
@@ -50,16 +50,19 @@ if [ -n "${E2E_GITEA:-}" ]; then
     --set fixer.forge.api=http://gitea-http.gitea.svc:3000/api/v1 --set fixer.forge.secretName=sentinel-fixer-forge)
 fi
 
-helm --kube-context "$ctx" upgrade --install sentinel-crds "$root/charts/sentinel-crds" --wait
+helm --kube-context "$ctx" dependency update "$root/charts/sentinel"
 helm --kube-context "$ctx" upgrade --install sentinel "$root/charts/sentinel" \
   --namespace sentinel --create-namespace \
   -f "$root/test/e2e/values-sentinel.yaml" \
   --set image.repository="${image%:*}" --set image.tag="${image##*:}" --set image.pullPolicy=Never \
+  --set sentinel-fence.lab.sealImage="$image" \
+  --set sentinel-fence.controller.namespace=sentinel \
+  --set sentinel-fence.lab.namespace=sentinel \
+  --set sentinel-fence.fixer.namespace=sentinel \
+  ${E2E_ARGOCD:+--set sentinel-fence.argocdNamespace=argocd} \
+  ${E2E_FLUX:+--set 'sentinel-fence.fluxNamespaces={flux-system}'} \
   "${argocd[@]}" "${flux[@]}" "${fixer[@]}" \
   --wait --timeout 5m
-helm --kube-context "$ctx" upgrade --install sentinel-fence "$root/charts/sentinel-fence" \
-  -f "$root/test/e2e/values-fence.yaml" --set lab.sealImage="$image" \
-  ${E2E_ARGOCD:+--set argocdNamespace=argocd} ${E2E_FLUX:+--set fluxNamespaces=\{flux-system\}} --wait
 
 kubectl --context "$ctx" apply -f "$root/test/apps/smoke.yaml" -f "$root/test/apps/two-tier.yaml"
 kubectl --context "$ctx" -n e2e-smoke rollout status deployment/web --timeout 3m

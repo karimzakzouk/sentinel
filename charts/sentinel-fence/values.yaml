@@ -12,8 +12,8 @@ actor:
   namespace: sentinel-actor
   serviceAccount: sentinel-actor
 
-# Namespaces the actor may change. Keep in sync with the sentinel chart's
-# watch.namespaces. Empty means the actor may change nothing.
+# Namespaces the actor may change. Prefer this list; when empty, the fence
+# uses global.watchNamespaces (set by the parent sentinel chart / install).
 namespaces: []
 
 replicas:
@@ -39,7 +39,10 @@ fixer:
 lab:
   namespace: sentinel
   serviceAccount: sentinel-lab
+  # Explicit pool wins. Otherwise poolSize + namespacePrefix (or global.*) build it.
   pool: []
+  poolSize: 0
+  namespacePrefix: sentinel-lab-
   # The image of the firewall each Lab pod seals itself with where the
   # cluster does not enforce NetworkPolicy: the sentinel chart's own image,
   # exactly as it runs it. Only an init container named lab-seal, first in
