@@ -90,7 +90,7 @@ type Brain struct {
 	// ValueLab, when set, races the failing revision with learned limits
 	// (container to memory and/or CPU limit) in place, before the Fixer is
 	// asked for the pull request that sets them.
-	ValueLab func(ctx context.Context, incident model.ID, target model.ObjectRef, revision string, memory, cpu map[string]string) (string, bool, error)
+	ValueLab func(ctx context.Context, incident model.ID, target model.ObjectRef, revision string, memory, cpu, disk map[string]string) (string, bool, error)
 	// CodeFixWithoutRollback asks the Fixer for a fix to the code of a
 	// crash with nothing to roll back, as for a bug older than the newest
 	// revision.

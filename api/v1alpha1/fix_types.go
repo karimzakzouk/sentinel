@@ -37,6 +37,16 @@ type FixSpec struct {
 	// as wrong as the new one.
 	// +optional
 	CPULimits map[string]string `json:"cpuLimits,omitempty"`
+	// DiskLimits are, per container, the ephemeral-storage limit Sentinel
+	// learned from what the workload used while it was healthy. For a
+	// disk-limit incident a fix proposes it, since putting back the old
+	// limit can be as wrong as the new one.
+	// +optional
+	DiskLimits map[string]string `json:"diskLimits,omitempty"`
+	// ReplicasBad is the replica count the rolled-back revision set, when
+	// a fix also restores spec.replicas; the good count is what runs now.
+	// +optional
+	ReplicasBad *int32 `json:"replicasBad,omitempty"`
 	// Merge lets the Fixer merge its pull request itself: the namespace's
 	// policy grants fix.merge at autonomous, and Sentinel's fixes for this
 	// fault on this workload have earned it where the policy asks them to.

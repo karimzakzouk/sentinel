@@ -171,6 +171,24 @@ func TestAMemoryLimitIsNotRestored(t *testing.T) {
 	}
 }
 
+// An ephemeral-storage limit is not put back either.
+func TestADiskLimitIsNotRestored(t *testing.T) {
+	ctx := context.Background()
+	pod := func(limit string) corev1.PodTemplateSpec {
+		c := corev1.Container{Name: "podinfod", Image: "podinfo:1",
+			Resources: corev1.ResourceRequirements{Limits: corev1.ResourceList{corev1.ResourceEphemeralStorage: resource.MustParse(limit)}}}
+		return corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{c}}}
+	}
+	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "podinfo", Namespace: "shop", UID: types.UID("dep")},
+		Spec: appsv1.DeploymentSpec{Template: pod("1Gi")}}
+	rs := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Name: "podinfo-bad", Namespace: "shop", Labels: map[string]string{"pod-template-hash": "bad"},
+		OwnerReferences: []metav1.OwnerReference{{UID: "dep"}}}, Spec: appsv1.ReplicaSetSpec{Template: pod("100Mi")}}
+	_, err := ContainerChange(ctx, fake.NewClientset(dep, rs), dep, "bad")
+	if err == nil || !strings.Contains(err.Error(), "ephemeral-storage limit") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 // A CPU limit is not put back either.
 func TestACPULimitIsNotRestored(t *testing.T) {
 	ctx := context.Background()
@@ -187,6 +205,20 @@ func TestACPULimitIsNotRestored(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "CPU limit") {
 		t.Fatalf("err = %v", err)
 	}
+}
+
+func diskTemplate(image, limit string) corev1.PodTemplateSpec {
+	c := corev1.Container{Name: "web", Image: image,
+		Resources: corev1.ResourceRequirements{Limits: corev1.ResourceList{corev1.ResourceEphemeralStorage: resource.MustParse(limit)}}}
+	return corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{c}}}
+}
+
+func graceTemplate(seconds int64) corev1.PodTemplateSpec {
+	c := corev1.Container{Name: "web", Image: "web:1"}
+	return corev1.PodTemplateSpec{Spec: corev1.PodSpec{
+		TerminationGracePeriodSeconds: &seconds,
+		Containers:                      []corev1.Container{c},
+	}}
 }
 
 // Of several values a revision changed, the fix sets the one the fault
@@ -229,6 +261,10 @@ func TestChangeForBlamesByFaultClass(t *testing.T) {
 			spec: v1alpha1.FixSpec{FaultClass: "resource.cpu-limit", CPULimits: map[string]string{"web": "500m"}}, want: "limits.cpu 10m -> 100m"},
 		{name: "a CPU limit with nothing learned", good: cpuTemplate("web:1", "100m"), bad: cpuTemplate("web:1", "10m"),
 			spec: v1alpha1.FixSpec{FaultClass: "resource.cpu-limit"}, wantRefusal: "has not measured enough"},
+		{name: "a disk limit, learned", good: diskTemplate("web:1", "1Gi"), bad: diskTemplate("web:1", "50Mi"),
+			spec: v1alpha1.FixSpec{FaultClass: "resource.disk-limit", DiskLimits: map[string]string{"web": "200Mi"}}, want: "limits.ephemeral-storage 50Mi -> 200Mi"},
+		{name: "termination grace restored", good: graceTemplate(30), bad: graceTemplate(1),
+			spec: v1alpha1.FixSpec{FaultClass: "config.timeout"}, want: "terminationGracePeriodSeconds 1 -> 30"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "shop", UID: types.UID("dep")},
@@ -361,5 +397,103 @@ func TestChangeForRestoresAProbeAndKeepsTheImage(t *testing.T) {
 	}
 	if c.Field != "readinessProbe" || listed(kept) != "web's image" {
 		t.Fatalf("got %s keeping %q", c.Field, listed(kept))
+	}
+}
+
+func TestLocateSetsALearnedDiskLimit(t *testing.T) {
+	repo := repoOf(t, map[string]string{
+		"app/kustomization.yaml": "resources: [deployment.yaml]\n",
+		"app/deployment.yaml":    podinfo("          resources:\n            limits: {ephemeral-storage: 100Mi}\n"),
+	})
+	edit, err := Locate(repo, "app", Target{Kind: "Deployment", Name: "podinfo"},
+		Change{Container: "podinfod", Field: "limits.ephemeral-storage", Bad: "100Mi", Good: "200Mi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(edit.After), "200Mi") {
+		t.Fatalf("after the fix:\n%s", edit.After)
+	}
+}
+
+func TestLocateRestoresReplicas(t *testing.T) {
+	yaml := `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: podinfo
+spec:
+  replicas: 0
+  selector:
+    matchLabels: {app: podinfo}
+  template:
+    metadata:
+      labels: {app: podinfo}
+    spec:
+      containers:
+        - name: podinfod
+          image: ghcr.io/stefanprodan/podinfo:6.17.0
+`
+	repo := repoOf(t, map[string]string{"app/kustomization.yaml": "resources: [deployment.yaml]\n", "app/deployment.yaml": yaml})
+	edit, err := Locate(repo, "app", Target{Kind: "Deployment", Name: "podinfo"},
+		Change{Field: "replicas", Bad: 0, Good: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(edit.After), "replicas: 3") && !strings.Contains(string(edit.After), `replicas: "3"`) {
+		t.Fatalf("after the fix:\n%s", edit.After)
+	}
+}
+
+func TestLocateRestoresTerminationGrace(t *testing.T) {
+	dep := `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: podinfo
+spec:
+  selector:
+    matchLabels: {app: podinfo}
+  template:
+    metadata:
+      labels: {app: podinfo}
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+        - name: podinfod
+          image: ghcr.io/stefanprodan/podinfo:6.17.0
+          ports:
+            - containerPort: 9898
+`
+	repo := repoOf(t, map[string]string{"app/kustomization.yaml": "resources: [deployment.yaml]\n", "app/deployment.yaml": dep})
+	edit, err := Locate(repo, "app", Target{Kind: "Deployment", Name: "podinfo"},
+		Change{Field: "terminationGracePeriodSeconds", Bad: 1, Good: 30})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(edit.After)
+	if !strings.Contains(got, "terminationGracePeriodSeconds") || !strings.Contains(got, "30") || strings.Contains(got, "terminationGracePeriodSeconds: 1") {
+		t.Fatalf("after the fix:\n%s", edit.After)
+	}
+}
+
+func TestChangeForRestoresReplicasWhenAsked(t *testing.T) {
+	ctx := context.Background()
+	tmpl := func(replicas int32) appsv1.DeploymentSpec {
+		c := corev1.Container{Name: "web", Image: "web:1"}
+		return appsv1.DeploymentSpec{
+			Replicas: &replicas,
+			Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{c}}},
+		}
+	}
+	three := int32(3)
+	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "redis", Namespace: "shop", UID: types.UID("dep")},
+		Spec: tmpl(3)}
+	rs := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Name: "redis-bad", Namespace: "shop", Labels: map[string]string{"pod-template-hash": "bad"},
+		OwnerReferences: []metav1.OwnerReference{{UID: "dep"}}}, Spec: appsv1.ReplicaSetSpec{Template: tmpl(0).Template}}
+	bad := int32(0)
+	c, _, err := ChangeFor(ctx, fake.NewClientset(dep, rs), dep, v1alpha1.FixSpec{FromRevision: "bad", FaultClass: "dependency.unavailable", ReplicasBad: &bad})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Field != fieldReplicas || c.Good != three || c.Bad != bad {
+		t.Fatalf("got %+v", c)
 	}
 }

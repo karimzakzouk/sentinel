@@ -177,11 +177,17 @@ func find(m resmap.ResMap, kind, name string) (*resource.Resource, error) {
 	return found[0], nil
 }
 
-// valueOfRes reads a field of a rendered workload's container.
+// valueOfRes reads a field of a rendered workload or its container.
 func valueOfRes(r *resource.Resource, container, field string) any {
 	m, err := r.Map()
 	if err != nil {
 		return nil
+	}
+	if isWorkloadField(field) {
+		return workloadValueIn(m, field)
+	}
+	if isPodSpecField(field) {
+		return podSpecValueIn(m, field)
 	}
 	if c := containerIn(m, container); c != nil {
 		return valueIn(c, field)
@@ -355,8 +361,12 @@ func fieldEdit(file string, src []byte, kind, name string, c Change) (*Edit, err
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", rel(file), err)
 	}
+	who := c.Container + "'s "
+	if c.Container == "" {
+		who = ""
+	}
 	return &Edit{Path: rel(file), Line: line, Before: src, After: after,
-		Why: fmt.Sprintf("%s sets %s's %s to %s on line %d", rel(file), c.Container, what(c.field()), shown(c.Bad), line)}, nil
+		Why: fmt.Sprintf("%s sets %s%s to %s on line %d", rel(file), who, what(c.field()), shown(c.Bad), line)}, nil
 }
 
 func spliceEdit(file string, src []byte, node *yaml.Node, value, why string) (*Edit, error) {
@@ -431,17 +441,45 @@ func onlyChanged(before, after resmap.ResMap, kind, name string, c Change) error
 		withoutBuildMetadata(bm)
 		withoutBuildMetadata(am)
 		if b.GetKind() == kind && b.GetName() == name {
-			container := containerIn(bm, c.Container)
 			got := valueOfRes(a, c.Container, c.field())
-			if !c.same(got, c.Good) || container == nil {
-				return fmt.Errorf("with the fix %s's %s renders as %s, not %s", c.Container, what(c.field()), shown(got), shown(c.Good))
+			if !c.same(got, c.Good) {
+				who := c.Container + "'s "
+				if c.Container == "" {
+					who = ""
+				}
+				return fmt.Errorf("with the fix %s%s renders as %s, not %s", who, what(c.field()), shown(got), shown(c.Good))
 			}
-			// Use the rendered value so probe maps match YAML's types, not
-			// the API object's JSON round-trip.
-			setValue(container, c.field(), got)
+			switch {
+			case isWorkloadField(c.field()):
+				spec, _ := bm["spec"].(map[string]any)
+				if spec == nil {
+					return fmt.Errorf("with the fix %s is missing", what(c.field()))
+				}
+				spec["replicas"] = got
+			case isPodSpecField(c.field()):
+				spec, _ := bm["spec"].(map[string]any)
+				tmpl, _ := spec["template"].(map[string]any)
+				podSpec, _ := tmpl["spec"].(map[string]any)
+				if podSpec == nil {
+					return fmt.Errorf("with the fix %s is missing", what(c.field()))
+				}
+				podSpec[c.field()] = got
+			default:
+				container := containerIn(bm, c.Container)
+				if container == nil {
+					return fmt.Errorf("with the fix %s's %s is missing", c.Container, what(c.field()))
+				}
+				// Use the rendered value so probe maps match YAML's types, not
+				// the API object's JSON round-trip.
+				setValue(container, c.field(), got)
+			}
 		}
 		if !reflect.DeepEqual(bm, am) {
-			return fmt.Errorf("the fix changes %s %s beyond %s's %s", a.GetKind(), a.GetName(), c.Container, what(c.field()))
+			who := c.Container + "'s "
+			if c.Container == "" {
+				who = ""
+			}
+			return fmt.Errorf("the fix changes %s %s beyond %s%s", a.GetKind(), a.GetName(), who, what(c.field()))
 		}
 	}
 	return nil

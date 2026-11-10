@@ -132,6 +132,15 @@ spec:
                 - frames
                 - language
                 type: object
+              diskLimits:
+                additionalProperties:
+                  type: string
+                description: |-
+                  DiskLimits are, per container, the ephemeral-storage limit Sentinel
+                  learned from what the workload used while it was healthy. For a
+                  disk-limit incident a fix proposes it, since putting back the old
+                  limit can be as wrong as the new one.
+                type: object
               errors:
                 description: |-
                   Errors are the error lines the failing revision logged, as masked
@@ -179,6 +188,12 @@ spec:
                   fault on this workload have earned it where the policy asks them to.
                   The Fixer checks the policy again before it merges.
                 type: boolean
+              replicasBad:
+                description: |-
+                  ReplicasBad is the replica count the rolled-back revision set, when
+                  a fix also restores spec.replicas; the good count is what runs now.
+                format: int32
+                type: integer
               workload:
                 description: Workload is the workload the mitigation rolled back.
                 properties:

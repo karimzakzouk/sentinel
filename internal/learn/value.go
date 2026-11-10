@@ -36,6 +36,13 @@ func MemoryLimit(workingSets []float64) (string, error) {
 // cores: the 99th percentile with room for a peak the samples missed, the
 // larger of 30% and 20m, rounded up to a millicore and written as a
 // Kubernetes millicore quantity.
+// DiskLimit is an ephemeral-storage limit for a container from its use
+// while healthy: the same quantile and room as MemoryLimit, since the API
+// reports no separate ephemeral-storage series yet.
+func DiskLimit(workingSets []float64) (string, error) {
+	return MemoryLimit(workingSets)
+}
+
 func CPULimit(cores []float64) (string, error) {
 	if len(cores) < MinSamples {
 		return "", fmt.Errorf("%d samples of its CPU use; %d are the fewest a limit is learned from", len(cores), MinSamples)

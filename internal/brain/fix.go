@@ -3,6 +3,7 @@ package brain
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -32,6 +33,8 @@ type FixRequest struct {
 	FaultClass   string
 	MemoryLimits map[string]string
 	CPULimits    map[string]string
+	DiskLimits   map[string]string
+	ReplicasBad  *int32
 	// Merge lets the Fixer merge the fix itself.
 	Merge bool
 	// Crash is the stack the workload crashed with, from its logs, when
@@ -134,9 +137,22 @@ func (b *Brain) askFix(ctx context.Context, inc *incident, a *model.Action) []le
 			}
 		}
 	}
+	if r.FaultClass == ClassDiskLimit && b.MemoryUse != nil {
+		for container, used := range b.MemoryUse(a.Target, from) {
+			if limit, err := learn.DiskLimit(used); err == nil {
+				if r.DiskLimits == nil {
+					r.DiskLimits = map[string]string{}
+				}
+				r.DiskLimits[container] = limit
+			} else {
+				b.Log.Info("no ephemeral-storage limit learned", "incident", inc.rec.ID, "container", container, "reason", err)
+			}
+		}
+	}
+	r.ReplicasBad = replicasBadFromCulprit(inc)
 	r.Crash, r.Errors = b.crashOf(ctx, inc.rec.ID, a.Target)
 	inc.fixAsked = true
-	if (len(r.MemoryLimits) > 0 || len(r.CPULimits) > 0) && b.ValueLab != nil {
+	if (len(r.MemoryLimits) > 0 || len(r.CPULimits) > 0 || len(r.DiskLimits) > 0) && b.ValueLab != nil {
 		// A learned limit is raced in the Lab before the pull request that
 		// sets it opens; the Fixer is asked once the verdict is in.
 		if b.valueFixes == nil {
@@ -166,7 +182,7 @@ func (b *Brain) askValueLab(ctx context.Context, vf *valueFix) []ledger.Draft {
 		return nil
 	}
 	r := vf.req
-	experiment, asked, err := b.ValueLab(ctx, r.Incident, r.Target, vf.revision, r.MemoryLimits, r.CPULimits)
+	experiment, asked, err := b.ValueLab(ctx, r.Incident, r.Target, vf.revision, r.MemoryLimits, r.CPULimits, r.DiskLimits)
 	switch {
 	case err != nil:
 		b.Log.Error("could not ask the Lab about a learned limit; the Fixer is asked without its verdict", "incident", r.Incident, "error", err)
@@ -194,7 +210,7 @@ func (b *Brain) onValuesVerdict(ctx context.Context, v LabVerdict) error {
 	r.LabVerdict = labVerdictWord(v.Phase) + ": " + v.Message
 	b.Log.Info("the Lab judged a learned limit", "incident", v.IncidentID, "phase", v.Phase, "message", v.Message)
 	if v.Phase == "Failed" {
-		r.MemoryLimits, r.CPULimits = nil, nil
+		r.MemoryLimits, r.CPULimits, r.DiskLimits = nil, nil, nil
 	}
 	drafts := b.requestFix(ctx, r)
 	if len(drafts) == 0 {
@@ -206,6 +222,33 @@ func (b *Brain) onValuesVerdict(ctx context.Context, v LabVerdict) error {
 
 // requestFix asks the Fixer for a fix and records the request. Callers
 // hold b.mu.
+// replicasBadFromCulprit is the replica count a scale culprit change set.
+func replicasBadFromCulprit(inc *incident) *int32 {
+	if inc.rec.Assessment == nil || inc.rec.Assessment.Culprit == nil {
+		return nil
+	}
+	return replicasBadFromFields(inc.rec.Assessment.Culprit.Fields)
+}
+
+func replicasBadFromFields(fields []string) *int32 {
+	for _, f := range fields {
+		if !strings.HasPrefix(f, "replicas:") {
+			continue
+		}
+		_, after, ok := strings.Cut(strings.TrimPrefix(f, "replicas:"), "->")
+		if !ok {
+			continue
+		}
+		var n int64
+		if _, err := fmt.Sscan(after, &n); err != nil {
+			continue
+		}
+		v := int32(n) //nolint:gosec // replica counts stay within policy bounds
+		return &v
+	}
+	return nil
+}
+
 func (b *Brain) requestFix(ctx context.Context, r FixRequest) []ledger.Draft {
 	why := ""
 	if b.MergePolicy != nil {

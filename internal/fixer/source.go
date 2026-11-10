@@ -186,13 +186,13 @@ func ContainerChange(ctx context.Context, client kubernetes.Interface, dep *apps
 // revision set them. A memory or CPU limit gets the value Sentinel learned,
 // not the old one.
 func ChangeFor(ctx context.Context, client kubernetes.Interface, dep *appsv1.Deployment, spec v1alpha1.FixSpec) (Change, []Change, error) {
-	changes, err := revisionChanges(ctx, client, dep, spec.FromRevision)
+	changes, err := revisionChanges(ctx, client, dep, spec)
 	if err != nil {
 		return Change{}, nil, err
 	}
 	if len(changes) == 0 {
 		return Change{}, nil, fmt.Errorf("the revision %s was rolled back from differs from the current one in nothing the Fixer restores "+
-			"(images, commands, arguments, environment values, probes, memory and CPU limits)", spec.FromRevision)
+			"(images, commands, arguments, environment values, probes, limits, timeouts and replicas)", spec.FromRevision)
 	}
 	var blamed, kept []Change
 	for _, c := range changes {
@@ -215,7 +215,7 @@ func ChangeFor(ctx context.Context, client kubernetes.Interface, dep *appsv1.Dep
 	if c.Bad == valueFromSet || c.Good == valueFromSet {
 		return Change{}, nil, fmt.Errorf("%s's %s comes from a ConfigMap, Secret or field in one revision; the Fixer restores literal values only", c.Container, what(c.Field))
 	}
-	if learned, ok := learnedLimit(spec, c); c.field() == fieldMemoryLimit || c.field() == fieldCPULimit {
+	if learned, ok := learnedLimit(spec, c); isLimitField(c.field()) {
 		if !ok && strings.HasPrefix(spec.LabVerdict, "it does not fix") {
 			return Change{}, nil, fmt.Errorf("the Lab raced the limit learned from %s's healthy use, and %s; putting the old limit back can be as wrong as the new one",
 				c.Container, spec.LabVerdict)
@@ -231,7 +231,7 @@ func ChangeFor(ctx context.Context, client kubernetes.Interface, dep *appsv1.Dep
 	return c, kept, nil
 }
 
-// learnedLimit is the limit Sentinel learned for a memory or CPU change.
+// learnedLimit is the limit Sentinel learned for a memory, CPU or disk change.
 func learnedLimit(spec v1alpha1.FixSpec, c Change) (string, bool) {
 	switch c.field() {
 	case fieldMemoryLimit:
@@ -239,6 +239,9 @@ func learnedLimit(spec v1alpha1.FixSpec, c Change) (string, bool) {
 		return v, ok
 	case fieldCPULimit:
 		v, ok := spec.CPULimits[c.Container]
+		return v, ok
+	case fieldDiskLimit:
+		v, ok := spec.DiskLimits[c.Container]
 		return v, ok
 	}
 	return "", false
@@ -256,10 +259,16 @@ func blames(class, field string) bool {
 		return field == fieldMemoryLimit
 	case "resource.cpu-limit":
 		return field == fieldCPULimit
+	case "resource.disk-limit":
+		return field == fieldDiskLimit
 	case "config.probe":
 		return isProbeField(field)
+	case "config.timeout":
+		return isPodSpecField(field)
+	case "dependency.unavailable":
+		return field == fieldReplicas
 	case "deploy.crash-on-start", "config.error", "deploy.new-errors", "runtime.crash":
-		return field != fieldMemoryLimit && field != fieldCPULimit && !isProbeField(field)
+		return !isLimitField(field) && !isProbeField(field) && !isPodSpecField(field) && field != fieldReplicas
 	}
 	return true
 }
@@ -267,7 +276,11 @@ func blames(class, field string) bool {
 func listed(cs []Change) string {
 	var out []string
 	for _, c := range cs {
-		out = append(out, c.Container+"'s "+what(c.field()))
+		if c.Container != "" {
+			out = append(out, c.Container+"'s "+what(c.field()))
+		} else {
+			out = append(out, what(c.field()))
+		}
 	}
 	return strings.Join(out, ", ")
 }
@@ -285,7 +298,8 @@ func lessQuantity(a any, b string) bool {
 
 // revisionChanges lists the values the Fixer restores that differ between
 // the revision a Deployment was rolled back from and its current template.
-func revisionChanges(ctx context.Context, client kubernetes.Interface, dep *appsv1.Deployment, fromRevision string) ([]Change, error) {
+func revisionChanges(ctx context.Context, client kubernetes.Interface, dep *appsv1.Deployment, spec v1alpha1.FixSpec) ([]Change, error) {
+	fromRevision := spec.FromRevision
 	list, err := client.AppsV1().ReplicaSets(dep.Namespace).List(ctx, metav1.ListOptions{LabelSelector: "pod-template-hash=" + fromRevision})
 	if err != nil {
 		return nil, err
@@ -319,14 +333,56 @@ func revisionChanges(ctx context.Context, client kubernetes.Interface, dep *apps
 			}
 		}
 	}
+	changes = append(changes, podSpecChanges(from.Spec.Template, dep.Spec.Template)...)
+	if spec.ReplicasBad != nil {
+		want := replicas(dep.Spec.Replicas)
+		if bad := *spec.ReplicasBad; bad != want {
+			changes = append(changes, Change{Field: fieldReplicas, Bad: bad, Good: want})
+		}
+	}
 	return changes, nil
+}
+
+func replicas(r *int32) int32 {
+	if r == nil {
+		return 1
+	}
+	return *r
+}
+
+// podSpecChanges lists pod-template fields restored from the good revision.
+func podSpecChanges(from, cur corev1.PodTemplateSpec) []Change {
+	var changes []Change
+	for _, spec := range []struct {
+		field string
+		bad   *int64
+		good  *int64
+	}{
+		{fieldTerminationGrace, from.Spec.TerminationGracePeriodSeconds, cur.Spec.TerminationGracePeriodSeconds},
+		{fieldActiveDeadline, from.Spec.ActiveDeadlineSeconds, cur.Spec.ActiveDeadlineSeconds},
+	} {
+		bad, good := int64OrNil(spec.bad), int64OrNil(spec.good)
+		if reflect.DeepEqual(bad, good) {
+			continue
+		}
+		changes = append(changes, Change{Field: spec.field, Bad: bad, Good: good})
+	}
+	return changes
+}
+
+func int64OrNil(v *int64) any {
+	if v == nil {
+		return nil
+	}
+	return *v
 }
 
 // containerFields lists the fields a fix may restore in two versions of a
 // container: image, command, arguments, probes, memory and CPU limits, and
 // every environment variable either sets.
 func containerFields(a, b corev1.Container) []string {
-	fields := []string{fieldImage, fieldCommand, fieldArgs, fieldReadinessProbe, fieldLivenessProbe, fieldStartupProbe, fieldMemoryLimit, fieldCPULimit}
+	fields := []string{fieldImage, fieldCommand, fieldArgs, fieldReadinessProbe, fieldLivenessProbe, fieldStartupProbe,
+		fieldMemoryLimit, fieldCPULimit, fieldDiskLimit}
 	seen := map[string]bool{}
 	for _, e := range append(a.Env, b.Env...) {
 		if !seen[e.Name] {
@@ -371,6 +427,10 @@ func fieldValue(c corev1.Container, field string) any {
 		}
 	case field == fieldCPULimit:
 		if q, ok := c.Resources.Limits[corev1.ResourceCPU]; ok {
+			return q.String()
+		}
+	case field == fieldDiskLimit:
+		if q, ok := c.Resources.Limits[corev1.ResourceEphemeralStorage]; ok {
 			return q.String()
 		}
 	case field == fieldReadinessProbe:
