@@ -1,0 +1,53 @@
+{{- $existing := lookup "sentinel.karimzakzouk.github.io/v1alpha1" "SentinelSettings" .Release.Namespace "sentinel" }}
+{{- if not $existing }}
+{{- $fa := int .Values.detection.falseAlarmsPerWeek }}
+{{- $perHour := int .Values.actor.actions.perHour }}
+{{- $buf := int .Values.capture.bodyBufferBytes }}
+{{- $maxAttempts := int .Values.fixer.code.llm.maxAttempts }}
+# Seeded once from Helm values. After that the console (or kubectl/GitOps on
+# this object) owns runtime knobs; Helm upgrades leave it alone.
+apiVersion: sentinel.karimzakzouk.github.io/v1alpha1
+kind: SentinelSettings
+metadata:
+  name: sentinel
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "sentinel.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  logLevel: {{ .Values.logLevel | quote }}
+  detection:
+    falseAlarmsPerWeek: {{ $fa }}
+    window: {{ .Values.detection.window | quote }}
+    tick: {{ .Values.detection.tick | quote }}
+    halfLife: {{ .Values.detection.halfLife | quote }}
+    incidentGap: {{ .Values.detection.incidentGap | quote }}
+    warmUp: {{ .Values.detection.warmUp | quote }}
+  logs:
+    enabled: {{ .Values.logs.enabled }}
+    sampleInterval: {{ .Values.logs.sampleInterval | quote }}
+  lab:
+    verifyRollbacks: {{ .Values.lab.verifyRollbacks }}
+  actor:
+    actionsEnabled: {{ .Values.actor.actions.enabled }}
+    perHour: {{ $perHour }}
+  fixer:
+    code:
+      withoutRollback: {{ .Values.fixer.code.withoutRollback }}
+      fixers: {{ toJson .Values.fixer.code.fixers }}
+      {{- with .Values.fixer.code.llm }}
+      {{- if .url }}
+      llm:
+        format: {{ .format | quote }}
+        url: {{ .url | quote }}
+        model: {{ .model | quote }}
+        maxAttempts: {{ $maxAttempts }}
+      {{- end }}
+      {{- end }}
+  capture:
+    exportBodies: {{ .Values.capture.exportBodies }}
+    bodyBufferBytes: {{ $buf }}
+  capabilities:
+    interval: {{ .Values.capabilities.interval | quote }}
+{{- end }}

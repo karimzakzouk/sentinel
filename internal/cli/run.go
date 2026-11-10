@@ -27,6 +27,7 @@ import (
 	"github.com/karimzakzouk/sentinel/internal/kube"
 	"github.com/karimzakzouk/sentinel/internal/ledger"
 	"github.com/karimzakzouk/sentinel/internal/nodeagent"
+	"github.com/karimzakzouk/sentinel/internal/settings"
 	webui "github.com/karimzakzouk/sentinel/internal/ui"
 	"github.com/karimzakzouk/sentinel/internal/version"
 )
@@ -63,7 +64,7 @@ func newRunCmd(kf *kube.Flags) *cobra.Command {
 			}
 			ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGTERM, os.Interrupt)
 			defer stop()
-			console := &api.Console{Clients: api.ClientsFor(rc), Namespaces: cfg.Namespaces}
+			console := &api.Console{Clients: api.ClientsFor(rc), Namespaces: cfg.Namespaces, AgentNamespace: cfg.AgentNamespace}
 			if o := cfg.UI.OIDC; o.Issuer != "" {
 				console.OIDC = &api.OIDC{Issuer: o.Issuer, ClientID: o.ClientID, RedirectURL: o.RedirectURL, Scopes: o.Scopes}
 				if o.ClientSecretFile != "" {
@@ -172,6 +173,9 @@ func runController(ctx context.Context, log *slog.Logger, cfg *config.Config, cl
 	acting.Store(requests)
 	watchErr := make(chan error, 1)
 	go func() { watchErr <- w.Run(ctx) }()
+	if cfg.AgentNamespace != "" {
+		go settings.Reconcile(ctx, client, dyn, settings.DefaultTargets(cfg.AgentNamespace), log)
+	}
 
 	detector := &capability.Detector{Client: client, Options: capability.Options{
 		Namespaces: cfg.Namespaces, AgentNamespace: cfg.AgentNamespace, ActorUser: cfg.ActorUser,

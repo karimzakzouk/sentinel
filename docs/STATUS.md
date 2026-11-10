@@ -422,13 +422,13 @@ Full reasoning in [decisions.md](decisions.md).
 - **Hardening:** baselines that survive restarts and dependency links from
   error logs are built; the tier-1 node agent has a first cut (decision 102).
   Standby for actor/Lab/Fixer already exists.
-- **Settings:** policy autonomy actions (including `restart`, `helm.rollback`,
-  `rollouts.abort`, `fix.merge`) and capture toggles (`capture.requests`,
-  opt-in `capture.bodies`) are in the console via SentinelPolicy.
-  Chart-level Fixer knobs (`fixer.code.withoutRollback`, `fixer.code.fixers`,
-  `fixer.code.llm`) stay in Helm values; the Policies page links to them.
-  Decision: extend SentinelPolicy for capture bodies rather than a Settings
-  ConfigMap (no such pattern existed).
+- **Settings:** console has a Settings page backed by `SentinelSettings`
+  (decision 120): detection, logs, Lab verify, actor kill switch/budget,
+  Fixer strategies/LLM URL, capture `exportBodies`, log level. Policies keep
+  per-namespace autonomy, capture.requests/bodies, and max capacity removal.
+  Helm still installs privileged agents, Lab pools, and Secret mounts once;
+  runtime toggles (e.g. want body export or not) no longer need values.yaml.
+  Capabilities tab renamed “Cluster” with plainer copy.
 - **CI:** with hosted Actions minutes spent and a $0 budget, CI and E2E
   run on the Azure self-hosted runner; wake may fail and the VM is
   started with `hack/azure-runner/wake.sh` when needed (decision 99).

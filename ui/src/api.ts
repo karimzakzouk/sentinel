@@ -273,7 +273,7 @@ export interface AutonomyRule {
 
 export interface PolicySpec {
   autonomy?: AutonomyRule[];
-  budgets?: { falseAlarmsPerWeek?: number; alphaPercent?: number; maxCapacityRemovalPercent?: number };
+  budgets?: { falseAlarmsPerWeek?: number; alphaPercent?: number; maxCapacityRemovalPercent?: number }; // maxCapacityRemoval is enforced; others reserved
   quietPeriodAfterHumanEdit?: string;
   capture?: { requests?: boolean; bodies?: boolean };
 }
@@ -287,6 +287,56 @@ export interface NamespacePolicies {
   namespace: string;
   policies: Policy[];
   error?: string;
+}
+
+export interface FixerLLMSettings {
+  format?: string;
+  url?: string;
+  model?: string;
+  maxAttempts?: number;
+}
+
+export interface SettingsSpec {
+  logLevel?: string;
+  detection?: {
+    falseAlarmsPerWeek?: number;
+    window?: string;
+    tick?: string;
+    halfLife?: string;
+    incidentGap?: string;
+    warmUp?: string;
+  };
+  logs?: { enabled?: boolean; sampleInterval?: string };
+  lab?: { verifyRollbacks?: boolean };
+  actor?: { actionsEnabled?: boolean; perHour?: number };
+  fixer?: {
+    code?: {
+      withoutRollback?: boolean;
+      fixers?: string[];
+      llm?: FixerLLMSettings;
+    };
+  };
+  capture?: { exportBodies?: boolean; bodyBufferBytes?: number };
+  capabilities?: { interval?: string };
+}
+
+export interface InstalledComponents {
+  actor?: boolean;
+  lab?: boolean;
+  fixer?: boolean;
+  capture?: boolean;
+  nodeAgent?: boolean;
+}
+
+export interface SentinelSettings {
+  metadata?: { name?: string; namespace?: string };
+  spec?: SettingsSpec;
+  status?: {
+    observedGeneration?: number;
+    appliedAt?: string;
+    message?: string;
+    installed?: InstalledComponents;
+  };
 }
 
 // whoami is who signed in to the console, null when nobody has, and
@@ -320,6 +370,8 @@ export const api = {
     send<{ done: string }>("PUT", `/api/policies/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`, spec),
   deletePolicy: (namespace: string, name: string) =>
     send<{ done: string }>("DELETE", `/api/policies/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`),
+  settings: () => send<SentinelSettings>("GET", "/api/settings"),
+  putSettings: (spec: SettingsSpec) => send<{ done: string }>("PUT", "/api/settings", spec),
   summary: () => get<Summary>("/api/summary"),
   incidents: () => get<{ incidents: Incident[] | null }>("/api/incidents").then((r) => r.incidents ?? []),
   incident: (id: string) => get<IncidentDetail>(`/api/incidents/${encodeURIComponent(id)}`),

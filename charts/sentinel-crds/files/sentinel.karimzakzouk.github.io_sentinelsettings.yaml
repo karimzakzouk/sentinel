@@ -1,0 +1,237 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.23.0
+  name: sentinelsettings.sentinel.karimzakzouk.github.io
+spec:
+  group: sentinel.karimzakzouk.github.io
+  names:
+    categories:
+    - sentinel
+    kind: SentinelSettings
+    listKind: SentinelSettingsList
+    plural: sentinelsettings
+    shortNames:
+    - sset
+    singular: sentinelsettings
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          SentinelSettings is the cluster-wide control plane for runtime knobs.
+          One object named "sentinel" lives in Sentinel's own namespace.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              SentinelSettingsSpec holds cluster-wide knobs operators may change without a
+              Helm reinstall. Install-time choices (namespaces, privileged agents, forge
+              secret mounts, Lab pool size) stay in the chart; this object covers what
+              can take effect by rewriting Sentinel's own ConfigMaps.
+            properties:
+              actor:
+                description: Actor holds the kill switch and hourly budget once the
+                  actor is installed.
+                properties:
+                  actionsEnabled:
+                    description: 'ActionsEnabled is the kill switch: false rejects
+                      every request.'
+                    type: boolean
+                  perHour:
+                    description: PerHour bounds actions per namespace per hour.
+                    format: int32
+                    maximum: 1000
+                    minimum: 0
+                    type: integer
+                type: object
+              capabilities:
+                description: Capabilities holds how often capability probes run.
+                properties:
+                  interval:
+                    description: Interval between capability reports.
+                    type: string
+                type: object
+              capture:
+                description: |-
+                  Capture holds cluster-wide traffic-capture behaviour once the capture
+                  agent is installed. Per-namespace recording stays on SentinelPolicy.
+                properties:
+                  bodyBufferBytes:
+                    description: BodyBufferBytes is OBI's per-side HTTP buffer for
+                      body extraction.
+                    format: int32
+                    maximum: 65536
+                    minimum: 1024
+                    type: integer
+                  exportBodies:
+                    description: |-
+                      ExportBodies asks OBI to export HTTP body attributes on traces.
+                      Namespaces still need SentinelPolicy capture.bodies to keep them.
+                    type: boolean
+                type: object
+              detection:
+                description: Detection thresholds and windows for the count detector.
+                properties:
+                  falseAlarmsPerWeek:
+                    description: FalseAlarmsPerWeek is the accepted false alarms per
+                      workload per week.
+                    format: int32
+                    maximum: 100
+                    minimum: 0
+                    type: integer
+                  halfLife:
+                    description: HalfLife is how fast old history fades.
+                    type: string
+                  incidentGap:
+                    description: IncidentGap is how long an incident stays open after
+                      signals go quiet.
+                    type: string
+                  tick:
+                    description: Tick is how often detectors evaluate.
+                    type: string
+                  warmUp:
+                    description: WarmUp is how long a workload learns before it may
+                      alarm.
+                    type: string
+                  window:
+                    description: Window is the detection window.
+                    type: string
+                type: object
+              fixer:
+                description: |-
+                  Fixer holds code-fix behaviour once the Fixer is installed. Forge
+                  URLs and token Secret mounts stay in Helm.
+                properties:
+                  code:
+                    description: Code holds fixers that change source, beside pinning
+                      an image back.
+                    properties:
+                      fixers:
+                        description: 'Fixers are tried in order: restore, template,
+                          mine, revert, llm.'
+                        items:
+                          type: string
+                        maxItems: 8
+                        type: array
+                        x-kubernetes-list-type: atomic
+                      llm:
+                        description: |-
+                          LLM is the model the llm fixer asks. Its API key Secret stays a Helm
+                          mount; only URL, model, format and attempts are set here.
+                        properties:
+                          format:
+                            description: Format is openai or anthropic.
+                            enum:
+                            - openai
+                            - anthropic
+                            type: string
+                          maxAttempts:
+                            description: MaxAttempts bounds model changes per fix.
+                            format: int32
+                            maximum: 10
+                            minimum: 1
+                            type: integer
+                          model:
+                            description: Model is the model name.
+                            type: string
+                          url:
+                            description: URL is the model's API base URL. Empty turns
+                              the llm fixer off.
+                            type: string
+                        type: object
+                      withoutRollback:
+                        description: WithoutRollback also asks for a code fix when
+                          nothing was rolled back.
+                        type: boolean
+                    type: object
+                type: object
+              lab:
+                description: Lab holds Lab behaviour that does not resize the pool.
+                properties:
+                  verifyRollbacks:
+                    description: |-
+                      VerifyRollbacks asks the Lab whether each proposed rollback fixes its
+                      incident.
+                    type: boolean
+                type: object
+              logLevel:
+                description: LogLevel is debug, info, warn or error.
+                enum:
+                - debug
+                - info
+                - warn
+                - error
+                type: string
+              logs:
+                description: Logs turns container-log evidence and sampling on or
+                  off.
+                properties:
+                  enabled:
+                    description: |-
+                      Enabled defaults to true when unset on the Settings object only after
+                      Helm has seeded it; an explicit false turns collection off.
+                    type: boolean
+                  sampleInterval:
+                    description: |-
+                      SampleInterval is how often each workload's errors are sampled; 0s
+                      turns sampling off.
+                    type: string
+                type: object
+            type: object
+          status:
+            description: SentinelSettingsStatus is what the controller last applied.
+            properties:
+              appliedAt:
+                format: date-time
+                type: string
+              installed:
+                description: |-
+                  InstalledComponents reports which chart components exist so the console can
+                  grey out knobs that need a Helm install first.
+                properties:
+                  actor:
+                    type: boolean
+                  capture:
+                    type: boolean
+                  fixer:
+                    type: boolean
+                  lab:
+                    type: boolean
+                  nodeAgent:
+                    type: boolean
+                type: object
+              message:
+                type: string
+              observedGeneration:
+                format: int64
+                type: integer
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

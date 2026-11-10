@@ -92,8 +92,12 @@ type Actor struct {
 	// Disabled is the kill switch: while it reports true, every request is
 	// rejected.
 	Disabled func() bool
-	// PerHour bounds the actions run per namespace per hour.
+	// PerHour bounds the actions run per namespace per hour when HourlyBudget
+	// is nil.
 	PerHour int
+	// HourlyBudget, when set, re-reads the hourly cap so a Settings change
+	// takes effect without a restart.
+	HourlyBudget func() int
 	// OnReady, when set, is called once the actor sees every namespace's
 	// requests.
 	OnReady func()
@@ -274,8 +278,12 @@ func (a *Actor) execute(ctx context.Context, req *v1alpha1.ActionRequest, polici
 	if req.Spec.DryRunOnly {
 		return v1alpha1.ActionDryRunPassed, "the dry run passed"
 	}
-	if !a.spend(req.Namespace, now) {
-		return v1alpha1.ActionRejected, policy.BudgetSpentMessage(a.PerHour)
+	perHour := a.PerHour
+	if a.HourlyBudget != nil {
+		perHour = a.HourlyBudget()
+	}
+	if !a.spend(req.Namespace, now, perHour) {
+		return v1alpha1.ActionRejected, policy.BudgetSpentMessage(perHour)
 	}
 	msg, err := run(ctx, req, false)
 	if err != nil {
@@ -285,7 +293,7 @@ func (a *Actor) execute(ctx context.Context, req *v1alpha1.ActionRequest, polici
 }
 
 // spend takes one action from the namespace's hourly budget.
-func (a *Actor) spend(namespace string, now time.Time) bool {
+func (a *Actor) spend(namespace string, now time.Time, perHour int) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.recent == nil {
@@ -297,7 +305,7 @@ func (a *Actor) spend(namespace string, now time.Time) bool {
 			kept = append(kept, t)
 		}
 	}
-	if len(kept) >= a.PerHour {
+	if len(kept) >= perHour {
 		a.recent[namespace] = kept
 		return false
 	}

@@ -25,6 +25,7 @@ import (
 	"github.com/karimzakzouk/sentinel/api/v1alpha1"
 	"github.com/karimzakzouk/sentinel/internal/actor"
 	"github.com/karimzakzouk/sentinel/internal/resume"
+	"github.com/karimzakzouk/sentinel/internal/settings"
 )
 
 // Console lets a person act through the UI: approve or veto an action
@@ -40,6 +41,8 @@ type Console struct {
 	// Namespaces are those Sentinel watches, whose policies the console
 	// shows.
 	Namespaces []string
+	// AgentNamespace is where the cluster-wide SentinelSettings object lives.
+	AgentNamespace string
 	// SessionTTL is how long a sign-in lasts; 8 hours when zero.
 	SessionTTL time.Duration
 	// OIDC, when set, signs people in through the cluster's identity
@@ -100,6 +103,8 @@ func (c *Console) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/policies", c.read(c.policies))
 	mux.HandleFunc("PUT /api/policies/{namespace}/{name}", c.write(c.putPolicy))
 	mux.HandleFunc("DELETE /api/policies/{namespace}/{name}", c.write(c.deletePolicy))
+	mux.HandleFunc("GET /api/settings", c.read(c.getSettings))
+	mux.HandleFunc("PUT /api/settings", c.write(c.putSettings))
 }
 
 // signIn checks a token by asking the API server who it belongs to, as
@@ -395,6 +400,57 @@ func (c *Console) deletePolicy(w http.ResponseWriter, r *http.Request, _ *sessio
 		return
 	}
 	writeJSON(w, map[string]string{"done": "deleted " + ns + "/" + name})
+}
+
+func (c *Console) settingsNS() string {
+	if c.AgentNamespace != "" {
+		return c.AgentNamespace
+	}
+	return "sentinel"
+}
+
+// getSettings returns the cluster-wide SentinelSettings the chart seeded.
+func (c *Console) getSettings(w http.ResponseWriter, r *http.Request, _ *session, _ kubernetes.Interface, d dynamic.Interface) {
+	u, err := d.Resource(settings.Resource).Namespace(c.settingsNS()).Get(r.Context(), settings.Name, metav1.GetOptions{})
+	if err != nil {
+		kubeError(w, err)
+		return
+	}
+	var s v1alpha1.SentinelSettings
+	if err := fromUnstructured(*u, &s); err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	writeJSON(w, s)
+}
+
+// putSettings writes SentinelSettings as the signed-in person. The controller
+// applies the Spec to ConfigMaps; the console does not rewrite them itself.
+func (c *Console) putSettings(w http.ResponseWriter, r *http.Request, _ *session, _ kubernetes.Interface, d dynamic.Interface) {
+	var spec v1alpha1.SentinelSettingsSpec
+	dec := json.NewDecoder(io.LimitReader(r.Body, 64<<10))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&spec); err != nil {
+		http.Error(w, "the settings do not read: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	s := v1alpha1.SentinelSettings{
+		TypeMeta:   metav1.TypeMeta{APIVersion: v1alpha1.GroupVersion.String(), Kind: "SentinelSettings"},
+		ObjectMeta: metav1.ObjectMeta{Name: settings.Name, Namespace: c.settingsNS()},
+		Spec:       spec,
+	}
+	body, err := json.Marshal(s)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	force := true
+	if _, err := d.Resource(settings.Resource).Namespace(c.settingsNS()).Patch(r.Context(), settings.Name, types.ApplyPatchType, body,
+		metav1.PatchOptions{FieldManager: "sentinel-console", Force: &force}); err != nil {
+		kubeError(w, err)
+		return
+	}
+	writeJSON(w, map[string]string{"done": "saved settings; Sentinel reloads within a minute"})
 }
 
 // kubeError passes on what the API server said, with its status: a

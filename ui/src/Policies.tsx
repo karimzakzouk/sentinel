@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { api, type AutonomyRule, type NamespacePolicies, type Policy, type PolicySpec } from "./api";
 import { useSession } from "./session";
 
@@ -12,6 +12,7 @@ const actions: { id: string; label: string }[] = [
   { id: "flux.rollback", label: "Suspend Flux, then roll back" },
   { id: "helm.rollback", label: "Roll back a Helm release" },
   { id: "rollouts.abort", label: "Abort an Argo Rollout" },
+  { id: "flagger.abort", label: "Abort a Flagger canary" },
   { id: "fix.merge", label: "Merge its own fix in Git" },
 ];
 
@@ -62,6 +63,16 @@ function captureOf(requests: boolean, bodies: boolean): PolicySpec["capture"] {
   return { ...(requests ? { requests: true } : {}), ...(bodies ? { bodies: true } : {}) };
 }
 
+function Field({ label, help, children }: { label: string; help: string; children: ReactNode }) {
+  return (
+    <label className="setting-field" style={{ marginTop: 12 }}>
+      <span className="setting-label">{label}</span>
+      <span className="setting-help">{help}</span>
+      {children}
+    </label>
+  );
+}
+
 function PolicyCard({ policy, onSaved }: { policy: Policy; onSaved: () => void }) {
   const [spec, setSpec] = useState<PolicySpec>(policy.spec ?? {});
   const [message, setMessage] = useState("");
@@ -93,29 +104,43 @@ function PolicyCard({ policy, onSaved }: { policy: Policy; onSaved: () => void }
           onRemove={() => setRules(rules.filter((_, j) => j !== i))}
         />
       ))}
-      <label className="check capture" title="What traffic capture's agent sees of this namespace's requests, kept so the Lab can replay reads">
+      <label className="check capture" title="Kept so the Lab can replay reads of this namespace">
         <input
           type="checkbox"
           checked={!!spec.capture?.requests}
           onChange={(e) => setSpec({ ...spec, capture: captureOf(e.target.checked, e.target.checked ? !!spec.capture?.bodies : false) })}
         />
-        Record request details: method, route, status and timing, never bodies unless opted in below. Needs traffic capture installed.
+        Record this namespace’s requests (method, route, status, timing — not bodies). Needs traffic capture installed — see Settings.
       </label>
-      <label
-        className="check capture"
-        title="Also keep redacted request and response bodies, capped ~4KiB, for Lab write replay. Only with request details on."
-      >
+      <label className="check capture" title="Redacted bodies, capped ~4KiB, for Lab write replay">
         <input
           type="checkbox"
           checked={!!spec.capture?.bodies}
           onChange={(e) => setSpec({ ...spec, capture: captureOf(!!spec.capture?.requests || e.target.checked, e.target.checked) })}
         />
-        Record request and response bodies (needs chart capture.exportBodies and plain HTTP JSON from OBI). Off by default.
+        Also record redacted request and response bodies. Turn on “Export HTTP bodies” under Settings first. Off by default.
       </label>
+      <Field
+        label="Max % of replicas an action may remove"
+        help="Caps how hard a scale-down or similar action may hit this namespace. Lowest policy wins."
+      >
+        <input
+          className="field"
+          type="number"
+          min={0}
+          max={100}
+          value={spec.budgets?.maxCapacityRemovalPercent ?? 20}
+          onChange={(e) =>
+            setSpec({
+              ...spec,
+              budgets: { ...spec.budgets, maxCapacityRemovalPercent: Number(e.target.value) },
+            })
+          }
+        />
+      </Field>
       <p className="muted policy-note">
-        Cluster-wide Fixer knobs stay in the chart&apos;s values, not in a policy:{" "}
-        <code>fixer.code.withoutRollback</code>, <code>fixer.code.fixers</code>, and <code>fixer.code.llm</code>. See{" "}
-        <code>charts/sentinel/values.yaml</code>.
+        Detection sensitivity, the actor kill switch, Lab verify, Fixer strategies, and capture body export are cluster-wide under{" "}
+        <a href="#/settings">Settings</a> — not in a policy.
       </p>
       <div className="policy-actions">
         <button
@@ -165,8 +190,9 @@ export function Policies() {
     <div className="policies">
       <h2>Policies</h2>
       <p className="muted">
-        What Sentinel may do in each namespace it watches. Unlisted actions stay at observe. Changes are made as {me.user}; the
-        cluster refuses what your permissions do not allow.
+        Rules per namespace: how far Sentinel may act on its own, and whether to record that namespace’s traffic. Unlisted
+        actions stay at “observe” (record only). You change these as {me.user}; the cluster refuses anything your account
+        may not do. Cluster-wide switches are under <a href="#/settings">Settings</a>.
       </p>
       {error && <div className="error-banner">{error}</div>}
       {all?.map((ns) => (
