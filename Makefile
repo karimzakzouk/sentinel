@@ -5,13 +5,16 @@ IMAGE ?= sentinel:dev
 E2E_CLUSTER ?= sentinel-e2e
 E2E_TIMEOUT ?= 45m
 LDFLAGS := -s -w -X github.com/karimzakzouk/sentinel/internal/version.Version=$(VERSION)
+# The tree-sitter grammars the Fixer reads source with; only these are
+# embedded in the binary. Builds without them embed every grammar.
+GRAMMAR_TAGS := $(shell cat hack/grammar-tags)
 
 .PHONY: all build test lint fmt vuln generate verify image helm-lint scenarios e2e-up e2e e2e-down tidy boutique-up delivery-up score ui
 
 all: build
 
 build:
-	CGO_ENABLED=0 $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/ ./cmd/...
+	CGO_ENABLED=0 $(GO) build -trimpath -tags '$(GRAMMAR_TAGS)' -ldflags "$(LDFLAGS)" -o bin/ ./cmd/...
 
 test:
 	$(GO) test -race -count=1 ./...
