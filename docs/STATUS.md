@@ -1,6 +1,6 @@
 # Status
 
-Last updated: Tuesday 10 November 2026, 06:15 Cairo time (UTC+2).
+Last updated: Tuesday 10 November 2026, 06:50 Cairo time (UTC+2).
 
 ## Where things stand
 
@@ -23,17 +23,18 @@ the old one, and merges its own fix where a policy grants it and its record has
 earned it. For a crash in code, in almost any language, it tries one
 fixer's change after another, each built by the source's own pipeline and
 raced in the Lab before the next: the crashing function put back, a fixed
-template, the culprit commit reverted, and last an optional language
-model's change; proven on the development cluster with a Go and a Python
-service, and with a small local model (below). It works with GitHub,
-Gitea, GitLab and Bitbucket. Where the cluster does not enforce
-NetworkPolicy, every Lab pod now seals itself, so the Lab runs on the
-development cluster too. **Phase 5 (Extend and harden) has started:**
-four more fault classes, a Merkle tree over the Ledger, standby replicas
-for the actor, the Lab and the Fixer, a console in the UI where a person
-signs in as themselves to approve, veto, resume and set policies, and
-optional traffic capture, whose recorded reads the Lab replays to its
-copies.
+template, a repair mined from the repository's own fix history, the
+culprit commit reverted, and last an optional language model's change;
+proven on the development cluster with a Go and a Python service, and
+with a small local model (below). It works with GitHub, Gitea, GitLab and
+Bitbucket. Where the cluster does not enforce NetworkPolicy, every Lab
+pod now seals itself, so the Lab runs on the development cluster too.
+**Phase 5 (Extend and harden) has started:** four more fault classes, a
+Merkle tree over the Ledger, standby replicas for the actor, the Lab and
+the Fixer, a console in the UI where a person signs in as themselves to
+approve, veto, resume and set policies, optional traffic capture, whose
+recorded reads the Lab replays to its copies, and a first cut of mined
+fix patterns from a repo's history.
 
 To look at it on a cluster where it runs:
 
@@ -93,7 +94,7 @@ To look at it on a cluster where it runs:
 | 1. Restore a bad value through Git | Built for an image, a command, arguments and environment values set in the files a Flux Kustomization or an Argo CD Application deploys (decisions 67 to 70 and 72), and in a kustomization's patches (decision 73): the Fixer finds the file, images entry or patch that set it, opens a pull request, follows it until the owner has applied it, and Sentinel checks that it held. Resuming the owner stays a person's (decision 69). Proven through Flux and Argo CD, and scored (below) | `TestTheFixerProposesTheFixInGit` and `TestTheFixerProposesTheFixInGitThroughArgoCD`, in CI and on the development cluster: a bad image committed to the Gitea repository the owner deploys from, Sentinel's rollback, a pull request changing line 17 of `deployment.yaml` with its comment kept, merged, the owner resumed, and "fix held", about 3 minutes after the proposal. The Git scenario session below. Unit tests render overlays with images entries, plain manifests, owners' name prefixes, and the abstentions |
 | 2. Partial reverts | Built (decision 74): of several values a revision changed, the one the fault class blames is fixed and the rest stay, said in the pull request | The pool's bad tag beside a greeting (below): the tag fixed, the greeting kept; unit tests for every class |
 | 3. Values of their own | Built for memory and CPU limits (decisions 75 and 98): a limit learned from healthy use, never above the one that held, raced in the Lab before its pull request opens; memory also updates the heap settings that no longer fit it (decision 96). Left: disk, probes, timeouts and replicas | Unit tests of the race, the verdict's path to the pull request, and the heap settings; the pool's memory-limit scenario (below) |
-| 4. Code incidents | Built for Go, Python, JavaScript and TypeScript, Java, Kotlin, Scala, C#, Ruby, PHP, Rust, C, C++ and Swift (decision 91): for a crash a new image brought, or an old bug nothing was rolled back from (decision 95), the Fixer tries fixers in order, each change built by the source's own pipeline and raced in the Lab before the next is tried: the crashing function put back, fifteen templates, the whole commit reverted, and a language model's change last (decisions 92 and 93); without a stack or commit labels too (decision 94) | The release sessions below, on the development cluster: shop's Go crash and pyshop's Python crash each fixed and passed by the Lab, 15 of 15 runs; with a 1.5B local model alone, its first change failed in the Lab and it was asked again. `TestTheCrashingFunctionIsPutBackInEveryLanguage` (twelve languages), `TestTemplatesFixTheCrashesEveryCodebaseHas`, `TestACrashInCodeGetsAFixInItsSource` (restore failed by the Lab, then a revert on the same pull request, then a model's change in a new one after a person closed it), `TestAnOldBugIsFixedFromTheCommitBeforeIt` |
+| 4. Code incidents | Built for Go, Python, JavaScript and TypeScript, Java, Kotlin, Scala, C#, Ruby, PHP, Rust, C, C++ and Swift (decision 91): for a crash a new image brought, or an old bug nothing was rolled back from (decision 95), the Fixer tries fixers in order, each change built by the source's own pipeline and raced in the Lab before the next is tried: the crashing function put back, fifteen templates, mined patterns from the repo's history (decision 101), the whole commit reverted, and a language model's change last (decisions 92 and 93); without a stack or commit labels too (decision 94) | The release sessions below, on the development cluster: shop's Go crash and pyshop's Python crash each fixed and passed by the Lab, 15 of 15 runs; with a 1.5B local model alone, its first change failed in the Lab and it was asked again. `TestTheCrashingFunctionIsPutBackInEveryLanguage` (twelve languages), `TestTemplatesFixTheCrashesEveryCodebaseHas`, `TestACrashInCodeGetsAFixInItsSource` (restore failed by the Lab, then a revert on the same pull request, then a model's change in a new one after a person closed it), `TestAnOldBugIsFixedFromTheCommitBeforeIt` |
 | 5. Delivery tiers | Built (decision 76): `fix.merge` at `autonomous`, earned by the record of fixes that held; the Fixer checks the grant before it merges | Unit tests of the grant, the record and the merge on Gitea and GitHub |
 | Forges | GitHub, Gitea, GitLab, Bitbucket Cloud and Bitbucket Data Center (`fixer.forge.kind`, decision 87) | Fake-server tests of each forge's API; `hack/forge-live.sh` against a real GitLab CE: a branch pushed as the Fixer pushes, a merge request under a subgroup opened, commented on, merged, and its merge commit found on main, with merge commits and fast-forward |
 
@@ -111,7 +112,7 @@ To look at it on a cluster where it runs:
 | Honeytoken Secrets | Built: Lab env and named-key volumes get shape-preserving stand-ins; looking one up through Lab DNS fails the race | Unit tests in `internal/lab` |
 | Outbound call catalog | Built: `capture.Calls` lists distinct client calls for Lab fakes | Unit tests in `internal/capture` |
 | Frontier fakes (metadata HTTP) | Built (decision 100): outside hosts get a Lab Service + stub answering recorded statuses; DNS, Allow and world probes include them | Unit tests in `internal/lab` (`fake_test`, synthesis with `api.stripe.com`) |
-| Own faker, mined fix patterns | Metadata HTTP fakes built; full faker (bodies, gRPC, TLS) and mined patterns not started | |
+| Own faker, mined fix patterns | Metadata HTTP fakes built; full faker (bodies, gRPC, TLS) next. **Mined fix patterns: first cut built** (decision 101): `internal/mine` scans recent commits for fix-like subjects or a single function-body change, and the `mine` fixer applies matching before/after snippets after templates and before revert/llm | Unit tests with a planted git history in `internal/mine` and `internal/codefix` |
 
 ## Acting session
 

@@ -23,6 +23,7 @@ import (
 	"sigs.k8s.io/kustomize/kyaml/filesys"
 
 	"github.com/karimzakzouk/sentinel/internal/codefix"
+	"github.com/karimzakzouk/sentinel/internal/mine"
 )
 
 // maxRepoBytes bounds what a checkout copies for rendering: a repository
@@ -187,6 +188,12 @@ func (c *Checkout) Resolve(rev string) (*plumbing.Hash, error) {
 		return nil, fmt.Errorf("the branch's history has no commit %s", rev)
 	}
 	return nil, fmt.Errorf("%d commits of the branch's history start with %s", len(found), rev)
+}
+
+// MinePatterns learns repair patterns from the clone's history, walking
+// back from Head.
+func (c *Checkout) MinePatterns(opts mine.Options) ([]mine.Pattern, error) {
+	return mine.MineFrom(c.repo, plumbing.NewHash(c.Head), opts)
 }
 
 // LastChanged finds, walking back the first parents from rev, the commit

@@ -149,8 +149,8 @@ type CodeFix struct {
 	// +optional
 	Message string `json:"message,omitempty"`
 	// Fixer names what proposed the current change: restore (a function
-	// put back as it was), template, revert (every file the commit changed
-	// put back), history or llm.
+	// put back as it was), template, mine (a repair from the repository's
+	// own history), revert (every file the commit changed put back) or llm.
 	// +optional
 	Fixer string `json:"fixer,omitempty"`
 	// Attempt counts the changes proposed, the current one included.

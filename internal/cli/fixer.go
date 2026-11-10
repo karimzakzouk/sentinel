@@ -70,7 +70,7 @@ type FixerConfig struct {
 		Platform           string   `json:"platform,omitempty"`
 		// LabNamespaces are where the Lab races images built from fixes.
 		LabNamespaces []string `json:"labNamespaces,omitempty"`
-		// Fixers are tried in order: restore, template, revert and llm.
+		// Fixers are tried in order: restore, template, mine, revert and llm.
 		Fixers []string `json:"fixers,omitempty"`
 		// Sources maps image repositories to the repositories they are
 		// built from, for images whose labels do not say.
@@ -114,8 +114,8 @@ func loadFixerConfig(path string) (FixerConfig, error) {
 	}
 	if c.Code != nil {
 		for _, name := range c.Code.Fixers {
-			if !slices.Contains([]string{"restore", "template", "revert", "llm"}, name) {
-				return FixerConfig{}, fmt.Errorf("code.fixers names %q: use restore, template, revert or llm", name)
+			if !slices.Contains([]string{"restore", "template", "mine", "revert", "llm"}, name) {
+				return FixerConfig{}, fmt.Errorf("code.fixers names %q: use restore, template, mine, revert or llm", name)
 			}
 		}
 		if m := c.Code.LLM; m != nil && (m.URL == "" || m.Model == "" || m.Format != "" && m.Format != llm.OpenAI && m.Format != llm.Anthropic) {
