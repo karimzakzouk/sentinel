@@ -1,32 +1,39 @@
-Sentinel is running in observe mode: it reads, reports and records, and changes nothing.
+Sentinel is installed as one Helm release (CRDs + controller{{ if .Values.fence.enabled }} + fence{{ end }}).
 
-Watched namespaces: {{ join ", " .Values.watch.namespaces }}
+Profile: {{ .Values.profile }}
+Watched namespaces: {{ join ", " (include "sentinel.watchList" . | fromJsonArray) }}
 
-See what Sentinel can see and do on this cluster, as its own identity:
-
-  sentinel capabilities --namespaces {{ join "," .Values.watch.namespaces }} \
-    --agent-namespace {{ .Release.Namespace }} \
-    --as system:serviceaccount:{{ .Release.Namespace }}:sentinel
-
-The controller also records every change in its capability report in the Ledger:
-
-  kubectl -n {{ .Release.Namespace }} logs deploy/sentinel | grep "capability report"
-
-Install the sentinel-fence chart (as a cluster admin) to bound what Sentinel itself may change.
-{{- if .Values.lab.enabled }}
-The Lab acts only once the fence knows its pool:
-
-  helm upgrade --install sentinel-fence charts/sentinel-fence --reuse-values \
-    --set lab.namespace={{ .Release.Namespace }} --set 'lab.pool={{ "{" }}{{ join "," (include "sentinel.labNamespaces" . | fromJsonArray) }}{{ "}" }}'
+{{- if eq .Values.profile "observe" }}
+Observe mode: Sentinel reads, reports and records. It changes nothing until
+you set profile=full (or enable actor/lab) and add a Policy in the UI.
+{{- else }}
+Full profile: actor and Lab are installed. Acting still needs a SentinelPolicy
+per namespace (Policies in the UI). The Fixer needs forge credentials separately.
 {{- end }}
+
+Open the console:
+
+  kubectl -n {{ .Release.Namespace }} port-forward deploy/sentinel 8090
+  # then http://localhost:8090 — sign in with a Kubernetes token
+
+Day-2 is the UI: Settings (kill switch, detection, Slack/LLM secrets, MITM),
+Policies (who may act where), Cluster (what this cluster allows).
+
 {{- if .Values.nodeAgent.enabled }}
 
-The tier-1 node agent is on: a DaemonSet on every node tails /var/log/pods
-(and cgroup v2) through read-only hostPaths, redacts on the node, and posts
-to the controller on port 4319. It needs root without capabilities; clusters
-that cannot run that shape (Fargate and similar) keep it off.
+Node agent: on (DaemonSet tails /var/log/pods on every node).
 {{- else }}
 
-The tier-1 node agent is off. Turn it on with --set nodeAgent.enabled=true
-where nodes can run a root DaemonSet with read-only hostPaths.
+Node agent: off. Opt in with --set nodeAgent.enabled=true where nodes allow it.
 {{- end }}
+{{- if .Values.capture.enabled }}
+
+Traffic capture: on.
+{{- else }}
+
+Traffic capture: off. Opt in with --set capture.enabled=true (privileged eBPF).
+{{- end }}
+
+Preferred install from this repo:
+
+  ./hack/sentinel-install.sh --namespaces {{ join "," (include "sentinel.watchList" . | fromJsonArray) }} --profile {{ .Values.profile }}

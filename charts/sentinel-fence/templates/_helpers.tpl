@@ -15,9 +15,46 @@ system:serviceaccount:{{ .Values.controller.namespace }}:{{ .Values.controller.s
 system:serviceaccount:{{ .Values.actor.namespace }}:{{ .Values.actor.serviceAccount }}
 {{- end }}
 
+{{- /* Namespaces the actor may change: explicit list, else global.watchNamespaces. */ -}}
+{{- define "fence.watchList" -}}
+{{- if .Values.namespaces -}}
+{{- .Values.namespaces | toJson -}}
+{{- else if and .Values.global .Values.global.watchNamespaces -}}
+{{- .Values.global.watchNamespaces | toJson -}}
+{{- else -}}
+[]
+{{- end -}}
+{{- end }}
+
 {{- /* CEL list literal of the namespaces the actor may change. */ -}}
 {{- define "fence.namespaces" -}}
-[{{ range $i, $ns := .Values.namespaces }}{{ if $i }}, {{ end }}'{{ $ns }}'{{ end }}]
+[{{ range $i, $ns := (include "fence.watchList" . | fromJsonArray) }}{{ if $i }}, {{ end }}'{{ $ns }}'{{ end }}]
+{{- end }}
+
+{{- /* Lab pool namespaces: explicit pool, else poolSize/prefix, else global. */ -}}
+{{- define "fence.labPoolList" -}}
+{{- if .Values.lab.pool -}}
+{{- .Values.lab.pool | toJson -}}
+{{- else -}}
+{{- $prefix := .Values.lab.namespacePrefix | default "sentinel-lab-" -}}
+{{- $size := int (.Values.lab.poolSize | default 0) -}}
+{{- if and (eq $size 0) .Values.global -}}
+{{- $size = int (.Values.global.labPoolSize | default 0) -}}
+{{- end -}}
+{{- if and .Values.global .Values.global.labNamespacePrefix -}}
+{{- $prefix = .Values.global.labNamespacePrefix -}}
+{{- end -}}
+{{- $out := list -}}
+{{- range $i := until $size -}}
+{{- $out = append $out (printf "%s%d" $prefix $i) -}}
+{{- end -}}
+{{- $out | toJson -}}
+{{- end -}}
+{{- end }}
+
+{{- /* CEL list literal of Lab pool namespaces. */ -}}
+{{- define "fence.labPoolCEL" -}}
+[{{ range $i, $ns := (include "fence.labPoolList" . | fromJsonArray) }}{{ if $i }}, {{ end }}'{{ $ns }}'{{ end }}]
 {{- end }}
 
 {{- /* Shared checks for every workload update: replicas, the selector, and the workload's labels and annotations. */ -}}

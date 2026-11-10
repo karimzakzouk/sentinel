@@ -1,6 +1,6 @@
 {{- define "sentinel.labConfig" -}}
 pool: {{ include "sentinel.labNamespaces" . }}
-twins: {{ toJson .Values.watch.namespaces }}
+twins: {{ include "sentinel.watchList" . }}
 clusterDomain: {{ .Values.lab.clusterDomain }}
 seal: {{ .Values.lab.seal }}
 {{- if ne .Values.lab.seal "policy" }}
@@ -9,7 +9,7 @@ sealImage: {{ include "sentinel.image" . }}
 healthAddr: ":8081"
 {{- include "sentinel.leaderElection" (dict "values" .Values.lab "namespace" .Release.Namespace "name" "sentinel-lab") }}
 {{- end }}
-{{- if .Values.lab.enabled }}
+{{- if (or .Values.lab.enabled (eq .Values.profile "full")) }}
 {{- $labels := include "sentinel.labels" . }}
 {{- $pool := include "sentinel.labNamespaces" . | fromJsonArray }}
 {{- $lab := dict "kind" "ServiceAccount" "name" "sentinel-lab" "namespace" .Release.Namespace }}
@@ -212,7 +212,7 @@ rules:
   - apiGroups: [apps]
     resources: [replicasets, controllerrevisions]
     verbs: [get, list]
-{{- range .Values.watch.namespaces }}
+{{- range (include "sentinel.watchList" . | fromJsonArray) }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

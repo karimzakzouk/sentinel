@@ -75,6 +75,7 @@ spec:
                 secretKeyRef:
                   name: {{ . }}
                   key: {{ $.Values.notify.slack.key }}
+                  optional: true
             {{- end }}
           ports:
             - name: health

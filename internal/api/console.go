@@ -105,6 +105,10 @@ func (c *Console) routes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/policies/{namespace}/{name}", c.write(c.deletePolicy))
 	mux.HandleFunc("GET /api/settings", c.read(c.getSettings))
 	mux.HandleFunc("PUT /api/settings", c.write(c.putSettings))
+	mux.HandleFunc("GET /api/secrets", c.read(c.getSecretStatus))
+	mux.HandleFunc("PUT /api/secrets/slack", c.write(c.putSlackSecret))
+	mux.HandleFunc("PUT /api/secrets/llm", c.write(c.putLLMSecret))
+	mux.HandleFunc("DELETE /api/secrets/{name}", c.write(c.deleteSecret))
 }
 
 // signIn checks a token by asking the API server who it belongs to, as

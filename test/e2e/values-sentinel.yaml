@@ -1,5 +1,12 @@
+# One release: CRDs + Sentinel + fence (see charts/sentinel Chart.yaml).
+profile: full
+fence:
+  enabled: true
 watch:
   namespaces: [e2e-smoke, boutique, e2e-gitops, e2e-delivery]
+global:
+  watchNamespaces: [e2e-smoke, boutique, e2e-gitops, e2e-delivery]
+  labPoolSize: 1
 actor:
   enabled: true
 lab:
@@ -20,3 +27,11 @@ detection:
 # Two samples in every window.
 logs:
   sampleInterval: 30s
+sentinel-fence:
+  namespaces: [e2e-smoke, boutique, e2e-gitops, e2e-delivery]
+  replicas:
+    min: 1
+    max: 5
+  lab:
+    pool: [sentinel-lab-0]
+    poolSize: 1

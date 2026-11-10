@@ -75,13 +75,14 @@ function Section({
 }
 
 function InstalledMap({ installed }: { installed?: InstalledComponents }) {
-  const rows: { key: keyof InstalledComponents; name: string; means: string }[] = [
-    { key: "actor", name: "Actor", means: "Can roll back and scale apps when a policy allows it" },
-    { key: "lab", name: "Lab", means: "Tests fixes in a sealed copy before trusting them" },
-    { key: "fixer", name: "Fixer", means: "Opens pull requests so rollbacks hold in Git" },
-    { key: "capture", name: "Traffic capture", means: "Sees requests apps serve, for the Lab to replay" },
-    { key: "captureMitm", name: "HTTPS body MITM", means: "Decrypts HTTPS for opted-in apps (HTTPS_PROXY + trust CA)" },
-    { key: "nodeAgent", name: "Node agent", means: "Reads redacted logs from each machine" },
+  const rows: { key: keyof InstalledComponents; name: string; means: string; how: string }[] = [
+    { key: "actor", name: "Actor", means: "Can roll back and scale apps when a policy allows it", how: "helm install with --profile full (or actor.enabled)" },
+    { key: "lab", name: "Lab", means: "Tests fixes in a sealed copy before trusting them", how: "helm install with --profile full (or lab.enabled)" },
+    { key: "fixer", name: "Fixer", means: "Opens pull requests so rollbacks hold in Git", how: "enable fixer + forge Secret (not in the UI — Git write access)" },
+    { key: "capture", name: "Traffic capture", means: "Sees requests apps serve, for the Lab to replay", how: "Helm: capture.enabled (privileged eBPF on nodes)" },
+    { key: "captureMitm", name: "HTTPS body MITM", means: "Decrypts HTTPS for opted-in apps", how: "Helm: capture.mitm.enabled" },
+    { key: "captureMitmTransparent", name: "Transparent MITM", means: "Intercepts 443 without HTTPS_PROXY on apps", how: "Helm: capture.mitm.transparent (hostNetwork + NET_ADMIN)" },
+    { key: "nodeAgent", name: "Node agent", means: "Reads redacted logs from each machine", how: "Helm: nodeAgent.enabled" },
   ];
   return (
     <ul className="installed-map">
@@ -92,7 +93,7 @@ function InstalledMap({ installed }: { installed?: InstalledComponents }) {
             <span className="dot" style={{ color: on ? "var(--green)" : "var(--faint)" }} />
             <span>
               <strong>{r.name}</strong>
-              <span className="muted"> — {on ? r.means : "Not installed yet. Turn it on in the Helm chart, then it appears here."}</span>
+              <span className="muted"> — {on ? r.means : `Not on this cluster yet (${r.how}).`}</span>
             </span>
           </li>
         );
@@ -111,6 +112,9 @@ export function Settings() {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
+  const [secrets, setSecrets] = useState<{ slack: boolean; llm: boolean }>();
+  const [slackURL, setSlackURL] = useState("");
+  const [llmKey, setLLMKey] = useState("");
 
   const load = useCallback(() => {
     api
@@ -120,6 +124,10 @@ export function Settings() {
         setError("");
       })
       .catch((e: Error) => setError(e.message));
+    api
+      .secrets()
+      .then(setSecrets)
+      .catch(() => setSecrets(undefined));
   }, []);
 
   useEffect(() => {
@@ -130,7 +138,10 @@ export function Settings() {
     return (
       <div className="empty">
         <h2>Settings</h2>
-        <p>Sign in to see what is installed and to turn features on or off without editing Helm YAML.</p>
+        <p>
+          Sign in to see what is installed and to turn features on or off. Day-2 lives here — you should not need Helm YAML
+          for kill switches, detection, or Slack/LLM keys.
+        </p>
       </div>
     );
   }
@@ -179,16 +190,139 @@ export function Settings() {
     <div className="settings">
       <h2>Settings</h2>
       <p className="muted">
-        Everything you can change while Sentinel is running. Per-app rules (who may act in which namespace) live under{" "}
-        <a href="#/policies">Policies</a>. Installing new components (Lab pool, capture agent, Fixer forge token) still
-        needs the chart once — then you control them here.
+        Everything you change day to day. Per-app rules live under <a href="#/policies">Policies</a>. Grey toggles mean
+        that piece was not installed with Helm yet — the note says exactly how to add it.
       </p>
       {error && <div className="error-banner">{error}</div>}
       {message && <div className="ok-banner">{message}</div>}
       {draft?._message && <p className="muted">Last apply: {draft._message}</p>}
 
-      <Section title="What’s installed" lead="A map of the pieces this cluster has. Grey means install with Helm first; green means you can configure it below.">
+      <Section
+        title="What’s installed"
+        lead="Green = on this cluster and configurable below. Grey = needs a one-time Helm enable (privileged agents or forge)."
+      >
         <InstalledMap installed={installed} />
+      </Section>
+
+      <Section
+        title="Secrets"
+        lead="Paste once; Sentinel never shows them again. Slack and LLM keys are fine here. Git forge tokens stay as kubectl secrets — they can write to your repos."
+      >
+        <Field
+          label="Slack incoming webhook"
+          help={secrets?.slack ? "Configured. Paste a new URL to replace it." : "Optional. Approvals and actions show up in Slack."}
+        >
+          <div className="settings-grid" style={{ alignItems: "center" }}>
+            <input
+              className="field"
+              type="password"
+              autoComplete="off"
+              placeholder={secrets?.slack ? "•••••••• (set)" : "https://hooks.slack.com/…"}
+              value={slackURL}
+              onChange={(e) => setSlackURL(e.target.value)}
+            />
+            <button
+              className="btn primary"
+              type="button"
+              disabled={!slackURL.trim() || saving}
+              onClick={() => {
+                setSaving(true);
+                setError("");
+                api
+                  .putSlackSecret(slackURL.trim())
+                  .then((r) => {
+                    setMessage(r.done);
+                    setSlackURL("");
+                    load();
+                  })
+                  .catch((e: Error) => setError(e.message))
+                  .finally(() => setSaving(false));
+              }}
+            >
+              Save Slack
+            </button>
+            {secrets?.slack && (
+              <button
+                className="btn"
+                type="button"
+                disabled={saving}
+                onClick={() => {
+                  setSaving(true);
+                  api
+                    .clearSecret("slack")
+                    .then((r) => {
+                      setMessage(r.done);
+                      load();
+                    })
+                    .catch((e: Error) => setError(e.message))
+                    .finally(() => setSaving(false));
+                }}
+              >
+                Clear
+              </button>
+            )}
+          </div>
+        </Field>
+        <Field
+          label="LLM API key"
+          help={
+            secrets?.llm
+              ? "Configured for the Fixer. Set the API URL and model below; the key is never shown."
+              : "Optional. Only used if the Fixer is installed and a model URL is set."
+          }
+        >
+          <div className="settings-grid" style={{ alignItems: "center" }}>
+            <input
+              className="field"
+              type="password"
+              autoComplete="off"
+              placeholder={secrets?.llm ? "•••••••• (set)" : "sk-…"}
+              value={llmKey}
+              onChange={(e) => setLLMKey(e.target.value)}
+              disabled={!installed?.fixer}
+            />
+            <button
+              className="btn primary"
+              type="button"
+              disabled={!llmKey.trim() || saving || !installed?.fixer}
+              onClick={() => {
+                setSaving(true);
+                setError("");
+                api
+                  .putLLMSecret(llmKey.trim())
+                  .then((r) => {
+                    setMessage(r.done);
+                    setLLMKey("");
+                    load();
+                  })
+                  .catch((e: Error) => setError(e.message))
+                  .finally(() => setSaving(false));
+              }}
+            >
+              Save LLM key
+            </button>
+            {secrets?.llm && (
+              <button
+                className="btn"
+                type="button"
+                disabled={saving}
+                onClick={() => {
+                  setSaving(true);
+                  api
+                    .clearSecret("llm")
+                    .then((r) => {
+                      setMessage(r.done);
+                      load();
+                    })
+                    .catch((e: Error) => setError(e.message))
+                    .finally(() => setSaving(false));
+                }}
+              >
+                Clear
+              </button>
+            )}
+          </div>
+        </Field>
       </Section>
 
       <Section
@@ -367,7 +501,7 @@ export function Settings() {
             </label>
           ))}
         </div>
-        <Field label="LLM API URL" help="Empty turns the language-model fixer off. Key stays in the chart Secret.">
+        <Field label="LLM API URL" help="Empty turns the language-model fixer off. Paste the API key under Secrets above.">
           <input
             className="field"
             disabled={!installed?.fixer}

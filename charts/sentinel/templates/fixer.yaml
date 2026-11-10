@@ -24,12 +24,12 @@ healthAddr: ":8081"
 code:
   insecureRegistries: {{ toJson .Values.fixer.code.insecureRegistries }}
   platform: {{ .Values.fixer.code.platform | quote }}
-  {{- if .Values.lab.enabled }}
+  {{- if (or .Values.lab.enabled (eq .Values.profile "full")) }}
   labNamespaces: {{ include "sentinel.labNamespaces" . }}
   {{- end }}
   fixers: {{ toJson .Values.fixer.code.fixers }}
   {{- with .Values.fixer.code.llm }}
-  {{- if .url }}
+  {{- if or .url .secretName }}
   llm:
     format: {{ .format | quote }}
     url: {{ .url | quote }}
@@ -147,7 +147,7 @@ spec:
             - name: token
               mountPath: /var/run/sentinel-fixer
               readOnly: true
-            {{- if and .Values.fixer.code.enabled .Values.fixer.code.llm.url .Values.fixer.code.llm.secretName }}
+            {{- if and .Values.fixer.code.enabled .Values.fixer.code.llm.secretName }}
             - name: llm-key
               mountPath: /var/run/sentinel-fixer-llm
               readOnly: true
@@ -167,10 +167,11 @@ spec:
               - key: {{ .Values.fixer.forge.key }}
                 path: token
               {{- end }}
-        {{- if and .Values.fixer.code.enabled .Values.fixer.code.llm.url .Values.fixer.code.llm.secretName }}
+        {{- if and .Values.fixer.code.enabled .Values.fixer.code.llm.secretName }}
         - name: llm-key
           secret:
             secretName: {{ .Values.fixer.code.llm.secretName }}
+            optional: true
             items:
               - key: {{ .Values.fixer.code.llm.key }}
                 path: key
@@ -272,7 +273,7 @@ rules:
   - apiGroups: [sentinel.karimzakzouk.github.io]
     resources: [sentinelpolicies]
     verbs: [list]
-{{- range .Values.watch.namespaces }}
+{{- range (include "sentinel.watchList" . | fromJsonArray) }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -330,7 +331,7 @@ roleRef:
 subjects:
   - {{ toJson $fixer }}
 {{- end }}
-{{- if and .Values.fixer.code.enabled .Values.lab.enabled }}
+{{- if and .Values.fixer.code.enabled (or .Values.lab.enabled (eq .Values.profile "full")) }}
 {{- range (include "sentinel.labNamespaces" $ | fromJsonArray) }}
 ---
 # Reading the Lab's verdict on an image built from a fix to code, to say it

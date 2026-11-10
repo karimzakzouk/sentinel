@@ -1,5 +1,5 @@
 {{- define "sentinel.actorConfig" -}}
-namespaces: {{ toJson .Values.watch.namespaces }}
+namespaces: {{ include "sentinel.watchList" . }}
 # The kill switch: false rejects every request. An edit to this ConfigMap
 # takes effect within a minute without a restart; a Helm upgrade restarts
 # the actor.
@@ -16,7 +16,7 @@ labNamespaces: {{ include "sentinel.labNamespaces" . }}
 healthAddr: ":8081"
 {{- include "sentinel.leaderElection" (dict "values" .Values.actor "namespace" .Values.actor.namespace "name" "sentinel-actor") }}
 {{- end }}
-{{- if .Values.actor.enabled }}
+{{- if (or .Values.actor.enabled (eq .Values.profile "full")) }}
 # The actor carries out the controller's action requests, as its own
 # identity, in its own namespace, after checking each one again. The
 # sentinel-fence chart bounds every write it makes.

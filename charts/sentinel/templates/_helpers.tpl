@@ -21,21 +21,33 @@ app.kubernetes.io/component: controller
 {{- end -}}
 {{- end }}
 
+{{- define "sentinel.watchList" -}}
+{{- if .Values.watch.namespaces -}}
+{{- .Values.watch.namespaces | toJson -}}
+{{- else if .Values.global.watchNamespaces -}}
+{{- .Values.global.watchNamespaces | toJson -}}
+{{- else -}}
+[]
+{{- end -}}
+{{- end }}
+
 {{- define "sentinel.labNamespaces" -}}
 {{- $out := list -}}
-{{- if .Values.lab.enabled -}}
-{{- range $i := until (int .Values.lab.poolSize) -}}
-{{- $out = append $out (printf "%s%d" $.Values.lab.namespacePrefix $i) -}}
+{{- if (or .Values.lab.enabled (eq .Values.profile "full")) -}}
+{{- $prefix := .Values.lab.namespacePrefix | default "sentinel-lab-" -}}
+{{- $size := int .Values.lab.poolSize -}}
+{{- range $i := until $size -}}
+{{- $out = append $out (printf "%s%d" $prefix $i) -}}
 {{- end -}}
 {{- end -}}
 {{- toJson $out -}}
 {{- end }}
 
 {{- define "sentinel.config" -}}
-namespaces: {{ toJson .Values.watch.namespaces }}
+namespaces: {{ include "sentinel.watchList" . }}
 agentNamespace: {{ .Release.Namespace }}
 labNamespaces: {{ include "sentinel.labNamespaces" . }}
-{{- if .Values.lab.enabled }}
+{{- if (or .Values.lab.enabled (eq .Values.profile "full")) }}
 verifyRollbacks: {{ .Values.lab.verifyRollbacks }}
 {{- end }}
 {{- if .Values.fixer.enabled }}
@@ -44,7 +56,7 @@ fixerNamespace: {{ .Release.Namespace }}
 codeFixWithoutRollback: {{ .Values.fixer.code.withoutRollback }}
 {{- end }}
 {{- end }}
-{{- if .Values.actor.enabled }}
+{{- if (or .Values.actor.enabled (eq .Values.profile "full")) }}
 actorUser: system:serviceaccount:{{ .Values.actor.namespace }}:{{ .Values.actor.serviceAccount }}
 {{- end }}
 ledger:
@@ -90,7 +102,7 @@ healthAddr: ":8081"
 {{- define "sentinel.captureConfig" -}}
 discovery:
   instrument:
-    {{- range .Values.watch.namespaces }}
+    {{- range (include "sentinel.watchList" . | fromJsonArray) }}
     - k8s_namespace: {{ . | quote }}
     {{- end }}
 {{- if .Values.capture.exportBodies }}
@@ -130,11 +142,15 @@ attributes:
 {{- end }}
 
 {{- define "sentinel.validate" -}}
-{{- if not .Values.watch.namespaces -}}
-{{- fail "watch.namespaces is empty: list the namespaces Sentinel may watch" -}}
+{{- $watch := include "sentinel.watchList" . | fromJsonArray -}}
+{{- if not $watch -}}
+{{- fail "watch.namespaces is empty: list the namespaces Sentinel may watch (or set global.watchNamespaces)" -}}
+{{- end -}}
+{{- if not (has .Values.profile (list "observe" "full")) -}}
+{{- fail (printf "profile is %q: use observe or full" .Values.profile) -}}
 {{- end -}}
 {{- $own := list .Release.Namespace -}}
-{{- if .Values.actor.enabled -}}
+{{- if (or .Values.actor.enabled (eq .Values.profile "full")) -}}
 {{- $own = append $own .Values.actor.namespace -}}
 {{- if eq .Values.actor.namespace .Release.Namespace -}}
 {{- fail "actor.namespace must differ from the release namespace, so the controller can never run a pod as the actor" -}}
@@ -144,7 +160,7 @@ attributes:
 {{- if not (has .Values.lab.seal (list "auto" "policy" "firewall")) -}}
 {{- fail (printf "lab.seal is %q: use auto, policy or firewall" .Values.lab.seal) -}}
 {{- end -}}
-{{- range .Values.watch.namespaces -}}
+{{- range $watch -}}
 {{- if has . $own -}}
 {{- fail (printf "namespace %q cannot be both watched and one of Sentinel's own" .) -}}
 {{- end -}}

@@ -1,9 +1,17 @@
 apiVersion: v2
 name: sentinel
-description: Sentinel, a self-hosted autonomous SRE for Kubernetes. Starts in observe mode.
+description: Sentinel, a self-hosted autonomous SRE for Kubernetes. Starts in observe mode. One chart installs the CRDs, controller, and fence.
 type: application
 version: 0.1.0
 appVersion: "0.1.0"
 kubeVersion: ">=1.30.0-0"
 home: https://github.com/karimzakzouk/sentinel
 license: Apache-2.0
+dependencies:
+  - name: sentinel-crds
+    version: 0.1.0
+    repository: "file://../sentinel-crds"
+  - name: sentinel-fence
+    version: 0.1.0
+    repository: "file://../sentinel-fence"
+    condition: fence.enabled

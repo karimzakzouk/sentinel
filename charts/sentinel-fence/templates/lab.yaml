@@ -32,7 +32,7 @@ spec:
     - name: kind
       expression: "request.resource.group + '/' + request.resource.resource + (variables.subResource == '' ? '' : '/' + variables.subResource)"
   validations:
-    - expression: "variables.requestNamespace in {{ toJson .Values.lab.pool | replace "\"" "'" }}"
+    - expression: "variables.requestNamespace in {{ include "fence.labPoolCEL" . }}"
       message: "the Lab may act only in its pool of namespaces"
       reason: Forbidden
     - expression: >-

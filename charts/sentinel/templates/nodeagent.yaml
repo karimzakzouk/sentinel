@@ -88,7 +88,7 @@ spec:
             - --log-root=/host/var/log/pods
             - --cgroup-root=/host/sys/fs/cgroup
             - --endpoint=http://sentinel-node-agent.{{ .Release.Namespace }}.svc:4319
-            {{- range .Values.watch.namespaces }}
+            {{- range (include "sentinel.watchList" . | fromJsonArray) }}
             - --namespaces={{ . }}
             {{- end }}
           env:

@@ -473,7 +473,11 @@ the source's own pipeline, which `hack/ci.sh` plays in our tests; traffic
 capture is optional, off until a namespace turns it on; the console acts as
 the person signed in.
 
-Needed later:
+Install UX (landed): one Helm release via `./hack/sentinel-install.sh` (CRDs +
+Sentinel + fence), `profile=observe|full`, and day-2 Settings for Slack/LLM
+secrets write-only. Forge tokens stay kubectl-only.
+
+Needed later (not more product code):
 
 | When | What |
 |---|---|
