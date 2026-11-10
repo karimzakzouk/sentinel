@@ -168,11 +168,16 @@ fixer:
 
 # Traffic capture keeps, for namespaces whose SentinelPolicy turns it on
 # (capture.requests), the method, route, status and timing of the requests
-# their workloads serve and make, never a body or a header, so the Lab can
-# replay reads to its copies. Its agent, OpenTelemetry's eBPF
-# instrumentation, runs on every node, in a namespace of its own that allows
-# the capabilities eBPF needs. Off by default; where nodes cannot run it,
-# the capability report says so and Sentinel works without it.
+# their workloads serve and make, never a header, so the Lab can replay
+# reads to its copies. capture.bodies on the same policy (only with
+# requests) is an opt-in to also keep redacted request and response bodies,
+# capped at about 4KiB each; off by default, and the metadata path is
+# unchanged when it is off. Full TLS interception is not required yet:
+# bodies are stored only when the agent sends them. Its agent,
+# OpenTelemetry's eBPF instrumentation, runs on every node, in a namespace
+# of its own that allows the capabilities eBPF needs. Off by default;
+# where nodes cannot run it, the capability report says so and Sentinel
+# works without it.
 capture:
   enabled: false
   namespace: sentinel-capture

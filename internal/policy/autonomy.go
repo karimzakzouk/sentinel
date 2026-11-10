@@ -90,3 +90,15 @@ func Capture(policies []v1alpha1.SentinelPolicy) bool {
 	}
 	return false
 }
+
+// CaptureBodies reports whether a namespace's policies opt in to keeping
+// request and response bodies: any one that sets Bodies with Requests.
+func CaptureBodies(policies []v1alpha1.SentinelPolicy) bool {
+	for _, p := range policies {
+		if p.Spec.Capture != nil && p.Spec.Capture.Requests && p.Spec.Capture.Bodies {
+			return true
+		}
+	}
+	return false
+}
+

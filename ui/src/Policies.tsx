@@ -3,11 +3,14 @@ import { api, type AutonomyRule, type NamespacePolicies, type Policy, type Polic
 import { useSession } from "./session";
 
 // The actions a policy can let Sentinel take, and what each level means.
+// Keep in sync with ActionRequest's action enum plus fix.merge (policy-only).
 const actions: { id: string; label: string }[] = [
   { id: "rollout.undo", label: "Roll back a rollout" },
   { id: "scale", label: "Restore replicas" },
+  { id: "restart", label: "Restart pods" },
   { id: "argocd.rollback", label: "Pause Argo CD, then roll back" },
   { id: "flux.rollback", label: "Suspend Flux, then roll back" },
+  { id: "helm.rollback", label: "Roll back a Helm release" },
   { id: "rollouts.abort", label: "Abort an Argo Rollout" },
   { id: "fix.merge", label: "Merge its own fix in Git" },
 ];
@@ -52,6 +55,13 @@ function Rule({ rule, onChange, onRemove }: { rule: AutonomyRule; onChange: (r: 
   );
 }
 
+function captureOf(requests: boolean, bodies: boolean): PolicySpec["capture"] {
+  if (!requests && !bodies) return undefined;
+  // Bodies only applies with requests; turning bodies on alone also turns requests on.
+  if (bodies && !requests) requests = true;
+  return { ...(requests ? { requests: true } : {}), ...(bodies ? { bodies: true } : {}) };
+}
+
 function PolicyCard({ policy, onSaved }: { policy: Policy; onSaved: () => void }) {
   const [spec, setSpec] = useState<PolicySpec>(policy.spec ?? {});
   const [message, setMessage] = useState("");
@@ -87,10 +97,26 @@ function PolicyCard({ policy, onSaved }: { policy: Policy; onSaved: () => void }
         <input
           type="checkbox"
           checked={!!spec.capture?.requests}
-          onChange={(e) => setSpec({ ...spec, capture: e.target.checked ? { requests: true } : undefined })}
+          onChange={(e) => setSpec({ ...spec, capture: captureOf(e.target.checked, e.target.checked ? !!spec.capture?.bodies : false) })}
         />
-        Record request details: method, route, status and timing, never bodies. Needs traffic capture installed.
+        Record request details: method, route, status and timing, never bodies unless opted in below. Needs traffic capture installed.
       </label>
+      <label
+        className="check capture"
+        title="Reserves the policy switch for a body recorder that is not fully live yet; turning it on stores no bodies today"
+      >
+        <input
+          type="checkbox"
+          checked={!!spec.capture?.bodies}
+          onChange={(e) => setSpec({ ...spec, capture: captureOf(!!spec.capture?.requests || e.target.checked, e.target.checked) })}
+        />
+        Record request and response bodies (opt-in stub; recorder not fully live yet). Off by default; needs request capture.
+      </label>
+      <p className="muted policy-note">
+        Cluster-wide Fixer knobs stay in the chart&apos;s values, not in a policy:{" "}
+        <code>fixer.code.withoutRollback</code>, <code>fixer.code.fixers</code>, and <code>fixer.code.llm</code>. See{" "}
+        <code>charts/sentinel/values.yaml</code>.
+      </p>
       <div className="policy-actions">
         <button
           className="btn"

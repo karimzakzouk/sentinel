@@ -769,6 +769,13 @@ textarea.field {
   align-items: center;
   margin-top: 10px;
 }
+.policy .policy-note {
+  margin: 10px 0 0;
+  font-size: 13px;
+}
+.policy .policy-note code {
+  font-size: 12px;
+}
 .rule {
   display: flex;
   gap: 8px;
