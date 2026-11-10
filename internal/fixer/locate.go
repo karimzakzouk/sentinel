@@ -32,12 +32,13 @@ type Target struct {
 // and the value production ran before it.
 type Change struct {
 	Container string
-	// Field is "image" (the default), "command", "args", or "env:NAME" for
-	// an environment variable's literal value.
+	// Field is "image" (the default), "command", "args", "env:NAME" for an
+	// environment variable's literal value, "readinessProbe",
+	// "livenessProbe", "startupProbe", or a resource limit.
 	Field string
 	// Bad and Good are the values: a string for the image and an
-	// environment variable, a []string for command and arguments, nil where
-	// the field was not set.
+	// environment variable, a []string for command and arguments, a
+	// map[string]any for a probe, nil where the field was not set.
 	Bad, Good any
 }
 
@@ -431,10 +432,13 @@ func onlyChanged(before, after resmap.ResMap, kind, name string, c Change) error
 		withoutBuildMetadata(am)
 		if b.GetKind() == kind && b.GetName() == name {
 			container := containerIn(bm, c.Container)
-			if got := valueOfRes(a, c.Container, c.field()); !c.same(got, c.Good) || container == nil {
+			got := valueOfRes(a, c.Container, c.field())
+			if !c.same(got, c.Good) || container == nil {
 				return fmt.Errorf("with the fix %s's %s renders as %s, not %s", c.Container, what(c.field()), shown(got), shown(c.Good))
 			}
-			setValue(container, c.field(), c.Good)
+			// Use the rendered value so probe maps match YAML's types, not
+			// the API object's JSON round-trip.
+			setValue(container, c.field(), got)
 		}
 		if !reflect.DeepEqual(bm, am) {
 			return fmt.Errorf("the fix changes %s %s beyond %s's %s", a.GetKind(), a.GetName(), c.Container, what(c.field()))
@@ -509,11 +513,23 @@ func onlyFileChanged(e *Edit, kind, name string, c Change) error {
 		}
 	}
 	before, after := decode(e.Before), decode(e.After)
+	var got any
+	for _, doc := range after {
+		meta, _ := doc["metadata"].(map[string]any)
+		if doc["kind"] == kind && meta["name"] == name {
+			if container := containerIn(doc, c.Container); container != nil {
+				got = valueIn(container, c.field())
+			}
+		}
+	}
+	if !c.same(got, c.Good) {
+		return fmt.Errorf("%s reads %s as %s, not %s", e.Path, what(c.field()), shown(got), shown(c.Good))
+	}
 	for _, doc := range before {
 		meta, _ := doc["metadata"].(map[string]any)
 		if doc["kind"] == kind && meta["name"] == name {
 			if container := containerIn(doc, c.Container); container != nil {
-				setValue(container, c.field(), c.Good)
+				setValue(container, c.field(), got)
 			}
 		}
 	}
