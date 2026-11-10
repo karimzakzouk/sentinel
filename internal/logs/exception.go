@@ -13,6 +13,9 @@ type Exception struct {
 	Language string `json:"language"`
 	// Types lists exception types from the outermost to the root cause.
 	Types []string `json:"types"`
+	// Message is the message of the exception the frames belong to,
+	// masked; fingerprints leave it out.
+	Message string `json:"message,omitempty"`
 	// Frames are the root cause's frames, innermost first: module and
 	// function, without argument values, and where each ran when the
 	// runtime printed it.
@@ -115,7 +118,7 @@ func parseGo(lines []string) Exception {
 	if strings.HasPrefix(head, "fatal error: ") {
 		typ = Mask(head)
 	}
-	e := Exception{Language: "go", Types: []string{typ}}
+	e := Exception{Language: "go", Types: []string{typ}, Message: typ}
 	goroutines := 0
 	for _, l := range lines[1:] {
 		switch {
@@ -199,9 +202,10 @@ func parseJava(lines []string) Exception {
 					h = h[i+2:]
 				}
 			}
-			name, _, _ := strings.Cut(h, ": ")
+			name, msg, _ := strings.Cut(h, ": ")
 			if javaThrowable(name) || strings.Contains(name, ".") && !strings.Contains(name, " ") {
 				e.Types = append(e.Types, name)
+				e.Message = Mask(msg)
 				frames = nil
 			}
 		}
@@ -239,8 +243,9 @@ func parsePython(lines []string) Exception {
 		case strings.HasPrefix(t, `File "`):
 			frames = append(frames, pythonFrame(t))
 		case l != "" && !indented(l) && !pythonChain(l):
-			name, _, _ := strings.Cut(l, ":")
+			name, msg, _ := strings.Cut(l, ":")
 			e.Types = append(e.Types, name)
+			e.Message = Mask(strings.TrimSpace(msg))
 		}
 	}
 	for i := len(frames) - 1; i >= 0; i-- {
@@ -266,8 +271,8 @@ func pythonFrame(t string) Frame {
 
 // Node.js: "TypeError: message", then "at function (file:line:column)".
 func parseNode(lines []string) Exception {
-	name, _, _ := strings.Cut(lines[0], ": ")
-	e := Exception{Language: "node", Types: []string{name}}
+	name, msg, _ := strings.Cut(lines[0], ": ")
+	e := Exception{Language: "node", Types: []string{name}, Message: Mask(msg)}
 	for _, l := range lines[1:] {
 		t := strings.TrimLeft(l, " \t")
 		if strings.HasPrefix(t, "at ") {
@@ -300,9 +305,12 @@ func nodeFrame(s string) Frame {
 func parseDotnet(lines []string) Exception {
 	e := Exception{Language: "dotnet"}
 	head := strings.TrimPrefix(strings.TrimPrefix(lines[0], "Unhandled exception. "), "Unhandled Exception: ")
-	for _, part := range strings.Split(head, " ---> ") {
-		name, _, _ := strings.Cut(part, ": ")
+	for i, part := range strings.Split(head, " ---> ") {
+		name, msg, _ := strings.Cut(part, ": ")
 		e.Types = append(e.Types, name)
+		if i == 0 {
+			e.Message = Mask(msg)
+		}
 	}
 	dotnetChain(&e, lines[1:])
 	return e

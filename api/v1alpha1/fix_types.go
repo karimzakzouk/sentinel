@@ -51,6 +51,16 @@ type Crash struct {
 	// +listType=atomic
 	// +kubebuilder:validation:MaxItems=20
 	Frames []string `json:"frames"`
+	// Types are the crash's exception types, outermost first, or the
+	// message a runtime prints for a panic, masked.
+	// +optional
+	// +listType=atomic
+	// +kubebuilder:validation:MaxItems=10
+	Types []string `json:"types,omitempty"`
+	// Message is the message of the exception the frames belong to, masked.
+	// +optional
+	// +kubebuilder:validation:MaxLength=512
+	Message string `json:"message,omitempty"`
 	// Stack is the same frames with where each ran, where the runtime
 	// printed it.
 	// +optional
@@ -105,6 +115,40 @@ type CodeFix struct {
 	// +optional
 	Verdict string `json:"verdict,omitempty"`
 	// Message says why there is no code fix, or how it stands.
+	// +optional
+	Message string `json:"message,omitempty"`
+	// Fixer names what proposed the current change: restore (a function
+	// put back as it was), template, revert (every file the commit changed
+	// put back), history or llm.
+	// +optional
+	Fixer string `json:"fixer,omitempty"`
+	// Attempt counts the changes proposed, the current one included.
+	// +optional
+	Attempt int32 `json:"attempt,omitempty"`
+	// Tried are the earlier changes, oldest first, and what became of them.
+	// +optional
+	// +listType=atomic
+	// +kubebuilder:validation:MaxItems=10
+	Tried []CodeAttempt `json:"tried,omitempty"`
+}
+
+// CodeAttempt is a change to the code the Fixer proposed and moved on from:
+// the Lab found it did not fix the crash, or a person closed it.
+type CodeAttempt struct {
+	Fixer string `json:"fixer"`
+	// +optional
+	// +listType=atomic
+	Change []string `json:"change,omitempty"`
+	// +optional
+	PullRequest string `json:"pullRequest,omitempty"`
+	// +optional
+	Commit string `json:"commit,omitempty"`
+	// +optional
+	Image string `json:"image,omitempty"`
+	// Verdict is the Lab's, or Declined when a person closed the pull
+	// request.
+	// +optional
+	Verdict string `json:"verdict,omitempty"`
 	// +optional
 	Message string `json:"message,omitempty"`
 }

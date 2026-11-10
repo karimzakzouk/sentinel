@@ -19,6 +19,7 @@ func parseRuby(lines []string) Exception {
 	e := Exception{Language: "ruby"}
 	if m := rubyHeader.FindStringSubmatch(lines[0]); m != nil {
 		e.Frames = append(e.Frames, rubyFrame(m[1], m[2], m[3]))
+		e.Message = Mask(strings.TrimSpace(rubyType.ReplaceAllString(lines[0][len(m[0]):], "")))
 	}
 	for _, l := range lines {
 		if m := rubyFrom.FindStringSubmatch(l); m != nil {
@@ -56,8 +57,9 @@ func phpUncaught(first string) bool {
 func parsePHP(lines []string) Exception {
 	e := Exception{Language: "php"}
 	_, rest, _ := strings.Cut(lines[0], "Uncaught ")
-	if name, _, ok := strings.Cut(rest, ":"); ok && name != "" && !strings.Contains(name, " ") {
+	if name, msg, ok := strings.Cut(rest, ":"); ok && name != "" && !strings.Contains(name, " ") {
 		e.Types = append(e.Types, name)
+		e.Message = Mask(strings.TrimSpace(phpWhere.ReplaceAllString(msg, "")))
 	}
 	type entry struct{ file, line, callee string }
 	var entries []entry
@@ -107,6 +109,7 @@ func parseRust(lines []string) Exception {
 		msg = lines[1]
 	}
 	e.Types = []string{"panic: " + Mask(msg)}
+	e.Message = Mask(msg)
 	for i, l := range lines {
 		f := rustFrame.FindStringSubmatch(l)
 		if f == nil || strings.HasPrefix(strings.TrimSpace(l), "at ") {
@@ -160,12 +163,14 @@ func parseNative(lines []string) Exception {
 	case m != nil:
 		lang(m[1])
 		e.Types = []string{"assertion failed: " + Mask(m[4])}
+		e.Message = Mask(m[4])
 		e.Frames = []Frame{{Function: cFunction(m[3]), InApp: true, File: m[1], Line: atoi(m[2])}}
 		return e
 	}
 	if m := muslAssert.FindStringSubmatch(first); m != nil {
 		lang(m[2])
 		e.Types = []string{"assertion failed: " + Mask(m[1])}
+		e.Message = Mask(m[1])
 		e.Frames = []Frame{{Function: cFunction(m[3]), InApp: true, File: m[2], Line: atoi(m[4])}}
 		return e
 	}

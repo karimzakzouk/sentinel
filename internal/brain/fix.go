@@ -40,6 +40,8 @@ type FixRequest struct {
 // Crash is a parsed crash stack.
 type Crash struct {
 	Language string
+	Types    []string
+	Message  string
 	Frames   []string
 	// Stack is the frames with where each ran, where the runtime printed it.
 	Stack []logs.Frame
@@ -282,7 +284,7 @@ func (b *Brain) crashOf(ctx context.Context, incident model.ID, target model.Obj
 				}
 			}
 			if len(frames) > 0 {
-				newest, at = &Crash{Language: ex.Language, Frames: frames, Stack: stack}, e.CollectedAt
+				newest, at = &Crash{Language: ex.Language, Types: ex.Types, Message: ex.Message, Frames: frames, Stack: stack}, e.CollectedAt
 			}
 		}
 	}

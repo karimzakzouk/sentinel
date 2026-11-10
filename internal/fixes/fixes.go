@@ -81,7 +81,8 @@ func (f *Fixes) Fix(ctx context.Context, r brain.FixRequest) (string, error) {
 			Workload: v1alpha1.TargetRef{APIVersion: "apps/v1", Kind: target.Kind, Namespace: target.Namespace, Name: target.Name}},
 	}
 	if c := r.Crash; c != nil {
-		fix.Spec.Crash = &v1alpha1.Crash{Language: c.Language, Frames: c.Frames[:min(len(c.Frames), 20)]}
+		fix.Spec.Crash = &v1alpha1.Crash{Language: c.Language, Frames: c.Frames[:min(len(c.Frames), 20)], Types: c.Types[:min(len(c.Types), 10)],
+			Message: c.Message[:min(len(c.Message), 512)]}
 		for _, f := range c.Stack[:min(len(c.Stack), 20)] {
 			fix.Spec.Crash.Stack = append(fix.Spec.Crash.Stack, v1alpha1.CrashFrame{Function: f.Function, File: f.File, Line: int32(min(f.Line, 1<<30))}) //nolint:gosec // bounded just above
 		}
