@@ -59,6 +59,9 @@ type Watcher struct {
 	rollouts    map[string]*rollout
 	// hadEndpoints marks Services seen with ready endpoints.
 	hadEndpoints map[types.UID]bool
+	// errorHosts are, per workload, the hosts its error lines named as
+	// addresses, and when last.
+	errorHosts map[string]map[string]time.Time
 }
 
 type namespaceListers struct {
@@ -83,6 +86,7 @@ func (w *Watcher) Run(ctx context.Context) error {
 		toBrain := w.Logs.OnEvidence
 		w.Logs.OnEvidence = func(ctx context.Context, ev LogEvidence) {
 			w.rolloutEvidence(ctx, ev)
+			w.learnHosts(ev)
 			if ev.Reason == ReasonSample {
 				w.Detector.Expose(ev.Workload, FactLogErrors, ev.Exposure)
 				w.Detector.Observe(SampleFacts(ev)...)
@@ -310,8 +314,54 @@ func (w *Watcher) Topology() *topology.Map {
 		for _, s := range sts {
 			edges = append(edges, topology.ConfigEdges(statefulSetRef(s), s.Spec.Template, targets)...)
 		}
+		w.mu.Lock()
+		for key, seen := range w.errorHosts {
+			from, err := model.ParseObjectRef(key)
+			if err != nil || from.Namespace != ns {
+				continue
+			}
+			var names []string
+			for h, at := range seen {
+				if time.Since(at) < errorHostsFor {
+					names = append(names, h)
+				}
+			}
+			edges = append(edges, topology.HostEdges(from, names, targets, "logs", topology.LogReliability)...)
+		}
+		w.mu.Unlock()
 	}
 	return topology.NewMap(edges)
+}
+
+// errorHostsFor is how long a host an error line named counts as one the
+// workload calls.
+const errorHostsFor = time.Hour
+
+// learnHosts keeps the hosts a workload's error lines name as addresses,
+// for its edges to the Services they are.
+func (w *Watcher) learnHosts(ev LogEvidence) {
+	var lines []string
+	for _, t := range ev.Summary.Templates {
+		if t.Error {
+			lines = append(lines, t.Template)
+		}
+	}
+	hosts := topology.ErrorHosts(lines)
+	if len(hosts) == 0 {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.errorHosts == nil {
+		w.errorHosts = map[string]map[string]time.Time{}
+	}
+	key := ev.Workload.String()
+	if w.errorHosts[key] == nil {
+		w.errorHosts[key] = map[string]time.Time{}
+	}
+	for _, h := range hosts {
+		w.errorHosts[key][h] = time.Now()
+	}
 }
 
 // pollMetrics reads resource use when the interval has passed: each pod's

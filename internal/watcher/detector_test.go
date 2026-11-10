@@ -297,3 +297,23 @@ func TestAlphaComesFromTheBudget(t *testing.T) {
 		t.Fatalf("alpha = %g, want %g", got, want)
 	}
 }
+
+// Learned histories survive a restart, decayed for the time Sentinel was
+// down: a series that had warmed up may alarm again at once.
+func TestLearnedBaselinesSurviveARestart(t *testing.T) {
+	d := NewCountDetector(time.Minute, 5*time.Second, 1, 24*time.Hour)
+	w := d.register(web)
+	w.series[FactKinds[0]].histCount, w.series[FactKinds[0]].histExp = 4, 36000
+	kept := d.Baselines(t0)
+	if len(kept) != 1 || kept[0].Workload != web.String() || kept[0].Exposure != 36000 {
+		t.Fatalf("kept %+v", kept)
+	}
+	again := NewCountDetector(time.Minute, 5*time.Second, 1, 24*time.Hour)
+	if n := again.Restore(append(kept, Baseline{Workload: "not a ref", Exposure: 1}), t0.Add(24*time.Hour)); n != 1 {
+		t.Fatalf("restored %d series", n)
+	}
+	s := again.workloads[web.String()].series[FactKinds[0]]
+	if s.histCount != 2 || s.histExp != 18000 {
+		t.Fatalf("after a day down, history %v over %vs; want half of each", s.histCount, s.histExp)
+	}
+}

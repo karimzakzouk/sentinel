@@ -6,6 +6,7 @@ package topology
 import (
 	"net"
 	"net/url"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -30,6 +31,59 @@ type Edge struct {
 // ConfigReliability is the chance that a Service named in a workload's
 // configuration is one it calls. Named but unused addresses happen.
 const ConfigReliability = 0.9
+
+// LogReliability is the chance that a Service an error line names is one
+// the workload calls: errors name what failed to answer, and sometimes a
+// name only in passing.
+const LogReliability = 0.7
+
+// ErrorHosts are the host names error lines name as addresses: a host and
+// port, a URL, a name after "dial tcp" or "connect to", as clients print
+// the connection they could not make. Masked values name nothing.
+func ErrorHosts(lines []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, l := range lines {
+		for _, word := range strings.Fields(l) {
+			word = strings.Trim(word, `"'(),;[]{}:`)
+			// Only an address names a host: a URL, or a host and its port.
+			if strings.Contains(word, "<") || !strings.Contains(word, "://") && !hostPort.MatchString(word) {
+				continue
+			}
+			for _, h := range hosts(word) {
+				if h != "" && validHost(h) && !seen[h] && net.ParseIP(h) == nil {
+					seen[h] = true
+					out = append(out, h)
+				}
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+var hostPort = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.-]*:\d{1,5}$`)
+
+// HostEdges are a workload's edges to the Services of its namespace that
+// hosts name, learned from source with reliability.
+func HostEdges(from model.ObjectRef, hostNames []string, services map[string]ServiceTarget, source string, reliability float64) []Edge {
+	var out []Edge
+	seen := map[string]bool{}
+	for _, host := range hostNames {
+		name := serviceName(host, from.Namespace)
+		svc, ok := services[name]
+		if !ok || seen[name] {
+			continue
+		}
+		seen[name] = true
+		for _, to := range svc.Backing {
+			if to != from {
+				out = append(out, Edge{From: from, To: to, Service: name, Source: source, Reliability: reliability})
+			}
+		}
+	}
+	return out
+}
 
 // ServiceTarget is a Service and the workloads behind it.
 type ServiceTarget struct {

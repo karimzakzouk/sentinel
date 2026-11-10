@@ -3,6 +3,7 @@ package topology
 import (
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -111,5 +112,30 @@ func TestExternalHostsAreTheAddressesOutsideTheNamespace(t *testing.T) {
 	want := []string{"10.0.0.7", "10.0.0.8", "api.stripe.com", "db.other.svc", "metrics.example.com", "redis-cart"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
+// A host an error line names as an address is a Service the workload
+// calls, when it is one of its namespace's; masked values and words name
+// nothing.
+func TestErrorLinesNameWhatAWorkloadCalls(t *testing.T) {
+	lines := []string{
+		"dial tcp redis-cart:6379: connect: connection refused",
+		"Get \"http://productcatalogservice.boutique.svc.cluster.local:3550/products\": context deadline exceeded",
+		"connect to <ip>:<num> failed",
+		"failed to load catalog: timeout",
+	}
+	hosts := ErrorHosts(lines)
+	if strings.Join(hosts, ",") != "productcatalogservice.boutique.svc.cluster.local,redis-cart" {
+		t.Fatalf("hosts %v", hosts)
+	}
+	from := model.ObjectRef{Group: "apps", Kind: "Deployment", Namespace: "boutique", Name: "cartservice"}
+	redis := model.ObjectRef{Group: "apps", Kind: "Deployment", Namespace: "boutique", Name: "redis-cart"}
+	catalog := model.ObjectRef{Group: "apps", Kind: "Deployment", Namespace: "boutique", Name: "productcatalogservice"}
+	edges := HostEdges(from, hosts, map[string]ServiceTarget{
+		"redis-cart": {Name: "redis-cart", Backing: []model.ObjectRef{redis}}, "productcatalogservice": {Name: "productcatalogservice", Backing: []model.ObjectRef{catalog}}},
+		"logs", LogReliability)
+	if len(edges) != 2 || edges[0].To != catalog || edges[1].To != redis || edges[0].Source != "logs" {
+		t.Fatalf("edges %+v", edges)
 	}
 }

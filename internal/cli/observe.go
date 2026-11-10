@@ -2,10 +2,13 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
 	"os"
+	"path/filepath"
 	"slices"
 	"time"
 
@@ -113,6 +116,15 @@ func newObserver(ctx context.Context, log *slog.Logger, cfg *config.Config, clie
 				"expected", t.Expected, "tailProbability", t.TailProbability, "alpha", t.Alpha, "inEpisode", t.InEpisode,
 				"historyCount", t.HistoryCount, "historyExposureSeconds", t.HistoryExposure)
 		}
+	}
+	if cfg.Ledger.Path != "" {
+		path := filepath.Join(filepath.Dir(cfg.Ledger.Path), "baselines.json")
+		if n, err := restoreBaselines(detector, path, time.Now()); err != nil {
+			log.Warn("could not take back the learned baselines; they are learned again", "path", path, "error", err)
+		} else if n > 0 {
+			log.Info("took back learned baselines", "series", n, "path", path)
+		}
+		go keepBaselines(ctx, detector, path, 5*time.Minute, log)
 	}
 	w := &watcher.Watcher{Client: client, Namespaces: cfg.Namespaces, Log: log, Detector: detector}
 	if _, err := client.Discovery().ServerResourcesForGroupVersion("metrics.k8s.io/v1beta1"); err == nil {
@@ -243,5 +255,49 @@ func valueLab(lab *verify.Lab) func(context.Context, model.ID, model.ObjectRef, 
 			overrides = append(overrides, v1alpha1.ValueOverride{Container: container, Field: "limits.memory", Value: limits[container]})
 		}
 		return lab.VerifyValues(ctx, incident, target, revision, overrides)
+	}
+}
+
+// restoreBaselines takes back the learned baselines a previous run kept.
+func restoreBaselines(d *watcher.CountDetector, path string, now time.Time) (int, error) {
+	raw, err := os.ReadFile(path) //nolint:gosec // beside the ledger the operator configured
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	var baselines []watcher.Baseline
+	if err := json.Unmarshal(raw, &baselines); err != nil {
+		return 0, err
+	}
+	return d.Restore(baselines, now), nil
+}
+
+// keepBaselines writes the learned baselines every interval and once more
+// as the controller stops, so a restart need not learn them again.
+func keepBaselines(ctx context.Context, d *watcher.CountDetector, path string, interval time.Duration, log *slog.Logger) {
+	write := func() {
+		raw, err := json.Marshal(d.Baselines(time.Now()))
+		if err == nil {
+			tmp := path + ".tmp"
+			if err = os.WriteFile(tmp, raw, 0o600); err == nil {
+				err = os.Rename(tmp, path)
+			}
+		}
+		if err != nil {
+			log.Warn("could not keep the learned baselines", "path", path, "error", err)
+		}
+	}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			write()
+			return
+		case <-t.C:
+			write()
+		}
 	}
 }
