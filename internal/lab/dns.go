@@ -43,7 +43,11 @@ func Zone(services []*corev1.Service, prodNS, domain string) string {
 		if s.Spec.ClusterIP == "" || s.Spec.ClusterIP == corev1.ClusterIPNone {
 			continue
 		}
-		for _, name := range []string{s.Name, s.Name + "." + prodNS, s.Name + "." + prodNS + ".svc", s.Name + "." + prodNS + ".svc." + domain} {
+		names := []string{s.Name, s.Name + "." + prodNS, s.Name + "." + prodNS + ".svc", s.Name + "." + prodNS + ".svc." + domain}
+		if host := s.Annotations[FakeHost]; host != "" {
+			names = append(names, host)
+		}
+		for _, name := range names {
 			fmt.Fprintf(&b, "%s. IN A %s\n", name, s.Spec.ClusterIP)
 		}
 	}

@@ -84,10 +84,16 @@ func TestSynthesisCopiesTheWorkloadAndWhatItCalls(t *testing.T) {
 			t.Fatalf("Service %s is not a fresh Lab copy: %+v", s.Name, s)
 		}
 	}
-	if !slices.Equal(names, []string{"front", "backend"}) {
-		t.Fatalf("copied Services %v; want front and backend", names)
+	if !slices.Equal(names, []string{"front", "backend", "fake-api-stripe-com"}) {
+		t.Fatalf("copied Services %v; want front, backend and a fake of api.stripe.com", names)
 	}
-	if len(plan.ConfigMaps) != 1 || plan.ConfigMaps[0].Data["mode"] != "live" || plan.ConfigMaps[0].Namespace != "sentinel-lab-0" {
+	var frontConfig *corev1.ConfigMap
+	for _, cm := range plan.ConfigMaps {
+		if cm.Name == "front-config" {
+			frontConfig = cm
+		}
+	}
+	if frontConfig == nil || frontConfig.Data["mode"] != "live" || frontConfig.Namespace != "sentinel-lab-0" {
 		t.Fatalf("ConfigMaps %+v; want front-config copied", plan.ConfigMaps)
 	}
 
@@ -122,7 +128,7 @@ func TestSynthesisCopiesTheWorkloadAndWhatItCalls(t *testing.T) {
 		"Deployment/shop/front's TOKEN holds a honeytoken instead of secret front-secrets",
 		"Deployment/shop/front runs without the variables of secret front-env",
 		"Deployment/shop/front's volume tls is an empty directory instead of secret front-tls",
-		"Deployment/shop/front names api.stripe.com, which is outside the Lab and unreachable there",
+		"Deployment/shop/front's api.stripe.com is a Lab fake of the outside host (no captured statuses)",
 	} {
 		if !slices.Contains(plan.Fidelity, want) {
 			t.Errorf("fidelity lacks %q; got:\n%s", want, strings.Join(plan.Fidelity, "\n"))
