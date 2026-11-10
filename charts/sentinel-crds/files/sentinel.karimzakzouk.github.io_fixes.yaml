@@ -75,6 +75,11 @@ spec:
                     description: Language is the runtime that printed it, such as
                       go.
                     type: string
+                  message:
+                    description: Message is the message of the exception the frames
+                      belong to, masked.
+                    maxLength: 512
+                    type: string
                   stack:
                     description: |-
                       Stack is the same frames with where each ran, where the runtime
@@ -96,6 +101,15 @@ spec:
                           type: integer
                       type: object
                     maxItems: 20
+                    type: array
+                    x-kubernetes-list-type: atomic
+                  types:
+                    description: |-
+                      Types are the crash's exception types, outermost first, or the
+                      message a runtime prints for a panic, masked.
+                    items:
+                      type: string
+                    maxItems: 10
                     type: array
                     x-kubernetes-list-type: atomic
                 required:
@@ -179,6 +193,11 @@ spec:
                   Code is the fix proposed to the failing image's source, beside the
                   one that pins the image back, when the fault is in its code.
                 properties:
+                  attempt:
+                    description: Attempt counts the changes proposed, the current
+                      one included.
+                    format: int32
+                    type: integer
                   change:
                     items:
                       type: string
@@ -193,6 +212,12 @@ spec:
                     description: |-
                       Failing is the image that crashed; the image built from the fix is
                       looked for in its repository.
+                    type: string
+                  fixer:
+                    description: |-
+                      Fixer names what proposed the current change: restore (a function
+                      put back as it was), template, revert (every file the commit changed
+                      put back), history or llm.
                     type: string
                   function:
                     description: Function is what the fix puts back as it was.
@@ -215,6 +240,40 @@ spec:
                     type: string
                   revision:
                     type: string
+                  tried:
+                    description: Tried are the earlier changes, oldest first, and
+                      what became of them.
+                    items:
+                      description: |-
+                        CodeAttempt is a change to the code the Fixer proposed and moved on from:
+                        the Lab found it did not fix the crash, or a person closed it.
+                      properties:
+                        change:
+                          items:
+                            type: string
+                          type: array
+                          x-kubernetes-list-type: atomic
+                        commit:
+                          type: string
+                        fixer:
+                          type: string
+                        image:
+                          type: string
+                        message:
+                          type: string
+                        pullRequest:
+                          type: string
+                        verdict:
+                          description: |-
+                            Verdict is the Lab's, or Declined when a person closed the pull
+                            request.
+                          type: string
+                      required:
+                      - fixer
+                      type: object
+                    maxItems: 10
+                    type: array
+                    x-kubernetes-list-type: atomic
                   verdict:
                     description: |-
                       Verdict is the Lab's on that image raced against the failing one:
