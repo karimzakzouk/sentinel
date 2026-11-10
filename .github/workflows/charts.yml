@@ -1,5 +1,8 @@
 # Package and push the Sentinel Helm chart to GHCR as an OCI chart.
 # Companies install: helm install sentinel oci://ghcr.io/<owner>/charts/sentinel
+#
+# Runs on the self-hosted Azure runner: GitHub-hosted minutes are $0-budget
+# (decision 99). Wake the VM with hack/azure-runner/wake.sh when jobs queue.
 name: Charts
 
 on:
@@ -19,16 +22,21 @@ concurrency:
 jobs:
   publish:
     name: Publish OCI chart
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, sentinel-lab]
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Install Helm
+      - name: Install Helm if missing
         run: |
-          curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+          if ! command -v helm >/dev/null; then
+            curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+          fi
+          helm version
       - name: Package
         run: |
           helm dependency update charts/sentinel
           mkdir -p dist
+          rm -f dist/sentinel-*.tgz
           helm package charts/sentinel -d dist
       - name: Push to GHCR
         env:
@@ -36,5 +44,5 @@ jobs:
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u ${{ github.actor }} --password-stdin
           chart=$(ls dist/sentinel-*.tgz)
-          # oci://ghcr.io/<owner>/charts — artifact name is the chart name (sentinel)
           helm push "$chart" "oci://ghcr.io/${{ github.repository_owner }}/charts"
+          echo "Published $chart → oci://ghcr.io/${{ github.repository_owner }}/charts/sentinel"
