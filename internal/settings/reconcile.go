@@ -36,7 +36,9 @@ func Reconcile(ctx context.Context, client kubernetes.Interface, dyn dynamic.Int
 			inst := probe(ctx, client, t)
 			if inst.Actor != s.Status.Installed.Actor || inst.Lab != s.Status.Installed.Lab ||
 				inst.Fixer != s.Status.Installed.Fixer || inst.Capture != s.Status.Installed.Capture ||
-				inst.CaptureMITM != s.Status.Installed.CaptureMITM || inst.NodeAgent != s.Status.Installed.NodeAgent {
+				inst.CaptureMITM != s.Status.Installed.CaptureMITM ||
+				inst.CaptureMITMTransparent != s.Status.Installed.CaptureMITMTransparent ||
+				inst.NodeAgent != s.Status.Installed.NodeAgent {
 				_ = setStatus(ctx, dyn, t.AgentNamespace, s, inst, s.Status.Message)
 			}
 			return

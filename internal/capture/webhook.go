@@ -13,11 +13,12 @@ import (
 )
 
 // InjectWebhook mutates Pods in opted-in namespaces so they trust the capture
-// CA and send HTTPS through the MITM. Transparent TPROXY without HTTPS_PROXY
-// stays out of scope.
+// CA. When TrustOnly is false it also sets HTTPS_PROXY at the CONNECT MITM;
+// when true (transparent redirect) only the CA is injected.
 type InjectWebhook struct {
-	ProxyURL string
-	Log      *slog.Logger
+	ProxyURL  string
+	TrustOnly bool
+	Log       *slog.Logger
 }
 
 func (h *InjectWebhook) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -67,7 +68,7 @@ func (h *InjectWebhook) admit(req *admissionv1.AdmissionRequest) *admissionv1.Ad
 		resp.Result = &metav1.Status{Message: err.Error()}
 		return resp
 	}
-	InjectMITM(&pod.Spec, h.ProxyURL)
+	InjectMITMOpts(&pod.Spec, InjectOptions{ProxyURL: h.ProxyURL, TrustOnly: h.TrustOnly})
 	if pod.Annotations == nil {
 		pod.Annotations = map[string]string{}
 	}

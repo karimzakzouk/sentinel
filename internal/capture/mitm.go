@@ -32,7 +32,10 @@ type MITMConfig struct {
 	Resolve func(clientIP string) (namespace, kind, name string, ok bool)
 	// DialTLS dials the origin; nil uses tls.Dial with system roots.
 	DialTLS func(network, addr string) (net.Conn, error)
-	HTTP    *http.Client
+	// ClientTLS optionally returns a client certificate for the peer pod IP
+	// when Settings capture.mitmClientTLS is on.
+	ClientTLS func(clientIP string) *tls.Certificate
+	HTTP      *http.Client
 }
 
 // ServeMITM listens until the listener fails.
@@ -132,12 +135,32 @@ func handleCaptureConnect(w http.ResponseWriter, r *http.Request, certs *certCac
 		return
 	}
 	defer tlsClient.Close()
-	upstream, err := cfg.DialTLS("tcp", hostPort)
+	upstream, err := dialOrigin(cfg, clientIP, hostPort)
 	if err != nil {
 		return
 	}
 	defer upstream.Close()
 	proxyCapture(tlsClient, upstream, host, clientIP, cfg)
+}
+
+func dialOrigin(cfg MITMConfig, clientIP, addr string) (net.Conn, error) {
+	dial := cfg.DialTLS
+	if dial == nil {
+		dial = func(network, a string) (net.Conn, error) {
+			return tls.Dial(network, a, &tls.Config{MinVersion: tls.VersionTLS12}) //nolint:gosec // system trust
+		}
+	}
+	if cfg.ClientTLS == nil {
+		return dial("tcp", addr)
+	}
+	cert := cfg.ClientTLS(clientIP)
+	if cert == nil {
+		return dial("tcp", addr)
+	}
+	return tls.Dial("tcp", addr, &tls.Config{
+		MinVersion:   tls.VersionTLS12, //nolint:gosec // system trust + opted client cert
+		Certificates: []tls.Certificate{*cert},
+	})
 }
 
 func proxyCapture(client, upstream net.Conn, host, clientIP string, cfg MITMConfig) {

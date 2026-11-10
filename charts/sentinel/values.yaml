@@ -202,6 +202,9 @@ capture:
   mitm:
     enabled: false
     inject: false
+    # Node-level REDIRECT DaemonSet (hostNetwork + NET_ADMIN). Install with
+    # Helm; toggle at runtime with Settings capture.mitmTransparent.
+    transparent: false
   resources:
     requests:
       cpu: 50m
