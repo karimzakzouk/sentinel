@@ -106,6 +106,11 @@ func (p *Prover) Build(ctx context.Context, ns, prodNS, domain string, plan *Pla
 			return nil, fmt.Errorf("copy ConfigMap %s: %w", cm.Name, err)
 		}
 	}
+	for _, sec := range plan.Secrets {
+		if _, err := core.Secrets(ns).Create(ctx, sec, metav1.CreateOptions{}); err != nil {
+			return nil, fmt.Errorf("mint honeytoken secret %s: %w", sec.Name, err)
+		}
+	}
 	forbidden, err := p.forbidden(ctx)
 	if err != nil {
 		return nil, err

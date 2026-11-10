@@ -76,9 +76,11 @@ type World struct {
 type Plan struct {
 	Workloads  []model.ObjectRef
 	ConfigMaps []*corev1.ConfigMap
-	Services   []*corev1.Service
-	Pods       []*corev1.Pod
-	Fidelity   []string
+	// Secrets are honeytoken stand-ins the Lab minted; never production values.
+	Secrets  []*corev1.Secret
+	Services []*corev1.Service
+	Pods     []*corev1.Pod
+	Fidelity []string
 	// Empty lists the datastores copied without their data.
 	Empty []model.ObjectRef
 }
@@ -120,6 +122,7 @@ func Synthesize(w World, target model.ObjectRef, ns string) (*Plan, error) {
 		}
 	}
 	copiedMaps := map[string]bool{}
+	honeys := map[string]*corev1.Secret{}
 	for _, ref := range closure {
 		wl := w.Workloads[ref]
 		if wl.Claims {
@@ -131,7 +134,7 @@ func Synthesize(w World, target model.ObjectRef, ns string) (*Plan, error) {
 			wl = throwaway(wl)
 			plan.Empty = append(plan.Empty, ref)
 		}
-		pod, err := copyPod(wl, w, ns, note)
+		pod, err := copyPod(wl, w, ns, note, honeys)
 		if err != nil {
 			return nil, err
 		}
@@ -155,6 +158,9 @@ func Synthesize(w World, target model.ObjectRef, ns string) (*Plan, error) {
 		}
 		plan.Pods = append(plan.Pods, pod)
 		plan.Workloads = append(plan.Workloads, ref)
+	}
+	for _, name := range sortedKeys(honeys) {
+		plan.Secrets = append(plan.Secrets, honeys[name])
 	}
 	copied := map[string]bool{}
 	for i := range w.Services {
@@ -204,7 +210,7 @@ func dependencyMap(w World) *topology.Map {
 }
 
 // copyPod is one pod of a workload, as the Lab may run it.
-func copyPod(wl Workload, w World, ns string, note func(string, ...any)) (*corev1.Pod, error) {
+func copyPod(wl Workload, w World, ns string, note func(string, ...any), secrets map[string]*corev1.Secret) (*corev1.Pod, error) {
 	ref := wl.Ref
 	spec := *wl.Template.Spec.DeepCopy()
 	if spec.HostNetwork || spec.HostPID || spec.HostIPC {
@@ -237,7 +243,7 @@ func copyPod(wl Workload, w World, ns string, note func(string, ...any)) (*corev
 			copyContainer(&cs[i], ref, w.Digests, note)
 		}
 	}
-	if err := copyVolumes(spec.Volumes, ref, note); err != nil {
+	if err := copyVolumes(spec.Volumes, ref, note, secrets, ns); err != nil {
 		return nil, err
 	}
 	if err := restrict(&spec, ref, note); err != nil {
@@ -378,8 +384,8 @@ func copyContainer(c *corev1.Container, ref model.ObjectRef, digests map[string]
 	}
 	for i := range c.Env {
 		if from := c.Env[i].ValueFrom; from != nil && from.SecretKeyRef != nil {
-			note("%s's %s holds a placeholder instead of secret %s", ref, c.Env[i].Name, from.SecretKeyRef.Name)
-			c.Env[i] = corev1.EnvVar{Name: c.Env[i].Name, Value: SecretPlaceholder(from.SecretKeyRef.Name, from.SecretKeyRef.Key)}
+			note("%s's %s holds a honeytoken instead of secret %s", ref, c.Env[i].Name, from.SecretKeyRef.Name)
+			c.Env[i] = corev1.EnvVar{Name: c.Env[i].Name, Value: Honeytoken(from.SecretKeyRef.Name, from.SecretKeyRef.Key)}
 		}
 	}
 	c.EnvFrom = slices.DeleteFunc(c.EnvFrom, func(e corev1.EnvFromSource) bool {
@@ -391,9 +397,10 @@ func copyContainer(c *corev1.Container, ref model.ObjectRef, digests map[string]
 	})
 }
 
-// copyVolumes keeps volumes that carry no state or secret, and turns
-// secrets and per-pod claims into empty directories.
-func copyVolumes(vs []corev1.Volume, ref model.ObjectRef, note func(string, ...any)) error {
+// copyVolumes keeps volumes that carry no state, mounts honeytoken Secrets
+// when the keys are named in the pod spec, and turns other secrets and
+// per-pod claims into empty directories.
+func copyVolumes(vs []corev1.Volume, ref model.ObjectRef, note func(string, ...any), secrets map[string]*corev1.Secret, ns string) error {
 	empty := corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}
 	for i := range vs {
 		v := &vs[i]
@@ -407,6 +414,11 @@ func copyVolumes(vs []corev1.Volume, ref model.ObjectRef, note func(string, ...a
 		case v.PersistentVolumeClaim != nil:
 			return fmt.Errorf("%s keeps state in persistent volumes, which the Lab cannot copy yet", ref)
 		case v.Secret != nil:
+			if honey := honeytokenSecret(v.Secret, ns); honey != nil {
+				secrets[honey.Name] = honey
+				note("%s's volume %s mounts a honeytoken secret instead of %s", ref, v.Name, v.Secret.SecretName)
+				break
+			}
 			note("%s's volume %s is an empty directory instead of secret %s", ref, v.Name, v.Secret.SecretName)
 			v.VolumeSource = empty
 		default:
@@ -415,6 +427,24 @@ func copyVolumes(vs []corev1.Volume, ref model.ObjectRef, note func(string, ...a
 		}
 	}
 	return nil
+}
+
+// honeytokenSecret mints a Lab Secret for a volume that names its keys. With
+// no Items the Lab cannot know the keys without reading production, so it
+// returns nil and the volume becomes an empty directory.
+func honeytokenSecret(src *corev1.SecretVolumeSource, ns string) *corev1.Secret {
+	if src == nil || len(src.Items) == 0 {
+		return nil
+	}
+	data := map[string][]byte{}
+	for _, it := range src.Items {
+		name := it.Path
+		if name == "" {
+			name = it.Key
+		}
+		data[name] = []byte(Honeytoken(src.SecretName, it.Key))
+	}
+	return &corev1.Secret{ObjectMeta: worldMeta(ns, src.SecretName, nil), Type: corev1.SecretTypeOpaque, Data: data}
 }
 
 type configMapRef struct {
@@ -482,4 +512,13 @@ func worldMeta(ns, name string, extra map[string]string) metav1.ObjectMeta {
 	}
 	l[Label] = WorldRole
 	return metav1.ObjectMeta{Name: name, Namespace: ns, Labels: l}
+}
+
+func sortedKeys[V any](m map[string]V) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }

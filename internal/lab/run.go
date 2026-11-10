@@ -292,8 +292,10 @@ func (l *Lab) handle(ctx context.Context, exp *v1alpha1.Experiment) Verdict {
 		tokens := secretTokens(world)
 		for _, name := range Unresolved(log, dns.Searches, own) {
 			if from := tokenIn(name, tokens); from != "" {
-				fidelity = append(fidelity, fmt.Sprintf("the world looked up %s, a name taken from %s, which holds a placeholder in the Lab", name, from))
-				continue
+				// A honeytoken looked up as a host means the copy treated a
+				// Lab stand-in as a real credential destination: fail closed.
+				return Verdict{Phase: PhaseFailed, Message: fmt.Sprintf("a Lab honeytoken for %s was looked up as %s", from, name),
+					Fidelity: fidelity, Runs: blocks, judged: true}
 			}
 			fidelity = append(fidelity, fmt.Sprintf("the world asked for %s, which the Lab does not provide", name))
 		}
@@ -317,11 +319,17 @@ func (l *Lab) candidate(ctx context.Context, world World, ref model.ObjectRef, r
 	}
 	var notes []string
 	note := func(format string, args ...any) { notes = append(notes, fmt.Sprintf(format, args...)) }
-	pod, err := copyPod(Workload{Ref: ref, Template: tpl, Replicas: 1}, world, ns, note)
+	honeys := map[string]*corev1.Secret{}
+	pod, err := copyPod(Workload{Ref: ref, Template: tpl, Replicas: 1}, world, ns, note, honeys)
 	if err != nil {
 		return nil, "", nil, err
 	}
 	core := l.Prover.Client.CoreV1()
+	for _, name := range sortedKeys(honeys) {
+		if _, err := core.Secrets(ns).Create(ctx, honeys[name], metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+			return nil, "", nil, fmt.Errorf("mint honeytoken secret %s: %w", name, err)
+		}
+	}
 	for _, cm := range configMapsOf(pod.Spec) {
 		if _, err := core.ConfigMaps(ns).Get(ctx, cm.name, metav1.GetOptions{}); err == nil {
 			continue
@@ -341,8 +349,8 @@ func (l *Lab) candidate(ctx context.Context, world World, ref model.ObjectRef, r
 	return pod, name, notes, nil
 }
 
-// secretTokens maps each placeholder the world's copies hold to the key of
-// the Secret it stands in for.
+// secretTokens maps each honeytoken marker the world's copies hold to the
+// key of the Secret it stands in for.
 func secretTokens(w World) map[string]string {
 	out := map[string]string{}
 	for _, wl := range w.Workloads {
@@ -353,12 +361,25 @@ func secretTokens(w World) map[string]string {
 				}
 			}
 		}
+		for _, v := range wl.Template.Spec.Volumes {
+			if v.Secret == nil {
+				continue
+			}
+			for _, it := range v.Secret.Items {
+				out[SecretPlaceholder(v.Secret.SecretName, it.Key)] = fmt.Sprintf("key %s of secret %s", it.Key, v.Secret.SecretName)
+			}
+		}
 	}
 	return out
 }
 
-// tokenIn names the secret key whose placeholder a looked-up name holds.
+// tokenIn names the secret key whose honeytoken a looked-up name holds.
 func tokenIn(name string, tokens map[string]string) string {
+	if mark := HoneyMarker(name); mark != "" {
+		if from := tokens[mark]; from != "" {
+			return from
+		}
+	}
 	if !strings.Contains(name, placeholderPrefix) {
 		return ""
 	}
