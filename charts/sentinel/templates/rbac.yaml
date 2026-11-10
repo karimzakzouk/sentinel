@@ -414,7 +414,10 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: [configmaps]
-    verbs: [get, update, patch]
+    verbs: [get, create, update, patch, delete]
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [get]
   - apiGroups: [apps]
     resources: [daemonsets, deployments, deployments/scale]
     verbs: [get, patch, update]
@@ -432,4 +435,63 @@ roleRef:
   name: {{ .Release.Name }}-settings-capture
 subjects:
   - {{ toJson $controller }}
+{{- if .Values.capture.mitm.enabled }}
+---
+# MITM inject: copy the capture CA into watched namespaces and label them for
+# the mutating webhook. Cluster-scoped namespace labels; ConfigMaps per watch ns.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Release.Name }}-capture-mitm-inject
+  labels:
+    {{- $labels | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [get, list, update, patch]
+  - apiGroups: [sentinel.karimzakzouk.github.io]
+    resources: [sentinelpolicies]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Release.Name }}-capture-mitm-inject
+  labels:
+    {{- $labels | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ .Release.Name }}-capture-mitm-inject
+subjects:
+  - {{ toJson $controller }}
+{{- range .Values.watch.namespaces }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $.Release.Name }}-capture-mitm-inject
+  namespace: {{ . }}
+  labels:
+    {{- $labels | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [get, create, update, patch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $.Release.Name }}-capture-mitm-inject
+  namespace: {{ . }}
+  labels:
+    {{- $labels | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $.Release.Name }}-capture-mitm-inject
+subjects:
+  - {{ toJson $controller }}
+{{- end }}
+{{- end }}
 {{- end }}

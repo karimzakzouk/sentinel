@@ -195,11 +195,13 @@ capture:
   # Per-side HTTP buffer for OBI body extraction; align with the ~4KiB cap
   # Sentinel applies after redaction.
   bodyBufferBytes: 8192
-  # Opt-in HTTPS CONNECT MITM for apps that set HTTPS_PROXY and trust the
-  # capture CA. Posts cleartext bodies to the OTLP receiver; separate from
-  # the Lab's seal-only MITM. Install with Helm; toggle from Settings.
+  # Opt-in HTTPS CONNECT MITM. Posts cleartext bodies to the OTLP receiver;
+  # separate from the Lab's seal-only MITM. Install with Helm; toggle from
+  # Settings. inject copies the capture CA into namespaces that record bodies
+  # and labels them so a mutating webhook sets HTTPS_PROXY + trust on new pods.
   mitm:
     enabled: false
+    inject: false
   resources:
     requests:
       cpu: 50m

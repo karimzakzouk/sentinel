@@ -98,6 +98,12 @@ spec:
                       that trust the capture CA and set HTTPS_PROXY. Requires capture.mitm
                       installed by Helm.
                     type: boolean
+                  mitmInject:
+                    description: |-
+                      MitmInject copies the capture CA into namespaces that record bodies and
+                      labels them so the mutating webhook mounts the CA and sets HTTPS_PROXY
+                      on new pods. Apps that pin certificates stay out of reach.
+                    type: boolean
                 type: object
               detection:
                 description: Detection thresholds and windows for the count detector.

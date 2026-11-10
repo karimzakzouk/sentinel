@@ -56,6 +56,47 @@ func bodiesForSeed(writes []v1alpha1.WriteReplay) []capture.BodySample {
 	return out
 }
 
+// seedBodiesFromSpec turns Experiment seed entries into body samples.
+func seedBodiesFromSpec(seed []v1alpha1.SeedBody) []capture.BodySample {
+	out := make([]capture.BodySample, 0, len(seed))
+	for _, s := range seed {
+		if s.Body == "" {
+			continue
+		}
+		out = append(out, capture.BodySample{Path: s.Path, Body: s.Body})
+	}
+	return out
+}
+
+// samplesForSeed prefers write bodies, then falls back to Experiment seed
+// samples (for example GET response bodies from capture.SeedSamples).
+func samplesForSeed(writes []v1alpha1.WriteReplay, seed []v1alpha1.SeedBody) []capture.BodySample {
+	samples := bodiesForSeed(writes)
+	if len(seedBodies(samples)) > 0 {
+		return samples
+	}
+	return seedBodiesFromSpec(seed)
+}
+
+// FromSeedSamples turns capture.SeedSamples into Experiment seed entries.
+func FromSeedSamples(samples []capture.BodySample, n int) []v1alpha1.SeedBody {
+	var out []v1alpha1.SeedBody
+	for _, s := range samples {
+		body := s.Body
+		if body == "" {
+			body = s.ResponseBody
+		}
+		if body == "" {
+			continue
+		}
+		out = append(out, v1alpha1.SeedBody{Path: s.Path, Body: body})
+		if n >= 0 && len(out) >= n {
+			break
+		}
+	}
+	return out
+}
+
 
 // WriteFidelity notes how many writes each run sends and how statuses are
 // judged; emptyDatastores forgives server errors when the response matched

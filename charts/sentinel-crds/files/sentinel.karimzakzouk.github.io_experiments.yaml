@@ -204,6 +204,31 @@ spec:
                   ReplicaSet or a StatefulSet's ControllerRevision. Empty means its
                   current template.
                 type: string
+              seed:
+                description: |-
+                  Seed lists captured bodies used only to fill empty Lab datastores
+                  before write replay when Writes carry no bodies (for example GET
+                  response bodies from capture.bodies).
+                items:
+                  description: SeedBody is one captured body used only to seed empty
+                    Lab datastores.
+                  properties:
+                    body:
+                      description: Body is the redacted request or response body.
+                      maxLength: 4096
+                      minLength: 1
+                      type: string
+                    path:
+                      description: Path is the request path the body came from, when
+                        known.
+                      maxLength: 1024
+                      pattern: ^/[^?#\s]*$
+                      type: string
+                  required:
+                  - body
+                  type: object
+                maxItems: 20
+                type: array
               timeout:
                 default: 30m
                 description: Timeout caps the experiment's wall-clock time.

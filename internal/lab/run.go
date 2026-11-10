@@ -293,13 +293,15 @@ func (l *Lab) handle(ctx context.Context, exp *v1alpha1.Experiment) Verdict {
 	if note := WriteFidelity(traffic.Writes, emptyStores); note != "" {
 		fidelity = append(fidelity, note)
 	}
-	if emptyStores && len(exp.Spec.Writes) > 0 {
-		samples := bodiesForSeed(exp.Spec.Writes)
-		seedNotes, err := p.SeedEmptyDatastores(ctx, ns, built, plan, samples)
-		if err != nil {
-			return Verdict{Phase: PhaseNotSure, Message: fmt.Sprintf("could not seed empty datastores: %v", err), Fidelity: fidelity, Runs: 0}
+	if emptyStores {
+		samples := samplesForSeed(exp.Spec.Writes, exp.Spec.Seed)
+		if len(seedBodies(samples)) > 0 {
+			seedNotes, err := p.SeedEmptyDatastores(ctx, ns, built, plan, samples)
+			if err != nil {
+				return Verdict{Phase: PhaseNotSure, Message: fmt.Sprintf("could not seed empty datastores: %v", err), Fidelity: fidelity, Runs: 0}
+			}
+			fidelity = append(fidelity, seedNotes...)
 		}
-		fidelity = append(fidelity, seedNotes...)
 	}
 	blocks, err := p.RunRace(ctx, ns, built, dns, baseline, variants, traffic, race, int(cmp.Or(exp.Spec.MaxRuns, 200)))
 	if log, lerr := p.DNSLog(ctx, ns); lerr == nil {

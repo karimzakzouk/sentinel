@@ -257,10 +257,17 @@ export function Settings() {
         />
         <Toggle
           label="Run HTTPS MITM for opted-in apps"
-          help="Starts the CONNECT proxy that terminates TLS for apps that set HTTPS_PROXY and trust the capture CA, then posts bodies to Sentinel. Off keeps ciphertext invisible to capture."
+          help="Starts the CONNECT proxy that terminates TLS and posts bodies to Sentinel. Off keeps ciphertext invisible to capture."
           checked={!!draft?.capture?.mitmEnabled}
           disabled={!installed?.captureMitm}
           onChange={(v) => setCapture({ mitmEnabled: v })}
+        />
+        <Toggle
+          label="Auto-inject capture CA and HTTPS proxy"
+          help="For namespaces that record bodies under Policies: copy the capture CA and label the namespace so new pods get the CA mounted and HTTPS_PROXY pointed at the MITM. Apps that pin certificates still will not work. Transparent intercept without a proxy is not available."
+          checked={!!draft?.capture?.mitmInject}
+          disabled={!installed?.captureMitm || !draft?.capture?.mitmEnabled}
+          onChange={(v) => setCapture({ mitmInject: v })}
         />
         <Field label="Body buffer (bytes)" help="How much of each request/response the agent may hold before redaction.">
           <input

@@ -316,7 +316,7 @@ export interface SettingsSpec {
       llm?: FixerLLMSettings;
     };
   };
-  capture?: { exportBodies?: boolean; bodyBufferBytes?: number; mitmEnabled?: boolean };
+  capture?: { exportBodies?: boolean; bodyBufferBytes?: number; mitmEnabled?: boolean; mitmInject?: boolean };
   capabilities?: { interval?: string };
 }
 

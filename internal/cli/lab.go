@@ -170,6 +170,31 @@ func newLabMITMCmd() *cobra.Command {
 	return cmd
 }
 
+func newLabSeedAMQPCmd() *cobra.Command {
+	var host, queue string
+	var port int
+	cmd := &cobra.Command{
+		Use:    "lab-seed-amqp",
+		Short:  "Publish captured bodies onto a RabbitMQ queue over AMQP 0-9-1 for Lab seeding",
+		Hidden: true,
+		Args:   cobra.ArbitraryArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := lab.SeedAMQP(host, port, queue, args); err != nil {
+				return terminate(err)
+			}
+			msg := fmt.Sprintf("seeded %d messages on %s", len(args), queue)
+			_ = os.WriteFile("/dev/termination-log", []byte(msg), 0o600)
+			_, err := fmt.Fprintln(cmd.OutOrStdout(), msg)
+			return err
+		},
+	}
+	cmd.Flags().StringVar(&host, "host", "", "RabbitMQ host")
+	cmd.Flags().IntVar(&port, "port", 5672, "AMQP port")
+	cmd.Flags().StringVar(&queue, "queue", "sentinel.lab.seed", "queue to declare and publish to")
+	_ = cmd.MarkFlagRequired("host")
+	return cmd
+}
+
 // terminate records why a pod's container failed where Kubernetes shows it.
 func terminate(err error) error {
 	_ = os.WriteFile("/dev/termination-log", []byte(err.Error()), 0o600)

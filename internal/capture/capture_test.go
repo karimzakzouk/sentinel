@@ -233,6 +233,26 @@ func TestBodiesAreKeptOnlyWhenEnabledBodies(t *testing.T) {
 	}
 }
 
+func TestSeedSamplesPrefersWritesThenReadResponseBodies(t *testing.T) {
+	writes := []Request{
+		{Method: "GET", Path: "/a", ResponseBody: `{"from":"get"}`},
+		{Method: "POST", Path: "/b", Body: `{"from":"post"}`},
+	}
+	got := SeedSamples(writes, 5)
+	if len(got) != 1 || got[0].Method != "POST" || got[0].Body != `{"from":"post"}` {
+		t.Fatalf("prefer writes: %+v", got)
+	}
+	reads := []Request{
+		{Method: "HEAD", Path: "/h", ResponseBody: "hdr"},
+		{Method: "GET", Path: "/g", ResponseBody: "body"},
+		{Method: "GET", Path: "/empty"},
+	}
+	got = SeedSamples(reads, 5)
+	if len(got) != 2 || got[0].Path != "/h" || got[1].ResponseBody != "body" {
+		t.Fatalf("read fallback: %+v", got)
+	}
+}
+
 // attachBodies accepts semantic-convention keys with or without the .content suffix.
 func TestAttachBodiesAcceptsPlainBodyKeys(t *testing.T) {
 	q := &Request{}

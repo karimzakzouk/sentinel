@@ -259,6 +259,32 @@ func Bodies(requests []Request, n int) []BodySample {
 	return out
 }
 
+// SeedSamples returns bodies for Lab datastore seeding: non-GET Bodies()
+// first, else GET/HEAD samples that carried a ResponseBody (EnabledBodies
+// captures), oldest first, at most n.
+func SeedSamples(requests []Request, n int) []BodySample {
+	if writes := Bodies(requests, n); len(writes) > 0 {
+		return writes
+	}
+	var out []BodySample
+	for _, r := range requests {
+		if n >= 0 && len(out) >= n {
+			break
+		}
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			continue
+		}
+		if r.ResponseBody == "" {
+			continue
+		}
+		out = append(out, BodySample{
+			Method: r.Method, Path: r.Path, Host: r.Host, Route: r.Route,
+			Port: r.Port, Status: r.Status, ResponseBody: r.ResponseBody,
+		})
+	}
+	return out
+}
+
 // replayablePath is a path a Lab can send as it is: absolute, no longer
 // than an Experiment allows, without a fragment or a space.
 func replayablePath(p string) bool {

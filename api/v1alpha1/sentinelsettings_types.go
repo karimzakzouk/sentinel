@@ -152,6 +152,11 @@ type CaptureSettings struct {
 	// installed by Helm.
 	// +optional
 	MitmEnabled *bool `json:"mitmEnabled,omitempty"`
+	// MitmInject copies the capture CA into namespaces that record bodies and
+	// labels them so the mutating webhook mounts the CA and sets HTTPS_PROXY
+	// on new pods. Apps that pin certificates stay out of reach.
+	// +optional
+	MitmInject *bool `json:"mitmInject,omitempty"`
 }
 
 // CapabilitiesSettings holds capability-probe timing.

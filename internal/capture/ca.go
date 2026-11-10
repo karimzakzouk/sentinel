@@ -13,6 +13,8 @@ import (
 	"net"
 	"sync"
 	"time"
+
+	"software.sslmate.com/src/go-pkcs12"
 )
 
 // Authority is a long-lived capture CA that issues per-host leaves for the
@@ -95,6 +97,14 @@ func (a *Authority) KeyPEM() []byte {
 		return nil
 	}
 	return append([]byte(nil), a.keyPEM...)
+}
+
+// TrustStorePKCS12 is a PKCS#12 truststore of the capture CA for JVM clients.
+func (a *Authority) TrustStorePKCS12() ([]byte, error) {
+	if a == nil || a.cert == nil {
+		return nil, fmt.Errorf("no capture CA")
+	}
+	return pkcs12.Legacy.EncodeTrustStore([]*x509.Certificate{a.cert}, TrustStorePassword)
 }
 
 // Issue returns a leaf certificate for host.

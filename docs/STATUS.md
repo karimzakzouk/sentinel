@@ -1,6 +1,6 @@
 # Status
 
-Last updated: Tuesday 10 November 2026, 07:00 Cairo time (UTC+2).
+Last updated: Tuesday 10 November 2026, 10:40 Cairo time (UTC+2).
 
 ## Where things stand
 
@@ -13,7 +13,7 @@ median of 69 seconds after the fault appeared, with no wrong action
 (below). Through Argo CD and Flux it first pauses the owner that would
 undo the rollback: in the GitOps session, a median of 66 seconds from fault
 to verified recovery. Without a policy it still only records what it would
-do. **Phase 4 (Fix) has four of its five slices built:** after such a
+do. **Phase 4 (Fix) has all five slices built:** after such a
 rollback, Sentinel proposes the change that makes it hold in Git, as a pull
 request, and checks that it held once it is merged and the owner resumed.
 It finds the value in a manifest, an images entry or a kustomization's
@@ -108,7 +108,7 @@ To look at it on a cluster where it runs:
 | Console | Sign in with your own token, or through the cluster's identity provider (decision 89); approve, veto, resume, set policies, as yourself (decision 82) | Unit tests of sign-in, the person's own approval, refusals from another page, and of single sign-on's state, nonce and replay checks; on the development cluster a real token signed in, the cluster refused what it may not see, and a bad token got 401; `hack/oidc-live.sh` signs in through a real Dex as a browser would |
 | Fingerprints | fp2 for logged exceptions (decision 84) | One Redis outage logged with two messages is one exception |
 | Traffic capture | Built (decisions 85, 86, 103, 105 and 115): optional OBI agent, per-namespace `capture.requests`, Lab read replay, write replay from `capture.Bodies`, and opt-in body capture (`capture.bodies` with requests, plus chart `capture.exportBodies` for OBI): redacted ~4KiB Body/ResponseBody only when EnabledBodies is on |
-| Argo Rollouts abort | Built (decision 97): `rollouts.abort` sets `status.abort`; Flagger still deferred to its analysis | Unit tests in `internal/actor`, `internal/watcher`, `internal/brain` |
+| Argo Rollouts / Flagger abort | Built: `rollouts.abort` sets `status.abort` (decision 97); `flagger.abort` sets Canary `status.phase=Failed` (decision 121) | Unit tests in `internal/actor`, `internal/watcher`, `internal/brain` |
 | Honeytoken Secrets | Built: Lab env and named-key volumes get shape-preserving stand-ins; looking one up through Lab DNS fails the race | Unit tests in `internal/lab` |
 | Outbound call catalog | Built: `capture.Calls` lists distinct client calls for Lab fakes | Unit tests in `internal/capture` |
 | Frontier fakes (HTTP + Lab CA HTTPS) | Built (decisions 100 and 111): outside hosts get a Lab Service + stub; HTTPS gets a Lab-issued leaf and copies trust the ephemeral Lab CA | Unit tests in `internal/lab` (`fake_test`, `ca_test`, synthesis with `api.stripe.com`) |
@@ -415,9 +415,12 @@ Full reasoning in [decisions.md](decisions.md).
   rabbitmq from captured bodies (decisions 105, 112 and 118). Chart
   `capture.exportBodies` wires OBI JSON body export (decision 115). Lab HTTPS
   copies get a JVM PKCS#12 truststore and a seal-safe CONNECT MITM that answers
-  recorded bodies (decision 119). Production-capture MITM for opted-in
-  HTTPS_PROXY clients is built (decision 122). Honeytoken Secrets that fail a
-  race on DNS lookup are built.
+  recorded bodies (decision 119). Production-capture MITM is built (decision
+  122), with Settings `mitmInject` copying the Capture CA and webhook-injecting
+  `HTTPS_PROXY` into namespaces that record bodies. Lab seed pods inherit
+  honeytoken credentials, RabbitMQ seeds over AMQP via SealImage, and empty
+  stores can seed from read-replay bodies too (decision 118). Honeytoken
+  Secrets that fail a race on DNS lookup are built.
 - **More rollback kinds:** DaemonSets, StatefulSets (with approval), Argo
   Rollouts abort, and Flagger Canary abort (`flagger.abort`, decision 121)
   are built.
@@ -426,8 +429,9 @@ Full reasoning in [decisions.md](decisions.md).
   Standby for actor/Lab/Fixer already exists.
 - **Settings:** console has a Settings page backed by `SentinelSettings`
   (decision 120): detection, logs, Lab verify, actor kill switch/budget,
-  Fixer strategies/LLM URL, capture `exportBodies`, log level. Policies keep
-  per-namespace autonomy, capture.requests/bodies, and max capacity removal.
+  Fixer strategies/LLM URL, capture `exportBodies`, `mitmEnabled`,
+  `mitmInject`, log level. Policies keep per-namespace autonomy,
+  capture.requests/bodies, and max capacity removal.
   Helm still installs privileged agents, Lab pools, and Secret mounts once;
   runtime toggles (e.g. want body export or not) no longer need values.yaml.
   Capabilities tab renamed “Cluster” with plainer copy.
