@@ -102,8 +102,11 @@ func (a *App) Token(ctx context.Context) (string, error) {
 		Token     string    `json:"token"`
 		ExpiresAt time.Time `json:"expires_at"`
 	}
-	if err := json.Unmarshal(data, &out); err != nil || out.Token == "" {
-		return "", fmt.Errorf("read the App's installation token: %v", err)
+	if err := json.Unmarshal(data, &out); err != nil {
+		return "", fmt.Errorf("read the App's installation token: %w", err)
+	}
+	if out.Token == "" {
+		return "", errors.New("GitHub answered with no installation token")
 	}
 	a.token, a.expires = out.Token, out.ExpiresAt
 	return a.token, nil
