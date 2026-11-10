@@ -80,6 +80,7 @@ metadata:
   namespace: {{ . }}
   labels:
     {{- $labels | nindent 4 }}
+    sentinel.karimzakzouk.github.io/rbac: {{ $.Release.Name }}-watch
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
@@ -159,6 +160,7 @@ metadata:
   namespace: {{ . }}
   labels:
     {{- $labels | nindent 4 }}
+    sentinel.karimzakzouk.github.io/rbac: {{ $.Release.Name }}-act
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
@@ -369,6 +371,39 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: {{ .Release.Name }}-settings
+subjects:
+  - {{ toJson $controller }}
+---
+# First-run / Settings: label watched namespaces and bind the watch (and act)
+# ClusterRoles there. bind is limited to those two ClusterRoles by name.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Release.Name }}-watch-sync
+  labels:
+    {{- $labels | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [get, list, watch, update, patch]
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [rolebindings]
+    verbs: [get, list, create, update, patch, delete]
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [clusterroles]
+    verbs: [bind]
+    resourceNames: [{{ .Release.Name }}-watch{{ if or .Values.actor.enabled (eq .Values.profile "full") }}, {{ .Release.Name }}-act{{ end }}]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Release.Name }}-watch-sync
+  labels:
+    {{- $labels | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ .Release.Name }}-watch-sync
 subjects:
   - {{ toJson $controller }}
 {{- if (or .Values.actor.enabled (eq .Values.profile "full")) }}

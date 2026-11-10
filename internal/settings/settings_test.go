@@ -15,6 +15,7 @@ import (
 func TestApplyUpdatesActorKillSwitchAndCaptureBodies(t *testing.T) {
 	ctx := context.Background()
 	client := fake.NewSimpleClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "shop"}},
 		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "sentinel-config", Namespace: "sentinel"},
 			Data: map[string]string{"config.yaml": "namespaces: [shop]\nledger:\n  path: /var/lib/sentinel/ledger.db\ndetection:\n  falseAlarmsPerWeek: 1\n"}},
 		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "sentinel-actor-config", Namespace: "sentinel-actor"},
@@ -27,6 +28,7 @@ func TestApplyUpdatesActorKillSwitchAndCaptureBodies(t *testing.T) {
 	buf := int32(4096)
 	perHour := int32(3)
 	got, err := Apply(ctx, client, DefaultTargets("sentinel"), v1alpha1.SentinelSettingsSpec{
+		Watch:   v1alpha1.WatchSettings{Namespaces: []string{"shop"}},
 		Actor:   v1alpha1.ActorSettings{ActionsEnabled: &on, PerHour: &perHour},
 		Capture: v1alpha1.CaptureSettings{ExportBodies: &bodies, BodyBufferBytes: &buf},
 		Lab:     v1alpha1.LabSettings{VerifyRollbacks: &off},

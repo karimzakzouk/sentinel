@@ -143,9 +143,7 @@ attributes:
 
 {{- define "sentinel.validate" -}}
 {{- $watch := include "sentinel.watchList" . | fromJsonArray -}}
-{{- if not $watch -}}
-{{- fail "global.watchNamespaces is empty: list the namespaces Sentinel may watch" -}}
-{{- end -}}
+{{- /* Empty watch is OK: first-run UI (or a later values upgrade) fills it. */ -}}
 {{- if not (has .Values.profile (list "observe" "full")) -}}
 {{- fail (printf "profile is %q: use observe or full" .Values.profile) -}}
 {{- end -}}

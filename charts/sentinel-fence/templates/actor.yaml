@@ -40,12 +40,16 @@ spec:
         (request.resource.group == 'kustomize.toolkit.fluxcd.io' && request.resource.resource == 'kustomizations') ||
         (request.resource.group == 'helm.toolkit.fluxcd.io' && request.resource.resource == 'helmreleases')
   validations:
+    # Watched namespaces are labeled by the controller (UI / Settings). RBAC
+    # RoleBindings are the hard gate; this refuses system and unlabeled ns.
     - expression: >-
         request.resource.group in ['authorization.k8s.io', 'authentication.k8s.io'] ||
-        variables.requestNamespace in {{ include "fence.namespaces" . }}{{ if .Values.argocdNamespace }} ||
+        (variables.requestNamespace != '' &&
+         namespaceObject != null &&
+         namespaceObject.metadata.?labels['sentinel.karimzakzouk.github.io/watched'].orValue('') == 'true'){{ if .Values.argocdNamespace }} ||
         (variables.argoApplication && variables.requestNamespace == '{{ .Values.argocdNamespace }}'){{ end }}{{ if .Values.fluxNamespaces }} ||
         (variables.fluxSync && variables.requestNamespace in {{ toJson .Values.fluxNamespaces | replace "\"" "'" }}){{ end }}
-      message: "Sentinel may act only in its allowlisted namespaces"
+      message: "Sentinel may act only in namespaces marked watched"
       reason: Forbidden
     - expression: >-
         request.resource.group in ['authorization.k8s.io', 'authentication.k8s.io'] ||

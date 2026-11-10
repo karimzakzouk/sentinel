@@ -16,6 +16,8 @@ metadata:
   annotations:
     helm.sh/resource-policy: keep
 spec:
+  watch:
+    namespaces: {{ include "sentinel.watchList" . }}
   logLevel: {{ .Values.logLevel | quote }}
   detection:
     falseAlarmsPerWeek: {{ $fa }}

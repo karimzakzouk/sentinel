@@ -18,16 +18,16 @@ profile: observe
 fence:
   enabled: true
 
-# Namespaces Sentinel may watch. This is the company install knob — one list
-# shared with the fence subchart via Helm globals:
-#   helm install … --set-json 'global.watchNamespaces=["my-app"]'
-# Empty fails the install; Sentinel never guesses the whole cluster.
+# Namespaces to watch. Empty = first-run UI asks (recommended for humans).
+# GitOps / values.yaml style still works:
+#   global:
+#     watchNamespaces: [my-app, payments]
 global:
   watchNamespaces: []
   labNamespacePrefix: sentinel-lab-
   labPoolSize: 2
 
-# Optional alias for from-source installs / e2e. Prefer global.watchNamespaces.
+# Optional alias (e2e / older values). Prefer global.watchNamespaces.
 watch:
   namespaces: []
 

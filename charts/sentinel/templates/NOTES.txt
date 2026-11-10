@@ -37,6 +37,10 @@ Traffic capture: off. Opt in with --set capture.enabled=true (privileged eBPF).
 Company install (published chart, no clone):
 
   helm install sentinel oci://ghcr.io/karimzakzouk/charts/sentinel \
-    --namespace sentinel --create-namespace \
-    --set-json 'global.watchNamespaces={{ include "sentinel.watchList" . }}' \
-    --set profile={{ .Values.profile }}
+    --namespace sentinel --create-namespace
+
+Then open the UI and pick namespaces — or pass them in values.yaml:
+
+  global:
+    watchNamespaces: [my-app]
+

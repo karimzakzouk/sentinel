@@ -49,9 +49,9 @@ spec:
           spec:
             description: |-
               SentinelSettingsSpec holds cluster-wide knobs operators may change without a
-              Helm reinstall. Install-time choices (namespaces, privileged agents, forge
-              secret mounts, Lab pool size) stay in the chart; this object covers what
-              can take effect by rewriting Sentinel's own ConfigMaps.
+              Helm reinstall. Privileged agents, forge secret mounts and Lab pool size
+              stay in the chart; watch namespaces and day-2 behaviour live here (UI or
+              values.yaml seed).
             properties:
               actor:
                 description: Actor holds the kill switch and hourly budget once the
@@ -226,6 +226,21 @@ spec:
                       SampleInterval is how often each workload's errors are sampled; 0s
                       turns sampling off.
                     type: string
+                type: object
+              watch:
+                description: |-
+                  Watch is which application namespaces Sentinel may see and act in.
+                  Empty means first-run: the console asks; or set via Helm values /
+                  values.yaml at install. The controller creates RoleBindings and labels
+                  those namespaces; it never watches the whole cluster by guess.
+                properties:
+                  namespaces:
+                    description: Namespaces Sentinel may watch. No wildcards.
+                    items:
+                      type: string
+                    maxItems: 256
+                    type: array
+                    x-kubernetes-list-type: set
                 type: object
             type: object
           status:

@@ -5,10 +5,16 @@ import (
 )
 
 // SentinelSettingsSpec holds cluster-wide knobs operators may change without a
-// Helm reinstall. Install-time choices (namespaces, privileged agents, forge
-// secret mounts, Lab pool size) stay in the chart; this object covers what
-// can take effect by rewriting Sentinel's own ConfigMaps.
+// Helm reinstall. Privileged agents, forge secret mounts and Lab pool size
+// stay in the chart; watch namespaces and day-2 behaviour live here (UI or
+// values.yaml seed).
 type SentinelSettingsSpec struct {
+	// Watch is which application namespaces Sentinel may see and act in.
+	// Empty means first-run: the console asks; or set via Helm values /
+	// values.yaml at install. The controller creates RoleBindings and labels
+	// those namespaces; it never watches the whole cluster by guess.
+	// +optional
+	Watch WatchSettings `json:"watch,omitempty"`
 	// LogLevel is debug, info, warn or error.
 	// +optional
 	// +kubebuilder:validation:Enum=debug;info;warn;error
@@ -36,6 +42,15 @@ type SentinelSettingsSpec struct {
 	// Capabilities holds how often capability probes run.
 	// +optional
 	Capabilities CapabilitiesSettings `json:"capabilities,omitempty"`
+}
+
+// WatchSettings is the allowlist of application namespaces.
+type WatchSettings struct {
+	// Namespaces Sentinel may watch. No wildcards.
+	// +optional
+	// +listType=set
+	// +kubebuilder:validation:MaxItems=256
+	Namespaces []string `json:"namespaces,omitempty"`
 }
 
 // DetectionSettings is the cluster-wide false-alarm budget and timing.

@@ -15,6 +15,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
+
+	"github.com/karimzakzouk/sentinel/internal/settings"
 )
 
 // Fixed Secret names the chart mounts as optional. The console fills them
@@ -133,6 +135,39 @@ func upsertSecret(ctx context.Context, k kubernetes.Interface, ns, name string, 
 	}
 	_, err = k.CoreV1().Secrets(ns).Update(ctx, sec, metav1.UpdateOptions{FieldManager: "sentinel-console"})
 	return err
+}
+
+// listNamespaces returns cluster namespaces the signed-in person can see,
+// for the first-run watch picker. System and Sentinel namespaces are flagged.
+func (c *Console) listNamespaces(w http.ResponseWriter, r *http.Request, _ *session, k kubernetes.Interface, _ dynamic.Interface) {
+	list, err := k.CoreV1().Namespaces().List(r.Context(), metav1.ListOptions{})
+	if err != nil {
+		kubeError(w, err)
+		return
+	}
+	type row struct {
+		Name     string `json:"name"`
+		Watched  bool   `json:"watched"`
+		Blocked  bool   `json:"blocked"`
+		Reason   string `json:"reason,omitempty"`
+	}
+	blocked := map[string]string{
+		"kube-system": "Kubernetes system", "kube-public": "Kubernetes system", "kube-node-lease": "Kubernetes system",
+		c.settingsNS(): "Sentinel", "sentinel-actor": "Sentinel", "sentinel-capture": "Sentinel", "sentinel-node-agent": "Sentinel",
+	}
+	out := make([]row, 0, len(list.Items))
+	for _, ns := range list.Items {
+		item := row{Name: ns.Name, Watched: ns.Labels[settings.WatchedLabel] == "true"}
+		if why, ok := blocked[ns.Name]; ok || strings.HasPrefix(ns.Name, "sentinel-lab-") {
+			item.Blocked = true
+			if !ok {
+				why = "Sentinel Lab"
+			}
+			item.Reason = why
+		}
+		out = append(out, item)
+	}
+	writeJSON(w, map[string]any{"namespaces": out})
 }
 
 func bounceDeploy(ctx context.Context, k kubernetes.Interface, ns, name string) error {

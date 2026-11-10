@@ -194,9 +194,8 @@ func (c *Config) setDefaults() {
 // Validate reports every problem at once.
 func (c *Config) Validate() error {
 	var errs []error
-	if len(c.Namespaces) == 0 {
-		errs = append(errs, errors.New("namespaces is empty: list the namespaces Sentinel may watch"))
-	}
+	// Empty namespaces is allowed: first-run until Settings/UI (or a values.yaml
+	// seed) names what to watch. Sentinel then watches nothing, by design.
 	seen := map[string]bool{}
 	for _, ns := range c.Namespaces {
 		if msgs := validation.IsDNS1123Label(ns); len(msgs) > 0 {
