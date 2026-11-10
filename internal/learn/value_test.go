@@ -27,6 +27,16 @@ func TestAMemoryLimitIsLearnedFromTheTailOfHealthyUse(t *testing.T) {
 	}
 }
 
+func TestADiskLimitMatchesMemoryLearning(t *testing.T) {
+	small := make([]float64, 100)
+	for i := range small {
+		small[i] = float64(6+i%2) * mebibyte
+	}
+	if got, err := DiskLimit(small); err != nil || got != "15Mi" {
+		t.Fatalf("disk: %s, %v; want 15Mi", got, err)
+	}
+}
+
 func TestACPULimitIsLearnedFromTheTailOfHealthyUse(t *testing.T) {
 	small := make([]float64, 100)
 	for i := range small {

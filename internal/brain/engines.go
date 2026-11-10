@@ -24,7 +24,12 @@ const (
 	// yet that distinguishes it from other resource faults; the Fixer and
 	// learn path still propose a learned limit when this class is set.
 	ClassCPULimit = "resource.cpu-limit"
-	ClassProbe    = "config.probe"
+	// ClassDiskLimit is an ephemeral-storage limit set too low. Until a
+	// separate fact exists, the Fixer and learn path still propose a learned
+	// limit when this class is set.
+	ClassDiskLimit = "resource.disk-limit"
+	ClassProbe     = "config.probe"
+	ClassTimeout   = "config.timeout"
 	ClassConfigError   = "config.error"
 	ClassUnschedulable = "capacity.unschedulable"
 	ClassRuntimeCrash  = "runtime.crash"

@@ -370,7 +370,7 @@ func TestALearnedLimitIsRacedBeforeItsPullRequest(t *testing.T) {
 			b.Fixer = fixer
 			busy := 1
 			var asked []map[string]string
-			b.ValueLab = func(_ context.Context, _ model.ID, _ model.ObjectRef, revision string, memory, _ map[string]string) (string, bool, error) {
+			b.ValueLab = func(_ context.Context, _ model.ID, _ model.ObjectRef, revision string, memory, _, _ map[string]string) (string, bool, error) {
 				if busy > 0 {
 					busy--
 					return "", false, nil
@@ -416,7 +416,7 @@ func TestALearnedCPULimitIsRacedBeforeItsPullRequest(t *testing.T) {
 	fixer := &fakeFixer{}
 	b.Fixer = fixer
 	var askedCPU map[string]string
-	b.ValueLab = func(_ context.Context, _ model.ID, _ model.ObjectRef, _ string, _, cpu map[string]string) (string, bool, error) {
+	b.ValueLab = func(_ context.Context, _ model.ID, _ model.ObjectRef, _ string, _, cpu, _ map[string]string) (string, bool, error) {
 		askedCPU = cpu
 		return "sentinel-lab-0/values", true, nil
 	}

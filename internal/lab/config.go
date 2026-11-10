@@ -87,7 +87,7 @@ func ValuesCandidate(failing *corev1.Pod, overrides []v1alpha1.ValueOverride) (*
 			return nil, fmt.Errorf("%s's %s: %w", o.Container, o.Field, err)
 		}
 		kind, name, ok := strings.Cut(o.Field, ".")
-		if !ok || kind != "limits" && kind != "requests" || name != "memory" && name != "cpu" {
+		if !ok || kind != "limits" && kind != "requests" || name != "memory" && name != "cpu" && name != "ephemeral-storage" {
 			return nil, fmt.Errorf("the Lab sets no %s", o.Field)
 		}
 		found := false

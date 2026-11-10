@@ -142,8 +142,10 @@ spec:
                       enum:
                       - limits.memory
                       - limits.cpu
+                      - limits.ephemeral-storage
                       - requests.memory
                       - requests.cpu
+                      - requests.ephemeral-storage
                       type: string
                     value:
                       type: string
@@ -191,49 +193,6 @@ spec:
                   type: object
                 maxItems: 20
                 type: array
-              writes:
-                description: |-
-                  Writes lists non-GET requests traffic capture kept with bodies, which
-                  each run sends its copy once the copy is ready: a copy works only if
-                  it answers every one with the same status production saw, unless its
-                  world's datastores are throwaway and empty.
-                items:
-                  description: WriteReplay is one non-GET request a run sends its copy.
-                  properties:
-                    body:
-                      description: Body is production's redacted request body when
-                        capture kept one.
-                      maxLength: 4096
-                      type: string
-                    method:
-                      maxLength: 16
-                      minLength: 1
-                      type: string
-                    path:
-                      description: Path, with no query string.
-                      maxLength: 1024
-                      pattern: ^/[^?#\s]*$
-                      type: string
-                    port:
-                      description: Port the copy serves it on; its first declared port
-                        when omitted.
-                      format: int32
-                      maximum: 65535
-                      minimum: 1
-                      type: integer
-                    status:
-                      description: Status is the HTTP status production answered.
-                      format: int32
-                      maximum: 999
-                      minimum: 0
-                      type: integer
-                  required:
-                  - method
-                  - path
-                  - status
-                  type: object
-                maxItems: 20
-                type: array
               revision:
                 description: |-
                   Revision is the workload's failing revision: a Deployment's
@@ -267,6 +226,50 @@ spec:
                 - name
                 - namespace
                 type: object
+              writes:
+                description: |-
+                  Writes lists non-GET requests traffic capture kept with bodies, which
+                  each run sends its copy once the copy is ready: a copy works only if
+                  it answers every one with the same status production saw, unless its
+                  world's datastores are throwaway and empty.
+                items:
+                  description: WriteReplay is one non-GET request a run sends its
+                    copy.
+                  properties:
+                    body:
+                      description: Body is production's redacted request body when
+                        capture kept one.
+                      maxLength: 4096
+                      type: string
+                    method:
+                      maxLength: 16
+                      minLength: 1
+                      type: string
+                    path:
+                      description: Path, with no query string.
+                      maxLength: 1024
+                      pattern: ^/[^?#\s]*$
+                      type: string
+                    port:
+                      description: Port the copy serves it on; its first declared
+                        port when omitted.
+                      format: int32
+                      maximum: 65535
+                      minimum: 1
+                      type: integer
+                    status:
+                      description: Status is the HTTP status production answered.
+                      format: int32
+                      maximum: 999
+                      minimum: 0
+                      type: integer
+                  required:
+                  - method
+                  - path
+                  - status
+                  type: object
+                maxItems: 20
+                type: array
             required:
             - incidentId
             - labNamespace

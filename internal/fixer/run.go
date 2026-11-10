@@ -339,6 +339,8 @@ func (f *Fixer) propose(ctx context.Context, fix *v1alpha1.Fix) (v1alpha1.FixPha
 		title = fmt.Sprintf("Set %s's memory limit to %s", change.Container, shown(change.Good))
 	case change.field() == fieldCPULimit:
 		title = fmt.Sprintf("Set %s's CPU limit to %s", change.Container, shown(change.Good))
+	case change.field() == fieldDiskLimit:
+		title = fmt.Sprintf("Set %s's ephemeral-storage limit to %s", change.Container, shown(change.Good))
 	case change.Good == nil:
 		title = fmt.Sprintf("Remove %s's %s", change.Container, field)
 	}
@@ -369,11 +371,14 @@ func body(fix *v1alpha1.Fix, src *Source, edit *Edit, change Change, kept []Chan
 	case change.field() == fieldCPULimit:
 		back = fmt.Sprintf("%s's CPU limit becomes %s, learned from what it used while healthy: putting back the old limit "+
 			"can be as wrong as the new one, so this sets the least that held with room to spare", change.Container, code(change.Good))
+	case change.field() == fieldDiskLimit:
+		back = fmt.Sprintf("%s's ephemeral-storage limit becomes %s, learned from what it used while healthy: putting back the old limit "+
+			"can be as wrong as the new one, so this sets the least that held with room to spare", change.Container, code(change.Good))
 	case change.Good == nil:
 		back = fmt.Sprintf("%s's %s goes, as the workload ran before it was set", change.Container, field)
 	}
 	also := ""
-	if (change.field() == fieldMemoryLimit || change.field() == fieldCPULimit) && fix.Spec.LabVerdict != "" {
+	if isLimitField(change.field()) && fix.Spec.LabVerdict != "" {
 		also += "\n- **The Lab**: it raced the workload's failing revision with this limit in a sealed copy: " + fix.Spec.LabVerdict + "."
 	}
 	if len(kept) > 0 {

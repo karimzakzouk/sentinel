@@ -16,8 +16,9 @@ import (
 // Fields a fix restores beside the image: a container's command and
 // arguments, an environment variable's literal value ("env:NAME"), its
 // readiness, liveness or startup probe (the whole object put back), and its
-// memory or CPU limit, which a fix sets to a learned value rather than
-// restores.
+// memory, CPU or ephemeral-storage limit, which a fix sets to a learned
+// value rather than restores, and pod-template or replica fields put back
+// from the good revision.
 const (
 	fieldImage          = "image"
 	fieldCommand        = "command"
@@ -27,8 +28,24 @@ const (
 	fieldStartupProbe   = "startupProbe"
 	fieldMemoryLimit    = "limits.memory"
 	fieldCPULimit       = "limits.cpu"
+	fieldDiskLimit      = "limits.ephemeral-storage"
+	fieldReplicas       = "replicas"
+	fieldTerminationGrace = "terminationGracePeriodSeconds"
+	fieldActiveDeadline   = "activeDeadlineSeconds"
 	envPrefix           = "env:"
 )
+
+func isLimitField(field string) bool {
+	return field == fieldMemoryLimit || field == fieldCPULimit || field == fieldDiskLimit
+}
+
+func isWorkloadField(field string) bool {
+	return field == fieldReplicas
+}
+
+func isPodSpecField(field string) bool {
+	return field == fieldTerminationGrace || field == fieldActiveDeadline
+}
 
 func isProbeField(field string) bool {
 	return field == fieldReadinessProbe || field == fieldLivenessProbe || field == fieldStartupProbe
@@ -66,7 +83,7 @@ func valueIn(container map[string]any, field string) any {
 			s, _ := e["value"].(string)
 			return s
 		}
-	case field == fieldMemoryLimit || field == fieldCPULimit:
+	case isLimitField(field):
 		res, _ := container["resources"].(map[string]any)
 		limits, _ := res["limits"].(map[string]any)
 		key := strings.TrimPrefix(field, "limits.")
@@ -132,7 +149,7 @@ func setValue(container map[string]any, field string, v any) {
 			return
 		}
 		container["env"] = kept
-	case field == fieldMemoryLimit || field == fieldCPULimit:
+	case isLimitField(field):
 		res, _ := container["resources"].(map[string]any)
 		limits, _ := res["limits"].(map[string]any)
 		key := strings.TrimPrefix(field, "limits.")
@@ -160,13 +177,23 @@ func setValue(container map[string]any, field string, v any) {
 
 func sameValue(a, b any) bool { return reflect.DeepEqual(a, b) }
 
+func sameInt(a, b any) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return fmt.Sprint(a) == fmt.Sprint(b)
+}
+
 // same reports whether two values of the change's field are equal: memory
 // and CPU limits as quantities, since "64Mi" and "67108864" are one limit,
 // and probes with Kubernetes' defaults applied, since the API fills them
 // and a manifest often leaves them out.
 func (c Change) same(a, b any) bool {
 	switch c.field() {
-	case fieldMemoryLimit, fieldCPULimit:
+	case fieldMemoryLimit, fieldCPULimit, fieldDiskLimit:
 		as, aok := a.(string)
 		bs, bok := b.(string)
 		if !aok || !bok {
@@ -175,6 +202,8 @@ func (c Change) same(a, b any) bool {
 		aq, aerr := resource.ParseQuantity(as)
 		bq, berr := resource.ParseQuantity(bs)
 		return aerr == nil && berr == nil && aq.Cmp(bq) == 0
+	case fieldReplicas, fieldTerminationGrace, fieldActiveDeadline:
+		return sameInt(a, b)
 	}
 	if isProbeField(c.field()) {
 		return sameProbe(a, b)
@@ -259,6 +288,8 @@ func shown(v any) string {
 	switch v := v.(type) {
 	case nil:
 		return "not set"
+	case int, int32, int64:
+		return fmt.Sprint(v)
 	case []string:
 		return "[" + strings.Join(v, ", ") + "]"
 	case map[string]any:
@@ -287,6 +318,14 @@ func what(field string) string {
 		return "memory limit"
 	case field == fieldCPULimit:
 		return "CPU limit"
+	case field == fieldDiskLimit:
+		return "ephemeral-storage limit"
+	case field == fieldReplicas:
+		return "replicas"
+	case field == fieldTerminationGrace:
+		return "termination grace period"
+	case field == fieldActiveDeadline:
+		return "active deadline"
 	case strings.HasPrefix(field, envPrefix):
 		return "environment variable " + strings.TrimPrefix(field, envPrefix)
 	}
@@ -299,11 +338,17 @@ func what(field string) string {
 // the same way, a key or an environment variable the bad change added
 // removed with its lines. It says where.
 func editField(src []byte, kind, name string, c Change) ([]byte, int, error) {
+	field := c.field()
+	switch {
+	case isWorkloadField(field):
+		return editWorkloadField(src, kind, name, c)
+	case isPodSpecField(field):
+		return editPodSpecField(src, kind, name, c)
+	}
 	container, err := containerNode(src, kind, name, c.Container)
 	if err != nil {
 		return nil, 0, err
 	}
-	field := c.field()
 	switch {
 	case field == fieldImage:
 		node := valueOf(container, "image")
@@ -349,7 +394,7 @@ func editField(src []byte, kind, name string, c Change) ([]byte, int, error) {
 		dash := entry.Column - 2
 		out, err := deleteLines(src, entry.Line, blockEnd(src, entry.Line, dash, false))
 		return out, entry.Line, err
-	case field == fieldMemoryLimit || field == fieldCPULimit:
+	case isLimitField(field):
 		key := strings.TrimPrefix(field, "limits.")
 		node := valueOf(valueOf(valueOf(container, "resources"), "limits"), key)
 		if node == nil || c.Good == nil {
@@ -463,7 +508,7 @@ func documents(src []byte) []*yaml.Node {
 	}
 }
 
-// fileValue reads a field of a workload's container as a file writes it.
+// fileValue reads a field of a workload or its container as a file writes it.
 func fileValue(src []byte, kind, name, container, field string) (any, bool) {
 	dec := yaml.NewDecoder(bytes.NewReader(src))
 	for {
@@ -475,10 +520,89 @@ func fileValue(src []byte, kind, name, container, field string) (any, bool) {
 		if doc["kind"] != kind || meta["name"] != name {
 			continue
 		}
+		if isWorkloadField(field) {
+			return workloadValueIn(doc, field), true
+		}
+		if isPodSpecField(field) {
+			return podSpecValueIn(doc, field), true
+		}
 		if c := containerIn(doc, container); c != nil {
 			return valueIn(c, field), true
 		}
 	}
+}
+
+// workloadTop finds the top node of a workload document in a file.
+func workloadTop(src []byte, kind, name string) (*yaml.Node, error) {
+	var found []*yaml.Node
+	for _, top := range documents(src) {
+		if scalar(top, "kind") != kind || name != "" && scalar(valueOf(top, "metadata"), "name") != name {
+			continue
+		}
+		found = append(found, top)
+	}
+	if len(found) != 1 {
+		return nil, fmt.Errorf("%d %ss named %s in the file, not one", len(found), kind, name)
+	}
+	return found[0], nil
+}
+
+func editWorkloadField(src []byte, kind, name string, c Change) ([]byte, int, error) {
+	top, err := workloadTop(src, kind, name)
+	if err != nil {
+		return nil, 0, err
+	}
+	node := valueOf(valueOf(top, "spec"), "replicas")
+	if node == nil || c.Good == nil {
+		return nil, 0, fmt.Errorf("%s sets no %s here", kind, what(c.field()))
+	}
+	out, err := splice(src, node, fmt.Sprint(c.Good))
+	return out, node.Line, err
+}
+
+func editPodSpecField(src []byte, kind, name string, c Change) ([]byte, int, error) {
+	top, err := workloadTop(src, kind, name)
+	if err != nil {
+		return nil, 0, err
+	}
+	podSpec := valueOf(valueOf(valueOf(top, "spec"), "template"), "spec")
+	node := valueOf(podSpec, c.field())
+	if c.Good == nil {
+		if node == nil {
+			return nil, 0, fmt.Errorf("%s's pod template sets no %s here", kind, what(c.field()))
+		}
+		key, _ := keyOf(podSpec, c.field())
+		out, err := deleteLines(src, key.Line, blockEnd(src, key.Line, key.Column, false))
+		return out, key.Line, err
+	}
+	if node == nil {
+		return nil, 0, fmt.Errorf("%s's pod template sets no %s here", kind, what(c.field()))
+	}
+	out, err := splice(src, node, fmt.Sprint(c.Good))
+	return out, node.Line, err
+}
+
+// workloadValueIn reads a workload-level field from a rendered resource.
+func workloadValueIn(m map[string]any, field string) any {
+	if field != fieldReplicas {
+		return nil
+	}
+	spec, _ := m["spec"].(map[string]any)
+	if v, ok := spec["replicas"]; ok {
+		return normalizeMap(v)
+	}
+	return nil
+}
+
+// podSpecValueIn reads a pod-template field from a rendered resource.
+func podSpecValueIn(m map[string]any, field string) any {
+	spec, _ := m["spec"].(map[string]any)
+	tmpl, _ := spec["template"].(map[string]any)
+	podSpec, _ := tmpl["spec"].(map[string]any)
+	if v, ok := podSpec[field]; ok {
+		return normalizeMap(v)
+	}
+	return nil
 }
 
 // containerNode finds, in a file of YAML documents, a workload's container.
