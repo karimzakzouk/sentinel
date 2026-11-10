@@ -107,7 +107,7 @@ To look at it on a cluster where it runs:
 | High availability | Standby replicas for the actor, the Lab and the Fixer (decision 81) | On the development cluster with two of each: one Lease holder each, the fence allowed the Leases, a standby took over a second after the holder was deleted |
 | Console | Sign in with your own token, or through the cluster's identity provider (decision 89); approve, veto, resume, set policies, as yourself (decision 82) | Unit tests of sign-in, the person's own approval, refusals from another page, and of single sign-on's state, nonce and replay checks; on the development cluster a real token signed in, the cluster refused what it may not see, and a bad token got 401; `hack/oidc-live.sh` signs in through a real Dex as a browser would |
 | Fingerprints | fp2 for logged exceptions (decision 84) | One Redis outage logged with two messages is one exception |
-| Traffic capture | Built (decisions 85, 86, 103 and 105): optional OBI agent, per-namespace `capture.requests`, Lab read replay, write replay from `capture.Bodies`, and opt-in body capture (`capture.bodies` with requests): redacted ~4KiB Body/ResponseBody only when EnabledBodies is on |
+| Traffic capture | Built (decisions 85, 86, 103, 105 and 112): optional OBI agent, per-namespace `capture.requests`, Lab read replay, write replay from `capture.Bodies`, and opt-in body capture (`capture.bodies` with requests, plus chart `capture.exportBodies` for OBI): redacted ~4KiB Body/ResponseBody only when EnabledBodies is on |
 | Argo Rollouts abort | Built (decision 97): `rollouts.abort` sets `status.abort`; Flagger still deferred to its analysis | Unit tests in `internal/actor`, `internal/watcher`, `internal/brain` |
 | Honeytoken Secrets | Built: Lab env and named-key volumes get shape-preserving stand-ins; looking one up through Lab DNS fails the race | Unit tests in `internal/lab` |
 | Outbound call catalog | Built: `capture.Calls` lists distinct client calls for Lab fakes | Unit tests in `internal/capture` |
@@ -407,9 +407,10 @@ Full reasoning in [decisions.md](decisions.md).
   metadata HTTP and HTTPS with a Lab CA (decisions 100 and 111); opt-in
   body capture and write replay with status comparison are built
   (decisions 103 and 105); datastore seeding from bodies is fidelity-only
-  for now. Left: filled response-body stubs, gRPC fakes, and an agent that
-  exports bodies. Honeytoken Secrets that fail a race on DNS lookup are
-  built.
+  for now. Left: filled response-body stubs, gRPC fakes, and HTTPS MITM so
+  bodies appear on TLS-only traffic. Chart `capture.exportBodies` wires OBI
+  JSON body export (decision 112). Honeytoken Secrets that fail a race on DNS
+  lookup are built.
 - **More rollback kinds:** DaemonSets, StatefulSets (with approval) and
   Argo Rollouts abort are built; Flagger stays deferred.
 - **Hardening:** baselines that survive restarts and dependency links from

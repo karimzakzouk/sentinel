@@ -93,6 +93,40 @@ discovery:
     {{- range .Values.watch.namespaces }}
     - k8s_namespace: {{ . | quote }}
     {{- end }}
+{{- if .Values.capture.exportBodies }}
+ebpf:
+  buffer_sizes:
+    http: {{ int .Values.capture.bodyBufferBytes }}
+  payload_extraction:
+    http:
+      enrichment:
+        enabled: true
+        policy:
+          default_action:
+            headers: exclude
+            body: exclude
+        rules:
+          - action: include
+            type: body
+            scope: request
+            match:
+              methods: [POST, PUT, PATCH, DELETE]
+              url_path_patterns:
+                - "*"
+          - action: include
+            type: body
+            scope: response
+            match:
+              methods: [POST, PUT, PATCH, DELETE]
+              url_path_patterns:
+                - "*"
+attributes:
+  select:
+    traces:
+      include:
+        - http.request.body.content
+        - http.response.body.content
+{{- end }}
 {{- end }}
 
 {{- define "sentinel.validate" -}}

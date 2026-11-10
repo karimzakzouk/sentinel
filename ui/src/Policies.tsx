@@ -110,7 +110,7 @@ function PolicyCard({ policy, onSaved }: { policy: Policy; onSaved: () => void }
           checked={!!spec.capture?.bodies}
           onChange={(e) => setSpec({ ...spec, capture: captureOf(!!spec.capture?.requests || e.target.checked, e.target.checked) })}
         />
-        Record request and response bodies (opt-in stub; recorder not fully live yet). Off by default; needs request capture.
+        Record request and response bodies (needs chart capture.exportBodies and plain HTTP JSON from OBI). Off by default.
       </label>
       <p className="muted policy-note">
         Cluster-wide Fixer knobs stay in the chart&apos;s values, not in a policy:{" "}
