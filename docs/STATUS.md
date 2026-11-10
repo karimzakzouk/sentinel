@@ -415,10 +415,12 @@ Full reasoning in [decisions.md](decisions.md).
   rabbitmq from captured bodies (decisions 105, 112 and 118). Chart
   `capture.exportBodies` wires OBI JSON body export (decision 115). Lab HTTPS
   copies get a JVM PKCS#12 truststore and a seal-safe CONNECT MITM that answers
-  recorded bodies (decision 119). Left: production-capture MITM for OBI
-  ciphertext. Honeytoken Secrets that fail a race on DNS lookup are built.
-- **More rollback kinds:** DaemonSets, StatefulSets (with approval) and
-  Argo Rollouts abort are built; Flagger stays deferred.
+  recorded bodies (decision 119). Production-capture MITM for opted-in
+  HTTPS_PROXY clients is built (decision 122). Honeytoken Secrets that fail a
+  race on DNS lookup are built.
+- **More rollback kinds:** DaemonSets, StatefulSets (with approval), Argo
+  Rollouts abort, and Flagger Canary abort (`flagger.abort`, decision 121)
+  are built.
 - **Hardening:** baselines that survive restarts and dependency links from
   error logs are built; the tier-1 node agent has a first cut (decision 102).
   Standby for actor/Lab/Fixer already exists.

@@ -80,6 +80,7 @@ function InstalledMap({ installed }: { installed?: InstalledComponents }) {
     { key: "lab", name: "Lab", means: "Tests fixes in a sealed copy before trusting them" },
     { key: "fixer", name: "Fixer", means: "Opens pull requests so rollbacks hold in Git" },
     { key: "capture", name: "Traffic capture", means: "Sees requests apps serve, for the Lab to replay" },
+    { key: "captureMitm", name: "HTTPS body MITM", means: "Decrypts HTTPS for opted-in apps (HTTPS_PROXY + trust CA)" },
     { key: "nodeAgent", name: "Node agent", means: "Reads redacted logs from each machine" },
   ];
   return (
@@ -253,6 +254,13 @@ export function Settings() {
           checked={!!draft?.capture?.exportBodies}
           disabled={!installed?.capture}
           onChange={(v) => setCapture({ exportBodies: v })}
+        />
+        <Toggle
+          label="Run HTTPS MITM for opted-in apps"
+          help="Starts the CONNECT proxy that terminates TLS for apps that set HTTPS_PROXY and trust the capture CA, then posts bodies to Sentinel. Off keeps ciphertext invisible to capture."
+          checked={!!draft?.capture?.mitmEnabled}
+          disabled={!installed?.captureMitm}
+          onChange={(v) => setCapture({ mitmEnabled: v })}
         />
         <Field label="Body buffer (bytes)" help="How much of each request/response the agent may hold before redaction.">
           <input

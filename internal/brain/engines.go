@@ -394,6 +394,9 @@ const (
 	// ActionRolloutsAbort aborts an Argo Rollouts progressive delivery
 	// instead of rewriting its template.
 	ActionRolloutsAbort = "rollouts.abort"
+	// ActionFlaggerAbort aborts a Flagger Canary instead of rewriting its
+	// primary Deployment.
+	ActionFlaggerAbort = "flagger.abort"
 	// ActionScaleRestore sets a workload's replicas back to what they were
 	// before a scale change: rolling back its template would not.
 	ActionScaleRestore = "scale.restore"
@@ -402,7 +405,7 @@ const (
 )
 
 // ReversibleActions undo a recorded change.
-var ReversibleActions = []string{ActionRolloutUndo, ActionRolloutsAbort, ActionScaleRestore}
+var ReversibleActions = []string{ActionRolloutUndo, ActionRolloutsAbort, ActionFlaggerAbort, ActionScaleRestore}
 
 // DecideInput is what the expected-loss decision needs.
 type DecideInput struct {
@@ -423,7 +426,7 @@ type Decision struct {
 // Validate checks the decision names a known action with finite losses.
 func (d Decision) Validate() error {
 	switch d.Action {
-	case ActionRolloutUndo, ActionRolloutsAbort, ActionScaleRestore, ActionNone, ActionEscalate:
+	case ActionRolloutUndo, ActionRolloutsAbort, ActionFlaggerAbort, ActionScaleRestore, ActionNone, ActionEscalate:
 	default:
 		return fmt.Errorf("unknown action %q", d.Action)
 	}
@@ -460,8 +463,11 @@ func (e ExpectedLoss) Decide(_ context.Context, in DecideInput) (Decision, error
 		switch tc.Change.Kind {
 		case "template":
 			undo = ActionRolloutUndo
-			if in.Workload.Kind == "Rollout" {
+			switch in.Workload.Kind {
+			case "Rollout":
 				undo = ActionRolloutsAbort
+			case "Canary":
+				undo = ActionFlaggerAbort
 			}
 		case "scale":
 			undo = ActionScaleRestore
@@ -482,7 +488,7 @@ func (e ExpectedLoss) Decide(_ context.Context, in DecideInput) (Decision, error
 		losses[undo] = e.Disruption + (1-pHelps)*e.PReal*e.Impact
 	}
 	best := ActionNone
-	for _, a := range []string{ActionRolloutUndo, ActionRolloutsAbort, ActionScaleRestore, ActionEscalate, ActionNone} {
+	for _, a := range []string{ActionRolloutUndo, ActionRolloutsAbort, ActionFlaggerAbort, ActionScaleRestore, ActionEscalate, ActionNone} {
 		if l, ok := losses[a]; ok && l < losses[best] {
 			best = a
 		}

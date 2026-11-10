@@ -33,7 +33,7 @@ func actionArgs(action string, top *RankedChange, revision string) map[string]st
 	}
 	c := top.Change
 	switch {
-	case (action == ActionRolloutUndo || action == ActionRolloutsAbort) && c.Kind == string(watcher.ChangeTemplate) && c.ProducedNewestRevision && revision != "":
+	case (action == ActionRolloutUndo || action == ActionRolloutsAbort || action == ActionFlaggerAbort) && c.Kind == string(watcher.ChangeTemplate) && c.ProducedNewestRevision && revision != "":
 		return map[string]string{argFromTemplateHash: revision}
 	case action == ActionScaleRestore && c.Kind == string(watcher.ChangeScale):
 		for _, f := range c.Fields {
@@ -66,6 +66,7 @@ func classLabel(c string) string {
 var verbs = map[string][2]string{
 	ActionRolloutUndo:   {"roll back", "rolled back"},
 	ActionRolloutsAbort: {"abort the rollout of", "aborted the rollout of"},
+	ActionFlaggerAbort:  {"abort the canary of", "aborted the canary of"},
 	ActionScaleRestore:  {"restore the replicas of", "restored the replicas of"},
 }
 

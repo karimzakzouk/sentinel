@@ -316,7 +316,7 @@ export interface SettingsSpec {
       llm?: FixerLLMSettings;
     };
   };
-  capture?: { exportBodies?: boolean; bodyBufferBytes?: number };
+  capture?: { exportBodies?: boolean; bodyBufferBytes?: number; mitmEnabled?: boolean };
   capabilities?: { interval?: string };
 }
 
@@ -325,6 +325,7 @@ export interface InstalledComponents {
   lab?: boolean;
   fixer?: boolean;
   capture?: boolean;
+  captureMitm?: boolean;
   nodeAgent?: boolean;
 }
 

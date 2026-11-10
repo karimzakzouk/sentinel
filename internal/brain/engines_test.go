@@ -170,6 +170,12 @@ func TestExpectedLossDecisions(t *testing.T) {
 	if d.Validate() != nil || d.Action != ActionRolloutsAbort {
 		t.Fatalf("decision = %+v; want rollouts.abort", d)
 	}
+	// A Flagger Canary is aborted the same way, not by rewriting its primary.
+	canary := model.ObjectRef{Group: "flagger.app", Kind: "Canary", Namespace: "shop", Name: "web"}
+	d, _ = e.Decide(ctx, DecideInput{Workload: canary, Classes: badImage, TopChange: &RankedChange{Change: CandidateChange{Kind: "template", Object: canary}, P: 0.9}})
+	if d.Validate() != nil || d.Action != ActionFlaggerAbort {
+		t.Fatalf("decision = %+v; want flagger.abort", d)
+	}
 }
 
 func TestEveryClassStatesEveryFeature(t *testing.T) {

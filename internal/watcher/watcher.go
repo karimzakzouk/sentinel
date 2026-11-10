@@ -109,7 +109,7 @@ func (w *Watcher) Run(ctx context.Context) error {
 		svcs, slices := f.Core().V1().Services(), f.Discovery().V1().EndpointSlices()
 		l := &namespaceListers{pods: pods.Lister(), replicaSets: rs.Lister(), deployments: deps.Lister(), statefulSet: sts.Lister(),
 			daemonSets: dss.Lister(), revisions: crs.Lister(),
-			services: svcs.Lister(), slices: slices.Lister(), owners: Owners{ReplicaSets: rs.Lister()}}
+			services: svcs.Lister(), slices: slices.Lister(), owners: Owners{ReplicaSets: rs.Lister(), Deployments: deps.Lister()}}
 		w.ns[ns] = l
 
 		if _, err := pods.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{

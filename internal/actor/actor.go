@@ -144,6 +144,7 @@ func (a *Actor) admit(ctx context.Context, req *v1alpha1.ActionRequest) (bool, v
 	}
 	appsWorkload := t.APIVersion == "apps/v1" && (t.Kind == "Deployment" || t.Kind == "StatefulSet" || t.Kind == "DaemonSet")
 	rolloutAbort := req.Spec.Action == ActionRolloutsAbort && t.APIVersion == "argoproj.io/v1alpha1" && t.Kind == "Rollout"
+	flaggerAbort := req.Spec.Action == ActionFlaggerAbort && strings.HasPrefix(t.APIVersion, "flagger.app/") && t.Kind == "Canary"
 	switch {
 	case !req.Spec.ExpiresAt.IsZero() && now.After(req.Spec.ExpiresAt.Time):
 		return no(v1alpha1.ActionExpired, "the request lapsed before it ran")
@@ -151,7 +152,7 @@ func (a *Actor) admit(ctx context.Context, req *v1alpha1.ActionRequest) (bool, v
 		return no(v1alpha1.ActionRejected, "the kill switch is on")
 	case t.Namespace != req.Namespace || !slices.Contains(a.Namespaces, t.Namespace):
 		return no(v1alpha1.ActionRejected, fmt.Sprintf("Sentinel may not act in namespace %q", t.Namespace))
-	case !appsWorkload && !rolloutAbort:
+	case !appsWorkload && !rolloutAbort && !flaggerAbort:
 		return no(v1alpha1.ActionRejected, fmt.Sprintf("no contract covers a %s/%s", t.APIVersion, t.Kind))
 	}
 	if who := req.Annotations[AnnotationVetoedBy]; who != "" {
@@ -262,6 +263,8 @@ func (a *Actor) execute(ctx context.Context, req *v1alpha1.ActionRequest, polici
 		run = a.fluxRollback
 	case ActionRolloutsAbort:
 		run = a.rolloutsAbort
+	case ActionFlaggerAbort:
+		run = a.flaggerAbort
 	case ActionScale:
 		maxRemoval := policy.MaxCapacityRemoval(policies)
 		run = func(ctx context.Context, req *v1alpha1.ActionRequest, dryRun bool) (string, error) {
