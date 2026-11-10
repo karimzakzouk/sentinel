@@ -9,13 +9,14 @@ On a real cluster (not this kind walkthrough), install the published chart:
 
 ```bash
 helm install sentinel oci://ghcr.io/karimzakzouk/charts/sentinel \
-  --namespace sentinel --create-namespace \
-  --set-json 'global.watchNamespaces=["my-app"]'
+  --namespace sentinel --create-namespace
 # optional: --set profile=full
 kubectl -n sentinel port-forward deploy/sentinel 8090
 ```
 
-Day-2 (policies, kill switch, Slack/LLM keys, MITM toggles) is the UI. No repo clone.
+Sign in and pick namespaces in the UI (or set `global.watchNamespaces` in a
+values.yaml). Day-2 is the UI. No repo clone.
+
 
 ## 1. Bring it up
 

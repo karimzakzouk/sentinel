@@ -205,6 +205,32 @@ export function Settings() {
       </Section>
 
       <Section
+        title="Watched namespaces"
+        lead="Application namespaces Sentinel may see. Change here anytime — Sentinel creates the RoleBindings. Or set the same list in Helm values.yaml under global.watchNamespaces."
+      >
+        <Field
+          label="Namespaces"
+          help="Comma-separated. System namespaces and Sentinel’s own are refused."
+        >
+          <input
+            className="field"
+            value={(draft?.watch?.namespaces ?? []).join(", ")}
+            onChange={(e) =>
+              set({
+                watch: {
+                  namespaces: e.target.value
+                    .split(",")
+                    .map((s) => s.trim())
+                    .filter(Boolean),
+                },
+              })
+            }
+            placeholder="shop, payments"
+          />
+        </Field>
+      </Section>
+
+      <Section
         title="Secrets"
         lead="Paste once; Sentinel never shows them again. Slack and LLM keys are fine here. Git forge tokens stay as kubectl secrets — they can write to your repos."
       >

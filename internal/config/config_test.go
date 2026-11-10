@@ -29,7 +29,6 @@ func TestLoadAppliesDefaults(t *testing.T) {
 
 func TestLoadRejectsUnsafeOrAmbiguousConfig(t *testing.T) {
 	cases := map[string]string{
-		"no namespaces":         "ledger: {path: /l.db}\n",
 		"wildcard namespace":    "namespaces: ['*']\nledger: {path: /l.db}\n",
 		"duplicate namespace":   "namespaces: [a, a]\nledger: {path: /l.db}\n",
 		"relative ledger path":  "namespaces: [a]\nledger: {path: l.db}\n",
@@ -50,6 +49,16 @@ func TestLoadRejectsUnsafeOrAmbiguousConfig(t *testing.T) {
 		if _, err := Load(write(t, content)); err == nil {
 			t.Errorf("%s: Load accepted it", name)
 		}
+	}
+}
+
+func TestEmptyNamespacesMeansFirstRun(t *testing.T) {
+	c, err := Load(write(t, "ledger: {path: /l.db}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Namespaces) != 0 {
+		t.Fatalf("want empty watch list, got %v", c.Namespaces)
 	}
 }
 

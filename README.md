@@ -18,21 +18,35 @@ and [docs/plan/](docs/plan/) for the full design and build plan.
 
 ## Install on a cluster
 
-Companies install the published chart — no repo clone, no scripts:
+One Helm release (CRDs + Sentinel + fence). No repo clone.
 
 ```sh
 helm install sentinel oci://ghcr.io/karimzakzouk/charts/sentinel \
-  --namespace sentinel --create-namespace \
-  --set-json 'global.watchNamespaces=["my-app"]'
-# optional: --set profile=full   # also installs actor + Lab
+  --namespace sentinel --create-namespace
 kubectl -n sentinel port-forward deploy/sentinel 8090
 ```
 
-One release ships CRDs + Sentinel + the fence. Day-2 (policies, kill switch,
-Slack/LLM secrets) is the UI. Privileged agents and forge tokens stay explicit
-`--set` / `kubectl create secret` steps.
+Open the UI, sign in, pick which namespaces to watch. That is the normal path.
 
-From a git checkout only, `./hack/sentinel-install.sh` wraps the same chart.
+### Or with a values file (GitOps / chart style)
+
+```yaml
+# values.yaml
+profile: observe   # or full (actor + Lab)
+global:
+  watchNamespaces:
+    - my-app
+    - payments
+```
+
+```sh
+helm install sentinel oci://ghcr.io/karimzakzouk/charts/sentinel \
+  --namespace sentinel --create-namespace -f values.yaml
+```
+
+Day-2 (policies, kill switch, Slack/LLM secrets, changing watch namespaces) is
+the UI. Privileged agents and forge tokens stay explicit `--set` /
+`kubectl create secret` steps.
 
 ## Try the capability report
 

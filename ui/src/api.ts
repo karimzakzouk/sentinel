@@ -297,6 +297,7 @@ export interface FixerLLMSettings {
 }
 
 export interface SettingsSpec {
+  watch?: { namespaces?: string[] };
   logLevel?: string;
   detection?: {
     falseAlarmsPerWeek?: number;
@@ -385,6 +386,8 @@ export const api = {
   putSlackSecret: (webhookUrl: string) => send<{ done: string }>("PUT", "/api/secrets/slack", { webhookUrl }),
   putLLMSecret: (key: string) => send<{ done: string }>("PUT", "/api/secrets/llm", { key }),
   clearSecret: (name: "slack" | "llm") => send<{ done: string }>("DELETE", `/api/secrets/${name}`, {}),
+  namespaces: () =>
+    send<{ namespaces: { name: string; watched: boolean; blocked: boolean; reason?: string }[] }>("GET", "/api/namespaces"),
   summary: () => get<Summary>("/api/summary"),
   incidents: () => get<{ incidents: Incident[] | null }>("/api/incidents").then((r) => r.incidents ?? []),
   incident: (id: string) => get<IncidentDetail>(`/api/incidents/${encodeURIComponent(id)}`),

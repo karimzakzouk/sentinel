@@ -45,18 +45,10 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -z "$namespaces" ]]; then
-  echo "error: --namespaces is required (Sentinel never watches the whole cluster by guess)" >&2
-  usage >&2
-  exit 1
-fi
 case "$profile" in observe|full) ;; *)
   echo "error: --profile must be observe or full" >&2
   exit 1
 esac
-
-IFS=',' read -r -a ns_list <<<"$namespaces"
-json_ns=$(printf '%s\n' "${ns_list[@]}" | python3 -c 'import json,sys; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))')
 
 helm_ctx=()
 [[ -n "$context" ]] && helm_ctx=(--kube-context "$context")
@@ -66,17 +58,20 @@ helm dependency update "$chart" >/dev/null
 
 pool_size=2
 lab_pool=$(python3 -c "import json; print(json.dumps([f'sentinel-lab-{i}' for i in range($pool_size)]))")
+ns_flags=()
+if [[ -n "$namespaces" ]]; then
+  json_ns=$(printf '%s\n' "${namespaces//,/ }" | tr ' ' '\n' | python3 -c 'import json,sys; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))')
+  ns_flags=(--set-json "global.watchNamespaces=$json_ns" --set-json "watch.namespaces=$json_ns")
+fi
 
 echo "Installing $release in namespace $ns (profile=$profile)…"
 helm "${helm_ctx[@]}" upgrade --install "$release" "$chart" \
   --namespace "$ns" --create-namespace \
   --set profile="$profile" \
-  --set-json "global.watchNamespaces=$json_ns" \
-  --set-json "watch.namespaces=$json_ns" \
-  --set-json "sentinel-fence.namespaces=$json_ns" \
   --set-json "sentinel-fence.lab.pool=$lab_pool" \
   --set "global.labPoolSize=$pool_size" \
   --set "sentinel-fence.lab.sealImage=ghcr.io/karimzakzouk/sentinel:0.1.0" \
+  "${ns_flags[@]}" \
   "${extra[@]}" \
   --wait --timeout 10m
 
@@ -85,4 +80,5 @@ cat <<EOF
 Sentinel is up (profile=$profile). From-source only — prefer the OCI chart in production.
 
   kubectl -n $ns port-forward deploy/sentinel 8090
+  # Sign in and pick namespaces unless you passed --namespaces
 EOF

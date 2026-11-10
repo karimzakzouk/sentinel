@@ -21,14 +21,19 @@ spec:
     - expression: >-
         request.resource.group in ['authorization.k8s.io', 'authentication.k8s.io'] ||
         (request.resource.resource == 'pods' && variables.subResource == '' && request.operation == 'CREATE' && variables.dryRun) ||
+        (request.resource.resource == 'namespaces' && request.operation == 'UPDATE' && variables.subResource == '') ||
+        (request.resource.group == 'rbac.authorization.k8s.io' && request.resource.resource == 'rolebindings' &&
+         request.operation in ['CREATE', 'UPDATE', 'DELETE'] && variables.subResource == '') ||
         (request.resource.group == 'sentinel.karimzakzouk.github.io' && request.resource.resource == 'actionrequests' &&
-         variables.subResource == '' && request.operation == 'CREATE' && variables.requestNamespace in {{ include "fence.namespaces" . }}) ||
+         variables.subResource == '' && request.operation == 'CREATE' && variables.requestNamespace != '' &&
+         namespaceObject != null &&
+         namespaceObject.metadata.?labels['sentinel.karimzakzouk.github.io/watched'].orValue('') == 'true') ||
         (request.resource.group == 'sentinel.karimzakzouk.github.io' && request.resource.resource == 'experiments' &&
          variables.subResource == '' && request.operation == 'CREATE' && variables.requestNamespace in {{ include "fence.labPoolCEL" . }} &&
          object.spec.purpose in ['verify-fix', 'reproduce'] && object.spec.labNamespace == variables.requestNamespace) ||
         (request.resource.group == 'sentinel.karimzakzouk.github.io' && request.resource.resource == 'fixes' &&
          variables.subResource == '' && request.operation == 'CREATE' && variables.requestNamespace == '{{ include "fence.fixerNamespace" . }}')
-      message: "Sentinel's controller may only run dry-run pod probes and access reviews, ask the actor for actions, ask the Lab to verify them and ask the Fixer for fixes; it never changes the cluster directly"
+      message: "Sentinel's controller may only dry-run probe, sync watch RBAC/labels, ask the actor/Lab/Fixer; it never changes workloads directly"
       reason: Forbidden
 ---
 apiVersion: admissionregistration.k8s.io/v1

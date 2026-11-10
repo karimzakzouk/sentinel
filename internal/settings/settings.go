@@ -45,6 +45,8 @@ type Targets struct {
 	CaptureMITM            string
 	CaptureMITMTransparent string
 	CaptureMITMRuntimeCM   string
+	// Release is the Helm release name (ClusterRole/RoleBinding prefix).
+	Release string
 }
 
 // DefaultTargets are the chart's fixed names.
@@ -66,6 +68,7 @@ func DefaultTargets(agentNamespace string) Targets {
 		CaptureMITM:            "sentinel-capture-mitm",
 		CaptureMITMTransparent: "sentinel-capture-mitm-redirect",
 		CaptureMITMRuntimeCM:   "sentinel-capture-mitm-runtime",
+		Release:                "sentinel",
 	}
 }
 
@@ -86,6 +89,10 @@ func Apply(ctx context.Context, client kubernetes.Interface, t Targets, spec v1a
 func ApplyWithDynamic(ctx context.Context, client kubernetes.Interface, dyn dynamic.Interface, t Targets, spec v1alpha1.SentinelSettingsSpec) (Applied, error) {
 	out := Applied{Installed: probe(ctx, client, t)}
 	var parts []string
+	if err := SyncWatch(ctx, client, t, t.Release, WatchFromSpec(spec), out.Installed.Actor); err != nil {
+		return out, fmt.Errorf("watch namespaces: %w", err)
+	}
+	parts = append(parts, "watch")
 	if err := patchController(ctx, client, t, spec); err != nil {
 		return out, err
 	}

@@ -6,6 +6,7 @@ import { ago, classLabel, isOpen, workload } from "./format";
 import { IncidentView } from "./IncidentView";
 import { Policies } from "./Policies";
 import { Settings } from "./Settings";
+import { Setup } from "./Setup";
 import { SignIn, useSession } from "./session";
 import { usePoll } from "./usePoll";
 
@@ -121,8 +122,12 @@ function IncidentItem({ incident, current, onSelect }: { incident: Incident; cur
 
 export function App() {
   const [route, go] = useRoute();
+  const { me } = useSession();
+  const [setupDone, setSetupDone] = useState(false);
   const summary = usePoll(api.summary, []);
   const incidents = usePoll(api.incidents, []);
+  const settings = usePoll(me ? api.settings : async () => null, [me, setupDone]);
+  const needsSetup = !!me && !setupDone && !!settings.data && !(settings.data.spec?.watch?.namespaces?.length);
   const view = route.startsWith("/capabilities")
     ? "capabilities"
     : route.startsWith("/settings")
@@ -162,7 +167,7 @@ export function App() {
           {(summary.error || incidents.error) && (
             <div className="error-banner">Cannot reach Sentinel: {summary.error ?? incidents.error}</div>
           )}
-          {view === "incidents" && (
+          {view === "incidents" && !needsSetup && (
             <nav className="list" aria-label="Incidents">
               {open.length > 0 && <h3>Open</h3>}
               {open.map((i) => (
@@ -177,7 +182,9 @@ export function App() {
           )}
         </aside>
         <main className="main">
-          {view === "capabilities" ? (
+          {needsSetup ? (
+            <Setup onDone={() => setSetupDone(true)} />
+          ) : view === "capabilities" ? (
             <Capabilities />
           ) : view === "settings" ? (
             <Settings />
@@ -201,7 +208,7 @@ export function App() {
                   <a href="#/capabilities">Cluster</a> — what this install can see and do
                 </li>
                 <li>
-                  <a href="#/settings">Settings</a> — kill switch, Slack/LLM keys, detection
+                  <a href="#/settings">Settings</a> — namespaces, kill switch, Slack/LLM keys
                 </li>
                 <li>
                   <a href="#/policies">Policies</a> — let it act in a namespace when you are ready
