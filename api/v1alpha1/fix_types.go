@@ -101,9 +101,12 @@ type CodeFix struct {
 	// +optional
 	Number int32 `json:"number,omitempty"`
 	// Failing is the image that crashed; the image built from the fix is
-	// looked for in its repository.
+	// looked for in its repository. Previous is the image the workload was
+	// rolled back to.
 	// +optional
 	Failing string `json:"failing,omitempty"`
+	// +optional
+	Previous string `json:"previous,omitempty"`
 	// Commit is the fix's commit, whose image the source's own pipeline
 	// builds, and Image that image once the registry has it.
 	// +optional
@@ -125,6 +128,9 @@ type CodeFix struct {
 	// Attempt counts the changes proposed, the current one included.
 	// +optional
 	Attempt int32 `json:"attempt,omitempty"`
+	// State is the pull request's: open, merged or closed.
+	// +optional
+	State string `json:"state,omitempty"`
 	// Tried are the earlier changes, oldest first, and what became of them.
 	// +optional
 	// +listType=atomic

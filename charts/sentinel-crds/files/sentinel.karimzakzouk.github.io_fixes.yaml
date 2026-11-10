@@ -211,7 +211,8 @@ spec:
                   failing:
                     description: |-
                       Failing is the image that crashed; the image built from the fix is
-                      looked for in its repository.
+                      looked for in its repository. Previous is the image the workload was
+                      rolled back to.
                     type: string
                   fixer:
                     description: |-
@@ -231,6 +232,8 @@ spec:
                   number:
                     format: int32
                     type: integer
+                  previous:
+                    type: string
                   pullRequest:
                     type: string
                   repository:
@@ -239,6 +242,9 @@ spec:
                       image was built from.
                     type: string
                   revision:
+                    type: string
+                  state:
+                    description: 'State is the pull request''s: open, merged or closed.'
                     type: string
                   tried:
                     description: Tried are the earlier changes, oldest first, and

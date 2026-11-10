@@ -105,6 +105,26 @@ fixer:
     enabled: false
     insecureRegistries: []
     platform: amd64
+    # The fixers tried for a crash, in order, each change raced in the Lab
+    # before the next is tried: restore (the crashing function put back as
+    # it was), template (a fixed change at the crash's line), revert (every
+    # file the culprit commit changed put back) and llm (a language
+    # model's change, asked only once the others have nothing left). Leave
+    # one out to turn it off.
+    fixers: [restore, template, revert, llm]
+    # A language model the llm fixer asks, off while url is empty. Any
+    # model works through one of two request formats: openai (OpenAI,
+    # Azure, Gemini, Mistral, DeepSeek, Groq, xAI, OpenRouter, Ollama,
+    # vLLM, llama.cpp, LM Studio, LiteLLM) or anthropic. Its key, if it
+    # needs one, is in secretName's key; maxAttempts bounds its changes per
+    # fix. Its changes never merge themselves.
+    llm:
+      format: openai
+      url: ""
+      model: ""
+      secretName: ""
+      key: key
+      maxAttempts: 2
   forge:
     # github, gitea, gitlab, bitbucket (Cloud) or bitbucket-server (Data
     # Center); empty is GitHub at api.github.com and Gitea anywhere else.

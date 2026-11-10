@@ -97,7 +97,7 @@ func (l *Lab) Verify(ctx context.Context, incident model.ID, target model.Object
 // code that its source's pipeline built, fixes the incident: the failing
 // revision raced with that image in place of its own.
 func (l *Lab) VerifyImage(ctx context.Context, incident model.ID, target model.ObjectRef, revision, image string) (string, bool, error) {
-	return l.ask(ctx, CodeExperimentName(incident), incident, target, revision, image)
+	return l.ask(ctx, CodeExperimentName(incident, image), incident, target, revision, image)
 }
 
 func (l *Lab) ask(ctx context.Context, name string, incident model.ID, target model.ObjectRef, revision, image string) (string, bool, error) {
@@ -197,8 +197,21 @@ func ExperimentName(incident model.ID) string {
 	return "sentinel-" + id[max(0, len(id)-12):] + "-verify"
 }
 
-// CodeExperimentName is the one Experiment per incident that races a fix
-// to the failing image's code.
-func CodeExperimentName(incident model.ID) string {
-	return strings.TrimSuffix(ExperimentName(incident), "-verify") + "-code"
+// CodeExperimentName is the Experiment that races image, built from a fix
+// to the failing image's code: one per image, as the Fixer tries one
+// fixer's change after another.
+func CodeExperimentName(incident model.ID, image string) string {
+	name := strings.TrimSuffix(ExperimentName(incident), "-verify") + "-code"
+	if i := strings.LastIndexByte(image, ':'); i >= 0 && !strings.Contains(image[i:], "/") {
+		tag := strings.Map(func(r rune) rune {
+			if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' {
+				return r
+			}
+			return -1
+		}, strings.ToLower(image[i+1:]))
+		if tag != "" {
+			name += "-" + tag[:min(len(tag), 12)]
+		}
+	}
+	return name
 }

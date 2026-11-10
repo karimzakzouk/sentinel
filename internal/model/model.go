@@ -317,6 +317,8 @@ type Fix struct {
 // Lab's verdict on that image.
 type FixCode struct {
 	PullRequest string   `json:"pullRequest,omitempty"`
+	Fixer       string   `json:"fixer,omitempty"`
+	Attempt     int      `json:"attempt,omitempty"`
 	Function    string   `json:"function,omitempty"`
 	Change      []string `json:"change,omitempty"`
 	Image       string   `json:"image,omitempty"`

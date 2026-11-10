@@ -1,7 +1,6 @@
 package fixer
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"strings"
@@ -27,88 +26,321 @@ var codeClasses = map[string]bool{"deploy.crash-on-start": true, "runtime.crash"
 const buildWait = time.Hour
 
 // codeFix proposes, beside the fix that pins the image back, a fix to the
-// failing image's code: in the source both images name, the function of
-// the crash's stack that the failing image's commit changed, put back as it
-// was. It returns nil when code fixes are off or the fault is not in code,
-// and a CodeFix whose message says why when it proposes none.
+// failing image's code: the first change the fixers propose, in order, that
+// applies at the source's head. It returns nil when code fixes are off or
+// the fault is not in code, and a CodeFix whose message says why when no
+// fixer has a change.
 func (f *Fixer) codeFix(ctx context.Context, fix *v1alpha1.Fix, change Change) *v1alpha1.CodeFix {
 	if f.Registry == nil || change.field() != fieldImage || !codeClasses[fix.Spec.FaultClass] {
 		return nil
 	}
 	bad, _ := change.Bad.(string)
 	good, _ := change.Good.(string)
-	cf := &v1alpha1.CodeFix{Failing: bad}
-	say := func(format string, args ...any) *v1alpha1.CodeFix {
-		cf.Message = fmt.Sprintf(format, args...)
+	cf := &v1alpha1.CodeFix{Failing: bad, Previous: good}
+	src, why := f.codeSource(ctx, fix, good, bad)
+	if src == nil {
+		cf.Message = why
 		return cf
 	}
+	cf.Repository, cf.Revision = src.bad.Repository, src.bad.Revision
+	c, why := f.nextChange(ctx, src, cf)
+	if c == nil {
+		cf.Message = why
+		return cf
+	}
+	if err := f.openCode(ctx, fix, cf, src, c, 1); err != nil {
+		cf.Message = err.Error()
+	}
+	return cf
+}
+
+// codeSource is what every fixer works from: the source both images were
+// built from, at the previous image's commit, the failing one's and the
+// branch's head.
+type codeSource struct {
+	co          *Checkout
+	owner, repo string
+	good, bad   codefix.Built
+	goodImage   string
+	in          codefix.Input
+	head        map[string][]byte
+}
+
+func (f *Fixer) codeSource(ctx context.Context, fix *v1alpha1.Fix, good, bad string) (*codeSource, string) {
 	crash := fix.Spec.Crash
 	switch {
 	case crash == nil || len(crash.Frames) == 0 && len(crash.Stack) == 0:
-		return say("the failing revision's logs held no crash stack to start a fix to its code from")
+		return nil, "the failing revision's logs held no crash stack to start a fix to its code from"
 	case !codefix.Reads(crash.Language):
-		return say("fixes to code do not read %s crashes yet", crash.Language)
+		return nil, fmt.Sprintf("fixes to code do not read %s crashes yet", crash.Language)
 	}
 	badSrc, err := f.source(ctx, bad)
 	if err != nil {
-		return say("%v", err)
+		return nil, err.Error()
 	}
 	goodSrc, err := f.source(ctx, good)
 	if err != nil {
-		return say("%v", err)
+		return nil, err.Error()
 	}
 	if goodSrc.Repository != badSrc.Repository {
-		return say("%s and %s come from different repositories, %s and %s", good, bad, goodSrc.Repository, badSrc.Repository)
+		return nil, fmt.Sprintf("%s and %s come from different repositories, %s and %s", good, bad, goodSrc.Repository, badSrc.Repository)
 	}
-	cf.Repository, cf.Revision = badSrc.Repository, badSrc.Revision
 	owner, repo, err := f.Forge.Repo(badSrc.Repository)
 	if err != nil {
-		return say("%v, the only forge the Fixer may write to", err)
+		return nil, fmt.Sprintf("%v, the only forge the Fixer may write to", err)
 	}
 	co, err := CloneHistory(ctx, badSrc.Repository, "", f.auth())
 	if err != nil {
-		return say("%v", err)
+		return nil, err.Error()
 	}
 	before, err := co.FilesAt(goodSrc.Revision)
 	if err != nil {
-		return say("%v", err)
+		return nil, err.Error()
 	}
 	failing, err := co.FilesAt(badSrc.Revision)
 	if err != nil {
-		return say("%v", err)
+		return nil, err.Error()
 	}
 	head, err := co.FilesAt(co.Head)
 	if err != nil {
-		return say("%v", err)
+		return nil, err.Error()
 	}
-	frames := crashFrames(crash)
-	patch, err := codefix.Propose(crash.Language, frames, before, failing)
+	return &codeSource{co: co, owner: owner, repo: repo, good: goodSrc, bad: badSrc, goodImage: good, head: head,
+		in: codefix.Input{Language: crash.Language, Types: crash.Types, Message: crash.Message, Frames: crashFrames(crash), Good: before, Bad: failing}}, ""
+}
+
+// Fixer names, in the order they are tried by default.
+var defaultCodeFixers = []string{"restore", "template", "revert", "llm"}
+
+func (f *Fixer) codeFixers() []string {
+	if len(f.CodeFixers) > 0 {
+		return f.CodeFixers
+	}
+	return defaultCodeFixers
+}
+
+// nextChange is the first change, in the fixers' order, not tried yet that
+// applies at the branch's head; the model is asked only when the fixers
+// that never write new code have none left. It says why when there is
+// none.
+func (f *Fixer) nextChange(ctx context.Context, src *codeSource, cf *v1alpha1.CodeFix) (*codefix.Change, string) {
+	var fixers []codefix.Fixer
+	useLLM := false
+	for _, name := range f.codeFixers() {
+		switch name {
+		case "restore":
+			fixers = append(fixers, codefix.Restorer{})
+		case "template":
+			fixers = append(fixers, codefix.Templates{})
+		case "revert":
+			fixers = append(fixers, codefix.Reverter{})
+		case "llm":
+			useLLM = f.LLM != nil
+		}
+	}
+	changes, refusals := codefix.Fixers(ctx, src.in, fixers...)
+	for _, c := range changes {
+		if tried(cf, c) {
+			continue
+		}
+		atHead, err := codefix.Rebase(c, src.head)
+		if err != nil {
+			refusals = append(refusals, c.Fixer+": "+err.Error())
+			continue
+		}
+		return atHead, ""
+	}
+	if useLLM && llmAttempts(cf) < max(1, f.LLMAttempts) {
+		changes, err := codefix.LLM{Model: f.LLM, Retries: 2, Tried: describeTried(cf)}.Propose(ctx, src.in)
+		if err == nil {
+			atHead, err := codefix.Rebase(changes[0], src.head)
+			if err == nil {
+				return atHead, ""
+			}
+			refusals = append(refusals, "llm: "+err.Error())
+		} else {
+			refusals = append(refusals, "llm: "+err.Error())
+		}
+	}
+	if len(refusals) == 0 {
+		return nil, "every fixer's change has been tried"
+	}
+	return nil, "no fixer has a change to try: " + codefix.Explain(refusals)
+}
+
+// tried reports whether a change is the current one or an earlier one.
+func tried(cf *v1alpha1.CodeFix, c *codefix.Change) bool {
+	summary := strings.Join(c.Summary(), "\n")
+	if cf.Fixer == c.Fixer && strings.Join(cf.Change, "\n") == summary {
+		return true
+	}
+	for _, t := range cf.Tried {
+		if t.Fixer == c.Fixer && strings.Join(t.Change, "\n") == summary {
+			return true
+		}
+	}
+	return false
+}
+
+func llmAttempts(cf *v1alpha1.CodeFix) int {
+	n := 0
+	if cf.Fixer == "llm" {
+		n++
+	}
+	for _, t := range cf.Tried {
+		if t.Fixer == "llm" {
+			n++
+		}
+	}
+	return n
+}
+
+// describeTried tells a model what was tried and why it was not enough.
+func describeTried(cf *v1alpha1.CodeFix) []string {
+	var out []string
+	add := func(fixer string, change []string, verdict, msg string) {
+		if fixer != "" {
+			out = append(out, fmt.Sprintf("%s (%s): %s: %s", fixer, strings.Join(change, "; "), verdict, msg))
+		}
+	}
+	for _, t := range cf.Tried {
+		add(t.Fixer, t.Change, t.Verdict, t.Message)
+	}
+	if cf.Verdict != "" && cf.Verdict != "Passed" {
+		add(cf.Fixer, cf.Change, cf.Verdict, cf.Message)
+	}
+	return out
+}
+
+// codeBranch is the branch of a code fix's attempt: one for the pull
+// request's changes, a new one after a person closed it.
+func codeBranch(fix *v1alpha1.Fix, pr int) string {
+	b := "sentinel/code-fix-" + shortID(fix.Spec.IncidentID)
+	if pr > 1 {
+		b += fmt.Sprintf("-%d", pr)
+	}
+	return b
+}
+
+// openCode pushes a change to a new branch and opens its pull request.
+func (f *Fixer) openCode(ctx context.Context, fix *v1alpha1.Fix, cf *v1alpha1.CodeFix, src *codeSource, c *codefix.Change, pr int) error {
+	title := fmt.Sprintf("Fix the crash in %s that %s brought (%s)", lastPart(c.Function), short(src.bad.Revision), c.Fixer)
+	if c.Fixer == "restore" {
+		title = fmt.Sprintf("Put %s back as it was before %s", lastPart(c.Function), short(src.bad.Revision))
+	}
+	message := fmt.Sprintf("%s\n\nThe crash that made Sentinel roll %s/%s back ran through %s. %s. Incident %s.\n",
+		title, fix.Spec.Workload.Namespace, fix.Spec.Workload.Name, c.Function, c.Why, fix.Spec.IncidentID)
+	branch := codeBranch(fix, pr)
+	commit, err := src.co.PushChange(ctx, c, branch, message, f.Author)
 	if err != nil {
-		return say("%v", err)
+		return err
 	}
-	// The branch's head may have moved on; the fix applies there only if
-	// the function is still as the failing commit left it.
-	atHead, err := codefix.Propose(crash.Language, frames, before, head)
-	if err != nil || atHead.Function != patch.Function || !bytes.Equal(funcText(atHead), funcText(patch)) {
-		return say("%s changed again after %s; a person reconciles the two", patch.Function, short(badSrc.Revision))
-	}
-	title := fmt.Sprintf("Put %s back as it was before %s", lastPart(patch.Function), short(badSrc.Revision))
-	message := fmt.Sprintf("%s\n\nThe crash that made Sentinel roll %s/%s back ran through %s, which %s changed. Incident %s.\n",
-		title, fix.Spec.Workload.Namespace, fix.Spec.Workload.Name, patch.Function, short(badSrc.Revision), fix.Spec.IncidentID)
-	branch := "sentinel/code-fix-" + shortID(fix.Spec.IncidentID)
-	commit, err := co.Push(ctx, &Edit{Path: atHead.Path, Line: atHead.Line, Before: atHead.Before, After: atHead.After, Why: atHead.Why},
-		branch, message, f.Author)
+	opened, err := f.Forge.Open(ctx, src.owner, src.repo, branch, src.co.Branch, title, codeBody(fix, c, src.goodImage, cf.Failing, src.bad, len(f.LabNamespaces) > 0))
 	if err != nil {
-		return say("%v", err)
+		return err
 	}
-	pr, err := f.Forge.Open(ctx, owner, repo, branch, co.Branch, title, codeBody(fix, patch, good, bad, badSrc, len(f.LabNamespaces) > 0))
+	cf.PullRequest, cf.Number, cf.State = opened.URL, int32(min(opened.Number, 1<<30)), "open" //nolint:gosec // bounded just above
+	f.attempt(cf, c, commit)
+	return nil
+}
+
+// attempt makes c the code fix's current change, at commit.
+func (f *Fixer) attempt(cf *v1alpha1.CodeFix, c *codefix.Change, commit string) {
+	cf.Attempt++
+	cf.Fixer, cf.Function, cf.Change, cf.Commit = c.Fixer, c.Function, c.Summary(), commit
+	cf.Image, cf.Verdict = "", ""
+	cf.Message = fmt.Sprintf("proposed by %s; waiting for the source's pipeline to build an image of %s", c.Fixer, short(commit))
+}
+
+// advance moves a code fix on from its current change, which the Lab found
+// does not fix the crash or a person closed, to the next fixer's: on the
+// same pull request, or a new one when the old one is closed. It says so
+// on the pull request, and why there is nothing left when there is not.
+func (f *Fixer) advance(ctx context.Context, fix *v1alpha1.Fix, verdict, why string) {
+	cf := fix.Status.Code
+	cf.Tried = append(cf.Tried, v1alpha1.CodeAttempt{Fixer: cf.Fixer, Change: cf.Change, PullRequest: cf.PullRequest, Commit: cf.Commit,
+		Image: cf.Image, Verdict: verdict, Message: why})
+	if len(cf.Tried) > 10 {
+		cf.Tried = cf.Tried[len(cf.Tried)-10:]
+	}
+	declined := verdict == "Declined"
+	src, msg := f.codeSource(ctx, fix, cf.Previous, cf.Failing)
+	if src == nil {
+		cf.Message = "cannot try another fix: " + msg
+		return
+	}
+	c, reason := f.nextChange(ctx, src, cf)
+	if c == nil {
+		cf.Message = "no other fix to try: " + reason
+		if !declined {
+			f.say(ctx, cf, "No fixer has another change to try: "+reason+". A person takes it from here.")
+		}
+		return
+	}
+	if declined {
+		if err := f.openCode(ctx, fix, cf, src, c, prNumberOf(cf)); err != nil {
+			cf.Message = "could not open another fix: " + err.Error()
+		}
+		return
+	}
+	commit, err := src.co.PushChange(ctx, c, codeBranch(fix, prNumberOf(cf)), fmt.Sprintf("Try %s instead\n\n%s.\n", c.Fixer, c.Why), f.Author)
 	if err != nil {
-		return say("%v", err)
+		cf.Message = "could not push the next fix: " + err.Error()
+		return
 	}
-	cf.Function, cf.PullRequest, cf.Number, cf.Commit = patch.Function, pr.URL, int32(min(pr.Number, 1<<30)), commit //nolint:gosec // bounded just above
-	cf.Change = []string{fmt.Sprintf("%s:%d: %s put back as it was before %s", atHead.Path, atHead.Line, patch.Function, short(badSrc.Revision))}
-	cf.Message = "proposed; waiting for the source's pipeline to build an image of " + short(commit)
-	return cf
+	f.attempt(cf, c, commit)
+	f.say(ctx, cf, fmt.Sprintf("That change did not fix the crash (%s). Sentinel now tries **%s** on this pull request:\n\n- %s\n\n%s.\n\nThe Lab races it once your pipeline builds it.",
+		why, c.Fixer, strings.Join(c.Summary(), "\n- "), c.Why))
+}
+
+// prNumberOf counts the pull requests a code fix has opened, the current
+// one included: one more after each a person closed.
+func prNumberOf(cf *v1alpha1.CodeFix) int {
+	n := 1
+	for _, t := range cf.Tried {
+		if t.Verdict == "Declined" {
+			n++
+		}
+	}
+	return n
+}
+
+// say comments on the code fix's pull request, as far as the forge allows.
+func (f *Fixer) say(ctx context.Context, cf *v1alpha1.CodeFix, body string) {
+	owner, repo, err := f.Forge.Repo(cf.Repository)
+	if err != nil || cf.Number == 0 {
+		return
+	}
+	if err := f.Forge.Comment(ctx, owner, repo, int(cf.Number), body); err != nil {
+		f.Log.Error("could not comment on a fix to the code", "pullRequest", cf.PullRequest, "error", err)
+	}
+}
+
+// codeClosed follows the code fix's pull request: once merged it is done,
+// and once a person closes it unmerged the Fixer tries the next fixer's
+// change in a new one. It reports whether the status changed.
+func (f *Fixer) codeClosed(ctx context.Context, fix *v1alpha1.Fix) bool {
+	cf := fix.Status.Code
+	if cf == nil || cf.Number == 0 || cf.State != "open" {
+		return false
+	}
+	owner, repo, err := f.Forge.Repo(cf.Repository)
+	if err != nil {
+		return false
+	}
+	pr, err := f.Forge.Get(ctx, owner, repo, int(cf.Number))
+	switch {
+	case err != nil:
+		return false
+	case pr.Merged:
+		cf.State, cf.Message = "merged", "merged as "+pr.MergeCommit
+		return true
+	case pr.State == "closed":
+		cf.State = "closed"
+		f.advance(ctx, fix, "Declined", "a person closed the pull request without merging it")
+		return true
+	}
+	return false
 }
 
 // crashFrames are the crash's frames, with where each ran when the runtime
@@ -136,31 +368,6 @@ func (f *Fixer) source(ctx context.Context, image string) (codefix.Built, error)
 	return codefix.ResolveSource(image, labels)
 }
 
-// funcText is the function a patch puts back, as the file had it.
-func funcText(p *codefix.Patch) []byte {
-	start, end := commonPrefix(p.Before, p.After), commonSuffix(p.Before, p.After)
-	if start+end > len(p.Before) {
-		return nil
-	}
-	return p.Before[start : len(p.Before)-end]
-}
-
-func commonPrefix(a, b []byte) int {
-	n := 0
-	for n < len(a) && n < len(b) && a[n] == b[n] {
-		n++
-	}
-	return n
-}
-
-func commonSuffix(a, b []byte) int {
-	n := 0
-	for n < len(a) && n < len(b) && a[len(a)-1-n] == b[len(b)-1-n] {
-		n++
-	}
-	return n
-}
-
 func lastPart(fn string) string {
 	if i := strings.LastIndexByte(fn, '.'); i >= 0 {
 		return fn[i+1:]
@@ -170,21 +377,31 @@ func lastPart(fn string) string {
 
 func short(rev string) string { return rev[:min(len(rev), 12)] }
 
-func codeBody(fix *v1alpha1.Fix, p *codefix.Patch, good, bad string, src codefix.Built, raced bool) string {
+func codeBody(fix *v1alpha1.Fix, c *codefix.Change, good, bad string, src codefix.Built, raced bool) string {
 	w := fix.Spec.Workload
-	checked := "It is not checked yet: once your pipeline builds an image from this branch, Sentinel races it against the failing one in its Lab and says here whether it fixes the crash."
+	checked := "It is not checked yet: once your pipeline builds an image from this branch, Sentinel races it against the failing one in its Lab and says here whether it fixes the crash. If it does not, Sentinel tries the next fixer's change on this pull request."
 	if !raced {
 		checked = "It is not checked: no Lab is installed to race an image built from this branch against the failing one."
 	}
-	return fmt.Sprintf(`Sentinel rolled **%s/%s** back from %s to %s after it crashed. The crash's stack ran through %s, which commit %s changed.
+	what := "This pull request puts that function back as it was before the commit, and leaves the commit's other changes as they are."
+	switch {
+	case strings.HasPrefix(c.Fixer, "template:"):
+		what = "This pull request changes only the line that crashed, or guards it, with a fixed template (" + strings.TrimPrefix(c.Fixer, "template:") + "). A guard can hide a bug as well as fix it: read it as a stopgap."
+	case c.Fixer == "revert":
+		what = "This pull request undoes the culprit commit: every file it changed, put back as it was."
+	case c.Fixer == "llm":
+		what = "This pull request's change was written by a language model, after the fixers that never write new code had none that held. Read it as you would a stranger's: it never merges itself."
+	}
+	return fmt.Sprintf(`Sentinel rolled **%s/%s** back from %s to %s after it crashed. The crash's stack ran through %s, and commit %s changed it.
 
-This pull request puts that function back as it was before the commit, and leaves the commit's other changes as they are. %s
+%s %s
 
-- **What changes**: %s, line %d.
+- **What changes**: %s.
 - **Why there**: %s.
 
 Incident %s.
-`, w.Namespace, w.Name, "`"+bad+"`", "`"+good+"`", "`"+p.Function+"`", short(src.Revision), checked, "`"+p.Path+"`", p.Line, p.Why, fix.Spec.IncidentID)
+`, w.Namespace, w.Name, "`"+bad+"`", "`"+good+"`", "`"+c.Function+"`", short(src.Revision), what, checked,
+		strings.Join(c.Summary(), "; "), c.Why, fix.Spec.IncidentID)
 }
 
 // awaitBuild looks for the image the source's pipeline built from a code
@@ -231,7 +448,7 @@ func (f *Fixer) reportVerdict(ctx context.Context, fix *v1alpha1.Fix) bool {
 	if cf == nil || cf.Image == "" || cf.Verdict != "" || cf.Number == 0 || len(f.LabNamespaces) == 0 {
 		return false
 	}
-	name := verify.CodeExperimentName(model.ID(fix.Spec.IncidentID))
+	name := verify.CodeExperimentName(model.ID(fix.Spec.IncidentID), cf.Image)
 	for _, ns := range f.LabNamespaces {
 		u, err := f.Dynamic.Resource(verify.ExperimentsResource).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
 		if err != nil {
@@ -268,6 +485,11 @@ func (f *Fixer) reportVerdict(ctx context.Context, fix *v1alpha1.Fix) bool {
 				return false
 			}
 			cf.Message += "; the forge refused the comment that says so on the pull request: " + err.Error()
+		}
+		// A change the Lab ran and found wanting gives way to the next
+		// fixer's; a Lab that could not run says nothing about the change.
+		if phase == "Failed" || phase == "NotSure" && runs > 0 {
+			f.advance(ctx, fix, phase, msg)
 		}
 		return true
 	}

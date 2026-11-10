@@ -240,7 +240,9 @@ var recipes = []recipe{
 	},
 	{
 		name: "start-empty", languages: []string{"python"},
-		matches: func(t []string, m string) bool { return anyContains(t, m, "'NoneType' object does not support item assignment") },
+		matches: func(t []string, m string) bool {
+			return anyContains(t, m, "'NoneType' object does not support item assignment")
+		},
 		apply: func(s site, src []byte, _ string) ([]byte, string, error) {
 			m := identAssign.FindStringSubmatch(s.text)
 			if m == nil {
@@ -276,7 +278,9 @@ var recipes = []recipe{
 	},
 	{
 		name: "optional-chaining", languages: []string{"node"},
-		matches: func(t []string, m string) bool { return anyContains(t, m, "Cannot read properties of undefined", "Cannot read properties of null") },
+		matches: func(t []string, m string) bool {
+			return anyContains(t, m, "Cannot read properties of undefined", "Cannot read properties of null")
+		},
 		apply: func(s site, src []byte, message string) ([]byte, string, error) {
 			m := jsReading.FindStringSubmatch(message)
 			if m == nil {
@@ -305,7 +309,9 @@ var recipes = []recipe{
 	},
 	{
 		name: "or-default", languages: []string{"dotnet"},
-		matches: func(t []string, m string) bool { return anyContains(t, m, "Sequence contains no elements", "Sequence contains no matching element") },
+		matches: func(t []string, m string) bool {
+			return anyContains(t, m, "Sequence contains no elements", "Sequence contains no matching element")
+		},
 		apply: func(s site, src []byte, _ string) ([]byte, string, error) {
 			for _, call := range []string{"First", "Single", "Last"} {
 				if i := strings.Index(s.text, "."+call+"("); i >= 0 {
@@ -318,7 +324,9 @@ var recipes = []recipe{
 	},
 	{
 		name: "safe-navigation", languages: []string{"ruby"},
-		matches: func(t []string, m string) bool { return anyContains(t, m, "NoMethodError") && anyContains(t, m, "for nil") },
+		matches: func(t []string, m string) bool {
+			return anyContains(t, m, "NoMethodError") && anyContains(t, m, "for nil")
+		},
 		apply: func(s site, src []byte, message string) ([]byte, string, error) {
 			m := rubyNilMethod.FindStringSubmatch(message)
 			if m == nil {
@@ -490,4 +498,3 @@ func javaReturn(f *fn) string {
 	}
 	return "return null;"
 }
-

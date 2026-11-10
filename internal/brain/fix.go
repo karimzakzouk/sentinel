@@ -197,7 +197,7 @@ func (b *Brain) OnFixUpdate(ctx context.Context, u FixUpdate) error {
 }
 
 func sameCode(a, b model.FixCode) bool {
-	return a.PullRequest == b.PullRequest && a.Image == b.Image && a.Verdict == b.Verdict && a.Message == b.Message
+	return a.PullRequest == b.PullRequest && a.Image == b.Image && a.Verdict == b.Verdict && a.Message == b.Message && a.Attempt == b.Attempt
 }
 
 // onCode records a step of the fix to the failing image's code and tells
@@ -210,11 +210,14 @@ func (b *Brain) onCode(ctx context.Context, f *model.Fix, u FixUpdate) []ledger.
 	target := f.Target.String()
 	var drafts []ledger.Draft
 	switch {
-	case now.PullRequest != "" && (prev == nil || prev.PullRequest == ""):
+	case now.PullRequest != "" && (prev == nil || prev.PullRequest != now.PullRequest):
 		b.tell(ctx, notify.KindApproval, u.IncidentID, f.Target, "Sentinel proposes a fix to "+target+"'s code: "+now.PullRequest,
 			strings.Join(now.Change, "\n")+"\nOnce your pipeline builds it, the Lab races it against the failing image.")
-	case now.Image != "" && (prev == nil || prev.Image == ""):
+	case now.Image != "" && (prev == nil || prev.Image != now.Image):
 		drafts = append(drafts, b.askCodeLab(ctx, f, now.Image)...)
+	case prev != nil && now.Attempt > prev.Attempt:
+		b.tell(ctx, notify.KindApproval, u.IncidentID, f.Target, "Sentinel tries another fix to "+target+"'s code: "+now.PullRequest,
+			strings.Join(now.Change, "\n")+"\n"+now.Message)
 	}
 	b.Log.Info("fix to the code", "incident", u.IncidentID, "target", target, "pullRequest", now.PullRequest, "image", now.Image,
 		"verdict", now.Verdict, "message", now.Message)

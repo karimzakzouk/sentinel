@@ -3,6 +3,7 @@ package fixer
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -42,6 +43,10 @@ type forgeServer struct {
 	openedCode map[string]string
 	comments   []string
 	merged     string
+	// codePRs counts the source's pull requests opened, numbered from 2;
+	// closed are those a person closed unmerged.
+	codePRs int
+	closed  map[string]bool
 }
 
 func newForge(t *testing.T, root string) *forgeServer {
@@ -61,7 +66,16 @@ func newForge(t *testing.T, root string) *forgeServer {
 		_ = json.NewDecoder(r.Body).Decode(&f.opened)
 		_, _ = io.WriteString(w, `{"number": 1, "html_url": "`+f.URL+`/sentinel/delivery/pulls/1", "state": "open"}`)
 	})
-	mux.HandleFunc("POST /api/v1/repos/sentinel/shop/issues/2/comments", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /api/v1/repos/sentinel/shop/pulls/{n}", func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		state := "open"
+		if f.closed[r.PathValue("n")] {
+			state = "closed"
+		}
+		_, _ = io.WriteString(w, `{"number": `+r.PathValue("n")+`, "state": "`+state+`"}`)
+	})
+	mux.HandleFunc("POST /api/v1/repos/sentinel/shop/issues/{n}/comments", func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		var c map[string]string
@@ -73,7 +87,9 @@ func newForge(t *testing.T, root string) *forgeServer {
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		_ = json.NewDecoder(r.Body).Decode(&f.openedCode)
-		_, _ = io.WriteString(w, `{"number": 2, "html_url": "`+f.URL+`/sentinel/shop/pulls/2", "state": "open"}`)
+		f.codePRs++
+		n := fmt.Sprint(f.codePRs + 1)
+		_, _ = io.WriteString(w, `{"number": `+n+`, "html_url": "`+f.URL+`/sentinel/shop/pulls/`+n+`", "state": "open"}`)
 	})
 	mux.HandleFunc("GET /api/v1/repos/sentinel/delivery/pulls/1", func(w http.ResponseWriter, _ *http.Request) {
 		f.mu.Lock()

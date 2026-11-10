@@ -189,7 +189,8 @@ func newObserver(ctx context.Context, log *slog.Logger, cfg *config.Config, clie
 				s := u.Status
 				var code *model.FixCode
 				if c := s.Code; c != nil {
-					code = &model.FixCode{PullRequest: c.PullRequest, Function: c.Function, Change: c.Change, Image: c.Image, Verdict: c.Verdict, Message: c.Message}
+					code = &model.FixCode{PullRequest: c.PullRequest, Fixer: c.Fixer, Attempt: int(c.Attempt), Function: c.Function, Change: c.Change, Image: c.Image,
+						Verdict: c.Verdict, Message: c.Message}
 				}
 				if err := b.OnFixUpdate(ctx, brain.FixUpdate{IncidentID: u.IncidentID, Fix: u.Name, Phase: string(s.Phase), Message: s.Message,
 					Owner: s.Owner, Resume: s.Resume, Repository: s.Repository, PullRequest: s.PullRequest, MergeCommit: s.MergeCommit,

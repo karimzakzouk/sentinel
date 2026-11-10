@@ -24,6 +24,7 @@ import (
 	"github.com/karimzakzouk/sentinel/internal/forge"
 	"github.com/karimzakzouk/sentinel/internal/kube"
 	"github.com/karimzakzouk/sentinel/internal/lead"
+	"github.com/karimzakzouk/sentinel/internal/llm"
 	"github.com/karimzakzouk/sentinel/internal/version"
 )
 
@@ -62,6 +63,16 @@ type FixerConfig struct {
 		Platform           string   `json:"platform,omitempty"`
 		// LabNamespaces are where the Lab races images built from fixes.
 		LabNamespaces []string `json:"labNamespaces,omitempty"`
+		// Fixers are tried in order: restore, template, revert and llm.
+		Fixers []string `json:"fixers,omitempty"`
+		// LLM, when set, is the model the llm fixer asks.
+		LLM *struct {
+			Format      llm.Format `json:"format,omitempty"`
+			URL         string     `json:"url"`
+			Model       string     `json:"model"`
+			KeyFile     string     `json:"keyFile,omitempty"`
+			MaxAttempts int        `json:"maxAttempts,omitempty"`
+		} `json:"llm,omitempty"`
 	} `json:"code,omitempty"`
 }
 
@@ -86,6 +97,16 @@ func loadFixerConfig(path string) (FixerConfig, error) {
 	}
 	if c.Forge.User == "" {
 		c.Forge.User = gitUsers[c.Forge.Kind]
+	}
+	if c.Code != nil {
+		for _, name := range c.Code.Fixers {
+			if !slices.Contains([]string{"restore", "template", "revert", "llm"}, name) {
+				return FixerConfig{}, fmt.Errorf("code.fixers names %q: use restore, template, revert or llm", name)
+			}
+		}
+		if m := c.Code.LLM; m != nil && (m.URL == "" || m.Model == "" || m.Format != "" && m.Format != llm.OpenAI && m.Format != llm.Anthropic) {
+			return FixerConfig{}, errors.New("code.llm needs a url, a model, and a format of openai or anthropic")
+		}
 	}
 	if c.Author.Name == "" {
 		c.Author.Name = "Sentinel"
@@ -143,6 +164,19 @@ func newFixerCmd(kf *kube.Flags) *cobra.Command {
 			if c := cfg.Code; c != nil {
 				f.Registry = &codefix.Registry{HTTP: &http.Client{Timeout: 30 * time.Second}, Insecure: c.InsecureRegistries, Platform: c.Platform}
 				f.LabNamespaces = c.LabNamespaces
+				f.CodeFixers = c.Fixers
+				if m := c.LLM; m != nil {
+					key := ""
+					if m.KeyFile != "" {
+						raw, err := os.ReadFile(m.KeyFile)
+						if err != nil {
+							return fmt.Errorf("read the model API's key: %w", err)
+						}
+						key = strings.TrimSpace(string(raw))
+					}
+					f.LLM = &llm.Client{Format: m.Format, URL: m.URL, Model: m.Model, Key: key, HTTP: &http.Client{Timeout: 5 * time.Minute}}
+					f.LLMAttempts = m.MaxAttempts
+				}
 			}
 			ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGTERM, os.Interrupt)
 			defer stop()
