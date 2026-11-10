@@ -80,6 +80,10 @@ func ActorRules(ns string) []Rule {
 // ForbiddenRules are permissions Sentinel's identities must never hold. Each
 // one would let a compromised Sentinel read credentials, run code in other
 // workloads, or raise its own privileges.
+//
+// Creating RoleBindings is intentionally allowed: day-2 watch sync binds the
+// watch/act ClusterRoles into chosen namespaces. Escalation is limited by the
+// ClusterRole bind rule's resourceNames, not by denying RoleBinding create.
 func ForbiddenRules(namespaces []string) []Rule {
 	rules := []Rule{
 		{Verb: "list", Resource: "secrets"},
@@ -99,7 +103,6 @@ func ForbiddenRules(namespaces []string) []Rule {
 			Rule{Verb: "create", Resource: "pods", Subresource: "exec", Namespace: ns},
 			Rule{Verb: "create", Resource: "serviceaccounts", Subresource: "token", Namespace: ns},
 			Rule{Verb: "create", Group: "apps", Resource: "deployments", Namespace: ns},
-			Rule{Verb: "create", Group: "rbac.authorization.k8s.io", Resource: "rolebindings", Namespace: ns},
 		)
 	}
 	return rules
