@@ -67,6 +67,11 @@ const (
 	pythonDone   // after the exception line: only a chained traceback continues
 	nodeStack
 	dotnetStack
+	phpStack
+	rustPanic // after the header: the next line is the panic's message
+	rustAfter
+	nativeSignal
+	backwardStack
 )
 
 // Add takes the next line and returns the records it completed.
@@ -152,6 +157,16 @@ func (a *Assembler) continues(text string) bool {
 		return indented(text) || hasAnyPrefix(text, "Caused by: ", "Suppressed: ")
 	case nodeStack:
 		return indented(text) || strings.HasPrefix(text, "Node.js v")
+	case phpStack:
+		return indented(text) || hasAnyPrefix(text, "Stack trace:", "#", "PHP Stack trace:")
+	case rustPanic:
+		return true
+	case rustAfter:
+		return indented(text) || hasAnyPrefix(text, "note: ", "stack backtrace:")
+	case nativeSignal:
+		return indented(text) || hasAnyPrefix(text, "PC: @", "@ ", "*** ")
+	case backwardStack:
+		return indented(text) || backwardEntry.MatchString(text)
 	}
 	return indented(text)
 }
@@ -176,6 +191,8 @@ func (a *Assembler) advance(text string) {
 		if strings.HasPrefix(text, "Traceback (most recent call last):") {
 			a.state = pythonFrames
 		}
+	case rustPanic:
+		a.state = rustAfter
 	}
 }
 
@@ -191,6 +208,14 @@ func startState(text string) state {
 		return javaStack
 	case jsError(text):
 		return nodeStack
+	case phpUncaught(text):
+		return phpStack
+	case strings.HasPrefix(text, "thread '") && strings.Contains(text, "' panicked at "):
+		return rustPanic
+	case signalHeader.MatchString(text), strings.HasPrefix(text, "*** Aborted at "):
+		return nativeSignal
+	case strings.HasPrefix(text, "Stack trace (most recent call last)"):
+		return backwardStack
 	}
 	return plain
 }

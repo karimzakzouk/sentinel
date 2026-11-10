@@ -75,6 +75,29 @@ spec:
                     description: Language is the runtime that printed it, such as
                       go.
                     type: string
+                  stack:
+                    description: |-
+                      Stack is the same frames with where each ran, where the runtime
+                      printed it.
+                    items:
+                      description: CrashFrame is one frame of a crash's stack.
+                      properties:
+                        file:
+                          description: File is the source file it ran in, as the runtime
+                            printed it.
+                          type: string
+                        function:
+                          description: |-
+                            Function is the frame's function, as the runtime named it; empty
+                            when it printed only where.
+                          type: string
+                        line:
+                          format: int32
+                          type: integer
+                      type: object
+                    maxItems: 20
+                    type: array
+                    x-kubernetes-list-type: atomic
                 required:
                 - frames
                 - language

@@ -19,6 +19,8 @@ func TestStackTracesBecomeOneRecord(t *testing.T) {
 	for name, trace := range map[string]string{
 		"go": goPanicTrace, "java": javaTrace, "python": pythonTrace, "python chained": pythonChainedTrace,
 		"node": nodeTrace, "dotnet": dotnetTrace, "logged java": loggedJavaTrace,
+		"ruby": rubyTrace, "php": phpTrace, "rust": rustTrace, "rust, short": rustShortTrace,
+		"glibc assert": glibcAssertTrace, "abseil": abseilTrace, "backward-cpp": backwardTrace,
 	} {
 		t.Run(name, func(t *testing.T) {
 			recs := Assemble(lines(before + "\n" + trace + "\n" + after))

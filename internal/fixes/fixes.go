@@ -82,6 +82,9 @@ func (f *Fixes) Fix(ctx context.Context, r brain.FixRequest) (string, error) {
 	}
 	if c := r.Crash; c != nil {
 		fix.Spec.Crash = &v1alpha1.Crash{Language: c.Language, Frames: c.Frames[:min(len(c.Frames), 20)]}
+		for _, f := range c.Stack[:min(len(c.Stack), 20)] {
+			fix.Spec.Crash.Stack = append(fix.Spec.Crash.Stack, v1alpha1.CrashFrame{Function: f.Function, File: f.File, Line: int32(min(f.Line, 1<<30))}) //nolint:gosec // bounded just above
+		}
 	}
 	obj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(fix)
 	if err != nil {
