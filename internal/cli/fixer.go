@@ -44,6 +44,13 @@ type FixerConfig struct {
 		// TokenFile holds the forge token; User is who Git pushes as.
 		TokenFile string `json:"tokenFile"`
 		User      string `json:"user"`
+		// App, on GitHub, has the Fixer act as a GitHub App installation,
+		// with tokens good for an hour, instead of with TokenFile's.
+		App *struct {
+			ID             int64  `json:"id"`
+			InstallationID int64  `json:"installationId"`
+			KeyFile        string `json:"keyFile"`
+		} `json:"app,omitempty"`
 	} `json:"forge"`
 	Author struct {
 		Name  string `json:"name"`
@@ -93,7 +100,11 @@ func loadFixerConfig(path string) (FixerConfig, error) {
 		return FixerConfig{}, errors.New("namespace is empty: name where Fix requests live")
 	case c.Forge.Web == "" || c.Forge.API == "":
 		return FixerConfig{}, errors.New("forge.web and forge.api must name the forge the Fixer proposes changes on")
-	case c.Forge.TokenFile == "":
+	case c.Forge.App != nil && (c.Forge.App.ID == 0 || c.Forge.App.InstallationID == 0 || c.Forge.App.KeyFile == ""):
+		return FixerConfig{}, errors.New("forge.app needs the App's id, its installation's id and its private key's file")
+	case c.Forge.App != nil && c.Forge.Kind != "" && c.Forge.Kind != forge.GitHub:
+		return FixerConfig{}, errors.New("forge.app is for GitHub")
+	case c.Forge.TokenFile == "" && c.Forge.App == nil:
 		return FixerConfig{}, errors.New("forge.tokenFile is empty: the Fixer needs a token to push and open pull requests")
 	case c.Forge.Kind != "" && !slices.Contains(forge.Kinds, c.Forge.Kind):
 		return FixerConfig{}, fmt.Errorf("forge.kind %q is none of %v", c.Forge.Kind, forge.Kinds)
@@ -139,12 +150,26 @@ func newFixerCmd(kf *kube.Flags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			token, err := os.ReadFile(cfg.Forge.TokenFile)
-			if err != nil {
-				return fmt.Errorf("read the forge token: %w", err)
-			}
-			if strings.TrimSpace(string(token)) == "" {
-				return fmt.Errorf("%s is empty: the Fixer needs a token to push and open pull requests", cfg.Forge.TokenFile)
+			var token []byte
+			var app *forge.App
+			if a := cfg.Forge.App; a != nil {
+				pemKey, err := os.ReadFile(a.KeyFile)
+				if err != nil {
+					return fmt.Errorf("read the GitHub App's private key: %w", err)
+				}
+				key, err := forge.ParseAppKey(pemKey)
+				if err != nil {
+					return err
+				}
+				app = &forge.App{ID: a.ID, InstallationID: a.InstallationID, Key: key, API: cfg.Forge.API}
+			} else {
+				var err error
+				if token, err = os.ReadFile(cfg.Forge.TokenFile); err != nil {
+					return fmt.Errorf("read the forge token: %w", err)
+				}
+				if strings.TrimSpace(string(token)) == "" {
+					return fmt.Errorf("%s is empty: the Fixer needs a token to push and open pull requests", cfg.Forge.TokenFile)
+				}
 			}
 			log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 			rc, err := kf.RESTConfig(version.UserAgent("fixer"))
@@ -160,7 +185,7 @@ func newFixerCmd(kf *kube.Flags) *cobra.Command {
 				return err
 			}
 			f := &fixer.Fixer{Client: client, Dynamic: dyn, Namespace: cfg.Namespace, GitUser: cfg.Forge.User,
-				Forge: &forge.Client{Kind: cfg.Forge.Kind, Web: cfg.Forge.Web, API: cfg.Forge.API, Token: strings.TrimSpace(string(token)),
+				Forge: &forge.Client{Kind: cfg.Forge.Kind, Web: cfg.Forge.Web, API: cfg.Forge.API, Token: strings.TrimSpace(string(token)), App: app,
 					HTTP: &http.Client{Timeout: time.Minute}},
 				Author:          object.Signature{Name: cfg.Author.Name, Email: cfg.Author.Email},
 				ArgoCDNamespace: cfg.ArgoCDNamespace, Poll: cfg.Poll, Log: log}

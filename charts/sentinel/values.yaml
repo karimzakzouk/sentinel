@@ -152,6 +152,14 @@ fixer:
     secretName: ""
     key: token
     user: ""
+    # On GitHub, act as a GitHub App instead of with a token: the App's id,
+    # its installation's id, and its private key under app.key in the same
+    # Secret. Its tokens last an hour and reach only the repositories it is
+    # installed on, with contents, pull requests and issues write.
+    app:
+      id: 0
+      installationId: 0
+      key: private-key.pem
   # The author of the Fixer's commits.
   author:
     name: Sentinel

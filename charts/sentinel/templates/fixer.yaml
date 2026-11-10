@@ -6,7 +6,14 @@ forge:
   {{- end }}
   web: {{ .Values.fixer.forge.web | quote }}
   api: {{ .Values.fixer.forge.api | quote }}
+  {{- if .Values.fixer.forge.app.id }}
+  app:
+    id: {{ int64 .Values.fixer.forge.app.id }}
+    installationId: {{ int64 .Values.fixer.forge.app.installationId }}
+    keyFile: /var/run/sentinel-fixer/app-key.pem
+  {{- else }}
   tokenFile: /var/run/sentinel-fixer/token
+  {{- end }}
   user: {{ .Values.fixer.forge.user | quote }}
 author:
   name: {{ .Values.fixer.author.name | quote }}
@@ -153,8 +160,13 @@ spec:
           secret:
             secretName: {{ .Values.fixer.forge.secretName }}
             items:
+              {{- if .Values.fixer.forge.app.id }}
+              - key: {{ .Values.fixer.forge.app.key }}
+                path: app-key.pem
+              {{- else }}
               - key: {{ .Values.fixer.forge.key }}
                 path: token
+              {{- end }}
         {{- if and .Values.fixer.code.enabled .Values.fixer.code.llm.url .Values.fixer.code.llm.secretName }}
         - name: llm-key
           secret:
