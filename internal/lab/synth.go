@@ -207,7 +207,7 @@ func Synthesize(w World, target model.ObjectRef, ns string) (*Plan, error) {
 			plan.Pods = append(plan.Pods, fake.Pod)
 			plan.Secrets = append(plan.Secrets, fake.Secrets...)
 			if fake.Recorded {
-				note("%s's %s is a fake of the outside service from captured traffic; unmatched HTTP calls answer 404; gRPC calls get the recorded status with an empty payload", ref, host)
+				note("%s's %s is a fake of the outside service from captured traffic; unmatched HTTP calls answer 404; gRPC calls get the recorded status and a captured response body when present, otherwise an empty payload", ref, host)
 			} else {
 				note("%s's %s is a Lab fake of the outside host (no captured statuses)", ref, host)
 			}
