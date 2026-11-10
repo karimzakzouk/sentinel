@@ -143,6 +143,8 @@ spec:
         object.spec.?volumeClaimTemplates == oldObject.spec.?volumeClaimTemplates &&
         object.spec.?persistentVolumeClaimRetentionPolicy == oldObject.spec.?persistentVolumeClaimRetentionPolicy
       message: "Sentinel may not change a StatefulSet's identity, storage or rollout settings"
+    - expression: "object.spec.template.metadata.?labels == oldObject.spec.template.metadata.?labels"
+      message: "Sentinel may not change a StatefulSet's pod labels, which its selector and its pods' identity rest on"
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding
@@ -180,6 +182,8 @@ spec:
         object.spec.?minReadySeconds == oldObject.spec.?minReadySeconds &&
         object.spec.?revisionHistoryLimit == oldObject.spec.?revisionHistoryLimit
       message: "Sentinel may not change a DaemonSet's rollout settings"
+    - expression: "object.spec.template.metadata.?labels == oldObject.spec.template.metadata.?labels"
+      message: "Sentinel may not change a DaemonSet's pod labels, which its selector rests on"
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding
