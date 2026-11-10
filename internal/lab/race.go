@@ -34,9 +34,10 @@ const (
 var holdFor = 20 * time.Second
 
 // Traffic is what each run sends its copy once the copy is ready: reads
-// traffic capture saw production answer.
+// traffic capture saw production answer, and writes it kept with bodies.
 type Traffic struct {
 	Requests []v1alpha1.ReplayRequest
+	Writes   []v1alpha1.WriteReplay
 	// ServerErrors are forgiven where the world's datastores are empty, so
 	// a read may fail for want of data; a read not answered at all is not.
 	ServerErrors bool
@@ -72,7 +73,9 @@ type racePod struct {
 	ready   time.Time
 	// replay is the pod replaying traffic to the copy, once it started.
 	replay string
-	ok     *bool
+	// writeReplay is the pod replaying writes to the copy, once it started.
+	writeReplay string
+	ok          *bool
 }
 
 // RunRace runs blocks of the baseline and every variant, each block's pods
@@ -105,7 +108,7 @@ func (p *Prover) RunRace(ctx context.Context, ns string, built *Built, dns *core
 		}
 		err := p.watchRuns(ctx, ns, pods, traffic)
 		for _, rp := range pods {
-			for _, name := range []string{rp.name, rp.replay} {
+			for _, name := range []string{rp.name, rp.replay, rp.writeReplay} {
 				if name != "" {
 					_ = core.Pods(ns).Delete(context.WithoutCancel(ctx), name, metav1.DeleteOptions{GracePeriodSeconds: ptr.To[int64](0)})
 				}
@@ -166,15 +169,18 @@ func (p *Prover) watchRuns(ctx context.Context, ns string, pods []*racePod, traf
 				if err := p.startReplay(ctx, ns, rp, pod, traffic); err != nil {
 					return err
 				}
+				if err := p.startWriteReplay(ctx, ns, rp, pod, traffic); err != nil {
+					return err
+				}
 				if now.Sub(rp.ready) < holdFor {
 					break
 				}
-				answered, err := p.replayed(ctx, ns, rp, traffic)
+				ok, err := p.replayed(ctx, ns, rp, traffic)
 				switch {
 				case err != nil:
 					return err
-				case answered != nil:
-					rp.ok = answered
+				case ok != nil:
+					rp.ok = ok
 				case now.Sub(rp.ready) > holdFor+readyWithin:
 					return fmt.Errorf("the traffic replayed to run %s did not finish", rp.name)
 				}
@@ -227,31 +233,79 @@ func (p *Prover) startReplay(ctx context.Context, ns string, rp *racePod, copied
 	return nil
 }
 
+// startWriteReplay starts the pod that sends a ready copy its captured
+// writes, unless there is none, or the Lab's quota has no room for it yet.
+func (p *Prover) startWriteReplay(ctx context.Context, ns string, rp *racePod, copied *corev1.Pod, traffic Traffic) error {
+	if len(traffic.Writes) == 0 || rp.writeReplay != "" || copied.Status.PodIP == "" {
+		return nil
+	}
+	var ports []int32
+	for _, w := range traffic.Writes {
+		ports = append(ports, w.Port)
+	}
+	pod := p.seal(writeReplayPod(ns, rp.name+"-write-replay", copied.Status.PodIP, traffic.Writes), podAllow(copied.Status.PodIP, ports...))
+	_, err := p.Client.CoreV1().Pods(ns).Create(ctx, pod, metav1.CreateOptions{})
+	switch {
+	case err == nil:
+		rp.writeReplay = pod.Name
+	case apierrors.IsForbidden(err) && strings.Contains(err.Error(), "exceeded quota"):
+	default:
+		return fmt.Errorf("write replay traffic to run %s: %w", rp.name, err)
+	}
+	return nil
+}
+
 // replayed reports whether a run's copy answered its traffic: true without
-// traffic, nil while the replay has not finished.
+// traffic, nil while a replay has not finished.
 func (p *Prover) replayed(ctx context.Context, ns string, rp *racePod, traffic Traffic) (*bool, error) {
-	if len(traffic.Requests) == 0 {
+	if len(traffic.Requests) == 0 && len(traffic.Writes) == 0 {
 		return ptr.To(true), nil
 	}
-	if rp.replay == "" {
-		return nil, nil
+	readOK := true
+	if len(traffic.Requests) > 0 {
+		if rp.replay == "" {
+			return nil, nil
+		}
+		pod, err := p.Client.CoreV1().Pods(ns).Get(ctx, rp.replay, metav1.GetOptions{})
+		if err != nil {
+			return nil, fmt.Errorf("watch the replay to run %s: %w", rp.name, err)
+		}
+		switch pod.Status.Phase {
+		case corev1.PodSucceeded:
+		case corev1.PodFailed:
+			return nil, fmt.Errorf("the replay to run %s failed: %s", rp.name, podState(pod))
+		default:
+			return nil, nil
+		}
+		codes, err := replayCodes(terminationMessage(pod), len(traffic.Requests))
+		if err != nil {
+			return nil, fmt.Errorf("the replay to run %s: %w", rp.name, err)
+		}
+		readOK = answered(codes, traffic.ServerErrors)
 	}
-	pod, err := p.Client.CoreV1().Pods(ns).Get(ctx, rp.replay, metav1.GetOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("watch the replay to run %s: %w", rp.name, err)
+	writeOK := true
+	if len(traffic.Writes) > 0 {
+		if rp.writeReplay == "" {
+			return nil, nil
+		}
+		pod, err := p.Client.CoreV1().Pods(ns).Get(ctx, rp.writeReplay, metav1.GetOptions{})
+		if err != nil {
+			return nil, fmt.Errorf("watch the write replay to run %s: %w", rp.name, err)
+		}
+		switch pod.Status.Phase {
+		case corev1.PodSucceeded:
+		case corev1.PodFailed:
+			return nil, fmt.Errorf("the write replay to run %s failed: %s", rp.name, podState(pod))
+		default:
+			return nil, nil
+		}
+		codes, err := writeReplayCodes(terminationMessage(pod), len(traffic.Writes))
+		if err != nil {
+			return nil, fmt.Errorf("the write replay to run %s: %w", rp.name, err)
+		}
+		writeOK = writesAnswered(codes, traffic.Writes, traffic.ServerErrors)
 	}
-	switch pod.Status.Phase {
-	case corev1.PodSucceeded:
-	case corev1.PodFailed:
-		return nil, fmt.Errorf("the replay to run %s failed: %s", rp.name, podState(pod))
-	default:
-		return nil, nil
-	}
-	codes, err := replayCodes(terminationMessage(pod), len(traffic.Requests))
-	if err != nil {
-		return nil, fmt.Errorf("the replay to run %s: %w", rp.name, err)
-	}
-	return ptr.To(answered(codes, traffic.ServerErrors)), nil
+	return ptr.To(readOK && writeOK), nil
 }
 
 // answered reports whether a copy answered every replayed read, without a
