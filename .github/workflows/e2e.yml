@@ -45,6 +45,7 @@ jobs:
     uses: ./.github/workflows/e2e-run.yml
     with:
       network: kindnet
-      # The Lab's tests run on the self-hosted runner, with every network
-      # plugin (E2E network plugins).
+      # Hosted Actions minutes are spent; run on the Azure self-hosted
+      # runner. The Lab's full matrix stays in E2E network plugins.
+      self-hosted: true
       skip: TestTheLab|TestALab

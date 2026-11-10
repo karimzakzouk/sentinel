@@ -1,3 +1,6 @@
+# Lint, unit tests and build on the self-hosted Azure runner. A short
+# GitHub-hosted wake job starts the VM when it is deallocated; the rest
+# does not spend Actions minutes.
 name: CI
 
 on:
@@ -14,15 +17,38 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  wake:
+    name: wake the runner
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: |
+            .github/actions
+            hack/azure-runner
+      - uses: ./.github/actions/wake-runner
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        with:
+          resource-group: ${{ vars.RUNNER_RESOURCE_GROUP || 'sentinel-ci' }}
+          vm-name: ${{ vars.RUNNER_VM_NAME }}
+
   check:
     name: Lint, test, build
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    needs: [wake]
+    runs-on: [self-hosted, sentinel-lab]
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          # The self-hosted runner keeps its Go caches on disk.
+          cache: false
       - name: Install pinned tools
         run: hack/install-tools.sh
       - name: Generated files and go.mod are up to date

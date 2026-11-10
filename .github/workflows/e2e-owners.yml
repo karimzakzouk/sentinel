@@ -48,6 +48,7 @@ jobs:
       label: -argocd
       argocd: true
       gitea: true
+      self-hosted: true
       run: TestArgoCD|TestTheFixer
   flux:
     name: Flux
@@ -57,4 +58,5 @@ jobs:
       label: -flux
       flux: true
       gitea: true
+      self-hosted: true
       run: TestFlux|TestTheFixer
