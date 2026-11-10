@@ -110,7 +110,7 @@ func newLabGRPCFakeCmd() *cobra.Command {
 	var routes, listen string
 	cmd := &cobra.Command{
 		Use:    "lab-grpc-fake",
-		Short:  "Answer recorded gRPC statuses for a Lab fake of an outside host",
+		Short:  "Answer recorded gRPC statuses and optional response bodies for a Lab fake of an outside host",
 		Hidden: true,
 		Args:   cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -120,7 +120,7 @@ func newLabGRPCFakeCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&routes, "routes", "/etc/lab-fake/grpc-routes", "recorded RPC path and gRPC status code lines")
+	cmd.Flags().StringVar(&routes, "routes", "/etc/lab-fake/grpc-routes", "recorded RPC path, gRPC status code, and optional base64 body lines")
 	cmd.Flags().StringVar(&listen, "listen", "", "TCP port or address to listen on")
 	_ = cmd.MarkFlagRequired("listen")
 	return cmd

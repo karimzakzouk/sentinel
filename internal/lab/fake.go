@@ -1,8 +1,8 @@
 package lab
 
 import (
-	"encoding/base64"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"net"
@@ -275,7 +275,7 @@ func fakeRoutes(host string, calls []capture.Call) (routes []fakeRoute, grpcs []
 				continue
 			}
 			seenGRPC[c.Path] = true
-			grpcs = append(grpcs, grpcRoute{Path: c.Path, Code: grpcCodeFor(c.GRPC, c.Status)})
+			grpcs = append(grpcs, grpcRoute{Path: c.Path, Code: grpcCodeFor(c.GRPC, c.Status), Body: c.ResponseBody})
 			continue
 		}
 		key := c.Method + " " + c.Path
