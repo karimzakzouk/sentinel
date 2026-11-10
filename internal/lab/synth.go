@@ -178,8 +178,14 @@ func Synthesize(w World, target model.ObjectRef, ns string) (*Plan, error) {
 		copied[svc.Name] = true
 		plan.Services = append(plan.Services, copyService(svc, ns, note))
 	}
+	ca, err := NewAuthority()
+	if err != nil {
+		return nil, fmt.Errorf("mint the Lab CA: %w", err)
+	}
 	faked := map[string]bool{}
+	httpsFake := false
 	for _, ref := range closure {
+		https := httpsHosts(w.Workloads[ref].Template)
 		for _, host := range topology.ExternalHosts(w.Workloads[ref].Template, w.Namespace, copied) {
 			if !fakeableHost(host) {
 				note("%s names %s, which is outside the Lab and unreachable there", ref, host)
@@ -189,17 +195,46 @@ func Synthesize(w World, target model.ObjectRef, ns string) (*Plan, error) {
 				continue
 			}
 			faked[host] = true
-			fake := fakeOf(host, w.Calls, ns)
+			fake, err := fakeOf(host, w.Calls, ns, ca, https[strings.ToLower(host)])
+			if err != nil {
+				return nil, err
+			}
 			if reserved[fake.Service.Name] || copied[fake.Service.Name] {
 				return nil, fmt.Errorf("outside host %s fakes as %s, which the Lab already uses", host, fake.Service.Name)
 			}
 			plan.ConfigMaps = append(plan.ConfigMaps, fake.ConfigMap)
 			plan.Services = append(plan.Services, fake.Service)
 			plan.Pods = append(plan.Pods, fake.Pod)
+			plan.Secrets = append(plan.Secrets, fake.Secrets...)
 			if fake.Recorded {
 				note("%s's %s is a fake of the outside service from captured traffic; unmatched calls answer 404", ref, host)
 			} else {
 				note("%s's %s is a Lab fake of the outside host (no captured statuses)", ref, host)
+			}
+			if fake.TLS {
+				httpsFake = true
+				note("%s's %s speaks TLS with a certificate the Lab CA issued", ref, host)
+			}
+		}
+	}
+	if httpsFake {
+		plan.Secrets = append([]*corev1.Secret{{
+			ObjectMeta: worldMeta(ns, LabCAName, nil),
+			Type:       corev1.SecretTypeOpaque,
+			Data:       map[string][]byte{"ca.crt": ca.CertPEM(), "ca.key": ca.KeyPEM()},
+		}}, plan.Secrets...)
+		for i, pod := range plan.Pods {
+			if pod.Annotations[FakeTLS] == "true" || pod.Labels[CopyOf] == "" {
+				continue
+			}
+			kind, name, ok := strings.Cut(pod.Labels[CopyOf], ".")
+			if !ok {
+				continue
+			}
+			ref := model.ObjectRef{Kind: kind, Name: name, Namespace: w.Namespace}
+			injectTrust(&plan.Pods[i].Spec, note, ref)
+			if likelyClientAuth(plan.Pods[i].Spec, plan.Fidelity, ref.String()) {
+				note("%s likely presents a client certificate to an HTTPS fake; pinned or mutual TLS is NOT SURE", ref)
 			}
 		}
 	}

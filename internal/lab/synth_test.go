@@ -129,10 +129,17 @@ func TestSynthesisCopiesTheWorkloadAndWhatItCalls(t *testing.T) {
 		"Deployment/shop/front runs without the variables of secret front-env",
 		"Deployment/shop/front's volume tls is an empty directory instead of secret front-tls",
 		"Deployment/shop/front's api.stripe.com is a Lab fake of the outside host (no captured statuses)",
+		"Deployment/shop/front's api.stripe.com speaks TLS with a certificate the Lab CA issued",
+		"Deployment/shop/front likely presents a client certificate to an HTTPS fake; pinned or mutual TLS is NOT SURE",
 	} {
 		if !slices.Contains(plan.Fidelity, want) {
 			t.Errorf("fidelity lacks %q; got:\n%s", want, strings.Join(plan.Fidelity, "\n"))
 		}
+	}
+	if !slices.ContainsFunc(plan.Fidelity, func(f string) bool {
+		return strings.Contains(f, "trusts the Lab CA at")
+	}) {
+		t.Errorf("fidelity lacks Lab CA trust note:\n%s", strings.Join(plan.Fidelity, "\n"))
 	}
 }
 
@@ -196,7 +203,13 @@ func TestADatastoreRunsEmpty(t *testing.T) {
 		t.Fatalf("no copy of db among %d pods", len(plan.Pods))
 	}
 	spec := plan.Pods[i].Spec
-	if len(spec.Volumes) != 1 || spec.Volumes[0].Name != "data" || spec.Volumes[0].EmptyDir == nil || !strings.HasPrefix(spec.Containers[0].Image, "postgres") {
+	var data *corev1.Volume
+	for i := range spec.Volumes {
+		if spec.Volumes[i].Name == "data" {
+			data = &spec.Volumes[i]
+		}
+	}
+	if data == nil || data.EmptyDir == nil || !strings.HasPrefix(spec.Containers[0].Image, "postgres") {
 		t.Fatalf("db copy: image %s, volumes %+v", spec.Containers[0].Image, spec.Volumes)
 	}
 	if want := "StatefulSet/shop/db runs as an empty postgres: the Lab copies none of its data"; !slices.Contains(plan.Fidelity, want) {

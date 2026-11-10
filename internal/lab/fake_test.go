@@ -54,9 +54,38 @@ func TestAnExternalAPIHostGetsAFakeServiceAndPod(t *testing.T) {
 	if cm == nil || !strings.Contains(cm.Data["respond.sh"], "GET") || !strings.Contains(cm.Data["respond.sh"], "/v1/charges") {
 		t.Fatalf("fake ConfigMap %+v", cm)
 	}
-	want := "Deployment/shop/front's api.stripe.com is a fake of the outside service from captured traffic; unmatched calls answer 404"
-	if !slices.Contains(plan.Fidelity, want) {
-		t.Fatalf("fidelity lacks %q:\n%s", want, strings.Join(plan.Fidelity, "\n"))
+	if pod.Annotations[FakeTLS] != "true" {
+		t.Fatal("HTTPS fake lacks the TLS annotation")
+	}
+	var hasCA, hasHostTLS bool
+	for _, s := range plan.Secrets {
+		if s.Name == LabCAName && len(s.Data["ca.crt"]) > 0 {
+			hasCA = true
+		}
+		if s.Name == "fake-api-stripe-com-tls" && len(s.Data[corev1.TLSCertKey]) > 0 {
+			hasHostTLS = true
+		}
+	}
+	if !hasCA || !hasHostTLS {
+		t.Fatalf("Lab CA or host TLS Secret missing: %+v", plan.Secrets)
+	}
+	front := plan.Pods[0]
+	if !slices.ContainsFunc(front.Spec.Volumes, func(v corev1.Volume) bool { return v.Name == labCAVolume && v.Secret != nil }) {
+		t.Fatal("copy lacks the Lab CA volume")
+	}
+	if !slices.ContainsFunc(front.Spec.Containers[0].Env, func(e corev1.EnvVar) bool {
+		return e.Name == "SSL_CERT_FILE" && e.Value == labCAPath
+	}) {
+		t.Fatalf("copy lacks SSL_CERT_FILE trust: %+v", front.Spec.Containers[0].Env)
+	}
+	for _, want := range []string{
+		"Deployment/shop/front's api.stripe.com is a fake of the outside service from captured traffic; unmatched calls answer 404",
+		"Deployment/shop/front's api.stripe.com speaks TLS with a certificate the Lab CA issued",
+		"Deployment/shop/front likely presents a client certificate to an HTTPS fake; pinned or mutual TLS is NOT SURE",
+	} {
+		if !slices.Contains(plan.Fidelity, want) {
+			t.Fatalf("fidelity lacks %q:\n%s", want, strings.Join(plan.Fidelity, "\n"))
+		}
 	}
 }
 

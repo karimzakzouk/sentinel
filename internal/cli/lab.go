@@ -106,6 +106,28 @@ func newLabSealCmd() *cobra.Command {
 	return cmd
 }
 
+func newLabFakeCmd() *cobra.Command {
+	var cert, key, routes, listen string
+	cmd := &cobra.Command{
+		Use:    "lab-fake",
+		Short:  "Answer recorded HTTP statuses over TLS for a Lab fake of an outside host",
+		Hidden: true,
+		Args:   cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if err := lab.ServeFakeTLS(listen, cert, key, routes); err != nil {
+				return terminate(err)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&cert, "cert", "/etc/lab-tls/tls.crt", "Lab-issued host certificate")
+	cmd.Flags().StringVar(&key, "key", "/etc/lab-tls/tls.key", "Lab-issued host private key")
+	cmd.Flags().StringVar(&routes, "routes", "/etc/lab-fake/routes", "recorded method path status lines")
+	cmd.Flags().StringVar(&listen, "listen", "", "TCP port or address to listen on")
+	_ = cmd.MarkFlagRequired("listen")
+	return cmd
+}
+
 // terminate records why a pod's container failed where Kubernetes shows it.
 func terminate(err error) error {
 	_ = os.WriteFile("/dev/termination-log", []byte(err.Error()), 0o600)
