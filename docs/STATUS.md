@@ -1,6 +1,6 @@
 # Status
 
-Last updated: Tuesday 10 November 2026, 06:55 Cairo time (UTC+2).
+Last updated: Tuesday 10 November 2026, 07:05 Cairo time (UTC+2).
 
 ## Where things stand
 
@@ -107,12 +107,12 @@ To look at it on a cluster where it runs:
 | High availability | Standby replicas for the actor, the Lab and the Fixer (decision 81) | On the development cluster with two of each: one Lease holder each, the fence allowed the Leases, a standby took over a second after the holder was deleted |
 | Console | Sign in with your own token, or through the cluster's identity provider (decision 89); approve, veto, resume, set policies, as yourself (decision 82) | Unit tests of sign-in, the person's own approval, refusals from another page, and of single sign-on's state, nonce and replay checks; on the development cluster a real token signed in, the cluster refused what it may not see, and a bad token got 401; `hack/oidc-live.sh` signs in through a real Dex as a browser would |
 | Fingerprints | fp2 for logged exceptions (decision 84) | One Redis outage logged with two messages is one exception |
-| Traffic capture | Built (decisions 85 and 86): optional OBI agent, per-namespace `capture.requests`, Lab replay; opt-in body capture (`capture.bodies`) is in progress beside it | On the development cluster: the agent ran on both nodes with eBPF's capabilities, not privileged; Online Boutique's frontend's requests (`GET /cart`, `/product/<id>`, `POST /cart/checkout`) and its gRPC calls to seven services arrived with methods, paths, statuses and timings; Redis statements, which carry keys, stayed out; the incident page lists them |
+| Traffic capture | Built (decisions 85, 86 and 103): optional OBI agent, per-namespace `capture.requests`, Lab replay, and opt-in body capture (`capture.bodies` with requests): redacted ~4KiB Body/ResponseBody only when EnabledBodies is on |
 | Argo Rollouts abort | Built (decision 97): `rollouts.abort` sets `status.abort`; Flagger still deferred to its analysis | Unit tests in `internal/actor`, `internal/watcher`, `internal/brain` |
 | Honeytoken Secrets | Built: Lab env and named-key volumes get shape-preserving stand-ins; looking one up through Lab DNS fails the race | Unit tests in `internal/lab` |
 | Outbound call catalog | Built: `capture.Calls` lists distinct client calls for Lab fakes | Unit tests in `internal/capture` |
 | Frontier fakes (metadata HTTP) | Built (decision 100): outside hosts get a Lab Service + stub answering recorded statuses; DNS, Allow and world probes include them | Unit tests in `internal/lab` (`fake_test`, synthesis with `api.stripe.com`) |
-| Own faker, mined fix patterns | Metadata HTTP fakes built; body capture foundation started; full faker (gRPC, TLS MITM, body-filled stubs) next. **Mined fix patterns: first cut built** (decision 101) |
+| Own faker, mined fix patterns | Metadata HTTP fakes built; body capture foundation built (decision 103); full faker (gRPC, TLS MITM, body-filled stubs) next. **Mined fix patterns: first cut built** (decision 101) |
 | Tier-1 node agent | First cut (decision 102): optional DaemonSet tails `/var/log/pods`, redacts on the node, optional cgroup memory.peak/pressure, posts batches; controller Store + OnBatch log evidence for open incidents | Unit tests in `internal/nodeagent` and `internal/cli` |
 
 ## Acting session
@@ -405,7 +405,7 @@ Full reasoning in [decisions.md](decisions.md).
 
 - **Lab realism:** frontier fakes from captured traffic are built for
   metadata-only HTTP (decision 100); opt-in body capture foundation is
-  started for write replay, response comparison and filled
+  built (decision 103) for write replay, response comparison and filled
   databases. Left: the Lab's certificate authority, TLS MITM, and an
   agent that exports bodies. Honeytoken Secrets that fail a race on DNS
   lookup are built.
@@ -416,7 +416,7 @@ Full reasoning in [decisions.md](decisions.md).
   Standby for actor/Lab/Fixer already exists.
 - **Settings:** policy autonomy actions (including `restart`, `helm.rollback`,
   `rollouts.abort`, `fix.merge`) and capture toggles (`capture.requests`,
-  opt-in stub `capture.bodies`) are in the console via SentinelPolicy.
+  opt-in `capture.bodies`) are in the console via SentinelPolicy.
   Chart-level Fixer knobs (`fixer.code.withoutRollback`, `fixer.code.fixers`,
   `fixer.code.llm`) stay in Helm values; the Policies page links to them.
   Decision: extend SentinelPolicy for capture bodies rather than a Settings

@@ -1,9 +1,10 @@
 // Package capture keeps what traffic capture's agent, OpenTelemetry's eBPF
 // instrumentation (OBI) on each node, saw of the requests watched workloads
-// served and made: method, route, status and timing, never a body or a
-// header. It is optional: without the agent nothing arrives, and the Lab
-// works as before on faults that need no traffic. A namespace turns it on
-// in its SentinelPolicy; requests of others are dropped as they arrive.
+// served and made: method, route, status and timing, never a header. Bodies
+// stay out unless the namespace's SentinelPolicy also sets capture.bodies.
+// It is optional: without the agent nothing arrives, and the Lab works as
+// before on faults that need no traffic. A namespace turns it on in its
+// SentinelPolicy; requests of others are dropped as they arrive.
 package capture
 
 import (
@@ -47,15 +48,25 @@ type Request struct {
 	GRPC     string        `json:"grpc,omitempty"`
 	Duration time.Duration `json:"duration"`
 	At       time.Time     `json:"at"`
+	// Body and ResponseBody are kept only when the namespace opts in to
+	// capture.bodies: redacted and capped. Empty by default.
+	Body         string `json:"body,omitempty"`
+	ResponseBody string `json:"responseBody,omitempty"`
 }
 
 // keep is how many requests are kept per workload, newest last.
 const keep = 512
 
+// bodyMax caps each stored body at about 4KiB.
+const bodyMax = 4 << 10
+
 // Store keeps the latest requests of each workload.
 type Store struct {
 	// Enabled says whether a namespace turned capture on.
 	Enabled func(namespace string) bool
+	// EnabledBodies says whether a namespace also keeps request and
+	// response bodies. Nil or false means bodies are never stored.
+	EnabledBodies func(namespace string) bool
 
 	mu       sync.Mutex
 	requests map[string][]Request
@@ -66,6 +77,9 @@ type Store struct {
 func (s *Store) Add(workload model.ObjectRef, r Request) bool {
 	if s.Enabled == nil || !s.Enabled(workload.Namespace) {
 		return false
+	}
+	if s.EnabledBodies == nil || !s.EnabledBodies(workload.Namespace) {
+		r.Body, r.ResponseBody = "", ""
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -204,6 +218,37 @@ func Calls(requests []Request, n int) []Call {
 	return out[:min(len(out), n)]
 }
 
+// BodySample is one non-GET request that carried a body. Lab seeding and
+// write replay will read these (and a BodyStore keyed by request id when
+// one exists); this helper is the hook stub for that path.
+type BodySample struct {
+	Method, Path, Host, Route string
+	Port, Status              int
+	Body, ResponseBody        string
+}
+
+// Bodies returns, from a workload's recent requests, non-GET samples that
+// have a Body or ResponseBody, oldest first, at most n.
+func Bodies(requests []Request, n int) []BodySample {
+	var out []BodySample
+	for _, r := range requests {
+		if n >= 0 && len(out) >= n {
+			break
+		}
+		if r.Method == "" || r.Method == http.MethodGet || r.Method == http.MethodHead {
+			continue
+		}
+		if r.Body == "" && r.ResponseBody == "" {
+			continue
+		}
+		out = append(out, BodySample{
+			Method: r.Method, Path: r.Path, Host: r.Host, Route: r.Route,
+			Port: r.Port, Status: r.Status, Body: r.Body, ResponseBody: r.ResponseBody,
+		})
+	}
+	return out
+}
+
 // replayablePath is a path a Lab can send as it is: absolute, no longer
 // than an Experiment allows, without a fragment or a space.
 func replayablePath(p string) bool {
@@ -253,9 +298,17 @@ func (rc *Receiver) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			continue
 		}
+		bodies := rc.Store.EnabledBodies != nil && rc.Store.EnabledBodies(workload.Namespace)
 		for _, ss := range rs.ScopeSpans {
 			for _, sp := range ss.Spans {
-				if q, ok := requestOf(sp); ok && rc.Store.Add(workload, q) {
+				q, ok := requestOf(sp)
+				if !ok {
+					continue
+				}
+				if bodies {
+					attachBodies(&q, attrs(sp.Attributes))
+				}
+				if rc.Store.Add(workload, q) {
 					kept++
 				}
 			}
@@ -433,6 +486,25 @@ func grpcCode(s string) (int, bool) {
 	}
 	i := slices.Index(grpcNames, name)
 	return i, i >= 0
+}
+
+// attachBodies copies body attributes from a span when present, capped and
+// redacted. Known keys are the plain and ".content" forms an exporter may
+// send; absent attributes leave the fields empty.
+func attachBodies(q *Request, a map[string]string) {
+	q.Body = clippedBody(cmp.Or(a["http.request.body.content"], a["http.request.body"]))
+	q.ResponseBody = clippedBody(cmp.Or(a["http.response.body.content"], a["http.response.body"]))
+}
+
+func clippedBody(s string) string {
+	if s == "" {
+		return ""
+	}
+	clean, _ := redactor.String(s)
+	if len(clean) > bodyMax {
+		return clean[:bodyMax]
+	}
+	return clean
 }
 
 var redactor = redact.New()
