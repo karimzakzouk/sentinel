@@ -20,6 +20,11 @@ metadata:
   labels:
     {{- include "sentinel.labels" . | nindent 4 }}
   annotations:
+    # After CRDs in the same release (Helm builds the whole main manifest
+    # before apply; a CR here would fail the client mapper on a fresh cluster).
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "5"
+    helm.sh/hook-delete-policy: before-hook-creation
     helm.sh/resource-policy: keep
 spec:
   watch:
