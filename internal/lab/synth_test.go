@@ -84,8 +84,8 @@ func TestSynthesisCopiesTheWorkloadAndWhatItCalls(t *testing.T) {
 			t.Fatalf("Service %s is not a fresh Lab copy: %+v", s.Name, s)
 		}
 	}
-	if !slices.Equal(names, []string{"front", "backend", "fake-api-stripe-com"}) {
-		t.Fatalf("copied Services %v; want front, backend and a fake of api.stripe.com", names)
+	if !slices.Equal(names, []string{"front", "backend", "fake-api-stripe-com", MITMName}) {
+		t.Fatalf("copied Services %v; want front, backend, a fake of api.stripe.com and the Lab MITM", names)
 	}
 	var frontConfig *corev1.ConfigMap
 	for _, cm := range plan.ConfigMaps {
@@ -131,6 +131,7 @@ func TestSynthesisCopiesTheWorkloadAndWhatItCalls(t *testing.T) {
 		"Deployment/shop/front's api.stripe.com is a Lab fake of the outside host (no captured statuses)",
 		"Deployment/shop/front's api.stripe.com speaks TLS with a certificate the Lab CA issued",
 		"Deployment/shop/front likely presents a client certificate to an HTTPS fake; pinned or mutual TLS is NOT SURE",
+		"Lab MITM " + MITMProxyURL + " terminates TLS with the Lab CA for HTTPS_PROXY clients and answers recorded bodies without leaving the seal; direct DNS+trust to per-host fakes stays the default",
 	} {
 		if !slices.Contains(plan.Fidelity, want) {
 			t.Errorf("fidelity lacks %q; got:\n%s", want, strings.Join(plan.Fidelity, "\n"))

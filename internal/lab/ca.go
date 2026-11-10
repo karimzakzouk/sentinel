@@ -13,6 +13,33 @@ import (
 	"time"
 )
 
+// AuthorityFromPEM loads a Lab CA from PEM-encoded certificate and key, as
+// stored in the lab-ca Secret for lab-mitm.
+func AuthorityFromPEM(certPEM, keyPEM []byte) (*Authority, error) {
+	certBlock, _ := pem.Decode(certPEM)
+	if certBlock == nil || certBlock.Type != "CERTIFICATE" {
+		return nil, fmt.Errorf("Lab CA certificate PEM is missing")
+	}
+	cert, err := x509.ParseCertificate(certBlock.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("parse Lab CA certificate: %w", err)
+	}
+	keyBlock, _ := pem.Decode(keyPEM)
+	if keyBlock == nil {
+		return nil, fmt.Errorf("Lab CA key PEM is missing")
+	}
+	key, err := x509.ParseECPrivateKey(keyBlock.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("parse Lab CA key: %w", err)
+	}
+	return &Authority{
+		cert:    cert,
+		key:     key,
+		certPEM: append([]byte(nil), certPEM...),
+		keyPEM:  append([]byte(nil), keyPEM...),
+	}, nil
+}
+
 // Authority is an ephemeral Lab certificate authority. One is minted per
 // world plan; it never reads production Secrets.
 type Authority struct {

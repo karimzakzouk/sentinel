@@ -46,7 +46,7 @@ var meshContainers = map[string]bool{
 }
 
 // reserved are the names the Lab's own objects use in a world.
-var reserved = map[string]bool{"lab-dns": true, "lab-echo": true, "lab-prober": true}
+var reserved = map[string]bool{"lab-dns": true, "lab-echo": true, "lab-prober": true, MITMName: true}
 
 // Workload is a production workload as the Lab copies it.
 type Workload struct {
@@ -184,6 +184,7 @@ func Synthesize(w World, target model.ObjectRef, ns string) (*Plan, error) {
 	}
 	faked := map[string]bool{}
 	httpsFake := false
+	tlsHosts := map[string]bool{}
 	for _, ref := range closure {
 		https := httpsHosts(w.Workloads[ref].Template)
 		for _, host := range topology.ExternalHosts(w.Workloads[ref].Template, w.Namespace, copied) {
@@ -213,6 +214,7 @@ func Synthesize(w World, target model.ObjectRef, ns string) (*Plan, error) {
 			}
 			if fake.TLS {
 				httpsFake = true
+				tlsHosts[strings.ToLower(host)] = true
 				note("%s's %s speaks TLS with a certificate the Lab CA issued", ref, host)
 			}
 		}
@@ -223,8 +225,13 @@ func Synthesize(w World, target model.ObjectRef, ns string) (*Plan, error) {
 			Type:       corev1.SecretTypeOpaque,
 			Data:       map[string][]byte{"ca.crt": ca.CertPEM(), "ca.key": ca.KeyPEM()},
 		}}, plan.Secrets...)
+		mitmCM, mitmSvc, mitmPod := mitmOf(ns, mitmRoutesFromCalls(w.Calls, tlsHosts))
+		plan.ConfigMaps = append(plan.ConfigMaps, mitmCM)
+		plan.Services = append(plan.Services, mitmSvc)
+		plan.Pods = append(plan.Pods, mitmPod)
+		note("Lab MITM %s terminates TLS with the Lab CA for HTTPS_PROXY clients and answers recorded bodies without leaving the seal; direct DNS+trust to per-host fakes stays the default", MITMProxyURL)
 		for i, pod := range plan.Pods {
-			if pod.Annotations[FakeTLS] == "true" || pod.Labels[CopyOf] == "" {
+			if pod.Annotations[FakeTLS] == "true" || pod.Annotations[FakeMITM] == "true" || pod.Labels[CopyOf] == "" {
 				continue
 			}
 			kind, name, ok := strings.Cut(pod.Labels[CopyOf], ".")
@@ -233,6 +240,7 @@ func Synthesize(w World, target model.ObjectRef, ns string) (*Plan, error) {
 			}
 			ref := model.ObjectRef{Kind: kind, Name: name, Namespace: w.Namespace}
 			injectTrust(&plan.Pods[i].Spec, note, ref)
+			rewriteProxyEnv(&plan.Pods[i].Spec, note, ref)
 			if likelyClientAuth(plan.Pods[i].Spec, plan.Fidelity, ref.String()) {
 				note("%s likely presents a client certificate to an HTTPS fake; pinned or mutual TLS is NOT SURE", ref)
 			}
