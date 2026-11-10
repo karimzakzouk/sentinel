@@ -2,4 +2,4 @@
 # self-hosted runner, as "Run workflow" does; hours is how long to watch,
 # 1 to 72. The soak holds the runner for that long.
 hours: 72
-requested: 2026-11-09, the phase 1 gate's soak, again after the first stopped at its start
+requested: 2026-11-10, restart soak on current main (cd5c278 MITM/Settings); cancel the in-progress soak on ba48d11 first — it holds the runner and is yesterday's binary
