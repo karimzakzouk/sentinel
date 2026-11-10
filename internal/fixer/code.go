@@ -44,10 +44,10 @@ func (f *Fixer) codeFix(ctx context.Context, fix *v1alpha1.Fix, change Change) *
 	}
 	crash := fix.Spec.Crash
 	switch {
-	case crash == nil || len(crash.Frames) == 0:
+	case crash == nil || len(crash.Frames) == 0 && len(crash.Stack) == 0:
 		return say("the failing revision's logs held no crash stack to start a fix to its code from")
-	case crash.Language != "go":
-		return say("fixes to code are for Go so far, and this crash is %s", crash.Language)
+	case !codefix.Reads(crash.Language):
+		return say("fixes to code do not read %s crashes yet", crash.Language)
 	}
 	badSrc, err := f.source(ctx, bad)
 	if err != nil {
@@ -81,17 +81,14 @@ func (f *Fixer) codeFix(ctx context.Context, fix *v1alpha1.Fix, change Change) *
 	if err != nil {
 		return say("%v", err)
 	}
-	frames := make([]logs.Frame, 0, len(crash.Frames))
-	for _, fn := range crash.Frames {
-		frames = append(frames, logs.Frame{Function: fn, InApp: true})
-	}
-	patch, err := codefix.ProposeGo(frames, before, failing)
+	frames := crashFrames(crash)
+	patch, err := codefix.Propose(crash.Language, frames, before, failing)
 	if err != nil {
 		return say("%v", err)
 	}
 	// The branch's head may have moved on; the fix applies there only if
 	// the function is still as the failing commit left it.
-	atHead, err := codefix.ProposeGo(frames, before, head)
+	atHead, err := codefix.Propose(crash.Language, frames, before, head)
 	if err != nil || atHead.Function != patch.Function || !bytes.Equal(funcText(atHead), funcText(patch)) {
 		return say("%s changed again after %s; a person reconciles the two", patch.Function, short(badSrc.Revision))
 	}
@@ -112,6 +109,23 @@ func (f *Fixer) codeFix(ctx context.Context, fix *v1alpha1.Fix, change Change) *
 	cf.Change = []string{fmt.Sprintf("%s:%d: %s put back as it was before %s", atHead.Path, atHead.Line, patch.Function, short(badSrc.Revision))}
 	cf.Message = "proposed; waiting for the source's pipeline to build an image of " + short(commit)
 	return cf
+}
+
+// crashFrames are the crash's frames, with where each ran when the runtime
+// printed it.
+func crashFrames(crash *v1alpha1.Crash) []logs.Frame {
+	if len(crash.Stack) > 0 {
+		frames := make([]logs.Frame, 0, len(crash.Stack))
+		for _, s := range crash.Stack {
+			frames = append(frames, logs.Frame{Function: s.Function, File: s.File, Line: int(s.Line), InApp: true})
+		}
+		return frames
+	}
+	frames := make([]logs.Frame, 0, len(crash.Frames))
+	for _, fn := range crash.Frames {
+		frames = append(frames, logs.Frame{Function: fn, InApp: true})
+	}
+	return frames
 }
 
 func (f *Fixer) source(ctx context.Context, image string) (codefix.Built, error) {

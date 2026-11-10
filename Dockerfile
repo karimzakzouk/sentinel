@@ -14,8 +14,9 @@ COPY api ./api
 COPY cmd ./cmd
 COPY internal ./internal
 COPY --from=ui /src/internal/ui/dist ./internal/ui/dist
+COPY hack/grammar-tags ./
 ARG VERSION=dev
-RUN CGO_ENABLED=0 go build -trimpath \
+RUN CGO_ENABLED=0 go build -trimpath -tags "$(cat grammar-tags)" \
       -ldflags "-s -w -X github.com/karimzakzouk/sentinel/internal/version.Version=${VERSION}" \
       -o /out/sentinel ./cmd/sentinel
 
