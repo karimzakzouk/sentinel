@@ -216,6 +216,10 @@ func ChangeFor(ctx context.Context, client kubernetes.Interface, dep *appsv1.Dep
 	}
 	if c.field() == fieldMemoryLimit {
 		learned, ok := spec.MemoryLimits[c.Container]
+		if !ok && strings.HasPrefix(spec.LabVerdict, "it does not fix") {
+			return Change{}, nil, fmt.Errorf("the Lab raced the limit learned from %s's healthy use, and %s; putting the old limit back can be as wrong as the new one",
+				c.Container, spec.LabVerdict)
+		}
 		if !ok {
 			return Change{}, nil, fmt.Errorf("revision %s changed %s's memory limit; putting the old limit back can be as wrong as the new one, "+
 				"and Sentinel has not measured enough of what %s uses to learn one", spec.FromRevision, c.Container, c.Container)

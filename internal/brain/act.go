@@ -368,7 +368,10 @@ func (b *Brain) OnLabVerdict(ctx context.Context, v LabVerdict) error {
 		return err
 	}
 	id := model.ExperimentID(v.IncidentID)
-	code := strings.HasSuffix(v.Experiment, "-code")
+	if strings.HasSuffix(v.Experiment, "-values") {
+		return b.onValuesVerdict(ctx, v)
+	}
+	code := strings.Contains(v.Experiment, "-code")
 	if code {
 		id = codeExperimentID(v.IncidentID)
 	}

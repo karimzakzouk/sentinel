@@ -90,17 +90,30 @@ func (l *Lab) Start(ctx context.Context) error {
 // not when every Lab namespace is busy, so the Brain asks again. Asking
 // twice for one incident is asking once.
 func (l *Lab) Verify(ctx context.Context, incident model.ID, target model.ObjectRef, revision string) (string, bool, error) {
-	return l.ask(ctx, ExperimentName(incident), incident, target, revision, "")
+	return l.ask(ctx, ExperimentName(incident), incident, target, revision, "", nil)
+}
+
+// VerifyValues asks the Lab whether the failing revision with values in
+// place, limits learned from healthy use, works: before the pull request
+// that sets them opens.
+func (l *Lab) VerifyValues(ctx context.Context, incident model.ID, target model.ObjectRef, revision string, overrides []v1alpha1.ValueOverride) (string, bool, error) {
+	return l.ask(ctx, ValuesExperimentName(incident), incident, target, revision, "", overrides)
+}
+
+// ValuesExperimentName is the Experiment that races the values a fix sets.
+func ValuesExperimentName(incident model.ID) string {
+	return strings.TrimSuffix(ExperimentName(incident), "-verify") + "-values"
 }
 
 // VerifyImage asks the Lab whether image, a fix to the failing revision's
 // code that its source's pipeline built, fixes the incident: the failing
 // revision raced with that image in place of its own.
 func (l *Lab) VerifyImage(ctx context.Context, incident model.ID, target model.ObjectRef, revision, image string) (string, bool, error) {
-	return l.ask(ctx, CodeExperimentName(incident, image), incident, target, revision, image)
+	return l.ask(ctx, CodeExperimentName(incident, image), incident, target, revision, image, nil)
 }
 
-func (l *Lab) ask(ctx context.Context, name string, incident model.ID, target model.ObjectRef, revision, image string) (string, bool, error) {
+func (l *Lab) ask(ctx context.Context, name string, incident model.ID, target model.ObjectRef, revision, image string,
+	overrides []v1alpha1.ValueOverride) (string, bool, error) {
 	if !slices.Contains(l.Watched, target.Namespace) {
 		return "", false, nil
 	}
@@ -115,7 +128,8 @@ func (l *Lab) ask(ctx context.Context, name string, incident model.ID, target mo
 		TypeMeta:   metav1.TypeMeta{APIVersion: v1alpha1.GroupVersion.String(), Kind: "Experiment"},
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
 		Spec: v1alpha1.ExperimentSpec{IncidentID: string(incident), Purpose: "verify-fix", LabNamespace: ns, Revision: revision, Candidate: image,
-			Workload: &v1alpha1.TargetRef{APIVersion: "apps/v1", Kind: target.Kind, Namespace: target.Namespace, Name: target.Name}},
+			Overrides: overrides,
+			Workload:  &v1alpha1.TargetRef{APIVersion: "apps/v1", Kind: target.Kind, Namespace: target.Namespace, Name: target.Name}},
 	}
 	if l.Replay != nil {
 		exp.Spec.Replay = l.Replay(target)
@@ -130,8 +144,11 @@ func (l *Lab) ask(ctx context.Context, name string, incident model.ID, target mo
 		return "", false, err
 	}
 	what := "a rollback"
-	if image != "" {
+	switch {
+	case image != "":
 		what = "a fix to the code, built as " + image
+	case len(overrides) > 0:
+		what = "values a fix would set"
 	}
 	l.Log.Info("asked the Lab to verify "+what, "incident", incident, "target", target.String(), "revision", revision, "lab", ns)
 	return ns + "/" + name, true, nil

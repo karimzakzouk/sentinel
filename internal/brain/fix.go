@@ -40,6 +40,9 @@ type FixRequest struct {
 	// templates: where no stack says where it failed, the source that
 	// logs them may.
 	Errors []string
+	// LabVerdict is what the Lab found of the learned values, raced before
+	// the pull request that sets them opens.
+	LabVerdict string
 	// CodeOnly asks for a fix to the code alone, for a crash no rollback
 	// could stop: FromRevision is then the revision that crashes, still
 	// running, and the culprit is whichever commit last changed the code
@@ -119,10 +122,82 @@ func (b *Brain) askFix(ctx context.Context, inc *incident, a *model.Action) []le
 		}
 	}
 	r.Crash, r.Errors = b.crashOf(ctx, inc.rec.ID, a.Target)
+	inc.fixAsked = true
+	if len(r.MemoryLimits) > 0 && b.ValueLab != nil {
+		// A learned limit is raced in the Lab before the pull request that
+		// sets it opens; the Fixer is asked once the verdict is in.
+		if b.valueFixes == nil {
+			b.valueFixes = map[model.ID]*valueFix{}
+		}
+		vf := &valueFix{req: r, revision: a.Target.Name + "-" + from}
+		b.valueFixes[inc.rec.ID] = vf
+		return b.askValueLab(ctx, vf)
+	}
+	return b.requestFix(ctx, r)
+}
+
+// valueFix is a fix request waiting on the Lab's verdict on the values it
+// sets.
+type valueFix struct {
+	req      FixRequest
+	revision string
+	asked    bool
+}
+
+// askValueLab asks the Lab, once, to race the failing revision with the
+// learned values in place; when every Lab namespace is busy the sweep asks
+// again, and when it cannot be asked the Fixer is asked without a verdict.
+// Callers hold b.mu.
+func (b *Brain) askValueLab(ctx context.Context, vf *valueFix) []ledger.Draft {
+	if vf.asked {
+		return nil
+	}
+	r := vf.req
+	experiment, asked, err := b.ValueLab(ctx, r.Incident, r.Target, vf.revision, r.MemoryLimits)
+	switch {
+	case err != nil:
+		b.Log.Error("could not ask the Lab about a learned limit; the Fixer is asked without its verdict", "incident", r.Incident, "error", err)
+		delete(b.valueFixes, r.Incident)
+		return b.requestFix(ctx, r)
+	case !asked:
+		return nil
+	}
+	vf.asked = true
+	e := model.Experiment{ID: model.ExperimentID(r.Incident) + "/values", IncidentID: r.Incident, Purpose: "verify-values", Target: r.Target,
+		Revision: vf.revision, Lab: experiment, Phase: "Requested"}
+	return []ledger.Draft{ledger.RecordDraft(source, model.KindExperiment, "requested", e.ID, r.Incident, e)}
+}
+
+// onValuesVerdict asks the Fixer for the fix whose values the Lab raced,
+// with the verdict: where the learned values did not fix the failure, the
+// Fixer does not set them. Callers hold b.mu.
+func (b *Brain) onValuesVerdict(ctx context.Context, v LabVerdict) error {
+	vf, ok := b.valueFixes[v.IncidentID]
+	if !ok {
+		return nil
+	}
+	delete(b.valueFixes, v.IncidentID)
+	r := vf.req
+	r.LabVerdict = labVerdictWord(v.Phase) + ": " + v.Message
+	b.Log.Info("the Lab judged a learned limit", "incident", v.IncidentID, "phase", v.Phase, "message", v.Message)
+	if v.Phase == "Failed" {
+		r.MemoryLimits = nil
+	}
+	drafts := b.requestFix(ctx, r)
+	if len(drafts) == 0 {
+		return nil
+	}
+	_, err := b.Ledger.Append(ctx, drafts...)
+	return err
+}
+
+// requestFix asks the Fixer for a fix and records the request. Callers
+// hold b.mu.
+func (b *Brain) requestFix(ctx context.Context, r FixRequest) []ledger.Draft {
 	why := ""
 	if b.MergePolicy != nil {
-		if level, gated := b.MergePolicy(a.Target.Namespace); level == model.AutonomyAutonomous {
-			earned, standing := b.standing(model.TrackKey{Action: ActionFixMerge, FaultClass: r.FaultClass, Service: a.Target.String()})
+		if level, gated := b.MergePolicy(r.Target.Namespace); level == model.AutonomyAutonomous {
+			earned, standing := b.standing(model.TrackKey{Action: ActionFixMerge, FaultClass: r.FaultClass, Service: r.Target.String()})
 			r.Merge = !gated || earned
 			if !r.Merge {
 				why = "; a person merges it, since " + standing
@@ -131,13 +206,12 @@ func (b *Brain) askFix(ctx context.Context, inc *incident, a *model.Action) []le
 	}
 	name, err := b.Fixer.Fix(ctx, r)
 	if err != nil {
-		b.Log.Error("could not ask the Fixer for a fix at the source", "incident", inc.rec.ID, "error", err)
+		b.Log.Error("could not ask the Fixer for a fix at the source", "incident", r.Incident, "error", err)
 		return nil
 	}
-	inc.fixAsked = true
-	f := model.Fix{ID: model.FixID(inc.rec.ID), IncidentID: inc.rec.ID, Target: a.Target, FromRevision: from, Phase: "Requested",
+	f := model.Fix{ID: model.FixID(r.Incident), IncidentID: r.Incident, Target: r.Target, FromRevision: r.FromRevision, Phase: "Requested",
 		Message: name + why, FaultClass: r.FaultClass, Merge: r.Merge}
-	return []ledger.Draft{ledger.RecordDraft(source, model.KindFix, "requested", f.ID, inc.rec.ID, f)}
+	return []ledger.Draft{ledger.RecordDraft(source, model.KindFix, "requested", f.ID, r.Incident, f)}
 }
 
 // OnFixUpdate records a step of an incident's fix and tells people what it

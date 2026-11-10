@@ -87,6 +87,35 @@ spec:
                 maximum: 1000
                 minimum: 1
                 type: integer
+              overrides:
+                description: |-
+                  Overrides, for verify-fix, make the candidate the failing revision
+                  with these values in place: a limit learned from healthy use, raced
+                  before the pull request that sets it opens.
+                items:
+                  description: |-
+                    ValueOverride is one value a candidate sets: a container's resource
+                    limit or request, as "limits.memory" or "requests.cpu".
+                  properties:
+                    container:
+                      type: string
+                    field:
+                      enum:
+                      - limits.memory
+                      - limits.cpu
+                      - requests.memory
+                      - requests.cpu
+                      type: string
+                    value:
+                      type: string
+                  required:
+                  - container
+                  - field
+                  - value
+                  type: object
+                maxItems: 20
+                type: array
+                x-kubernetes-list-type: atomic
               purpose:
                 description: |-
                   Purpose says what the experiment tests: prove seals the Lab and

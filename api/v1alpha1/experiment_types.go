@@ -54,6 +54,22 @@ type ExperimentSpec struct {
 	// +optional
 	// +kubebuilder:validation:MaxItems=20
 	Replay []ReplayRequest `json:"replay,omitempty"`
+	// Overrides, for verify-fix, make the candidate the failing revision
+	// with these values in place: a limit learned from healthy use, raced
+	// before the pull request that sets it opens.
+	// +optional
+	// +listType=atomic
+	// +kubebuilder:validation:MaxItems=20
+	Overrides []ValueOverride `json:"overrides,omitempty"`
+}
+
+// ValueOverride is one value a candidate sets: a container's resource
+// limit or request, as "limits.memory" or "requests.cpu".
+type ValueOverride struct {
+	Container string `json:"container"`
+	// +kubebuilder:validation:Enum=limits.memory;limits.cpu;requests.memory;requests.cpu
+	Field string `json:"field"`
+	Value string `json:"value"`
 }
 
 // ReplayRequest is one GET a run sends its copy.

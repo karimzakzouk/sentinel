@@ -84,6 +84,10 @@ type Brain struct {
 	Act Requester
 	// Lab, when set, verifies proposed rollbacks before anyone acts on them.
 	Lab Verifier
+	// ValueLab, when set, races the failing revision with learned limits
+	// (container to memory limit) in place, before the Fixer is asked for
+	// the pull request that sets them.
+	ValueLab func(ctx context.Context, incident model.ID, target model.ObjectRef, revision string, limits map[string]string) (string, bool, error)
 	// CodeFixWithoutRollback asks the Fixer for a fix to the code of a
 	// crash with nothing to roll back, as for a bug older than the newest
 	// revision.
@@ -116,6 +120,9 @@ type Brain struct {
 	// codeLab holds fixes to code whose built image the Lab was too busy
 	// to race; the sweep asks again.
 	codeLab map[model.ID]model.Fix
+	// valueFixes are fix requests waiting on the Lab's verdict on the
+	// limits they set.
+	valueFixes map[model.ID]*valueFix
 	// rollbacks are the rollbacks Sentinel carried out in the last day,
 	// which a person may yet revert; lastTemplate is each workload's last
 	// template change, and troubledAt when the Watcher last detected
@@ -525,6 +532,9 @@ func (b *Brain) Sweep(ctx context.Context) error {
 	drafts := append(b.reverts(ctx, now), b.holds(ctx, now)...)
 	for _, f := range b.codeLab {
 		drafts = append(drafts, b.askCodeLab(ctx, &f, f.Code.Image)...)
+	}
+	for _, vf := range b.valueFixes {
+		drafts = append(drafts, b.askValueLab(ctx, vf)...)
 	}
 	for key, inc := range b.open {
 		drafts = append(drafts, b.verify(inc)...)

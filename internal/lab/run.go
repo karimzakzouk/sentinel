@@ -235,6 +235,16 @@ func (l *Lab) handle(ctx context.Context, exp *v1alpha1.Experiment) Verdict {
 		variants = []Variant{{Name: "image " + exp.Spec.Candidate, Slug: "img", Pod: pod},
 			{Name: "deletion control", Slug: "del", Pod: DeletionControl(baseline)}}
 		candidates, controls = []string{variants[0].Name}, []string{variants[1].Name}
+	} else if exp.Spec.Purpose == "verify-fix" && len(exp.Spec.Overrides) > 0 {
+		// Values a fix would set, learned from healthy use: the failing
+		// revision with them in place.
+		pod, err := ValuesCandidate(baseline, exp.Spec.Overrides)
+		if err != nil {
+			return Verdict{Phase: PhaseNotSure, Message: "the Lab has no fix to try: " + err.Error(), Fidelity: fidelity}
+		}
+		variants = []Variant{{Name: "the failing revision with " + Overridden(exp.Spec.Overrides), Slug: "val", Pod: pod},
+			{Name: "deletion control", Slug: "del", Pod: DeletionControl(baseline)}}
+		candidates, controls = []string{variants[0].Name}, []string{variants[1].Name}
 	} else if exp.Spec.Purpose == "verify-fix" {
 		pod, revision, notes, err := l.candidate(ctx, world, ref, exp.Spec.Revision, ns)
 		if err != nil {

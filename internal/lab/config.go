@@ -6,6 +6,9 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
+	"k8s.io/apimachinery/pkg/api/resource"
+
+	"github.com/karimzakzouk/sentinel/api/v1alpha1"
 )
 
 // ConfigRevert is the failing copy with each container's command,
@@ -72,4 +75,49 @@ func imageRepository(image string) string {
 		name = name[:i]
 	}
 	return name
+}
+
+// ValuesCandidate is the failing copy with values in place: the limit a fix
+// would set, learned from healthy use, raced before its pull request opens.
+func ValuesCandidate(failing *corev1.Pod, overrides []v1alpha1.ValueOverride) (*corev1.Pod, error) {
+	out := failing.DeepCopy()
+	for _, o := range overrides {
+		q, err := resource.ParseQuantity(o.Value)
+		if err != nil {
+			return nil, fmt.Errorf("%s's %s: %w", o.Container, o.Field, err)
+		}
+		kind, name, ok := strings.Cut(o.Field, ".")
+		if !ok || kind != "limits" && kind != "requests" || name != "memory" && name != "cpu" {
+			return nil, fmt.Errorf("the Lab sets no %s", o.Field)
+		}
+		found := false
+		for i := range out.Spec.Containers {
+			c := &out.Spec.Containers[i]
+			if c.Name != o.Container {
+				continue
+			}
+			found = true
+			list := &c.Resources.Limits
+			if kind == "requests" {
+				list = &c.Resources.Requests
+			}
+			if *list == nil {
+				*list = corev1.ResourceList{}
+			}
+			(*list)[corev1.ResourceName(name)] = q
+		}
+		if !found {
+			return nil, fmt.Errorf("the failing copy has no container %s", o.Container)
+		}
+	}
+	return out, nil
+}
+
+// Overridden says what a candidate's overrides set, for people.
+func Overridden(overrides []v1alpha1.ValueOverride) string {
+	var parts []string
+	for _, o := range overrides {
+		parts = append(parts, fmt.Sprintf("%s's %s at %s", o.Container, o.Field, o.Value))
+	}
+	return strings.Join(parts, ", ")
 }
