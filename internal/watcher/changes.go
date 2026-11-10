@@ -106,6 +106,13 @@ func StatefulSetChanges(old, cur *appsv1.StatefulSet, now time.Time) []Change {
 		cur, &old.Spec.Template, &cur.Spec.Template, old.Spec.Replicas, cur.Spec.Replicas, now)
 }
 
+// DaemonSetChanges returns the changes between two observations of a
+// DaemonSet, which has no replicas of its own to change.
+func DaemonSetChanges(old, cur *appsv1.DaemonSet, now time.Time) []Change {
+	return workloadChanges(model.ObjectRef{Group: "apps", Kind: "DaemonSet", Namespace: cur.Namespace, Name: cur.Name},
+		cur, &old.Spec.Template, &cur.Spec.Template, nil, nil, now)
+}
+
 func workloadChanges(ref model.ObjectRef, cur metav1.Object, oldT, curT *corev1.PodTemplateSpec, oldR, curR *int32, now time.Time) []Change {
 	actor := cur.GetAnnotations()[annotationManager]
 	var out []Change

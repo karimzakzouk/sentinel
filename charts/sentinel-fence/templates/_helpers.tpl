@@ -34,18 +34,6 @@ system:serviceaccount:{{ .Values.actor.namespace }}:{{ .Values.actor.serviceAcco
   message: "Sentinel may only change its own annotations on a workload"
 {{- end }}
 
-{{- /* The pod template is fixed but for the restart annotation, where no rollback contract applies. */ -}}
-{{- define "fence.podTemplateValidations" -}}
-- expression: "object.spec.template.spec == oldObject.spec.template.spec"
-  message: "Sentinel may not change the pod spec: service account, volumes, images, environment and security settings are fixed"
-- expression: "object.spec.template.metadata.?labels == oldObject.spec.template.metadata.?labels"
-  message: "Sentinel may not change pod template labels"
-- expression: >-
-    variables.newAnnotations.all(k, k == 'kubectl.kubernetes.io/restartedAt' || (k in variables.oldAnnotations && variables.oldAnnotations[k] == variables.newAnnotations[k])) &&
-    variables.oldAnnotations.all(k, k == 'kubectl.kubernetes.io/restartedAt' || k in variables.newAnnotations)
-  message: "the only pod template annotation Sentinel may change is the restart annotation"
-{{- end }}
-
 {{- /* The API server omits empty request fields, and reading a missing key is an error in CEL. */ -}}
 {{- define "fence.requestVariables" -}}
 - name: subResource

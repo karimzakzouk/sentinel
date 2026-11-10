@@ -66,6 +66,8 @@ type namespaceListers struct {
 	replicaSets appslisters.ReplicaSetLister
 	deployments appslisters.DeploymentLister
 	statefulSet appslisters.StatefulSetLister
+	daemonSets  appslisters.DaemonSetLister
+	revisions   appslisters.ControllerRevisionLister
 	services    corelisters.ServiceLister
 	slices      discoverylisters.EndpointSliceLister
 	owners      Owners
@@ -98,9 +100,11 @@ func (w *Watcher) Run(ctx context.Context) error {
 	for _, ns := range w.Namespaces {
 		f := informers.NewSharedInformerFactoryWithOptions(w.Client, 0, informers.WithNamespace(ns), informers.WithTransform(Transform))
 		pods, rs, deps, sts := f.Core().V1().Pods(), f.Apps().V1().ReplicaSets(), f.Apps().V1().Deployments(), f.Apps().V1().StatefulSets()
+		dss, crs := f.Apps().V1().DaemonSets(), f.Apps().V1().ControllerRevisions()
 		cms, events := f.Core().V1().ConfigMaps(), f.Core().V1().Events()
 		svcs, slices := f.Core().V1().Services(), f.Discovery().V1().EndpointSlices()
 		l := &namespaceListers{pods: pods.Lister(), replicaSets: rs.Lister(), deployments: deps.Lister(), statefulSet: sts.Lister(),
+			daemonSets: dss.Lister(), revisions: crs.Lister(),
 			services: svcs.Lister(), slices: slices.Lister(), owners: Owners{ReplicaSets: rs.Lister()}}
 		w.ns[ns] = l
 
@@ -136,6 +140,19 @@ func (w *Watcher) Run(ctx context.Context) error {
 			DeleteFunc: func(obj any) {
 				if s, ok := deleted(obj).(*appsv1.StatefulSet); ok {
 					w.forget(ctx, statefulSetRef(s))
+				}
+			},
+		}); err != nil {
+			return err
+		}
+		if _, err := dss.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
+			AddFunc: func(obj any) { w.Detector.Register(daemonSetRef(obj.(*appsv1.DaemonSet))) },
+			UpdateFunc: func(oldObj, newObj any) {
+				w.changes(ctx, DaemonSetChanges(oldObj.(*appsv1.DaemonSet), newObj.(*appsv1.DaemonSet), time.Now().UTC()))
+			},
+			DeleteFunc: func(obj any) {
+				if d, ok := deleted(obj).(*appsv1.DaemonSet); ok {
+					w.forget(ctx, daemonSetRef(d))
 				}
 			},
 		}); err != nil {
@@ -178,7 +195,7 @@ func (w *Watcher) Run(ctx context.Context) error {
 		f.Start(ctx.Done())
 		synced = append(synced, pods.Informer().HasSynced, rs.Informer().HasSynced, deps.Informer().HasSynced,
 			sts.Informer().HasSynced, cms.Informer().HasSynced, events.Informer().HasSynced,
-			svcs.Informer().HasSynced, slices.Informer().HasSynced)
+			svcs.Informer().HasSynced, slices.Informer().HasSynced, dss.Informer().HasSynced, crs.Informer().HasSynced)
 	}
 	if !cache.WaitForCacheSync(ctx.Done(), synced...) {
 		return fmt.Errorf("informer caches did not sync")
@@ -464,8 +481,27 @@ func (w *Watcher) NewestRevision(ref model.ObjectRef) string {
 			return ""
 		}
 		return sts.Status.UpdateRevision
+	case "DaemonSet":
+		// Its pods carry the newest ControllerRevision's hash.
+		crs, err := l.revisions.ControllerRevisions(ref.Namespace).List(labels.Everything())
+		if err != nil {
+			return ""
+		}
+		best, bestRev := "", int64(-1)
+		for _, cr := range crs {
+			owner := metav1.GetControllerOf(cr)
+			if owner == nil || owner.Kind != "DaemonSet" || owner.Name != ref.Name || cr.Revision <= bestRev {
+				continue
+			}
+			best, bestRev = cr.Labels[appsv1.ControllerRevisionHashLabelKey], cr.Revision
+		}
+		return best
 	}
 	return ""
+}
+
+func daemonSetRef(d *appsv1.DaemonSet) model.ObjectRef {
+	return model.ObjectRef{Group: "apps", Kind: "DaemonSet", Namespace: d.Namespace, Name: d.Name}
 }
 
 func deploymentRef(d *appsv1.Deployment) model.ObjectRef {

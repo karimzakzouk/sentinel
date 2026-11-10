@@ -4,6 +4,10 @@ import (
 	"testing"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	"github.com/karimzakzouk/sentinel/internal/logs"
 )
 
@@ -70,5 +74,17 @@ func TestAPodsLatestSampleReplacesItsEarlierOne(t *testing.T) {
 	r.add(sample("rollout-after", "web-new", "new", 180, few), t0.Add(3*time.Minute))
 	if n := len(r.after); n != 1 || r.after["web-new"].Exposure != 180 {
 		t.Fatalf("after samples = %+v", r.after)
+	}
+}
+
+// A DaemonSet's template change is a change like a Deployment's.
+func TestADaemonSetsTemplateChangeIsAChange(t *testing.T) {
+	old := &appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{Name: "agent", Namespace: "shop"},
+		Spec: appsv1.DaemonSetSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "agent", Image: "agent:1"}}}}}}
+	cur := old.DeepCopy()
+	cur.Spec.Template.Spec.Containers[0].Image = "agent:2"
+	got := DaemonSetChanges(old, cur, time.Now())
+	if len(got) != 1 || got[0].Kind != ChangeTemplate || got[0].Object.Kind != "DaemonSet" || got[0].Fields[0] != "image:agent" {
+		t.Fatalf("changes %+v", got)
 	}
 }

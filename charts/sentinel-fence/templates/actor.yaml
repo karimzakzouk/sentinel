@@ -28,7 +28,7 @@ spec:
   variables:
     {{- include "fence.requestVariables" . | nindent 4 }}
     - name: workload
-      expression: "request.resource.group == 'apps' && request.resource.resource in ['deployments', 'statefulsets']"
+      expression: "request.resource.group == 'apps' && request.resource.resource in ['deployments', 'statefulsets', 'daemonsets']"
     - name: argoApplication
       expression: "request.resource.group == 'argoproj.io' && request.resource.resource == 'applications'"
     - name: fluxSync
@@ -50,7 +50,7 @@ spec:
          request.resource.resource == 'actionrequests' && variables.subResource == 'status'){{ if .Values.argocdNamespace }} ||
         (request.operation == 'UPDATE' && variables.argoApplication && variables.subResource == ''){{ end }}{{ if .Values.fluxNamespaces }} ||
         (request.operation == 'UPDATE' && variables.fluxSync && variables.subResource == ''){{ end }}
-      message: "Sentinel may only update existing Deployments and StatefulSets, or their scale, and the status of action requests"
+      message: "Sentinel may only update existing Deployments, StatefulSets and DaemonSets, or their scale, and the status of action requests"
       reason: Forbidden
     - expression: "variables.subResource != 'scale' || (object.spec.?replicas.orValue(0) >= {{ .Values.replicas.min }} && object.spec.?replicas.orValue(0) <= {{ .Values.replicas.max }})"
       message: "replicas must stay between {{ .Values.replicas.min }} and {{ .Values.replicas.max }}"
@@ -109,6 +109,10 @@ spec:
   policyName: sentinel-fence-actor-deployments
   validationActions: [Deny]
 ---
+# StatefulSet and DaemonSet updates: the pod template, which a rollback
+# restores from the workload's own ControllerRevisions; a StatefulSet's
+# rollback waits for a person in the actor's code, which no admission
+# policy can check. Identity, storage and rollout settings stay fixed.
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
@@ -130,7 +134,6 @@ spec:
     {{- include "fence.workloadVariables" . | nindent 4 }}
   validations:
     {{- include "fence.workloadValidations" . | nindent 4 }}
-    {{- include "fence.podTemplateValidations" . | nindent 4 }}
     - expression: >-
         object.spec.serviceName == oldObject.spec.serviceName &&
         object.spec.?podManagementPolicy == oldObject.spec.?podManagementPolicy &&
@@ -149,4 +152,41 @@ metadata:
     {{- include "fence.labels" . | nindent 4 }}
 spec:
   policyName: sentinel-fence-actor-statefulsets
+  validationActions: [Deny]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: sentinel-fence-actor-daemonsets
+  labels:
+    {{- include "fence.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [apps]
+        apiVersions: [v1]
+        operations: [UPDATE]
+        resources: [daemonsets]
+  matchConditions:
+    - name: is-sentinel-actor
+      expression: request.userInfo.username == "{{ include "fence.actorUser" . }}"
+  variables:
+    {{- include "fence.workloadVariables" . | nindent 4 }}
+  validations:
+    {{- include "fence.workloadValidations" . | nindent 4 }}
+    - expression: >-
+        object.spec.?updateStrategy == oldObject.spec.?updateStrategy &&
+        object.spec.?minReadySeconds == oldObject.spec.?minReadySeconds &&
+        object.spec.?revisionHistoryLimit == oldObject.spec.?revisionHistoryLimit
+      message: "Sentinel may not change a DaemonSet's rollout settings"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: sentinel-fence-actor-daemonsets
+  labels:
+    {{- include "fence.labels" . | nindent 4 }}
+spec:
+  policyName: sentinel-fence-actor-daemonsets
   validationActions: [Deny]

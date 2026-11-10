@@ -44,7 +44,7 @@ func WatcherRules(ns string) []Rule {
 	var rules []Rule
 	for _, res := range []struct{ group, resource string }{
 		{"", "pods"}, {"", "events"}, {"", "configmaps"}, {"", "services"},
-		{"apps", "deployments"}, {"apps", "replicasets"}, {"apps", "statefulsets"}, {"apps", "daemonsets"},
+		{"apps", "deployments"}, {"apps", "replicasets"}, {"apps", "statefulsets"}, {"apps", "daemonsets"}, {"apps", "controllerrevisions"},
 		{"discovery.k8s.io", "endpointslices"},
 	} {
 		for _, verb := range []string{"list", "watch"} {

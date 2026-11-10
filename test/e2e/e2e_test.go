@@ -868,7 +868,10 @@ func TestFenceBlocksForbiddenWrites(t *testing.T) {
 		{"actor restores a Deployment's template", patch(actor, smokeNS, "deployment", "web", `{"spec":{"template":{"spec":{"containers":[{"name":"web","image":"busybox"}]}}}}`), true, false},
 		{"actor pauses a Deployment", patch(actor, smokeNS, "deployment", "web", `{"spec":{"paused":true}}`), false, true},
 		{"actor changes a Deployment's labels", patch(actor, smokeNS, "deployment", "web", `{"metadata":{"labels":{"x":"y"}}}`), false, true},
-		{"actor changes a StatefulSet's image", patch(actor, smokeNS, "statefulset", "store", `{"spec":{"template":{"spec":{"containers":[{"name":"store","image":"busybox"}]}}}}`), false, true},
+		// A StatefulSet's rollback restores an earlier template too; the actor
+		// waits for a person's approval first, which no admission policy sees.
+		{"actor restores a StatefulSet's template", patch(actor, smokeNS, "statefulset", "store", `{"spec":{"template":{"spec":{"containers":[{"name":"store","image":"busybox"}]}}}}`), true, false},
+		{"actor changes a StatefulSet's storage", patch(actor, smokeNS, "statefulset", "store", `{"spec":{"persistentVolumeClaimRetentionPolicy":{"whenDeleted":"Delete"}}}`), false, true},
 		{"actor changes StatefulSet pod labels", patch(actor, smokeNS, "statefulset", "store", `{"spec":{"template":{"metadata":{"labels":{"x":"y"}}}}}`), false, true},
 		{"actor acts outside its namespaces", patch(actor, "kube-system", "deployment", "coredns", `{"spec":{"replicas":2}}`), false, false},
 		{"actor records an action request's outcome", updateStatus, true, false},
