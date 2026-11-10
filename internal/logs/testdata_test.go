@@ -73,4 +73,53 @@ Node.js v20.11.1`
          at Microsoft.Extensions.Caching.StackExchangeRedis.RedisCache.GetAndRefreshAsync(String key, Boolean getData, CancellationToken token)
          at Microsoft.Extensions.Caching.StackExchangeRedis.RedisCache.GetAsync(String key, CancellationToken token)
          at cartservice.cartstore.RedisCartStore.GetCartAsync(String userId) in /app/cartstore/RedisCartStore.cs:line 90' raised.`
+
+	rubyTrace = "/app/lib/shop.rb:4:in 'Shop#load': undefined method '[]' for nil (NoMethodError)\n" +
+		"\tfrom /usr/local/bundle/gems/rack-3.1.0/lib/rack/builder.rb:12:in 'Rack::Builder#call'\n" +
+		"\tfrom /app/lib/shop.rb:10:in 'block in Shop.run'\n" +
+		"\tfrom /app/app.rb:3:in '<main>'"
+
+	rubyOldTrace = "/app/lib/shop.rb:4:in `load': undefined method `[]' for nil:NilClass (NoMethodError)\n" +
+		"\tfrom /app/app.rb:3:in `<main>'"
+
+	phpTrace = `PHP Fatal error:  Uncaught Error: Call to a member function load() on null in /var/www/src/Catalog.php:12
+Stack trace:
+#0 /var/www/src/Shop.php(30): App\Catalog->items()
+#1 /var/www/vendor/slim/slim/Slim/App.php(205): App\Shop->run()
+#2 /var/www/public/index.php(8): Slim\App->handle()
+#3 {main}
+  thrown in /var/www/src/Catalog.php on line 12`
+
+	rustTrace = `thread 'main' panicked at src/catalog.rs:17:9:
+index out of bounds: the len is 0 but the index is 0
+stack backtrace:
+   0: rust_begin_unwind
+             at /rustc/90b35a6239c3d8bdabc530a6a0816f7ff89a0aaf/library/std/src/panicking.rs:665:5
+   1: core::panicking::panic_bounds_check
+             at /rustc/90b35a6239c3d8bdabc530a6a0816f7ff89a0aaf/library/core/src/panicking.rs:266:5
+   2: shop::catalog::Catalog::first
+             at ./src/catalog.rs:17:9
+   3: shop::main
+             at ./src/main.rs:6:5
+note: Some details are omitted, run with ` + "`RUST_BACKTRACE=full`" + ` for a verbose backtrace.`
+
+	rustShortTrace = `thread 'main' panicked at 'called ` + "`Option::unwrap()`" + ` on a ` + "`None`" + ` value', src/main.rs:6:31
+note: run with ` + "`RUST_BACKTRACE=1`" + ` environment variable to display a backtrace`
+
+	glibcAssertTrace = "shop: src/catalog.c:12: load: Assertion `items != NULL' failed."
+
+	muslAssertTrace = "Assertion failed: items != NULL (src/catalog.cpp: int shop::Catalog::load(int): 12)"
+
+	abseilTrace = `*** SIGSEGV received at time=1762736400 on cpu 2 ***
+PC: @     0x55d1c2a3b1c4  (unknown)  shop::Catalog::Load()
+    @     0x7f3a2b1c4d5e       64  __libc_start_main
+    @     0x55d1c2a3b2d0       32  main`
+
+	backwardTrace = `Stack trace (most recent call last):
+#2    Object "/app/shop", at 0x55d1c2a3b2d0, in main
+      Source "/src/main.cpp", line 20, in main [0x55d1c2a3b2d0]
+#1    Object "/app/shop", at 0x55d1c2a3b250, in shop::Catalog::run()
+      Source "/src/catalog.cpp", line 31, in shop::Catalog::run() [0x55d1c2a3b250]
+#0    Object "/app/shop", at 0x55d1c2a3b1c4, in shop::Catalog::load(int)
+      Source "/src/catalog.cpp", line 12, in shop::Catalog::load(int) [0x55d1c2a3b1c4]`
 )

@@ -45,6 +45,15 @@ func TestParseException(t *testing.T) {
 		"logged java": {loggedJavaTrace, "java",
 			"[<time> <time> ERROR <num> --- [main] o.s.boot.SpringApplication : Application run failed]",
 			"[com.example.shop.App.main]"},
+		"ruby":                     {rubyTrace, "ruby", "[NoMethodError]", "[Shop#load Shop.run <main>]"},
+		"ruby, before 3.4":         {rubyOldTrace, "ruby", "[NoMethodError]", "[load <main>]"},
+		"php":                      {phpTrace, "php", "[Error]", "[App\\Catalog->items App\\Shop->run {main}]"},
+		"rust":                     {rustTrace, "rust", "[panic: index out of bounds: the len is <num> but the index is <num>]", "[shop::catalog::Catalog::first shop::main]"},
+		"rust without a backtrace": {rustShortTrace, "rust", "[panic: called `Option::unwrap()` on a `None` value]", "[]"},
+		"glibc assert":             {glibcAssertTrace, "c", "[assertion failed: items != NULL]", "[load]"},
+		"musl assert":              {muslAssertTrace, "cpp", "[assertion failed: items != NULL]", "[shop::Catalog::load]"},
+		"abseil":                   {abseilTrace, "cpp", "[SIGSEGV]", "[shop::Catalog::Load main]"},
+		"backward-cpp":             {backwardTrace, "cpp", "[crash]", "[shop::Catalog::load shop::Catalog::run main]"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			e := parse(t, tc.trace)
@@ -82,6 +91,41 @@ func TestFingerprintsGroupTheSameErrorOnly(t *testing.T) {
 		if a, b := parse(t, pair[0]).Fingerprint, parse(t, pair[1]).Fingerprint; a == b {
 			t.Errorf("different errors share fingerprint %s:\n%s\n---\n%s", a, pair[0], pair[1])
 		}
+	}
+}
+
+// Each frame says where it ran, as the runtime printed it, so the Fixer can
+// find the function in the source; a frame without a source says nothing.
+func TestFramesSayWhereTheyRan(t *testing.T) {
+	type at struct {
+		file string
+		line int
+	}
+	for name, tc := range map[string]struct {
+		trace string
+		want  []at
+	}{
+		"go":           {goPanicTrace, []at{{"/app/server.go", 42}, {"/usr/local/go/src/net/http/server.go", 2136}, {"/app/main.go", 17}}},
+		"java":         {javaTrace, []at{{"Catalog.java", 42}, {"Catalog.java", 20}, {"Constructor.java", 480}}},
+		"python":       {pythonTrace, []at{{"/usr/local/lib/python3.11/site-packages/redis/connection.py", 707}, {"/app/main.py", 6}, {"/app/main.py", 10}}},
+		"node":         {nodeTrace, []at{{"/usr/src/app/server.js", 162}, {"/usr/src/app/server.js", 110}, {"", 0}, {"", 0}}},
+		"dotnet":       {dotnetTrace, []at{{"", 0}, {"", 0}, {"/app/cartstore/RedisCartStore.cs", 87}, {"/app/services/CartService.cs", 43}}},
+		"ruby":         {rubyTrace, []at{{"/app/lib/shop.rb", 4}, {"/usr/local/bundle/gems/rack-3.1.0/lib/rack/builder.rb", 12}, {"/app/lib/shop.rb", 10}, {"/app/app.rb", 3}}},
+		"php":          {phpTrace, []at{{"/var/www/src/Catalog.php", 12}, {"/var/www/src/Shop.php", 30}, {"/var/www/vendor/slim/slim/Slim/App.php", 205}, {"/var/www/public/index.php", 8}}},
+		"rust":         {rustTrace, []at{{"/rustc/90b35a6239c3d8bdabc530a6a0816f7ff89a0aaf/library/std/src/panicking.rs", 665}, {"/rustc/90b35a6239c3d8bdabc530a6a0816f7ff89a0aaf/library/core/src/panicking.rs", 266}, {"./src/catalog.rs", 17}, {"./src/main.rs", 6}}},
+		"rust, short":  {rustShortTrace, []at{{"src/main.rs", 6}}},
+		"glibc assert": {glibcAssertTrace, []at{{"src/catalog.c", 12}}},
+		"backward-cpp": {backwardTrace, []at{{"/src/catalog.cpp", 12}, {"/src/catalog.cpp", 31}, {"/src/main.cpp", 20}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var got []at
+			for _, f := range parse(t, tc.trace).Frames {
+				got = append(got, at{f.File, f.Line})
+			}
+			if fmt.Sprint(got) != fmt.Sprint(tc.want) {
+				t.Errorf("frames ran at %v\nwant %v", got, tc.want)
+			}
+		})
 	}
 }
 

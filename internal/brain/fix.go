@@ -41,6 +41,8 @@ type FixRequest struct {
 type Crash struct {
 	Language string
 	Frames   []string
+	// Stack is the frames with where each ran, where the runtime printed it.
+	Stack []logs.Frame
 }
 
 // ActionFixMerge is the policy action that lets the Fixer merge its own
@@ -272,13 +274,15 @@ func (b *Brain) crashOf(ctx context.Context, incident model.ID, target model.Obj
 		}
 		for _, ex := range data.Summary.Exceptions {
 			var frames []string
+			var stack []logs.Frame
 			for _, f := range ex.Frames {
 				if f.InApp {
 					frames = append(frames, f.Function)
+					stack = append(stack, f)
 				}
 			}
 			if len(frames) > 0 {
-				newest, at = &Crash{Language: ex.Language, Frames: frames}, e.CollectedAt
+				newest, at = &Crash{Language: ex.Language, Frames: frames, Stack: stack}, e.CollectedAt
 			}
 		}
 	}

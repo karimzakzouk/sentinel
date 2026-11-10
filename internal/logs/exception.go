@@ -13,20 +13,25 @@ type Exception struct {
 	Language string `json:"language"`
 	// Types lists exception types from the outermost to the root cause.
 	Types []string `json:"types"`
-	// Frames are the root cause's frames, innermost first, as module and
-	// function without line numbers or argument values.
+	// Frames are the root cause's frames, innermost first: module and
+	// function, without argument values, and where each ran when the
+	// runtime printed it.
 	Frames []Frame `json:"frames,omitempty"`
 	// Fingerprint groups occurrences of the same error: types and in-app
 	// frames, hashed, under a versioned algorithm.
 	Fingerprint string `json:"fingerprint"`
 }
 
-// Frame is one call in a stack trace.
+// Frame is one call in a stack trace. File and Line, where the runtime
+// printed them, say where in the source it ran; fingerprints leave them out,
+// so a line moving does not split one error in two.
 type Frame struct {
 	Function string `json:"function"`
 	// InApp marks the application's own code, as opposed to the runtime,
 	// the standard library and dependencies.
-	InApp bool `json:"inApp,omitempty"`
+	InApp bool   `json:"inApp,omitempty"`
+	File  string `json:"file,omitempty"`
+	Line  int    `json:"line,omitempty"`
 }
 
 // FingerprintVersion names the fingerprint algorithm. Changing what goes
@@ -55,6 +60,14 @@ func ParseException(r Record) (Exception, bool) {
 		e = parseJava(r.Lines)
 	case jsError(first):
 		e = parseNode(r.Lines)
+	case rubyHeader.MatchString(first):
+		e = parseRuby(r.Lines)
+	case phpUncaught(first):
+		e = parsePHP(r.Lines)
+	case strings.HasPrefix(first, "thread '") && strings.Contains(first, "' panicked at "):
+		e = parseRust(r.Lines)
+	case glibcAssert.MatchString(first) || muslAssert.MatchString(first) || nativeCrash(first):
+		e = parseNative(r.Lines)
 	case len(r.Lines) > 1 && hasAnyPrefix(strings.TrimLeft(r.Lines[1], " \t"), "at ", "---> "):
 		// A logged exception: an entry's message, then frames or, in .NET,
 		// the inner exceptions and their frames.
@@ -114,9 +127,37 @@ func parseGo(lines []string) Exception {
 				fn = l[:i]
 			}
 			e.Frames = append(e.Frames, Frame{Function: fn, InApp: goInApp(fn)})
+		case goroutines == 1 && l != "" && indented(l) && len(e.Frames) > 0 && e.Frames[len(e.Frames)-1].File == "":
+			// "\t/src/catalog.go:17 +0x1d"
+			loc, _, _ := strings.Cut(strings.TrimSpace(l), " +0x")
+			f := &e.Frames[len(e.Frames)-1]
+			f.File, f.Line = fileLine(loc)
 		}
 	}
 	return e
+}
+
+// fileLine splits "path:line" and "path:line:column".
+func fileLine(loc string) (string, int) {
+	file := loc
+	var line int
+	for range 2 {
+		i := strings.LastIndexByte(file, ':')
+		if i <= 0 || !digits(file[i+1:]) {
+			break
+		}
+		line = atoi(file[i+1:])
+		file = file[:i]
+	}
+	return strings.TrimPrefix(file, "file://"), line
+}
+
+func atoi(s string) int {
+	n := 0
+	for i := 0; i < len(s) && i < 9; i++ {
+		n = n*10 + int(s[i]-'0')
+	}
+	return n
 }
 
 // goInApp treats package main and module paths outside well-known
@@ -170,13 +211,19 @@ func parseJava(lines []string) Exception {
 }
 
 func javaFrame(s string) Frame {
-	fn, _, _ := strings.Cut(s, "(")
+	fn, loc, _ := strings.Cut(s, "(")
 	if i := strings.IndexByte(fn, '/'); i >= 0 {
 		fn = fn[i+1:] // module prefix: java.base/java.lang.Thread.run
 	}
-	return Frame{Function: fn, InApp: !hasAnyPrefix(fn, "java.", "javax.", "jdk.", "sun.", "com.sun.", "kotlin.",
+	f := Frame{Function: fn, InApp: !hasAnyPrefix(fn, "java.", "javax.", "jdk.", "sun.", "com.sun.", "kotlin.",
 		"kotlinx.", "scala.", "org.springframework.", "org.apache.", "io.netty.", "reactor.", "io.grpc.",
 		"org.hibernate.", "com.fasterxml.", "org.junit.", "io.micrometer.", "ch.qos.logback.", "org.slf4j.")}
+	// "(Catalog.java:42)"; a frame without a source says "Native Method"
+	// or "Unknown Source".
+	if loc, ok := strings.CutSuffix(loc, ")"); ok && strings.Contains(loc, ":") {
+		f.File, f.Line = fileLine(loc)
+	}
+	return f
 }
 
 // Python: "Traceback" blocks of File lines, outermost first, each ending in
@@ -206,11 +253,15 @@ func parsePython(lines []string) Exception {
 func pythonFrame(t string) Frame {
 	rest := strings.TrimPrefix(t, `File "`)
 	file, rest, _ := strings.Cut(rest, `"`)
-	_, fn, _ := strings.Cut(rest, ", in ")
+	where, fn, _ := strings.Cut(rest, ", in ")
 	module := strings.TrimSuffix(path.Base(file), ".py")
 	inApp := !strings.Contains(file, "site-packages") && !strings.Contains(file, "dist-packages") &&
 		!strings.Contains(file, "/lib/python") && !strings.HasPrefix(file, "<")
-	return Frame{Function: module + "." + fn, InApp: inApp}
+	f := Frame{Function: module + "." + fn, InApp: inApp}
+	if n, ok := strings.CutPrefix(strings.TrimSpace(strings.TrimPrefix(where, ",")), "line "); ok && digits(n) && !strings.HasPrefix(file, "<") {
+		f.File, f.Line = file, atoi(n)
+	}
+	return f
 }
 
 // Node.js: "TypeError: message", then "at function (file:line:column)".
@@ -234,15 +285,14 @@ func nodeFrame(s string) Frame {
 			fn = fn[:j]
 		}
 	}
-	file := loc
-	for range 2 { // drop :line:column
-		if i := strings.LastIndexByte(file, ':'); i > 0 && digits(file[i+1:]) {
-			file = file[:i]
-		}
-	}
+	file, line := fileLine(loc)
 	module := strings.TrimSuffix(path.Base(file), path.Ext(file))
 	inApp := !strings.Contains(file, "node_modules") && !hasAnyPrefix(file, "node:", "internal/")
-	return Frame{Function: module + "." + fn, InApp: inApp}
+	f := Frame{Function: module + "." + fn, InApp: inApp}
+	if inApp && line > 0 {
+		f.File, f.Line = file, line
+	}
+	return f
 }
 
 // .NET: "Unhandled exception. Type: message", inner exceptions after
@@ -268,7 +318,14 @@ func dotnetChain(e *Exception, lines []string) {
 			if i := strings.IndexByte(fn, '['); i > 0 {
 				fn = fn[:i] // generic arguments: First[TSource]
 			}
-			e.Frames = append(e.Frames, Frame{Function: fn, InApp: !hasAnyPrefix(fn, "System.", "Microsoft.", "Grpc.", "Google.Protobuf.")})
+			f := Frame{Function: fn, InApp: !hasAnyPrefix(fn, "System.", "Microsoft.", "Grpc.", "Google.Protobuf.")}
+			// "in /app/cartstore/RedisCartStore.cs:line 87", where symbols ship.
+			if i := strings.LastIndex(t, " in "); i > 0 {
+				if file, n, ok := strings.Cut(t[i+4:], ":line "); ok && digits(n) {
+					f.File, f.Line = file, atoi(n)
+				}
+			}
+			e.Frames = append(e.Frames, f)
 		case strings.HasPrefix(t, "---> "):
 			name, _, _ := strings.Cut(t[5:], ": ")
 			e.Types = append(e.Types, name)

@@ -51,6 +51,25 @@ type Crash struct {
 	// +listType=atomic
 	// +kubebuilder:validation:MaxItems=20
 	Frames []string `json:"frames"`
+	// Stack is the same frames with where each ran, where the runtime
+	// printed it.
+	// +optional
+	// +listType=atomic
+	// +kubebuilder:validation:MaxItems=20
+	Stack []CrashFrame `json:"stack,omitempty"`
+}
+
+// CrashFrame is one frame of a crash's stack.
+type CrashFrame struct {
+	// Function is the frame's function, as the runtime named it; empty
+	// when it printed only where.
+	// +optional
+	Function string `json:"function,omitempty"`
+	// File is the source file it ran in, as the runtime printed it.
+	// +optional
+	File string `json:"file,omitempty"`
+	// +optional
+	Line int32 `json:"line,omitempty"`
 }
 
 // CodeFix is a fix proposed to a failing image's source.
