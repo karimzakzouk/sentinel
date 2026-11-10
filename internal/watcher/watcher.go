@@ -381,7 +381,7 @@ func (w *Watcher) pollMetrics(ctx context.Context, now time.Time) {
 	totals := map[string][2]float64{}
 	type sample struct {
 		workload, container, revision string
-		bytes                         float64
+		bytes, cores                  float64
 	}
 	var samples []sample
 	for ns, l := range w.ns {
@@ -405,7 +405,7 @@ func (w *Watcher) pollMetrics(ctx context.Context, now time.Time) {
 			workload, rev := l.owners.Resolve(pod)
 			t := totals[workload.String()]
 			totals[workload.String()] = [2]float64{t[0] + u.CPU, t[1] + u.Memory}
-			samples = append(samples, sample{workload.String(), u.Container, rev, u.Memory})
+			samples = append(samples, sample{workload.String(), u.Container, rev, u.Memory, u.CPU})
 		}
 	}
 	m.mu.Lock()
@@ -413,6 +413,7 @@ func (w *Watcher) pollMetrics(ctx context.Context, now time.Time) {
 	m.usage = usage
 	for _, s := range samples {
 		m.addMemory(s.workload, s.container, s.revision, s.bytes)
+		m.addCPU(s.workload, s.container, s.revision, s.cores)
 	}
 	if m.history == nil {
 		m.history = map[string]*usageHistory{}
@@ -455,6 +456,23 @@ func (w *Watcher) MemoryUse(ref model.ObjectRef, except string) map[string][]flo
 		for _, s := range samples {
 			if s.revision != except {
 				out[container] = append(out[container], s.bytes)
+			}
+		}
+	}
+	return out
+}
+
+// CPUUse reports, per container of a workload, the CPU use its pods had in
+// revisions other than except, in cores: what it used while healthy, for
+// learning a CPU limit once except has failed.
+func (w *Watcher) CPUUse(ref model.ObjectRef, except string) map[string][]float64 {
+	w.metrics.mu.Lock()
+	defer w.metrics.mu.Unlock()
+	out := map[string][]float64{}
+	for container, samples := range w.metrics.cpu[ref.String()] {
+		for _, s := range samples {
+			if s.revision != except {
+				out[container] = append(out[container], s.cores)
 			}
 		}
 	}

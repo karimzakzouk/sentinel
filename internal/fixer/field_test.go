@@ -165,6 +165,24 @@ func TestAMemoryLimitIsNotRestored(t *testing.T) {
 	}
 }
 
+// A CPU limit is not put back either.
+func TestACPULimitIsNotRestored(t *testing.T) {
+	ctx := context.Background()
+	pod := func(limit string) corev1.PodTemplateSpec {
+		c := corev1.Container{Name: "podinfod", Image: "podinfo:1",
+			Resources: corev1.ResourceRequirements{Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse(limit)}}}
+		return corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{c}}}
+	}
+	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "podinfo", Namespace: "shop", UID: types.UID("dep")},
+		Spec: appsv1.DeploymentSpec{Template: pod("100m")}}
+	rs := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Name: "podinfo-bad", Namespace: "shop", Labels: map[string]string{"pod-template-hash": "bad"},
+		OwnerReferences: []metav1.OwnerReference{{UID: "dep"}}}, Spec: appsv1.ReplicaSetSpec{Template: pod("10m")}}
+	_, err := ContainerChange(ctx, fake.NewClientset(dep, rs), dep, "bad")
+	if err == nil || !strings.Contains(err.Error(), "CPU limit") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 // Of several values a revision changed, the fix sets the one the fault
 // class blames and leaves the rest; a class that blames two refuses, and a
 // memory limit gets the learned value, never more than the limit that held.
@@ -175,29 +193,40 @@ func TestChangeForBlamesByFaultClass(t *testing.T) {
 			Resources: corev1.ResourceRequirements{Limits: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse(limit)}}}
 		return corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{c}}}
 	}
+	cpuTemplate := func(image, cpu string) corev1.PodTemplateSpec {
+		c := corev1.Container{Name: "web", Image: image,
+			Resources: corev1.ResourceRequirements{Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse(cpu)}}}
+		return corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{c}}}
+	}
 	for _, tc := range []struct {
 		name        string
-		bad         corev1.PodTemplateSpec
+		good, bad   corev1.PodTemplateSpec
 		spec        v1alpha1.FixSpec
 		want, kept  string
 		wantRefusal string
 	}{
-		{name: "a bad image beside a new greeting", bad: template("web:nope", "hello", "64Mi"),
+		{name: "a bad image beside a new greeting", good: template("web:1", "hi", "64Mi"), bad: template("web:nope", "hello", "64Mi"),
 			spec: v1alpha1.FixSpec{FaultClass: "deploy.bad-image"}, want: "image web:nope -> web:1", kept: "web's environment variable GREETING"},
-		{name: "a crash two changes could explain", bad: template("web:2", "hello", "64Mi"),
+		{name: "a crash two changes could explain", good: template("web:1", "hi", "64Mi"), bad: template("web:2", "hello", "64Mi"),
 			spec: v1alpha1.FixSpec{FaultClass: "deploy.crash-on-start"}, wantRefusal: "2 values changed in revision bad that a deploy.crash-on-start fault could be blamed on"},
-		{name: "a memory limit, learned", bad: template("web:1", "hi", "6Mi"),
+		{name: "a memory limit, learned", good: template("web:1", "hi", "64Mi"), bad: template("web:1", "hi", "6Mi"),
 			spec: v1alpha1.FixSpec{FaultClass: "resource.memory-limit", MemoryLimits: map[string]string{"web": "14Mi"}}, want: "limits.memory 6Mi -> 14Mi"},
-		{name: "a memory limit learned above the one that held", bad: template("web:1", "hi", "6Mi"),
+		{name: "a memory limit learned above the one that held", good: template("web:1", "hi", "64Mi"), bad: template("web:1", "hi", "6Mi"),
 			spec: v1alpha1.FixSpec{FaultClass: "resource.memory-limit", MemoryLimits: map[string]string{"web": "100Mi"}}, want: "limits.memory 6Mi -> 64Mi"},
-		{name: "a memory limit with nothing learned", bad: template("web:1", "hi", "6Mi"),
+		{name: "a memory limit with nothing learned", good: template("web:1", "hi", "64Mi"), bad: template("web:1", "hi", "6Mi"),
 			spec: v1alpha1.FixSpec{FaultClass: "resource.memory-limit"}, wantRefusal: "has not measured enough"},
-		{name: "a change the class is not blamed on", bad: template("web:1", "hello", "64Mi"),
+		{name: "a change the class is not blamed on", good: template("web:1", "hi", "64Mi"), bad: template("web:1", "hello", "64Mi"),
 			spec: v1alpha1.FixSpec{FaultClass: "resource.memory-limit"}, wantRefusal: "none of which a resource.memory-limit fault is blamed on"},
+		{name: "a CPU limit, learned", good: cpuTemplate("web:1", "100m"), bad: cpuTemplate("web:1", "10m"),
+			spec: v1alpha1.FixSpec{FaultClass: "resource.cpu-limit", CPULimits: map[string]string{"web": "80m"}}, want: "limits.cpu 10m -> 80m"},
+		{name: "a CPU limit learned above the one that held", good: cpuTemplate("web:1", "100m"), bad: cpuTemplate("web:1", "10m"),
+			spec: v1alpha1.FixSpec{FaultClass: "resource.cpu-limit", CPULimits: map[string]string{"web": "500m"}}, want: "limits.cpu 10m -> 100m"},
+		{name: "a CPU limit with nothing learned", good: cpuTemplate("web:1", "100m"), bad: cpuTemplate("web:1", "10m"),
+			spec: v1alpha1.FixSpec{FaultClass: "resource.cpu-limit"}, wantRefusal: "has not measured enough"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "shop", UID: types.UID("dep")},
-				Spec: appsv1.DeploymentSpec{Template: template("web:1", "hi", "64Mi")}}
+				Spec: appsv1.DeploymentSpec{Template: tc.good}}
 			rs := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Name: "web-bad", Namespace: "shop", Labels: map[string]string{"pod-template-hash": "bad"},
 				OwnerReferences: []metav1.OwnerReference{{UID: "dep"}}}, Spec: appsv1.ReplicaSetSpec{Template: tc.bad}}
 			tc.spec.FromRevision = "bad"
@@ -231,6 +260,22 @@ func TestLocateSetsALearnedMemoryLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	if want := podinfo("          resources:\n            limits: {memory: 14Mi} # tight\n"); string(edit.After) != want || edit.Line != 16 {
+		t.Fatalf("line %d:\n%s\nwant:\n%s", edit.Line, edit.After, want)
+	}
+}
+
+// A learned CPU limit is written where the manifest sets the limit.
+func TestLocateSetsALearnedCPULimit(t *testing.T) {
+	repo := repoOf(t, map[string]string{
+		"app/kustomization.yaml": "resources: [deployment.yaml]\n",
+		"app/deployment.yaml":    podinfo("          resources:\n            limits: {cpu: 10m} # tight\n"),
+	})
+	edit, err := Locate(repo, "app", Target{Kind: "Deployment", Name: "podinfo"},
+		Change{Container: "podinfod", Field: "limits.cpu", Bad: "10m", Good: "80m"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := podinfo("          resources:\n            limits: {cpu: 80m} # tight\n"); string(edit.After) != want || edit.Line != 16 {
 		t.Fatalf("line %d:\n%s\nwant:\n%s", edit.Line, edit.After, want)
 	}
 }

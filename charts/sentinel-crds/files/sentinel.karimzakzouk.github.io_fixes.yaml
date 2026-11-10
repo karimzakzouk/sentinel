@@ -65,6 +65,15 @@ spec:
                   running, and the culprit is the commit that last changed the code the
                   crash ran through.
                 type: boolean
+              cpuLimits:
+                additionalProperties:
+                  type: string
+                description: |-
+                  CPULimits are, per container, the CPU limit Sentinel learned from
+                  what the workload used while it was healthy. For a cpu-limit
+                  incident a fix proposes it, since putting back the old limit can be
+                  as wrong as the new one.
+                type: object
               crash:
                 description: |-
                   Crash is the stack the failing revision crashed with, when its logs

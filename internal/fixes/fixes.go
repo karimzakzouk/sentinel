@@ -77,7 +77,7 @@ func (f *Fixes) Fix(ctx context.Context, r brain.FixRequest) (string, error) {
 	fix := &v1alpha1.Fix{
 		TypeMeta:   metav1.TypeMeta{APIVersion: v1alpha1.GroupVersion.String(), Kind: "Fix"},
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: f.Namespace},
-		Spec: v1alpha1.FixSpec{IncidentID: string(incident), FromRevision: fromRevision, FaultClass: r.FaultClass, MemoryLimits: r.MemoryLimits, Merge: r.Merge,
+		Spec: v1alpha1.FixSpec{IncidentID: string(incident), FromRevision: fromRevision, FaultClass: r.FaultClass, MemoryLimits: r.MemoryLimits, CPULimits: r.CPULimits, Merge: r.Merge,
 			Workload: v1alpha1.TargetRef{APIVersion: "apps/v1", Kind: target.Kind, Namespace: target.Namespace, Name: target.Name}},
 	}
 	fix.Spec.Errors = r.Errors[:min(len(r.Errors), 5)]

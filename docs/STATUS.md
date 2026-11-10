@@ -1,6 +1,6 @@
 # Status
 
-Last updated: Tuesday 10 November 2026, 04:04 Cairo time (UTC+2).
+Last updated: Tuesday 10 November 2026, 06:15 Cairo time (UTC+2).
 
 ## Where things stand
 
@@ -18,8 +18,8 @@ rollback, Sentinel proposes the change that makes it hold in Git, as a pull
 request, and checks that it held once it is merged and the owner resumed.
 It finds the value in a manifest, an images entry or a kustomization's
 patch, fixes only the value the fault is blamed on when one commit changed
-several, proposes a memory limit learned from healthy use rather than the
-old one, and merges its own fix where a policy grants it and its record has
+several, proposes a memory or CPU limit learned from healthy use rather than
+the old one, and merges its own fix where a policy grants it and its record has
 earned it. For a crash in code, in almost any language, it tries one
 fixer's change after another, each built by the source's own pipeline and
 raced in the Lab before the next: the crashing function put back, a fixed
@@ -92,7 +92,7 @@ To look at it on a cluster where it runs:
 |---|---|---|
 | 1. Restore a bad value through Git | Built for an image, a command, arguments and environment values set in the files a Flux Kustomization or an Argo CD Application deploys (decisions 67 to 70 and 72), and in a kustomization's patches (decision 73): the Fixer finds the file, images entry or patch that set it, opens a pull request, follows it until the owner has applied it, and Sentinel checks that it held. Resuming the owner stays a person's (decision 69). Proven through Flux and Argo CD, and scored (below) | `TestTheFixerProposesTheFixInGit` and `TestTheFixerProposesTheFixInGitThroughArgoCD`, in CI and on the development cluster: a bad image committed to the Gitea repository the owner deploys from, Sentinel's rollback, a pull request changing line 17 of `deployment.yaml` with its comment kept, merged, the owner resumed, and "fix held", about 3 minutes after the proposal. The Git scenario session below. Unit tests render overlays with images entries, plain manifests, owners' name prefixes, and the abstentions |
 | 2. Partial reverts | Built (decision 74): of several values a revision changed, the one the fault class blames is fixed and the rest stay, said in the pull request | The pool's bad tag beside a greeting (below): the tag fixed, the greeting kept; unit tests for every class |
-| 3. Values of their own | Built for memory limits (decision 75): a limit learned from healthy use, never above the one that held, raced in the Lab before its pull request opens, with the heap settings that no longer fit it (decision 96). Left: CPU, disk, probes, timeouts and replicas | Unit tests of the race, the verdict's path to the pull request, and the heap settings; the pool's memory-limit scenario (below) |
+| 3. Values of their own | Built for memory and CPU limits (decisions 75 and 98): a limit learned from healthy use, never above the one that held, raced in the Lab before its pull request opens; memory also updates the heap settings that no longer fit it (decision 96). Left: disk, probes, timeouts and replicas | Unit tests of the race, the verdict's path to the pull request, and the heap settings; the pool's memory-limit scenario (below) |
 | 4. Code incidents | Built for Go, Python, JavaScript and TypeScript, Java, Kotlin, Scala, C#, Ruby, PHP, Rust, C, C++ and Swift (decision 91): for a crash a new image brought, or an old bug nothing was rolled back from (decision 95), the Fixer tries fixers in order, each change built by the source's own pipeline and raced in the Lab before the next is tried: the crashing function put back, fifteen templates, the whole commit reverted, and a language model's change last (decisions 92 and 93); without a stack or commit labels too (decision 94) | The release sessions below, on the development cluster: shop's Go crash and pyshop's Python crash each fixed and passed by the Lab, 15 of 15 runs; with a 1.5B local model alone, its first change failed in the Lab and it was asked again. `TestTheCrashingFunctionIsPutBackInEveryLanguage` (twelve languages), `TestTemplatesFixTheCrashesEveryCodebaseHas`, `TestACrashInCodeGetsAFixInItsSource` (restore failed by the Lab, then a revert on the same pull request, then a model's change in a new one after a person closed it), `TestAnOldBugIsFixedFromTheCommitBeforeIt` |
 | 5. Delivery tiers | Built (decision 76): `fix.merge` at `autonomous`, earned by the record of fixes that held; the Fixer checks the grant before it merges | Unit tests of the grant, the record and the merge on Gitea and GitHub |
 | Forges | GitHub, Gitea, GitLab, Bitbucket Cloud and Bitbucket Data Center (`fixer.forge.kind`, decision 87) | Fake-server tests of each forge's API; `hack/forge-live.sh` against a real GitLab CE: a branch pushed as the Fixer pushes, a merge request under a subgroup opened, commented on, merged, and its merge commit found on main, with merge commits and fast-forward |
@@ -107,6 +107,7 @@ To look at it on a cluster where it runs:
 | Console | Sign in with your own token, or through the cluster's identity provider (decision 89); approve, veto, resume, set policies, as yourself (decision 82) | Unit tests of sign-in, the person's own approval, refusals from another page, and of single sign-on's state, nonce and replay checks; on the development cluster a real token signed in, the cluster refused what it may not see, and a bad token got 401; `hack/oidc-live.sh` signs in through a real Dex as a browser would |
 | Fingerprints | fp2 for logged exceptions (decision 84) | One Redis outage logged with two messages is one exception |
 | Traffic capture | Built (decisions 85 and 86): an optional eBPF agent (OpenTelemetry's OBI), a switch per namespace in its SentinelPolicy and the console, request details only, and replay in the Lab | On the development cluster: the agent ran on both nodes with eBPF's capabilities, not privileged; Online Boutique's frontend's requests (`GET /cart`, `/product/<id>`, `POST /cart/checkout`) and its gRPC calls to seven services arrived with methods, paths, statuses and timings; Redis statements, which carry keys, stayed out; the incident page lists them |
+| Argo Rollouts abort | Built (decision 97): `rollouts.abort` sets `status.abort`; Flagger still deferred to its analysis | Unit tests in `internal/actor`, `internal/watcher`, `internal/brain` |
 | Own faker, mined fix patterns | Not started | |
 
 ## Acting session
@@ -401,8 +402,9 @@ Full reasoning in [decisions.md](decisions.md).
   Lab's certificate authority, fake secrets that raise an alarm, and an
   opt-in recorder of request and response bodies for write replay,
   response comparison and filled databases.
-- **More rollback kinds:** DaemonSets, Argo Rollouts and Flagger, and
-  StatefulSets with a person's approval.
+- **More rollback kinds:** DaemonSets and StatefulSets (with a person's
+  approval) are built; Argo Rollouts abort (`rollouts.abort`, decision 97)
+  is built; Flagger stays deferred to its own analysis.
 - **Hardening:** baselines that survive restarts, a standby controller,
   dependency links from error logs, and the node agent.
 - **Settings:** every switch in the console as well as the YAML.

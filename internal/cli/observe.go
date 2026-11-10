@@ -136,7 +136,7 @@ func newObserver(ctx context.Context, log *slog.Logger, cfg *config.Config, clie
 		Revisions: w.NewestRevision, Lookback: time.Hour, Gap: d.IncidentGap.Duration, Localize: localize,
 		Dependents:   func(ref model.ObjectRef) []model.ObjectRef { return w.Topology().Dependents(ref) },
 		Dependencies: func(ref model.ObjectRef) []topology.Reach { return w.Topology().DependenciesWithHops(ref) },
-		Deviations:   w.Deviations, MemoryUse: w.MemoryUse}
+		Deviations:   w.Deviations, MemoryUse: w.MemoryUse, CPUUse: w.CPUUse}
 	if n, err := b.Restore(ctx); err != nil {
 		return nil, nil, fmt.Errorf("restore open incidents: %w", err)
 	} else if n > 0 {
@@ -247,12 +247,15 @@ func newObserver(ctx context.Context, log *slog.Logger, cfg *config.Config, clie
 }
 
 // valueLab asks the Lab to race the failing revision with learned memory
-// limits in place.
-func valueLab(lab *verify.Lab) func(context.Context, model.ID, model.ObjectRef, string, map[string]string) (string, bool, error) {
-	return func(ctx context.Context, incident model.ID, target model.ObjectRef, revision string, limits map[string]string) (string, bool, error) {
+// and CPU limits in place.
+func valueLab(lab *verify.Lab) func(context.Context, model.ID, model.ObjectRef, string, map[string]string, map[string]string) (string, bool, error) {
+	return func(ctx context.Context, incident model.ID, target model.ObjectRef, revision string, memory, cpu map[string]string) (string, bool, error) {
 		var overrides []v1alpha1.ValueOverride
-		for _, container := range slices.Sorted(maps.Keys(limits)) {
-			overrides = append(overrides, v1alpha1.ValueOverride{Container: container, Field: "limits.memory", Value: limits[container]})
+		for _, container := range slices.Sorted(maps.Keys(memory)) {
+			overrides = append(overrides, v1alpha1.ValueOverride{Container: container, Field: "limits.memory", Value: memory[container]})
+		}
+		for _, container := range slices.Sorted(maps.Keys(cpu)) {
+			overrides = append(overrides, v1alpha1.ValueOverride{Container: container, Field: "limits.cpu", Value: cpu[container]})
 		}
 		return lab.VerifyValues(ctx, incident, target, revision, overrides)
 	}

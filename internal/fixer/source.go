@@ -182,8 +182,8 @@ func ContainerChange(ctx context.Context, client kubernetes.Interface, dep *apps
 // ChangeFor finds the value a fix sets: of the values the revision the
 // Deployment was rolled back from changed, the one the incident's fault
 // class blames. The others it returns as kept, for the fix to leave as that
-// revision set them. A memory limit gets the value Sentinel learned, not
-// the old one.
+// revision set them. A memory or CPU limit gets the value Sentinel learned,
+// not the old one.
 func ChangeFor(ctx context.Context, client kubernetes.Interface, dep *appsv1.Deployment, spec v1alpha1.FixSpec) (Change, []Change, error) {
 	changes, err := revisionChanges(ctx, client, dep, spec.FromRevision)
 	if err != nil {
@@ -191,7 +191,7 @@ func ChangeFor(ctx context.Context, client kubernetes.Interface, dep *appsv1.Dep
 	}
 	if len(changes) == 0 {
 		return Change{}, nil, fmt.Errorf("the revision %s was rolled back from differs from the current one in nothing the Fixer restores "+
-			"(images, commands, arguments, environment values, memory limits)", spec.FromRevision)
+			"(images, commands, arguments, environment values, memory and CPU limits)", spec.FromRevision)
 	}
 	var blamed, kept []Change
 	for _, c := range changes {
@@ -214,15 +214,14 @@ func ChangeFor(ctx context.Context, client kubernetes.Interface, dep *appsv1.Dep
 	if c.Bad == valueFromSet || c.Good == valueFromSet {
 		return Change{}, nil, fmt.Errorf("%s's %s comes from a ConfigMap, Secret or field in one revision; the Fixer restores literal values only", c.Container, what(c.Field))
 	}
-	if c.field() == fieldMemoryLimit {
-		learned, ok := spec.MemoryLimits[c.Container]
+	if learned, ok := learnedLimit(spec, c); c.field() == fieldMemoryLimit || c.field() == fieldCPULimit {
 		if !ok && strings.HasPrefix(spec.LabVerdict, "it does not fix") {
 			return Change{}, nil, fmt.Errorf("the Lab raced the limit learned from %s's healthy use, and %s; putting the old limit back can be as wrong as the new one",
 				c.Container, spec.LabVerdict)
 		}
 		if !ok {
-			return Change{}, nil, fmt.Errorf("revision %s changed %s's memory limit; putting the old limit back can be as wrong as the new one, "+
-				"and Sentinel has not measured enough of what %s uses to learn one", spec.FromRevision, c.Container, c.Container)
+			return Change{}, nil, fmt.Errorf("revision %s changed %s's %s; putting the old limit back can be as wrong as the new one, "+
+				"and Sentinel has not measured enough of what %s uses to learn one", spec.FromRevision, c.Container, what(c.field()), c.Container)
 		}
 		if !lessQuantity(c.Good, learned) {
 			c.Good = learned
@@ -231,17 +230,33 @@ func ChangeFor(ctx context.Context, client kubernetes.Interface, dep *appsv1.Dep
 	return c, kept, nil
 }
 
+// learnedLimit is the limit Sentinel learned for a memory or CPU change.
+func learnedLimit(spec v1alpha1.FixSpec, c Change) (string, bool) {
+	switch c.field() {
+	case fieldMemoryLimit:
+		v, ok := spec.MemoryLimits[c.Container]
+		return v, ok
+	case fieldCPULimit:
+		v, ok := spec.CPULimits[c.Container]
+		return v, ok
+	}
+	return "", false
+}
+
 // blames reports whether a fault of a class is blamed on a field: a bad
-// image on the image, a memory limit on the limit, a crash or an error on
-// what the container runs. A class it does not know blames every field.
+// image on the image, a memory or CPU limit on the limit, a crash or an
+// error on what the container runs. A class it does not know blames every
+// field.
 func blames(class, field string) bool {
 	switch class {
 	case "deploy.bad-image":
 		return field == fieldImage
 	case "resource.memory-limit":
 		return field == fieldMemoryLimit
+	case "resource.cpu-limit":
+		return field == fieldCPULimit
 	case "deploy.crash-on-start", "config.error", "deploy.new-errors", "runtime.crash":
-		return field != fieldMemoryLimit
+		return field != fieldMemoryLimit && field != fieldCPULimit
 	}
 	return true
 }
@@ -305,10 +320,10 @@ func revisionChanges(ctx context.Context, client kubernetes.Interface, dep *apps
 }
 
 // containerFields lists the fields a fix may restore in two versions of a
-// container: image, command, arguments, and every environment variable
-// either sets.
+// container: image, command, arguments, memory and CPU limits, and every
+// environment variable either sets.
 func containerFields(a, b corev1.Container) []string {
-	fields := []string{fieldImage, fieldCommand, fieldArgs, fieldMemoryLimit}
+	fields := []string{fieldImage, fieldCommand, fieldArgs, fieldMemoryLimit, fieldCPULimit}
 	seen := map[string]bool{}
 	for _, e := range append(a.Env, b.Env...) {
 		if !seen[e.Name] {
@@ -349,6 +364,10 @@ func fieldValue(c corev1.Container, field string) any {
 		}
 	case field == fieldMemoryLimit:
 		if q, ok := c.Resources.Limits[corev1.ResourceMemory]; ok {
+			return q.String()
+		}
+	case field == fieldCPULimit:
+		if q, ok := c.Resources.Limits[corev1.ResourceCPU]; ok {
 			return q.String()
 		}
 	}

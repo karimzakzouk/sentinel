@@ -23,14 +23,15 @@ type Fixer interface {
 // FixRequest is what the Fixer is asked: to make the rollback of Target,
 // away from the revision with pod template hash FromRevision, hold where
 // that revision was written. FaultClass says which of the revision's
-// changes to blame; MemoryLimits are limits learned, per container, from
-// what it used while healthy.
+// changes to blame; MemoryLimits and CPULimits are limits learned, per
+// container, from what it used while healthy.
 type FixRequest struct {
 	Incident     model.ID
 	Target       model.ObjectRef
 	FromRevision string
 	FaultClass   string
 	MemoryLimits map[string]string
+	CPULimits    map[string]string
 	// Merge lets the Fixer merge the fix itself.
 	Merge bool
 	// Crash is the stack the workload crashed with, from its logs, when
@@ -121,9 +122,21 @@ func (b *Brain) askFix(ctx context.Context, inc *incident, a *model.Action) []le
 			}
 		}
 	}
+	if r.FaultClass == ClassCPULimit && b.CPUUse != nil {
+		for container, used := range b.CPUUse(a.Target, from) {
+			if limit, err := learn.CPULimit(used); err == nil {
+				if r.CPULimits == nil {
+					r.CPULimits = map[string]string{}
+				}
+				r.CPULimits[container] = limit
+			} else {
+				b.Log.Info("no CPU limit learned", "incident", inc.rec.ID, "container", container, "reason", err)
+			}
+		}
+	}
 	r.Crash, r.Errors = b.crashOf(ctx, inc.rec.ID, a.Target)
 	inc.fixAsked = true
-	if len(r.MemoryLimits) > 0 && b.ValueLab != nil {
+	if (len(r.MemoryLimits) > 0 || len(r.CPULimits) > 0) && b.ValueLab != nil {
 		// A learned limit is raced in the Lab before the pull request that
 		// sets it opens; the Fixer is asked once the verdict is in.
 		if b.valueFixes == nil {
@@ -153,7 +166,7 @@ func (b *Brain) askValueLab(ctx context.Context, vf *valueFix) []ledger.Draft {
 		return nil
 	}
 	r := vf.req
-	experiment, asked, err := b.ValueLab(ctx, r.Incident, r.Target, vf.revision, r.MemoryLimits)
+	experiment, asked, err := b.ValueLab(ctx, r.Incident, r.Target, vf.revision, r.MemoryLimits, r.CPULimits)
 	switch {
 	case err != nil:
 		b.Log.Error("could not ask the Lab about a learned limit; the Fixer is asked without its verdict", "incident", r.Incident, "error", err)
@@ -181,7 +194,7 @@ func (b *Brain) onValuesVerdict(ctx context.Context, v LabVerdict) error {
 	r.LabVerdict = labVerdictWord(v.Phase) + ": " + v.Message
 	b.Log.Info("the Lab judged a learned limit", "incident", v.IncidentID, "phase", v.Phase, "message", v.Message)
 	if v.Phase == "Failed" {
-		r.MemoryLimits = nil
+		r.MemoryLimits, r.CPULimits = nil, nil
 	}
 	drafts := b.requestFix(ctx, r)
 	if len(drafts) == 0 {
