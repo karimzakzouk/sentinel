@@ -349,3 +349,79 @@ func TestAModelsFailedChangeCountsOnce(t *testing.T) {
 		t.Fatalf("with a current model change, %d counted, want 2", n)
 	}
 }
+
+// A crash nothing was rolled back from, a bug two commits older than the
+// image that runs, gets a fix to its code measured from the commit before
+// the one that last changed the crashing function; the newer commits stay.
+func TestAnOldBugIsFixedFromTheCommitBeforeIt(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	srv := newForge(t, root)
+	registry := &imageRegistry{commits: map[string]string{}}
+	reg := httptest.NewTLSServer(registry)
+	t.Cleanup(reg.Close)
+	host := strings.TrimPrefix(reg.URL, "https://")
+	work := filepath.Join(root, "work")
+	if _, err := git.PlainInit(work, false); err != nil {
+		t.Fatal(err)
+	}
+	commit := func(name, content, message string) string {
+		t.Helper()
+		if err := writeFile(filepath.Join(work, name), content); err != nil {
+			t.Fatal(err)
+		}
+		gitRun(t, work, "add", ".")
+		gitRun(t, work, "commit", "-q", "-m", message)
+		return gitRun(t, work, "rev-parse", "HEAD")
+	}
+	base := commit("catalog.py", "def load():\n    items = {}\n    for i in D:\n        items[i] = i\n    return items\n", "Load the catalog")
+	commit("catalog.py", "def load():\n    items = None\n    for i in D:\n        items[i] = i\n    return items\n", "Start the catalog empty")
+	commit("README.md", "pyshop\n", "Say what it is")
+	running := commit("app.py", "import catalog\nCATALOG = catalog.load()\n", "Load at start")
+	bare := filepath.Join(root, "sentinel", "shop.git")
+	gitRun(t, root, "clone", "--bare", "--quiet", work, bare)
+	gitRun(t, bare, "config", "http.receivepack", "true")
+	gitRun(t, bare, "symbolic-ref", "HEAD", "refs/heads/master")
+	sourceURL = srv.URL + "/sentinel/shop.git"
+	registry.commits[running[:7]] = running
+	image := host + "/sentinel/shop:" + running[:7]
+	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "pyshop", Namespace: "e2e-delivery"}, Spec: appsv1.DeploymentSpec{Template: podTemplate(image)}}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{FixesResource: "FixList"})
+	if _, err := dyn.Resource(FixesResource).Namespace("sentinel").Create(ctx, &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": v1alpha1.GroupVersion.String(), "kind": "Fix",
+		"metadata": map[string]any{"name": "sentinel-0123456789ab-fix", "namespace": "sentinel"},
+		"spec": map[string]any{"incidentId": "01a1c008-0123-4567-89ab-0123456789ab", "fromRevision": "cur", "faultClass": "runtime.crash", "codeOnly": true,
+			"crash": map[string]any{"language": "python", "frames": []any{"catalog.load"},
+				"stack": []any{map[string]any{"function": "catalog.load", "file": "/app/catalog.py", "line": int64(4)}}},
+			"workload": map[string]any{"apiVersion": "apps/v1", "kind": "Deployment", "namespace": "e2e-delivery", "name": "pyshop"}}}},
+		metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	f := &Fixer{Client: fake.NewClientset(dep), Dynamic: dyn, Namespace: "sentinel", GitUser: "sentinel",
+		Forge:    &forge.Client{Web: srv.URL, API: srv.URL + "/api/v1", Token: "s3cret"},
+		Registry: &codefix.Registry{HTTP: reg.Client()}, LabNamespaces: []string{"sentinel-lab-0"},
+		Author: object.Signature{Name: "Sentinel", Email: "sentinel@example.com"}, Log: slog.New(slog.DiscardHandler)}
+	store := cache.NewStore(cache.MetaNamespaceKeyFunc)
+	u, _ := dyn.Resource(FixesResource).Namespace("sentinel").Get(ctx, "sentinel-0123456789ab-fix", metav1.GetOptions{})
+	_ = store.Add(u)
+	if _, err := f.process(ctx, store, "sentinel/sentinel-0123456789ab-fix", 0); err != nil {
+		t.Fatal(err)
+	}
+	u, _ = dyn.Resource(FixesResource).Namespace("sentinel").Get(ctx, "sentinel-0123456789ab-fix", metav1.GetOptions{})
+	var got v1alpha1.Fix
+	_ = runtime.DefaultUnstructuredConverter.FromUnstructured(u.Object, &got)
+	cf := got.Status.Code
+	if got.Status.Phase != PhaseProposed || cf == nil || cf.Base != base || cf.Fixer != "restore" || cf.Number != 2 {
+		t.Fatalf("phase %s %q, code %+v", got.Status.Phase, got.Status.Message, cf)
+	}
+	pushed := gitRun(t, bare, "show", "sentinel/code-fix-0123456789ab:catalog.py")
+	if !strings.Contains(pushed, "items = {}") {
+		t.Fatalf("pushed:\n%s", pushed)
+	}
+	if app := gitRun(t, bare, "show", "sentinel/code-fix-0123456789ab:app.py"); !strings.Contains(app, "catalog.load()") {
+		t.Fatal("the newer commits were undone")
+	}
+	if srv.opened != nil {
+		t.Fatalf("a pull request to the deploy repository was opened: %+v", srv.opened)
+	}
+}

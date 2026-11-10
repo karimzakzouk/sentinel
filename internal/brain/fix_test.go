@@ -196,6 +196,48 @@ func TestTheFixerIsToldTheCrash(t *testing.T) {
 	}
 }
 
+// A crash with nothing to roll back, as a bug older than the newest
+// revision, still gets the Fixer asked, once, for a fix to the code alone,
+// once its logs hold a stack; without the switch, or without a stack, it is
+// not asked.
+func TestACrashWithNothingToUndoIsFixedInItsCode(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		on, withStack bool
+		asked         int
+	}{{"on, with a stack", true, true, 1}, {"off", false, true, 0}, {"on, without a stack", true, false, 0}} {
+		t.Run(tc.name, func(t *testing.T) {
+			b, l := newBrain(t)
+			fixer := &fakeFixer{}
+			b.Fixer, b.CodeFixWithoutRollback = fixer, tc.on
+			b.Revisions = func(model.ObjectRef) string { return "cur" }
+			inc := &incident{rec: model.Incident{ID: "inc-1"}}
+			if tc.withStack {
+				ev := watcher.LogEvidence{Workload: web, Pod: "web-1", CollectedAt: onset, Summary: logs.Summary{
+					Exceptions: []logs.ExceptionCount{{Exception: logs.Exception{Language: "python", Types: []string{"KeyError"},
+						Frames: []logs.Frame{{Function: "shop.load", File: "/app/shop.py", Line: 9, InApp: true}}}}}}}
+				e := evidenceRecord("inc-1", ev)
+				if _, err := l.Append(ctx, ledger.RecordDraft(source, model.KindEvidence, "attached", e.ID, "inc-1", e)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for range 2 {
+				b.askCodeFix(ctx, inc, web, "runtime.crash")
+			}
+			if len(fixer.requests) != tc.asked {
+				t.Fatalf("asked %d times, want %d", len(fixer.requests), tc.asked)
+			}
+			if tc.asked == 0 {
+				return
+			}
+			r := fixer.requests[0]
+			if !r.CodeOnly || r.FromRevision != "cur" || r.Crash == nil || r.Crash.Stack[0].File != "/app/shop.py" {
+				t.Fatalf("request %+v", r)
+			}
+		})
+	}
+}
+
 // fakeImageLab answers image races, or is busy once.
 type fakeImageLab struct {
 	fakeVerifierNone

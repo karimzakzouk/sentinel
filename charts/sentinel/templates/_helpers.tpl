@@ -40,6 +40,9 @@ verifyRollbacks: {{ .Values.lab.verifyRollbacks }}
 {{- end }}
 {{- if .Values.fixer.enabled }}
 fixerNamespace: {{ .Release.Namespace }}
+{{- if .Values.fixer.code.enabled }}
+codeFixWithoutRollback: {{ .Values.fixer.code.withoutRollback }}
+{{- end }}
 {{- end }}
 {{- if .Values.actor.enabled }}
 actorUser: system:serviceaccount:{{ .Values.actor.namespace }}:{{ .Values.actor.serviceAccount }}

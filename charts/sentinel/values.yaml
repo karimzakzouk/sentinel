@@ -112,6 +112,10 @@ fixer:
     # model's change, asked only once the others have nothing left). Leave
     # one out to turn it off.
     fixers: [restore, template, revert, llm]
+    # A crash nothing was rolled back from, as a bug older than the newest
+    # revision, gets a fix to its code too: the culprit is whichever commit
+    # last changed the code the crash ran through.
+    withoutRollback: true
     # A language model the llm fixer asks, off while url is empty. Any
     # model works through one of two request formats: openai (OpenAI,
     # Azure, Gemini, Mistral, DeepSeek, Groq, xAI, OpenRouter, Ollama,

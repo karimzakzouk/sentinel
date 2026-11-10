@@ -48,6 +48,12 @@ type FixSpec struct {
 	// +listType=atomic
 	// +kubebuilder:validation:MaxItems=5
 	Errors []string `json:"errors,omitempty"`
+	// CodeOnly asks for a fix to the code alone, for a crash nothing was
+	// rolled back from: FromRevision is the revision that crashes, still
+	// running, and the culprit is the commit that last changed the code the
+	// crash ran through.
+	// +optional
+	CodeOnly bool `json:"codeOnly,omitempty"`
 }
 
 // Crash is a crash's stack as Sentinel parsed it from redacted logs.
@@ -114,6 +120,11 @@ type CodeFix struct {
 	Failing string `json:"failing,omitempty"`
 	// +optional
 	Previous string `json:"previous,omitempty"`
+	// Base is the commit fixes are measured from: the previous image's, or,
+	// for a crash nothing was rolled back from, the parent of the commit
+	// that last changed the code the crash ran through.
+	// +optional
+	Base string `json:"base,omitempty"`
 	// Commit is the fix's commit, whose image the source's own pipeline
 	// builds, and Image that image once the registry has it.
 	// +optional

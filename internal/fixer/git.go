@@ -189,6 +189,45 @@ func (c *Checkout) Resolve(rev string) (*plumbing.Hash, error) {
 	return nil, fmt.Errorf("%d commits of the branch's history start with %s", len(found), rev)
 }
 
+// LastChanged finds, walking back the first parents from rev, the commit
+// that last changed the function the crash's innermost in-app frame ran
+// in, and returns its parent: the base a fix to an old bug is measured
+// from. It says why when it finds none within historyDepth commits.
+func (c *Checkout) LastChanged(rev string, in codefix.Input) (string, string) {
+	at, err := c.Resolve(rev)
+	if err != nil {
+		return "", err.Error()
+	}
+	target, err := codefix.CrashFunction(in)
+	if err != nil {
+		return "", err.Error()
+	}
+	commit, err := c.repo.CommitObject(*at)
+	if err != nil {
+		return "", err.Error()
+	}
+	for range historyDepth {
+		if commit.NumParents() == 0 {
+			return "", fmt.Sprintf("%s has not changed since the repository began", target.Name())
+		}
+		parent, err := commit.Parent(0)
+		if err != nil {
+			return "", err.Error()
+		}
+		was := ""
+		if f, err := parent.File(target.Path()); err == nil {
+			if text, err := f.Contents(); err == nil {
+				was = text
+			}
+		}
+		if !target.Same(was) {
+			return parent.Hash.String(), ""
+		}
+		commit = parent
+	}
+	return "", fmt.Sprintf("%s did not change in the last %d commits", target.Name(), historyDepth)
+}
+
 // Push commits the edit on a new branch from the checked out head, as
 // author, and pushes the branch, over one of the same name left by an
 // attempt that stopped before its pull request: the branch is Sentinel's.

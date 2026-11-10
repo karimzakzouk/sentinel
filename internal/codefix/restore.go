@@ -617,3 +617,57 @@ func stillParses(file string, before, after []byte) error {
 	}
 	return nil
 }
+
+// Located is the function a crash's innermost in-app frame ran in, as the
+// failing commit had it.
+type Located struct{ f *fn }
+
+// CrashFunction finds the function the crash's innermost in-app frame ran
+// in, in the failing commit's source.
+func CrashFunction(in Input) (*Located, error) {
+	exts := languageFiles[in.Language]
+	if in.Language == "go" {
+		exts = []string{".go"}
+	}
+	if len(exts) == 0 {
+		return nil, fmt.Errorf("fixes to code do not read %s", in.Language)
+	}
+	for _, fr := range in.Frames {
+		if !fr.InApp {
+			continue
+		}
+		f, err := locate(fr, in.Bad, exts)
+		if err != nil {
+			return nil, err
+		}
+		if f != nil {
+			return &Located{f}, nil
+		}
+	}
+	return nil, fmt.Errorf("%w: none of its frames is in the repository", ErrNoMeeting)
+}
+
+// Name is the function's name, qualified by its scopes.
+func (l *Located) Name() string { return l.f.name() }
+
+// Path is the file it is in.
+func (l *Located) Path() string { return l.f.file }
+
+// Same reports whether src, the same file at another commit, holds the
+// function as it is.
+func (l *Located) Same(src string) bool {
+	if src == "" {
+		return false
+	}
+	p, err := parse(l.f.file, []byte(src))
+	if err != nil {
+		return false
+	}
+	defer p.release()
+	for _, f := range p.functions(l.f.file) {
+		if strings.Join(f.path, "\x00") == strings.Join(l.f.path, "\x00") {
+			return bytes.Equal(f.text, l.f.text)
+		}
+	}
+	return false
+}

@@ -40,6 +40,11 @@ type FixRequest struct {
 	// templates: where no stack says where it failed, the source that
 	// logs them may.
 	Errors []string
+	// CodeOnly asks for a fix to the code alone, for a crash no rollback
+	// could stop: FromRevision is then the revision that crashes, still
+	// running, and the culprit is whichever commit last changed the code
+	// the crash ran through.
+	CodeOnly bool
 }
 
 // Crash is a parsed crash stack.
@@ -303,6 +308,38 @@ func (b *Brain) crashOf(ctx context.Context, incident model.ID, target model.Obj
 		}
 	}
 	return newest, errs
+}
+
+// codeOnlyClasses are crashes in code a rollback cannot stop when no change
+// is to blame: a bug that was there before the newest revision.
+var codeOnlyClasses = map[string]bool{"runtime.crash": true, "deploy.crash-on-start": true, "runtime.errors": true}
+
+// askCodeFix asks the Fixer, once per incident, for a fix to the code of a
+// Deployment that crashes with nothing to undo, once its logs hold a stack
+// or errors to start from. Callers hold b.mu.
+func (b *Brain) askCodeFix(ctx context.Context, inc *incident, target model.ObjectRef, class string) []ledger.Draft {
+	if b.Fixer == nil || !b.CodeFixWithoutRollback || inc.fixAsked || target.Kind != "Deployment" || !codeOnlyClasses[class] {
+		return nil
+	}
+	rev := b.revision(target)
+	if rev == "" {
+		return nil
+	}
+	crash, errs := b.crashOf(ctx, inc.rec.ID, target)
+	if crash == nil && len(errs) == 0 {
+		return nil
+	}
+	r := FixRequest{Incident: inc.rec.ID, Target: target, FromRevision: rev, FaultClass: class, Crash: crash, Errors: errs, CodeOnly: true}
+	name, err := b.Fixer.Fix(ctx, r)
+	if err != nil {
+		b.Log.Error("could not ask the Fixer for a fix to the code", "incident", inc.rec.ID, "error", err)
+		return nil
+	}
+	inc.fixAsked = true
+	b.Log.Info("asked the Fixer for a fix to the code, with nothing to roll back", "incident", inc.rec.ID, "target", target.String())
+	f := model.Fix{ID: model.FixID(inc.rec.ID), IncidentID: inc.rec.ID, Target: target, FromRevision: rev, Phase: "Requested",
+		Message: name + "; a fix to the code alone, as nothing could be rolled back", FaultClass: class}
+	return []ledger.Draft{ledger.RecordDraft(source, model.KindFix, "requested", f.ID, inc.rec.ID, f)}
 }
 
 // fixTrack is the cell of a fix's track record.

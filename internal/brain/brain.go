@@ -84,6 +84,10 @@ type Brain struct {
 	Act Requester
 	// Lab, when set, verifies proposed rollbacks before anyone acts on them.
 	Lab Verifier
+	// CodeFixWithoutRollback asks the Fixer for a fix to the code of a
+	// crash with nothing to roll back, as for a bug older than the newest
+	// revision.
+	CodeFixWithoutRollback bool
 	// ImageLab, when set, races images built from fixes to code; without
 	// it, Lab does, when it can.
 	ImageLab ImageVerifier
@@ -673,6 +677,9 @@ func (b *Brain) assess(ctx context.Context, inc *incident, workload model.Object
 		}
 	}
 	inc.lastAction = decision.Action
+	if decision.Action == ActionEscalate {
+		drafts = append(drafts, b.askCodeFix(ctx, inc, workload, classes.Top().Value)...)
+	}
 
 	a := &model.Assessment{Class: classes.Top().Value, ClassP: round(classes.Top().P), Decision: decision.Action}
 	summary := []any{"class", a.Class, "classP", a.ClassP, "decision", decision.Action}

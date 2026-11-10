@@ -201,7 +201,7 @@ func newObserver(ctx context.Context, log *slog.Logger, cfg *config.Config, clie
 		if err := f.Start(ctx); err != nil {
 			log.Warn("the Fixer does not make rollbacks hold at their source", "reason", err)
 		} else {
-			b.Fixer = f
+			b.Fixer, b.CodeFixWithoutRollback = f, cfg.CodeFixWithoutRollback
 			log.Info("the Fixer makes verified rollbacks hold at their source", "namespace", cfg.FixerNamespace)
 		}
 	}

@@ -42,7 +42,7 @@ func (f *Fixer) codeFix(ctx context.Context, fix *v1alpha1.Fix, change Change) *
 		cf.Message = why
 		return cf
 	}
-	cf.Repository, cf.Revision = src.bad.Repository, src.bad.Revision
+	cf.Repository, cf.Revision, cf.Base = src.bad.Repository, src.bad.Revision, src.good.Revision
 	c, why := f.nextChange(ctx, src, cf)
 	if c == nil {
 		cf.Message = why
@@ -52,6 +52,47 @@ func (f *Fixer) codeFix(ctx context.Context, fix *v1alpha1.Fix, change Change) *
 		cf.Message = err.Error()
 	}
 	return cf
+}
+
+// proposeCode proposes a fix to the code of a Deployment that crashes with
+// nothing rolled back: the image it runs is the failing one, and the base
+// is the parent of the commit that last changed the code the crash ran
+// through. There is no change to its configuration to hold.
+func (f *Fixer) proposeCode(ctx context.Context, fix *v1alpha1.Fix) (v1alpha1.FixPhase, string, error) {
+	if f.Registry == nil {
+		return PhaseAbstained, "fixes to code are off: the Fixer has no registry to read images' sources from", nil
+	}
+	w := fix.Spec.Workload
+	dep, err := f.Client.AppsV1().Deployments(w.Namespace).Get(ctx, w.Name, metav1.GetOptions{})
+	if err != nil {
+		return "", "", err
+	}
+	why := "none of its containers' images names its source"
+	for _, c := range dep.Spec.Template.Spec.Containers {
+		if _, err := f.source(ctx, c.Image); err != nil {
+			why = err.Error()
+			continue
+		}
+		cf := &v1alpha1.CodeFix{Failing: c.Image}
+		fix.Status.Code = cf
+		src, msg := f.codeSource(ctx, fix, "", c.Image)
+		if src == nil {
+			cf.Message = msg
+			return PhaseAbstained, msg, nil
+		}
+		cf.Repository, cf.Revision, cf.Base = src.bad.Repository, src.bad.Revision, src.good.Revision
+		change, reason := f.nextChange(ctx, src, cf)
+		if change == nil {
+			cf.Message = reason
+			return PhaseAbstained, reason, nil
+		}
+		if err := f.openCode(ctx, fix, cf, src, change, 1); err != nil {
+			return "", "", err
+		}
+		return PhaseProposed, fmt.Sprintf("a fix to the code alone, as nothing was rolled back: %s, measured from %s, the commit before %s last changed it",
+			cf.PullRequest, short(cf.Base), change.Function), nil
+	}
+	return PhaseAbstained, why, nil
 }
 
 // codeSource is what every fixer works from: the source both images were
@@ -71,9 +112,19 @@ func (f *Fixer) codeSource(ctx context.Context, fix *v1alpha1.Fix, good, bad str
 	if err != nil {
 		return nil, err.Error()
 	}
-	goodSrc, err := f.source(ctx, good)
-	if err != nil {
-		return nil, err.Error()
+	var goodSrc codefix.Built
+	switch base := ""; {
+	case fix.Status.Code != nil && fix.Status.Code.Base != "":
+		base = fix.Status.Code.Base
+		goodSrc = codefix.Built{Repository: badSrc.Repository, Revision: base}
+	case good == "":
+		// Nothing was rolled back from: the base is found in the history,
+		// below, once the clone is there.
+		goodSrc = codefix.Built{Repository: badSrc.Repository}
+	default:
+		if goodSrc, err = f.source(ctx, good); err != nil {
+			return nil, err.Error()
+		}
 	}
 	if goodSrc.Repository != badSrc.Repository {
 		return nil, fmt.Sprintf("%s and %s come from different repositories, %s and %s", good, bad, goodSrc.Repository, badSrc.Repository)
@@ -86,19 +137,11 @@ func (f *Fixer) codeSource(ctx context.Context, fix *v1alpha1.Fix, good, bad str
 	if err != nil {
 		return nil, err.Error()
 	}
-	before, err := co.FilesAt(goodSrc.Revision)
-	if err != nil {
-		return nil, err.Error()
-	}
 	failing, err := co.FilesAt(badSrc.Revision)
 	if err != nil {
 		return nil, err.Error()
 	}
-	head, err := co.FilesAt(co.Head)
-	if err != nil {
-		return nil, err.Error()
-	}
-	in := codefix.Input{Good: before, Bad: failing}
+	in := codefix.Input{Bad: failing}
 	if crash := fix.Spec.Crash; crash != nil {
 		in.Language, in.Types, in.Message, in.Frames = crash.Language, crash.Types, crash.Message, crashFrames(crash)
 	}
@@ -110,6 +153,22 @@ func (f *Fixer) codeSource(ctx context.Context, fix *v1alpha1.Fix, good, bad str
 		if in.Language == "" {
 			in.Language = language
 		}
+	}
+	if goodSrc.Revision == "" {
+		base, why := co.LastChanged(badSrc.Revision, in)
+		if base == "" {
+			return nil, why
+		}
+		goodSrc.Revision = base
+	}
+	before, err := co.FilesAt(goodSrc.Revision)
+	if err != nil {
+		return nil, err.Error()
+	}
+	in.Good = before
+	head, err := co.FilesAt(co.Head)
+	if err != nil {
+		return nil, err.Error()
 	}
 	return &codeSource{co: co, owner: owner, repo: repo, good: goodSrc, bad: badSrc, goodImage: good, head: head, in: in}, ""
 }
