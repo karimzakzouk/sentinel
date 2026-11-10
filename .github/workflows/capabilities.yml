@@ -29,7 +29,8 @@ env:
 jobs:
   k3s:
     name: k3s (built-in policy controller enforces NetworkPolicy)
-    runs-on: ubuntu-24.04
+    # Hosted runners are blocked (org spend limit); wake.sh self-hosted only.
+    runs-on: [self-hosted, sentinel-lab]
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -44,10 +45,12 @@ jobs:
           sudo install -m 0755 /tmp/k3d /usr/local/bin/k3d
       - run: k3d cluster create capability --agents 1 --wait --timeout 5m
       - run: hack/capability-check.sh k3d-capability k3s available
+      - if: always()
+        run: k3d cluster delete capability || true
 
   minikube:
     name: minikube (bridge network plugin ignores NetworkPolicy)
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, sentinel-lab]
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -62,3 +65,5 @@ jobs:
           sudo install -m 0755 /tmp/minikube /usr/local/bin/minikube
       - run: minikube start --driver=docker --cni=bridge --wait=all
       - run: hack/capability-check.sh minikube minikube unavailable
+      - if: always()
+        run: minikube delete || true
