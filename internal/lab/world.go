@@ -211,7 +211,11 @@ func claims(spec corev1.PodSpec) bool {
 }
 
 // digests maps each image a pod's spec names to the digest-pinned
-// reference its container runs, when the runtime reports one.
+// reference its container runs, when the runtime reports one under the
+// same repository. Kind and some CRI paths report ImageIDs as
+// docker.io/library/import-…@sha256:…; pinning those would rewrite the
+// copy to another repository, and ImageCandidate could no longer find the
+// failing image to replace.
 func digests(pod corev1.Pod) map[string]string {
 	images := map[string]string{}
 	for _, c := range append(pod.Spec.InitContainers, pod.Spec.Containers...) {
@@ -220,9 +224,14 @@ func digests(pod corev1.Pod) map[string]string {
 	out := map[string]string{}
 	for _, s := range append(pod.Status.InitContainerStatuses, pod.Status.ContainerStatuses...) {
 		id := strings.TrimPrefix(s.ImageID, "docker-pullable://")
-		if image, ok := images[s.Name]; ok && strings.Contains(id, "@sha256:") && !strings.HasPrefix(id, "sha256:") {
-			out[image] = id
+		image, ok := images[s.Name]
+		if !ok || !strings.Contains(id, "@sha256:") || strings.HasPrefix(id, "sha256:") {
+			continue
 		}
+		if imageRepository(id) != imageRepository(image) {
+			continue
+		}
+		out[image] = id
 	}
 	return out
 }

@@ -38,7 +38,13 @@ func TestTheWorldHoldsTheFailingRevision(t *testing.T) {
 		&appsv1.ControllerRevision{ObjectMeta: metav1.ObjectMeta{Name: "db-1", Namespace: "shop", OwnerReferences: owned("StatefulSet", "db")},
 			Data: runtime.RawExtension{Raw: stsRev}},
 		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "web-abc-1", Namespace: "shop"}, Spec: image("web:bad").Spec,
-			Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{Name: "web", ImageID: "docker.io/library/web@sha256:feed"}}}},
+			Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{Name: "web", ImageID: "web@sha256:feed"}}}},
+		// kind loads images under docker.io/library/import-…; that ImageID
+		// must not pin the named registry image to another repository.
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "web-kind", Namespace: "shop"},
+			Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "web", Image: "10.96.200.200:5000/pyshop:bad"}}},
+			Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{Name: "web",
+				ImageID: "docker-pullable://docker.io/library/import-2026-11-10@sha256:kindfeed"}}}},
 	)
 	web := model.ObjectRef{Group: "apps", Kind: "Deployment", Namespace: "shop", Name: "web"}
 	w, err := ReadWorld(ctx, client, "shop", web, "web-abc")
@@ -49,8 +55,11 @@ func TestTheWorldHoldsTheFailingRevision(t *testing.T) {
 	if got.Spec.Containers[0].Image != "web:bad" || got.Labels[appsv1.DefaultDeploymentUniqueLabelKey] != "" {
 		t.Fatalf("copied %s with labels %v; want the failing revision without its hash", got.Spec.Containers[0].Image, got.Labels)
 	}
-	if w.Digests["web:bad"] != "docker.io/library/web@sha256:feed" {
+	if w.Digests["web:bad"] != "web@sha256:feed" {
 		t.Fatalf("digests %v", w.Digests)
+	}
+	if _, ok := w.Digests["10.96.200.200:5000/pyshop:bad"]; ok {
+		t.Fatalf("kind import ImageID pinned the named image: %v", w.Digests)
 	}
 	db := model.ObjectRef{Group: "apps", Kind: "StatefulSet", Namespace: "shop", Name: "db"}
 	w, err = ReadWorld(ctx, client, "shop", db, "db-1")
