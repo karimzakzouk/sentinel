@@ -113,7 +113,7 @@ To look at it on a cluster where it runs:
 | Outbound call catalog | Built: `capture.Calls` lists distinct client calls for Lab fakes | Unit tests in `internal/capture` |
 | Frontier fakes (metadata HTTP) | Built (decision 100): outside hosts get a Lab Service + stub answering recorded statuses; DNS, Allow and world probes include them | Unit tests in `internal/lab` (`fake_test`, synthesis with `api.stripe.com`) |
 | Own faker, mined fix patterns | Metadata HTTP fakes built; body capture foundation built (decision 103); full faker (gRPC, TLS MITM, body-filled stubs) next. **Mined fix patterns: first cut built** (decision 101) |
-| Tier-1 node agent | First cut (decision 103): optional DaemonSet tails `/var/log/pods`, redacts on the node, optional cgroup memory.peak/pressure, posts batches; controller stores and joins evidence to incidents | Unit tests in `internal/nodeagent` and `internal/cli` |
+| Tier-1 node agent | First cut (decision 102): optional DaemonSet tails `/var/log/pods`, redacts on the node, optional cgroup memory.peak/pressure, posts batches; controller Store + OnBatch log evidence for open incidents | Unit tests in `internal/nodeagent` and `internal/cli` |
 
 ## Acting session
 

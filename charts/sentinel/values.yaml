@@ -189,6 +189,23 @@ capture:
     limits:
       memory: 512Mi
 
+# The tier-1 node agent tails /var/log/pods on every node through a
+# read-only hostPath, redacts on the node, optionally reads cgroup v2
+# memory.peak and pressure, and posts JSON batches to the controller. It
+# runs as root without capabilities in a namespace of its own. Off by
+# default; the capability report's detect.node-agent probe says whether
+# the cluster admits it. Batches land in a Store; OnBatch turns lines into
+# log evidence for open incidents (decision 102).
+nodeAgent:
+  enabled: false
+  namespace: sentinel-node-agent
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      memory: 256Mi
+
 # The console signs people in with their own Kubernetes token. Where the
 # cluster's API server trusts an OIDC identity provider, it signs them in
 # there too: name the provider's issuer and the client the API server
