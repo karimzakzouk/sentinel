@@ -1,6 +1,6 @@
 # Status
 
-Last updated: Tuesday 10 November 2026, 10:40 Cairo time (UTC+2).
+Last updated: Tuesday 10 November 2026, 11:15 Cairo time (UTC+2).
 
 ## Where things stand
 
@@ -416,8 +416,9 @@ Full reasoning in [decisions.md](decisions.md).
   `capture.exportBodies` wires OBI JSON body export (decision 115). Lab HTTPS
   copies get a JVM PKCS#12 truststore and a seal-safe CONNECT MITM that answers
   recorded bodies (decision 119). Production-capture MITM is built (decision
-  122), with Settings `mitmInject` copying the Capture CA and webhook-injecting
-  `HTTPS_PROXY` into namespaces that record bodies. Lab seed pods inherit
+  122): CONNECT proxy, Settings `mitmInject` (CA + optional `HTTPS_PROXY`),
+  Settings `mitmTransparent` (node nft REDIRECT DaemonSet, no proxy env), and
+  Settings `mitmClientTLS` (opt-in upstream client certs). Lab seed pods inherit
   honeytoken credentials, RabbitMQ seeds over AMQP via SealImage, and empty
   stores can seed from read-replay bodies too (decision 118). Honeytoken
   Secrets that fail a race on DNS lookup are built.
@@ -430,8 +431,8 @@ Full reasoning in [decisions.md](decisions.md).
 - **Settings:** console has a Settings page backed by `SentinelSettings`
   (decision 120): detection, logs, Lab verify, actor kill switch/budget,
   Fixer strategies/LLM URL, capture `exportBodies`, `mitmEnabled`,
-  `mitmInject`, log level. Policies keep per-namespace autonomy,
-  capture.requests/bodies, and max capacity removal.
+  `mitmInject`, `mitmTransparent`, `mitmClientTLS`, log level. Policies keep
+  per-namespace autonomy, capture.requests/bodies, and max capacity removal.
   Helm still installs privileged agents, Lab pools, and Secret mounts once;
   runtime toggles (e.g. want body export or not) no longer need values.yaml.
   Capabilities tab renamed “Cluster” with plainer copy.

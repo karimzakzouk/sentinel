@@ -92,6 +92,13 @@ spec:
                       ExportBodies asks OBI to export HTTP body attributes on traces.
                       Namespaces still need SentinelPolicy capture.bodies to keep them.
                     type: boolean
+                  mitmClientTLS:
+                    description: |-
+                      MitmClientTLS lets the MITM present a workload's client certificate when
+                      dialing upstream (opt-in mTLS). The pod must name the Secret with
+                      annotation sentinel.karimzakzouk.github.io/client-tls-secret, or mount a
+                      tls/mtls/client Secret. Requires RBAC to get that Secret.
+                    type: boolean
                   mitmEnabled:
                     description: |-
                       MitmEnabled runs the HTTPS CONNECT MITM that posts bodies for clients
@@ -102,7 +109,14 @@ spec:
                     description: |-
                       MitmInject copies the capture CA into namespaces that record bodies and
                       labels them so the mutating webhook mounts the CA and sets HTTPS_PROXY
-                      on new pods. Apps that pin certificates stay out of reach.
+                      on new pods (unless MitmTransparent is on, when only the CA is mounted).
+                      Apps that pin certificates still must relax those pins themselves.
+                    type: boolean
+                  mitmTransparent:
+                    description: |-
+                      MitmTransparent enables node-level REDIRECT of TCP/443 into the capture
+                      MITM DaemonSet so apps need no HTTPS_PROXY. Requires capture.mitm.transparent
+                      installed by Helm. CA trust still needs MitmInject (or a manual trust).
                     type: boolean
                 type: object
               detection:
@@ -230,6 +244,8 @@ spec:
                   capture:
                     type: boolean
                   captureMitm:
+                    type: boolean
+                  captureMitmTransparent:
                     type: boolean
                   fixer:
                     type: boolean

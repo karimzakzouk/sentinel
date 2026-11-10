@@ -41,27 +41,31 @@ type Targets struct {
 	ActorDeploy      string
 	FixerDeploy      string
 	LabDeploy        string
-	CaptureDaemonSet string
-	CaptureMITM      string
+	CaptureDaemonSet       string
+	CaptureMITM            string
+	CaptureMITMTransparent string
+	CaptureMITMRuntimeCM   string
 }
 
 // DefaultTargets are the chart's fixed names.
 func DefaultTargets(agentNamespace string) Targets {
 	return Targets{
-		AgentNamespace:   agentNamespace,
-		ActorNamespace:   "sentinel-actor",
-		CaptureNamespace: "sentinel-capture",
-		ControllerCM:     "sentinel-config",
-		ActorCM:          "sentinel-actor-config",
-		FixerCM:          "sentinel-fixer-config",
-		LabCM:            "sentinel-lab-config",
-		CaptureCM:        "sentinel-capture",
-		ControllerDeploy: "sentinel",
-		ActorDeploy:      "sentinel-actor",
-		FixerDeploy:      "sentinel-fixer",
-		LabDeploy:        "sentinel-lab",
-		CaptureDaemonSet: "sentinel-capture",
-		CaptureMITM:      "sentinel-capture-mitm",
+		AgentNamespace:         agentNamespace,
+		ActorNamespace:         "sentinel-actor",
+		CaptureNamespace:       "sentinel-capture",
+		ControllerCM:           "sentinel-config",
+		ActorCM:                "sentinel-actor-config",
+		FixerCM:                "sentinel-fixer-config",
+		LabCM:                  "sentinel-lab-config",
+		CaptureCM:              "sentinel-capture",
+		ControllerDeploy:       "sentinel",
+		ActorDeploy:            "sentinel-actor",
+		FixerDeploy:            "sentinel-fixer",
+		LabDeploy:              "sentinel-lab",
+		CaptureDaemonSet:       "sentinel-capture",
+		CaptureMITM:            "sentinel-capture-mitm",
+		CaptureMITMTransparent: "sentinel-capture-mitm-redirect",
+		CaptureMITMRuntimeCM:   "sentinel-capture-mitm-runtime",
 	}
 }
 
@@ -121,6 +125,12 @@ func ApplyWithDynamic(ctx context.Context, client kubernetes.Interface, dyn dyna
 		}
 		parts = append(parts, "capture-mitm")
 	}
+	if out.Installed.CaptureMITM || out.Installed.CaptureMITMTransparent {
+		if err := syncMITMRuntime(ctx, client, t, spec); err != nil {
+			return out, err
+		}
+		parts = append(parts, "capture-mitm-runtime")
+	}
 	if out.Installed.CaptureMITM {
 		if err := syncMITMInject(ctx, client, dyn, t, spec); err != nil {
 			return out, err
@@ -145,13 +155,18 @@ func probe(ctx context.Context, client kubernetes.Interface, t Targets) v1alpha1
 		_, err := client.AppsV1().Deployments(ns).Get(ctx, name, metav1.GetOptions{})
 		return err == nil
 	}
+	hasDS := func(ns, name string) bool {
+		_, err := client.AppsV1().DaemonSets(ns).Get(ctx, name, metav1.GetOptions{})
+		return err == nil
+	}
 	return v1alpha1.InstalledComponents{
-		Actor:       hasCM(t.ActorNamespace, t.ActorCM),
-		Lab:         hasCM(t.AgentNamespace, t.LabCM),
-		Fixer:       hasCM(t.AgentNamespace, t.FixerCM),
-		Capture:     hasCM(t.CaptureNamespace, t.CaptureCM),
-		CaptureMITM: hasDeploy(t.CaptureNamespace, t.CaptureMITM),
-		NodeAgent:   hasCM(t.AgentNamespace, "sentinel-node-agent-token") || hasCM("sentinel-node-agent", "sentinel-node-agent-token"),
+		Actor:                  hasCM(t.ActorNamespace, t.ActorCM),
+		Lab:                    hasCM(t.AgentNamespace, t.LabCM),
+		Fixer:                  hasCM(t.AgentNamespace, t.FixerCM),
+		Capture:                hasCM(t.CaptureNamespace, t.CaptureCM),
+		CaptureMITM:            hasDeploy(t.CaptureNamespace, t.CaptureMITM),
+		CaptureMITMTransparent: hasDS(t.CaptureNamespace, t.CaptureMITMTransparent),
+		NodeAgent:              hasCM(t.AgentNamespace, "sentinel-node-agent-token") || hasCM("sentinel-node-agent", "sentinel-node-agent-token"),
 	}
 }
 

@@ -154,9 +154,21 @@ type CaptureSettings struct {
 	MitmEnabled *bool `json:"mitmEnabled,omitempty"`
 	// MitmInject copies the capture CA into namespaces that record bodies and
 	// labels them so the mutating webhook mounts the CA and sets HTTPS_PROXY
-	// on new pods. Apps that pin certificates stay out of reach.
+	// on new pods (unless MitmTransparent is on, when only the CA is mounted).
+	// Apps that pin certificates still must relax those pins themselves.
 	// +optional
 	MitmInject *bool `json:"mitmInject,omitempty"`
+	// MitmTransparent enables node-level REDIRECT of TCP/443 into the capture
+	// MITM DaemonSet so apps need no HTTPS_PROXY. Requires capture.mitm.transparent
+	// installed by Helm. CA trust still needs MitmInject (or a manual trust).
+	// +optional
+	MitmTransparent *bool `json:"mitmTransparent,omitempty"`
+	// MitmClientTLS lets the MITM present a workload's client certificate when
+	// dialing upstream (opt-in mTLS). The pod must name the Secret with
+	// annotation sentinel.karimzakzouk.github.io/client-tls-secret, or mount a
+	// tls/mtls/client Secret. Requires RBAC to get that Secret.
+	// +optional
+	MitmClientTLS *bool `json:"mitmClientTLS,omitempty"`
 }
 
 // CapabilitiesSettings holds capability-probe timing.
@@ -179,6 +191,8 @@ type InstalledComponents struct {
 	Capture bool `json:"capture,omitempty"`
 	// +optional
 	CaptureMITM bool `json:"captureMitm,omitempty"`
+	// +optional
+	CaptureMITMTransparent bool `json:"captureMitmTransparent,omitempty"`
 	// +optional
 	NodeAgent bool `json:"nodeAgent,omitempty"`
 }

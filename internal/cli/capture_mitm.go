@@ -2,10 +2,12 @@ package cli
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -18,7 +20,8 @@ import (
 )
 
 func newCaptureMITMCmd(kf *kube.Flags) *cobra.Command {
-	var listen, webhookListen, otlp, tokenFile, caDir, caSecret, namespace, webhookConfig string
+	var listen, webhookListen, otlp, tokenFile, caDir, caSecret, namespace, webhookConfig, flagsDir string
+	var transparent bool
 	cmd := &cobra.Command{
 		Use:    "capture-mitm",
 		Short:  "Terminate HTTPS for opted-in clients and post bodies to Sentinel's capture receiver",
@@ -63,6 +66,7 @@ func newCaptureMITMCmd(kf *kube.Flags) *cobra.Command {
 				return err
 			}
 
+			flags := loadMITMFlags(flagsDir, transparent)
 			proxyURL := capture.ProxyURLFor(namespace)
 			if webhookListen != "" {
 				serviceDNS := fmt.Sprintf("sentinel-capture-mitm.%s.svc", namespace)
@@ -71,24 +75,55 @@ func newCaptureMITMCmd(kf *kube.Flags) *cobra.Command {
 					return err
 				}
 				go func() {
-					h := &capture.InjectWebhook{ProxyURL: proxyURL}
+					h := &capture.InjectWebhook{ProxyURL: proxyURL, TrustOnly: flags.trustOnly}
 					_ = capture.ListenAndServeTLS(listenAddr(webhookListen), wCert, wKey, h)
 				}()
 			}
 
-			if err := capture.ServeMITM(capture.MITMConfig{
+			cfg := capture.MITMConfig{
 				Listen: listen, CACertFile: certFile, CAKeyFile: keyFile,
 				OTLP: otlp, Token: strings.TrimSpace(string(token)),
 				Resolve: func(clientIP string) (string, string, string, bool) {
 					return resolvePodWorkload(cmd.Context(), client, clientIP)
 				},
-			}); err != nil {
+			}
+			if flags.clientTLS {
+				cfg.ClientTLS = func(clientIP string) *tls.Certificate {
+					return clientTLSForIP(cmd.Context(), client, clientIP)
+				}
+			}
+
+			if transparent {
+				// Redirect DaemonSet: arm nft only while Settings says so.
+				if !flags.transparent {
+					_ = capture.ClearRedirect()
+					cmd.Println("capture MITM redirect idle (mitmTransparent off)")
+					<-cmd.Context().Done()
+					return cmd.Context().Err()
+				}
+				port, err := listenPort(listen)
+				if err != nil {
+					return err
+				}
+				if err := capture.ApplyRedirect(port); err != nil {
+					return err
+				}
+				defer func() { _ = capture.ClearRedirect() }()
+				if err := capture.ServeTransparentMITM(cfg); err != nil {
+					return terminate(err)
+				}
+				return nil
+			}
+
+			if err := capture.ServeMITM(cfg); err != nil {
 				return terminate(err)
 			}
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&listen, "listen", "8888", "TCP port or address to listen on")
+	cmd.Flags().BoolVar(&transparent, "transparent", false, "run as node redirect DaemonSet (nft REDIRECT + original-dst TLS)")
+	cmd.Flags().StringVar(&flagsDir, "flags-dir", "", "directory with runtime flags from Settings (trust-only, mitm-client-tls, transparent-enabled)")
 	cmd.Flags().StringVar(&webhookListen, "webhook-listen", "", "HTTPS address for the pod inject webhook (empty disables it)")
 	cmd.Flags().StringVar(&webhookConfig, "webhook-config", "sentinel-capture-mitm", "MutatingWebhookConfiguration to patch with the serving caBundle")
 	cmd.Flags().StringVar(&otlp, "otlp", "http://sentinel-capture:4318/v1/traces", "OTLP HTTP traces URL")
@@ -99,11 +134,70 @@ func newCaptureMITMCmd(kf *kube.Flags) *cobra.Command {
 	return cmd
 }
 
+type mitmFlags struct {
+	transparent bool
+	trustOnly   bool
+	clientTLS   bool
+}
+
+func loadMITMFlags(dir string, transparentFlag bool) mitmFlags {
+	f := mitmFlags{transparent: transparentFlag, trustOnly: transparentFlag}
+	if dir == "" {
+		return f
+	}
+	if b, err := os.ReadFile(filepath.Join(dir, "transparent-enabled")); err == nil { //nolint:gosec
+		v := strings.TrimSpace(string(b))
+		f.transparent = v == "1" || strings.EqualFold(v, "true")
+		if f.transparent {
+			f.trustOnly = true
+		}
+	}
+	if b, err := os.ReadFile(filepath.Join(dir, "trust-only")); err == nil { //nolint:gosec
+		v := strings.TrimSpace(string(b))
+		f.trustOnly = v == "1" || strings.EqualFold(v, "true")
+	}
+	f.clientTLS = capture.ClientTLSEnabled(dir)
+	return f
+}
+
+func listenPort(listen string) (uint16, error) {
+	a := listenAddr(listen)
+	_, port, err := net.SplitHostPort(a)
+	if err != nil {
+		return 0, err
+	}
+	p, err := strconv.Atoi(port)
+	if err != nil || p <= 0 || p > 65535 {
+		return 0, fmt.Errorf("bad listen port %q", listen)
+	}
+	return uint16(p), nil
+}
+
 func listenAddr(v string) string {
 	if strings.Contains(v, ":") {
-		return v
+		if _, _, err := net.SplitHostPort(v); err == nil {
+			return v
+		}
 	}
-	return ":" + v
+	if _, err := strconv.Atoi(v); err == nil {
+		return ":" + v
+	}
+	return v
+}
+
+func clientTLSForIP(ctx context.Context, client kubernetes.Interface, clientIP string) *tls.Certificate {
+	if clientIP == "" || net.ParseIP(clientIP) == nil {
+		return nil
+	}
+	pods, err := client.CoreV1().Pods("").List(ctx, metav1.ListOptions{FieldSelector: "status.podIP=" + clientIP})
+	if err != nil || len(pods.Items) == 0 {
+		return nil
+	}
+	cert, err := capture.ClientTLSFromPod(ctx, client, &pods.Items[0], "")
+	if err != nil {
+		return nil
+	}
+	return cert
 }
 
 func resolvePodWorkload(ctx context.Context, client kubernetes.Interface, clientIP string) (ns, kind, name string, ok bool) {

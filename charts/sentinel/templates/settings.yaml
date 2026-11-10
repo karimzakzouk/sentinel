@@ -50,6 +50,8 @@ spec:
     bodyBufferBytes: {{ $buf }}
     mitmEnabled: {{ .Values.capture.mitm.enabled }}
     mitmInject: {{ .Values.capture.mitm.inject }}
+    mitmTransparent: {{ .Values.capture.mitm.transparent }}
+    mitmClientTLS: false
   capabilities:
     interval: {{ .Values.capabilities.interval | quote }}
 {{- end }}

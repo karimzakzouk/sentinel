@@ -287,6 +287,9 @@ rules:
   - apiGroups: [""]
     resources: [pods]
     verbs: [list, watch, get]
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [get]
   - apiGroups: [apps]
     resources: [replicasets]
     verbs: [get]
@@ -308,6 +311,21 @@ subjects:
   - kind: ServiceAccount
     name: sentinel-capture
     namespace: {{ .Values.capture.namespace }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sentinel-capture-mitm-runtime
+  namespace: {{ .Values.capture.namespace }}
+  labels:
+    {{- include "sentinel.labels" . | nindent 4 }}
+data:
+  transparent: "false"
+  clientTLS: "false"
+  trustOnly: "false"
+  transparent-enabled: "0"
+  trust-only: "0"
+  mitm-client-tls: "0"
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -340,6 +358,7 @@ spec:
             - --listen=8888
             - --webhook-listen=9443
             - --webhook-config=sentinel-capture-mitm
+            - --flags-dir=/etc/sentinel-capture-mitm-runtime
             - --otlp=http://sentinel-capture.{{ .Release.Namespace }}.svc:4318/v1/traces
             - --token-file=/etc/sentinel-capture/token
             - --namespace={{ .Values.capture.namespace }}
@@ -359,6 +378,9 @@ spec:
               readOnly: true
             - name: run
               mountPath: /var/run/sentinel-capture-mitm
+            - name: flags
+              mountPath: /etc/sentinel-capture-mitm-runtime
+              readOnly: true
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -375,6 +397,10 @@ spec:
                 path: token
         - name: run
           emptyDir: {}
+        - name: flags
+          configMap:
+            name: sentinel-capture-mitm-runtime
+            optional: true
 ---
 apiVersion: v1
 kind: Service
@@ -425,5 +451,86 @@ webhooks:
         operations: ["CREATE"]
         resources: ["pods"]
         scope: Namespaced
+{{- if .Values.capture.mitm.transparent }}
+---
+# Node-level REDIRECT of TCP/443 into a hostNetwork MITM. Privileged install
+# stays Helm-only (decision 120); Settings capture.mitmTransparent toggles the
+# runtime flags ConfigMap that arms the nft rules.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: sentinel-capture-mitm-redirect
+  namespace: {{ .Values.capture.namespace }}
+  labels:
+    {{- include "sentinel.labels" . | nindent 4 }}
+    app.kubernetes.io/component: capture-mitm-redirect
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sentinel-capture-mitm-redirect
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: sentinel-capture-mitm-redirect
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: capture-mitm-redirect
+    spec:
+      serviceAccountName: sentinel-capture
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      enableServiceLinks: false
+      containers:
+        - name: mitm
+          image: {{ include "sentinel.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - capture-mitm
+            - --transparent
+            - --listen=10443
+            - --flags-dir=/etc/sentinel-capture-mitm-runtime
+            - --otlp=http://sentinel-capture.{{ .Release.Namespace }}.svc:4318/v1/traces
+            - --token-file=/etc/sentinel-capture/token
+            - --namespace={{ .Values.capture.namespace }}
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          ports:
+            - name: mitm
+              containerPort: 10443
+              hostPort: 10443
+          volumeMounts:
+            - name: token
+              mountPath: /etc/sentinel-capture
+              readOnly: true
+            - name: run
+              mountPath: /var/run/sentinel-capture-mitm
+            - name: flags
+              mountPath: /etc/sentinel-capture-mitm-runtime
+              readOnly: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              add: [NET_ADMIN]
+              drop: [ALL]
+          resources:
+            {{- toYaml .Values.capture.resources | nindent 12 }}
+      volumes:
+        - name: token
+          secret:
+            secretName: sentinel-capture-token
+            items:
+              - key: token
+                path: token
+        - name: run
+          emptyDir: {}
+        - name: flags
+          configMap:
+            name: sentinel-capture-mitm-runtime
+            optional: true
+{{- end }}
 {{- end }}
 {{- end }}

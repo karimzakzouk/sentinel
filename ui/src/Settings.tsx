@@ -264,10 +264,24 @@ export function Settings() {
         />
         <Toggle
           label="Auto-inject capture CA and HTTPS proxy"
-          help="For namespaces that record bodies under Policies: copy the capture CA and label the namespace so new pods get the CA mounted and HTTPS_PROXY pointed at the MITM. Apps that pin certificates still will not work. Transparent intercept without a proxy is not available."
+          help="For namespaces that record bodies under Policies: copy the capture CA and label the namespace so new pods get the CA mounted. When transparent MITM is off, also sets HTTPS_PROXY. Certificate pinning still has to be relaxed in the app."
           checked={!!draft?.capture?.mitmInject}
           disabled={!installed?.captureMitm || !draft?.capture?.mitmEnabled}
           onChange={(v) => setCapture({ mitmInject: v })}
+        />
+        <Toggle
+          label="Transparent HTTPS intercept (no proxy env)"
+          help="Redirects TCP/443 on each node into the capture MITM so apps need no HTTPS_PROXY. Needs the Helm redirect DaemonSet. Still needs the Capture CA trusted (use auto-inject). Meshes and pinned clients may bypass or refuse."
+          checked={!!draft?.capture?.mitmTransparent}
+          disabled={!installed?.captureMitmTransparent || !draft?.capture?.mitmEnabled}
+          onChange={(v) => setCapture({ mitmTransparent: v })}
+        />
+        <Toggle
+          label="Use workload client certificates (mTLS)"
+          help="When dialing upstream, present a client cert from the source pod’s Secret (annotation sentinel…/client-tls-secret, or a mounted tls/mtls/client Secret). Opt-in only; Sentinel will not invent client keys."
+          checked={!!draft?.capture?.mitmClientTLS}
+          disabled={!installed?.captureMitm || !draft?.capture?.mitmEnabled}
+          onChange={(v) => setCapture({ mitmClientTLS: v })}
         />
         <Field label="Body buffer (bytes)" help="How much of each request/response the agent may hold before redaction.">
           <input

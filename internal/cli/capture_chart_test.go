@@ -46,6 +46,10 @@ func TestCaptureChartWiresMITMInjectWebhook(t *testing.T) {
 		"capture-mitm.sentinel.karimzakzouk.github.io",
 		"--webhook-listen=9443",
 		"sentinel.karimzakzouk.github.io/capture-mitm: inject",
+		"sentinel-capture-mitm-redirect",
+		"--transparent",
+		"NET_ADMIN",
+		"hostNetwork: true",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("capture mitm chart missing %q", want)
@@ -55,7 +59,9 @@ func TestCaptureChartWiresMITMInjectWebhook(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(values), "inject:") {
-		t.Fatal("values.yaml should document capture.mitm.inject")
+	for _, want := range []string{"inject:", "transparent:"} {
+		if !strings.Contains(string(values), want) {
+			t.Fatalf("values.yaml should document capture.mitm.%s", strings.TrimSuffix(want, ":"))
+		}
 	}
 }

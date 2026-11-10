@@ -34,13 +34,26 @@ var trustEnv = []string{
 	"AWS_CA_BUNDLE",
 }
 
-// InjectMITM mounts the capture CA and points HTTP(S)_PROXY at the MITM when
-// those variables are unset. Existing values are left alone. Idempotent when
-// the trust volume is already present.
+// InjectOptions controls whether HTTPS_PROXY is set (CONNECT) or only the
+// Capture CA is mounted (transparent redirect).
+type InjectOptions struct {
+	ProxyURL  string
+	TrustOnly bool // when true, do not set HTTP(S)_PROXY
+}
+
+// InjectMITM mounts the capture CA and optionally points HTTP(S)_PROXY at the
+// MITM when those variables are unset. Existing values are left alone.
+// Idempotent when the trust volume is already present.
 func InjectMITM(spec *corev1.PodSpec, proxyURL string) {
+	InjectMITMOpts(spec, InjectOptions{ProxyURL: proxyURL})
+}
+
+// InjectMITMOpts is InjectMITM with explicit options.
+func InjectMITMOpts(spec *corev1.PodSpec, opts InjectOptions) {
 	if spec == nil {
 		return
 	}
+	proxyURL := opts.ProxyURL
 	if proxyURL == "" {
 		proxyURL = DefaultProxyURL
 	}
@@ -81,6 +94,9 @@ func InjectMITM(spec *corev1.PodSpec, proxyURL string) {
 				if !strings.Contains(c.Env[i].Value, "sentinel-capture-ca.p12") {
 					c.Env[i].Value = strings.TrimSpace(c.Env[i].Value + " " + jvmOpts)
 				}
+			}
+			if opts.TrustOnly {
+				continue
 			}
 			for _, proxy := range []string{"HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"} {
 				if hasEnv(c.Env, proxy) {
