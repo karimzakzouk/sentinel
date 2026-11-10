@@ -67,13 +67,6 @@ type codeSource struct {
 }
 
 func (f *Fixer) codeSource(ctx context.Context, fix *v1alpha1.Fix, good, bad string) (*codeSource, string) {
-	crash := fix.Spec.Crash
-	switch {
-	case crash == nil || len(crash.Frames) == 0 && len(crash.Stack) == 0:
-		return nil, "the failing revision's logs held no crash stack to start a fix to its code from"
-	case !codefix.Reads(crash.Language):
-		return nil, fmt.Sprintf("fixes to code do not read %s crashes yet", crash.Language)
-	}
 	badSrc, err := f.source(ctx, bad)
 	if err != nil {
 		return nil, err.Error()
@@ -105,8 +98,20 @@ func (f *Fixer) codeSource(ctx context.Context, fix *v1alpha1.Fix, good, bad str
 	if err != nil {
 		return nil, err.Error()
 	}
-	return &codeSource{co: co, owner: owner, repo: repo, good: goodSrc, bad: badSrc, goodImage: good, head: head,
-		in: codefix.Input{Language: crash.Language, Types: crash.Types, Message: crash.Message, Frames: crashFrames(crash), Good: before, Bad: failing}}, ""
+	in := codefix.Input{Good: before, Bad: failing}
+	if crash := fix.Spec.Crash; crash != nil {
+		in.Language, in.Types, in.Message, in.Frames = crash.Language, crash.Types, crash.Message, crashFrames(crash)
+	}
+	// Without a stack, the source that logs the failing revision's errors
+	// stands in for one; and a revert needs neither.
+	if len(in.Frames) == 0 && len(fix.Spec.Errors) > 0 {
+		frames, language := codefix.LoggedAt(fix.Spec.Errors, failing)
+		in.Frames = frames
+		if in.Language == "" {
+			in.Language = language
+		}
+	}
+	return &codeSource{co: co, owner: owner, repo: repo, good: goodSrc, bad: badSrc, goodImage: good, head: head, in: in}, ""
 }
 
 // Fixer names, in the order they are tried by default.
@@ -263,6 +268,8 @@ func (f *Fixer) advance(ctx context.Context, fix *v1alpha1.Fix, verdict, why str
 	if len(cf.Tried) > 10 {
 		cf.Tried = cf.Tried[len(cf.Tried)-10:]
 	}
+	// The change is in Tried now; it is no longer the current one.
+	cf.Fixer, cf.Change, cf.Function = "", nil, ""
 	declined := verdict == "Declined"
 	src, msg := f.codeSource(ctx, fix, cf.Previous, cf.Failing)
 	if src == nil {
@@ -346,6 +353,9 @@ func (f *Fixer) codeClosed(ctx context.Context, fix *v1alpha1.Fix) bool {
 // crashFrames are the crash's frames, with where each ran when the runtime
 // printed it.
 func crashFrames(crash *v1alpha1.Crash) []logs.Frame {
+	if crash == nil {
+		return nil
+	}
 	if len(crash.Stack) > 0 {
 		frames := make([]logs.Frame, 0, len(crash.Stack))
 		for _, s := range crash.Stack {
@@ -363,9 +373,12 @@ func crashFrames(crash *v1alpha1.Crash) []logs.Frame {
 func (f *Fixer) source(ctx context.Context, image string) (codefix.Built, error) {
 	labels, err := f.Registry.Labels(ctx, image)
 	if err != nil {
+		if b, err2 := codefix.ResolveSourceWith(image, nil, f.Sources); err2 == nil {
+			return b, nil
+		}
 		return codefix.Built{}, fmt.Errorf("could not read %s's labels: %w", image, err)
 	}
-	return codefix.ResolveSource(image, labels)
+	return codefix.ResolveSourceWith(image, labels, f.Sources)
 }
 
 func lastPart(fn string) string {

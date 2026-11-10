@@ -203,3 +203,46 @@ func TestAMovedFunctionIsFoundWhereItWas(t *testing.T) {
 		t.Fatalf("put back in %s:\n%s", p.Path, p.After)
 	}
 }
+
+// A failure that left no stack is found where the source logs its error:
+// the longest piece masking kept, in one place; a piece logged in many
+// places says nothing.
+func TestTheSourceThatLogsAnErrorStandsInForAStack(t *testing.T) {
+	files := map[string][]byte{
+		"catalog.py": []byte("def load(path):\n    if not path:\n        log.error('could not load the catalog from %s', path)\n        raise SystemExit(1)\n"),
+		"util.py":    []byte("def a():\n    log.error('retrying')\ndef b():\n    log.error('retrying')\ndef c():\n    log.error('retrying')\ndef d():\n    log.error('retrying')\n"),
+	}
+	frames, language := LoggedAt([]string{"retrying", "ERROR could not load the catalog from <path>", "<num> retrying in <duration>"}, files)
+	if language != "python" || len(frames) != 1 || frames[0].File != "catalog.py" || frames[0].Line != 3 {
+		t.Fatalf("%s %+v", language, frames)
+	}
+	p, err := Propose(language, frames, map[string][]byte{"catalog.py": []byte("def load(path):\n    return read(path)\n")}, files)
+	if err != nil || p.Function != "load" {
+		t.Fatalf("%+v %v", p, err)
+	}
+}
+
+// Where an image's labels do not name its source, the Fixer's sources do,
+// and its tag names the commit.
+func TestAnImageWithoutLabelsIsResolvedFromTheFixersSources(t *testing.T) {
+	sources := map[string]string{"registry.test/shop": "https://forge.test/team/shop", "team/api": "https://forge.test/team/api"}
+	for image, want := range map[string]Built{
+		"registry.test/shop:4f2a9c1":     {Repository: "https://forge.test/team/shop", Revision: "4f2a9c1"},
+		"registry.test/shop:sha-4F2A9C1": {Repository: "https://forge.test/team/shop", Revision: "4f2a9c1"},
+		"team/api:9e1b2c3d":              {Repository: "https://forge.test/team/api", Revision: "9e1b2c3d"},
+	} {
+		got, err := ResolveSourceWith(image, nil, sources)
+		if err != nil || got != want {
+			t.Errorf("%s: %+v %v", image, got, err)
+		}
+	}
+	for _, image := range []string{"registry.test/shop:v1.2.0", "registry.test/other:4f2a9c1"} {
+		if _, err := ResolveSourceWith(image, nil, sources); err == nil {
+			t.Errorf("%s resolved", image)
+		}
+	}
+	labelled := map[string]string{"org.opencontainers.image.source": "https://forge.test/team/shop", "org.opencontainers.image.revision": "4f2a9c1d00"}
+	if got, err := ResolveSourceWith("registry.test/shop:4f2a9c1", labelled, nil); err != nil || got.Revision != "4f2a9c1d00" {
+		t.Errorf("labels: %+v %v", got, err)
+	}
+}

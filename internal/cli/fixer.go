@@ -65,6 +65,9 @@ type FixerConfig struct {
 		LabNamespaces []string `json:"labNamespaces,omitempty"`
 		// Fixers are tried in order: restore, template, revert and llm.
 		Fixers []string `json:"fixers,omitempty"`
+		// Sources maps image repositories to the repositories they are
+		// built from, for images whose labels do not say.
+		Sources map[string]string `json:"sources,omitempty"`
 		// LLM, when set, is the model the llm fixer asks.
 		LLM *struct {
 			Format      llm.Format `json:"format,omitempty"`
@@ -164,7 +167,7 @@ func newFixerCmd(kf *kube.Flags) *cobra.Command {
 			if c := cfg.Code; c != nil {
 				f.Registry = &codefix.Registry{HTTP: &http.Client{Timeout: 30 * time.Second}, Insecure: c.InsecureRegistries, Platform: c.Platform}
 				f.LabNamespaces = c.LabNamespaces
-				f.CodeFixers = c.Fixers
+				f.CodeFixers, f.Sources = c.Fixers, c.Sources
 				if m := c.LLM; m != nil {
 					key := ""
 					if m.KeyFile != "" {

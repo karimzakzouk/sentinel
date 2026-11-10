@@ -41,6 +41,13 @@ type FixSpec struct {
 	// held one: a fix to the image's code starts from it.
 	// +optional
 	Crash *Crash `json:"crash,omitempty"`
+	// Errors are the error lines the failing revision logged, as masked
+	// templates; where no stack says where it failed, the source that logs
+	// them may.
+	// +optional
+	// +listType=atomic
+	// +kubebuilder:validation:MaxItems=5
+	Errors []string `json:"errors,omitempty"`
 }
 
 // Crash is a crash's stack as Sentinel parsed it from redacted logs.

@@ -71,6 +71,9 @@ type Fixer struct {
 	// LLMAttempts times a fix, after the other fixers have nothing left.
 	LLM         codefix.Completer
 	LLMAttempts int
+	// Sources maps image repositories (registry/name) to the repositories
+	// they are built from, for images whose labels do not say.
+	Sources map[string]string
 	// Poll is how often it reads an open pull request, and a merged fix's
 	// source.
 	Poll    time.Duration

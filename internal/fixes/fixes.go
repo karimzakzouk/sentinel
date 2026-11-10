@@ -80,6 +80,7 @@ func (f *Fixes) Fix(ctx context.Context, r brain.FixRequest) (string, error) {
 		Spec: v1alpha1.FixSpec{IncidentID: string(incident), FromRevision: fromRevision, FaultClass: r.FaultClass, MemoryLimits: r.MemoryLimits, Merge: r.Merge,
 			Workload: v1alpha1.TargetRef{APIVersion: "apps/v1", Kind: target.Kind, Namespace: target.Namespace, Name: target.Name}},
 	}
+	fix.Spec.Errors = r.Errors[:min(len(r.Errors), 5)]
 	if c := r.Crash; c != nil {
 		fix.Spec.Crash = &v1alpha1.Crash{Language: c.Language, Frames: c.Frames[:min(len(c.Frames), 20)], Types: c.Types[:min(len(c.Types), 10)],
 			Message: c.Message[:min(len(c.Message), 512)]}

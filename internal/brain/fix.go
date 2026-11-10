@@ -3,6 +3,7 @@ package brain
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"time"
 
@@ -35,6 +36,10 @@ type FixRequest struct {
 	// Crash is the stack the workload crashed with, from its logs, when
 	// they held one: the application's own functions, innermost first.
 	Crash *Crash
+	// Errors are the error lines the failing revision logged, as masked
+	// templates: where no stack says where it failed, the source that
+	// logs them may.
+	Errors []string
 }
 
 // Crash is a parsed crash stack.
@@ -108,7 +113,7 @@ func (b *Brain) askFix(ctx context.Context, inc *incident, a *model.Action) []le
 			}
 		}
 	}
-	r.Crash = b.crashOf(ctx, inc.rec.ID, a.Target)
+	r.Crash, r.Errors = b.crashOf(ctx, inc.rec.ID, a.Target)
 	why := ""
 	if b.MergePolicy != nil {
 		if level, gated := b.MergePolicy(a.Target.Namespace); level == model.AutonomyAutonomous {
@@ -258,12 +263,13 @@ func codeExperimentID(incident model.ID) model.ID { return model.ExperimentID(in
 
 // crashOf is the newest crash stack, with the application's own frames,
 // in the logs of the workload the incident holds as evidence.
-func (b *Brain) crashOf(ctx context.Context, incident model.ID, target model.ObjectRef) *Crash {
+func (b *Brain) crashOf(ctx context.Context, incident model.ID, target model.ObjectRef) (*Crash, []string) {
 	records, err := ledger.List[model.Evidence](ctx, b.Ledger, model.KindEvidence, incident)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 	var newest *Crash
+	var errs []string
 	var at time.Time
 	for _, e := range records {
 		if len(e.Data) == 0 || e.CollectedAt.Before(at) {
@@ -276,6 +282,11 @@ func (b *Brain) crashOf(ctx context.Context, incident model.ID, target model.Obj
 		if json.Unmarshal(e.Data, &data) != nil || data.Workload.Kind != target.Kind || data.Workload.Namespace != target.Namespace ||
 			data.Workload.Name != target.Name {
 			continue
+		}
+		for _, t := range data.Summary.Templates {
+			if t.Error && len(errs) < 5 && !slices.Contains(errs, t.Template) {
+				errs = append(errs, t.Template)
+			}
 		}
 		for _, ex := range data.Summary.Exceptions {
 			var frames []string
@@ -291,7 +302,7 @@ func (b *Brain) crashOf(ctx context.Context, incident model.ID, target model.Obj
 			}
 		}
 	}
-	return newest
+	return newest, errs
 }
 
 // fixTrack is the cell of a fix's track record.
