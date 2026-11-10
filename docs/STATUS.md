@@ -112,7 +112,7 @@ To look at it on a cluster where it runs:
 | Honeytoken Secrets | Built: Lab env and named-key volumes get shape-preserving stand-ins; looking one up through Lab DNS fails the race | Unit tests in `internal/lab` |
 | Outbound call catalog | Built: `capture.Calls` lists distinct client calls for Lab fakes | Unit tests in `internal/capture` |
 | Frontier fakes (metadata HTTP) | Built (decision 100): outside hosts get a Lab Service + stub answering recorded statuses; DNS, Allow and world probes include them | Unit tests in `internal/lab` (`fake_test`, synthesis with `api.stripe.com`) |
-| Own faker, mined fix patterns | Metadata HTTP fakes built; body capture foundation built (decision 103); full faker (gRPC, TLS MITM, body-filled stubs) next. **Mined fix patterns: first cut built** (decision 101) |
+| Own faker, mined fix patterns | Metadata HTTP fakes built; body capture foundation built (decision 102); full faker (gRPC, TLS MITM, body-filled stubs) next. **Mined fix patterns: first cut built** (decision 101) |
 | Tier-1 node agent | First cut (decision 102): optional DaemonSet tails `/var/log/pods`, redacts on the node, optional cgroup memory.peak/pressure, posts batches; controller Store + OnBatch log evidence for open incidents | Unit tests in `internal/nodeagent` and `internal/cli` |
 
 ## Acting session
@@ -405,14 +405,14 @@ Full reasoning in [decisions.md](decisions.md).
 
 - **Lab realism:** frontier fakes from captured traffic are built for
   metadata-only HTTP (decision 100); opt-in body capture foundation is
-  built (decision 103) for write replay, response comparison and filled
+  built (decision 102) for write replay, response comparison and filled
   databases. Left: the Lab's certificate authority, TLS MITM, and an
   agent that exports bodies. Honeytoken Secrets that fail a race on DNS
   lookup are built.
 - **More rollback kinds:** DaemonSets, StatefulSets (with approval) and
   Argo Rollouts abort are built; Flagger stays deferred.
 - **Hardening:** baselines that survive restarts and dependency links from
-  error logs are built; the tier-1 node agent has a first cut (decision 103).
+  error logs are built; the tier-1 node agent has a first cut (decision 102).
   Standby for actor/Lab/Fixer already exists.
 - **Settings:** policy autonomy actions (including `restart`, `helm.rollback`,
   `rollouts.abort`, `fix.merge`) and capture toggles (`capture.requests`,
