@@ -136,6 +136,7 @@ func (p *Prover) Build(ctx context.Context, ns, prodNS, domain string, plan *Pla
 		return nil, fmt.Errorf("the Lab DNS did not become ready: %w", err)
 	}
 	for _, pod := range plan.Pods {
+		pod = withFakeTLSImage(pod.DeepCopy(), p.SealImage)
 		pod = p.seal(gated(pod, built.Gate), built.Allow)
 		pod.Spec.DNSConfig = DNSConfig(built.DNS, prodNS, domain)
 		if _, err := core.Pods(ns).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
@@ -258,4 +259,19 @@ func WorldProbes(services []*corev1.Service, prodNS, domain string) []Probe {
 		}
 	}
 	return append(out, Probe{Name: "API server by name", Address: hostPort("kubernetes.default.svc."+domain, 443)})
+}
+
+// withFakeTLSImage runs HTTPS fakes from SealImage (Sentinel's own binary,
+// which holds lab-fake) when the Lab has one; otherwise the stub keeps the
+// probe image and falls back to agnhost netexec for the TLS handshake.
+func withFakeTLSImage(pod *corev1.Pod, sealImage string) *corev1.Pod {
+	if pod == nil || sealImage == "" || pod.Annotations[FakeTLS] != "true" {
+		return pod
+	}
+	for i := range pod.Spec.Containers {
+		if pod.Spec.Containers[i].Name == "fake" {
+			pod.Spec.Containers[i].Image = sealImage
+		}
+	}
+	return pod
 }
