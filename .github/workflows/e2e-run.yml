@@ -53,12 +53,15 @@ permissions:
 
 jobs:
   # The self-hosted runner deallocates itself when idle; a GitHub-hosted
-  # minute starts it.
+  # minute starts it when the account still has Actions minutes. With a $0
+  # budget the wake is blocked: continue anyway so a VM already up (or one
+  # started with hack/azure-runner/wake.sh) can pick the job up.
   wake:
     name: wake the runner
     if: inputs.self-hosted
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    continue-on-error: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -78,7 +81,7 @@ jobs:
   run:
     name: ${{ inputs.network }}${{ inputs.label }}
     needs: [wake]
-    if: ${{ !cancelled() && (needs.wake.result == 'success' || needs.wake.result == 'skipped') }}
+    if: ${{ !cancelled() && (needs.wake.result == 'success' || needs.wake.result == 'skipped' || needs.wake.result == 'failure') }}
     runs-on: ${{ inputs.self-hosted && fromJSON('["self-hosted", "sentinel-lab"]') || 'ubuntu-24.04' }}
     timeout-minutes: 50
     env:
