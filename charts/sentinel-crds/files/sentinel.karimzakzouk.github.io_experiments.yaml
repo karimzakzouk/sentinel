@@ -95,6 +95,11 @@ spec:
                       maximum: 65535
                       minimum: 1
                       type: integer
+                    responseBody:
+                      description: ResponseBody is a redacted response body sample
+                        when capture.bodies kept one.
+                      maxLength: 4096
+                      type: string
                     status:
                       format: int32
                       maximum: 999

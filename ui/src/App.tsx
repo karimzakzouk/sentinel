@@ -5,6 +5,7 @@ import { Capabilities } from "./Capabilities";
 import { ago, classLabel, isOpen, workload } from "./format";
 import { IncidentView } from "./IncidentView";
 import { Policies } from "./Policies";
+import { Settings } from "./Settings";
 import { SignIn, useSession } from "./session";
 import { usePoll } from "./usePoll";
 
@@ -43,12 +44,12 @@ function Header({ summary }: { summary?: Summary }) {
       )}
       <div className="spacer" />
       {summary?.mode === "assist" ? (
-        <span className="pill amber" title="A SentinelPolicy lets Sentinel run reversible actions on its own; elsewhere it only records them">
-          <span className="dot" /> Acting where a policy allows
+        <span className="pill amber" title="At least one policy lets Sentinel act on its own somewhere">
+          <span className="dot" /> Can act where policies allow
         </span>
       ) : (
-        <span className="pill accent" title="Sentinel records what it would do and changes nothing">
-          <span className="dot" /> Observe mode
+        <span className="pill accent" title="No policy lets Sentinel change the cluster yet — it only records">
+          <span className="dot" /> Watching only
         </span>
       )}
       {summary && (
@@ -124,11 +125,13 @@ export function App() {
   const incidents = usePoll(api.incidents, []);
   const view = route.startsWith("/capabilities")
     ? "capabilities"
-    : route.startsWith("/actions")
-      ? "actions"
-      : route.startsWith("/policies")
-        ? "policies"
-        : "incidents";
+    : route.startsWith("/settings")
+      ? "settings"
+      : route.startsWith("/actions")
+        ? "actions"
+        : route.startsWith("/policies")
+          ? "policies"
+          : "incidents";
   const all = (incidents.data ?? []).filter((i) => !i.mergedInto);
   const open = all.filter(isOpen);
   const done = all.filter((i) => !isOpen(i));
@@ -140,17 +143,20 @@ export function App() {
       <div className="body">
         <aside className="sidebar">
           <div className="tabs" role="tablist">
-            <button className="tab" role="tab" aria-selected={view === "incidents"} onClick={() => go("/")}>
+            <button className="tab" role="tab" aria-selected={view === "incidents"} onClick={() => go("/")} title="What went wrong and why">
               Incidents
             </button>
-            <button className="tab" role="tab" aria-selected={view === "actions"} onClick={() => go("/actions")}>
+            <button className="tab" role="tab" aria-selected={view === "actions"} onClick={() => go("/actions")} title="What Sentinel did or asked to do">
               Actions
             </button>
-            <button className="tab" role="tab" aria-selected={view === "policies"} onClick={() => go("/policies")}>
+            <button className="tab" role="tab" aria-selected={view === "policies"} onClick={() => go("/policies")} title="Per-namespace rules: autonomy and capture">
               Policies
             </button>
-            <button className="tab" role="tab" aria-selected={view === "capabilities"} onClick={() => go("/capabilities")}>
-              Capabilities
+            <button className="tab" role="tab" aria-selected={view === "settings"} onClick={() => go("/settings")} title="Cluster-wide knobs without Helm YAML">
+              Settings
+            </button>
+            <button className="tab" role="tab" aria-selected={view === "capabilities"} onClick={() => go("/capabilities")} title="What this cluster lets Sentinel do">
+              Cluster
             </button>
           </div>
           {(summary.error || incidents.error) && (
@@ -173,6 +179,8 @@ export function App() {
         <main className="main">
           {view === "capabilities" ? (
             <Capabilities />
+          ) : view === "settings" ? (
+            <Settings />
           ) : view === "policies" ? (
             <Policies />
           ) : view === "actions" ? (
@@ -183,10 +191,12 @@ export function App() {
             <p className="empty">{incidents.error ? "" : "Loading…"}</p>
           ) : (
             <div className="empty">
-              <h2>Nothing to explain</h2>
+              <h2>All quiet</h2>
               <p>
-                Sentinel is watching. When something goes wrong it opens an incident here, explains what it sees, and records
-                what it would do.
+                Sentinel is watching your apps. When something breaks it opens an incident here in plain language, shows what
+                changed, and records what it would do — or does it, when a{" "}
+                <a href="#/policies">policy</a> allows. Use <a href="#/settings">Settings</a> to turn capture, the Lab, and
+                acting knobs on or off without Helm.
               </p>
             </div>
           )}

@@ -24,6 +24,7 @@ var (
 func addKnownTypes(s *runtime.Scheme) error {
 	s.AddKnownTypes(GroupVersion,
 		&SentinelPolicy{}, &SentinelPolicyList{},
+		&SentinelSettings{}, &SentinelSettingsList{},
 		&ActionRequest{}, &ActionRequestList{},
 		&Experiment{}, &ExperimentList{},
 		&Fix{}, &FixList{},

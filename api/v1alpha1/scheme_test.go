@@ -13,6 +13,7 @@ func TestAddToSchemeRegistersEveryKind(t *testing.T) {
 	}
 	for _, kind := range []string{
 		"SentinelPolicy", "SentinelPolicyList",
+		"SentinelSettings", "SentinelSettingsList",
 		"ActionRequest", "ActionRequestList",
 		"Experiment", "ExperimentList",
 		"Fix", "FixList",

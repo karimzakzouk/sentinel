@@ -21,6 +21,14 @@ const classes: Record<string, { label: string; meaning: string }> = {
 const actions: Record<string, { label: string; verb: string }> = {
   "rollout.undo": { label: "Roll back", verb: "roll back the rollout of" },
   "scale.restore": { label: "Restore replicas", verb: "restore the replica count of" },
+  scale: { label: "Restore replicas", verb: "restore the replica count of" },
+  restart: { label: "Restart pods", verb: "restart the pods of" },
+  "argocd.rollback": { label: "Pause Argo CD, then roll back", verb: "pause Argo CD and roll back" },
+  "flux.rollback": { label: "Suspend Flux, then roll back", verb: "suspend Flux and roll back" },
+  "helm.rollback": { label: "Roll back a Helm release", verb: "roll back the Helm release of" },
+  "rollouts.abort": { label: "Abort an Argo Rollout", verb: "abort the Argo Rollout of" },
+  "flagger.abort": { label: "Abort a Flagger canary", verb: "abort the Flagger canary of" },
+  "fix.merge": { label: "Merge its own fix in Git", verb: "merge the fix for" },
   escalate: { label: "Ask a person", verb: "ask a person to look at" },
   none: { label: "Do nothing", verb: "leave" },
 };

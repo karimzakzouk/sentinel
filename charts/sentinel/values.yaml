@@ -178,6 +178,10 @@ fixer:
 # of its own that allows the capabilities eBPF needs. Off by default;
 # where nodes cannot run it, the capability report says so and Sentinel
 # works without it.
+#
+# capture.enabled (install the privileged agent) stays Helm-only.
+# exportBodies and bodyBufferBytes are seeded into SentinelSettings and
+# then owned by the console Settings page.
 capture:
   enabled: false
   namespace: sentinel-capture
@@ -186,6 +190,7 @@ capture:
   # http.response.body.content on OTLP traces (JSON HTTP/1 payloads via
   # ebpf enrichment; not TLS ciphertext). Off by default. Sentinel keeps
   # bodies only for namespaces whose SentinelPolicy also sets capture.bodies.
+  # After install, toggle this from the console Settings page.
   exportBodies: false
   # Per-side HTTP buffer for OBI body extraction; align with the ~4KiB cap
   # Sentinel applies after redaction.

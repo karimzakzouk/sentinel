@@ -102,6 +102,13 @@ func newActorCmd(kf *kube.Flags) *cobra.Command {
 						return true
 					}
 					return !current.Enabled
+				},
+				HourlyBudget: func() int {
+					current, err := loadActorConfig(configPath)
+					if err != nil {
+						return cfg.PerHour
+					}
+					return current.PerHour
 				}}
 			ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGTERM, os.Interrupt)
 			defer stop()

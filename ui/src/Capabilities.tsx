@@ -9,8 +9,10 @@ const featureNames: Record<string, string> = {
   "detect.metrics": "Resource metrics",
   "detect.node-agent": "Node agent",
   "detect.ebpf": "eBPF",
-  act: "Acting (later phases)",
+  act: "Acting on workloads",
   lab: "Lab sandbox",
+  "capture.traffic": "Traffic capture",
+  "fixer.code": "Code fixes",
   "lab.user-namespaces": "User namespaces in the Lab",
   "lab.sandbox-runtime": "Sandboxed runtime",
 };
@@ -98,16 +100,18 @@ export function Capabilities() {
   return (
     <article>
       <div className="title-row">
-        <h1>What Sentinel can do here</h1>
+        <h1>This cluster</h1>
       </div>
       <p className="subtitle">
-        Checked {ago(r.generatedAt)} as <span className="mono">{r.identity}</span> on {r.cluster.platform}{" "}
-        {r.cluster.serverVersion}, {r.cluster.nodes} node(s)
-        {r.cluster.networkPlugin ? `, ${r.cluster.networkPlugin}` : ""}.
+        What Sentinel is allowed to see and do here. Checked {ago(r.generatedAt)} as{" "}
+        <span className="mono">{r.identity}</span> on {r.cluster.platform} {r.cluster.serverVersion}, {r.cluster.nodes}{" "}
+        node(s)
+        {r.cluster.networkPlugin ? `, network: ${r.cluster.networkPlugin}` : ""}. Turn behaviour on under{" "}
+        <a href="#/settings">Settings</a>; set per-namespace rules under <a href="#/policies">Policies</a>.
       </p>
       {r.warnings && r.warnings.length > 0 && <Warnings warnings={r.warnings} />}
       <section className="card" style={{ marginBottom: 16 }}>
-        <h2>Features</h2>
+        <h2>What works on this cluster</h2>
         <div className="features">
           {features.map((f) => (
             <div key={f.name} className="feature">
@@ -135,7 +139,8 @@ export function Capabilities() {
         </section>
       )}
       <section className="card">
-        <h2>Checks</h2>
+        <h2>Technical checks</h2>
+        <p className="muted">For operators who want the raw probe results.</p>
         <table className="table">
           <thead>
             <tr>
@@ -147,7 +152,7 @@ export function Capabilities() {
           <tbody>
             {r.checks.map((c) => (
               <tr key={c.id}>
-                <td className="mono">{c.id}</td>
+                <td>{featureNames[c.id] ?? c.id}</td>
                 <td>
                   <span className={`pill ${statusPill[c.status] ?? ""}`}>{c.status}</span>
                 </td>

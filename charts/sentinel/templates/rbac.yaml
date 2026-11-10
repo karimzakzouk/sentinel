@@ -330,3 +330,102 @@ roleRef:
 subjects:
   - {{ toJson $controller }}
 {{- end }}
+---
+# Runtime Settings: the controller applies the console's SentinelSettings to
+# its ConfigMaps and rolls the pods that read them.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Release.Name }}-settings
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- $labels | nindent 4 }}
+rules:
+  - apiGroups: [sentinel.karimzakzouk.github.io]
+    resources: [sentinelsettings]
+    verbs: [get, list, watch]
+  - apiGroups: [sentinel.karimzakzouk.github.io]
+    resources: [sentinelsettings/status]
+    verbs: [get, patch, update]
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [get, update, patch]
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [get, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Release.Name }}-settings
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- $labels | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ .Release.Name }}-settings
+subjects:
+  - {{ toJson $controller }}
+{{- if .Values.actor.enabled }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Release.Name }}-settings-actor
+  namespace: {{ .Values.actor.namespace }}
+  labels:
+    {{- $labels | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [get, update, patch]
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [get, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Release.Name }}-settings-actor
+  namespace: {{ .Values.actor.namespace }}
+  labels:
+    {{- $labels | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ .Release.Name }}-settings-actor
+subjects:
+  - {{ toJson $controller }}
+{{- end }}
+{{- if .Values.capture.enabled }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Release.Name }}-settings-capture
+  namespace: {{ .Values.capture.namespace }}
+  labels:
+    {{- $labels | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [get, update, patch]
+  - apiGroups: [apps]
+    resources: [daemonsets]
+    verbs: [get, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Release.Name }}-settings-capture
+  namespace: {{ .Values.capture.namespace }}
+  labels:
+    {{- $labels | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ .Release.Name }}-settings-capture
+subjects:
+  - {{ toJson $controller }}
+{{- end }}
