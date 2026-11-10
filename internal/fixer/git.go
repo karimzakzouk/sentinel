@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path"
+	"strings"
 	"time"
 
 	"github.com/go-git/go-billy/v5"
@@ -134,9 +135,9 @@ func CloneHistory(ctx context.Context, url, branch string, auth transport.AuthMe
 // FilesAt reads every file of a commit the clone holds, up to
 // maxRepoBytes.
 func (c *Checkout) FilesAt(rev string) (map[string][]byte, error) {
-	hash, err := c.repo.ResolveRevision(plumbing.Revision(rev))
+	hash, err := c.Resolve(rev)
 	if err != nil {
-		return nil, fmt.Errorf("the branch's history has no commit %s: %w", rev, err)
+		return nil, err
 	}
 	commit, err := c.repo.CommitObject(*hash)
 	if err != nil {
@@ -160,6 +161,32 @@ func (c *Checkout) FilesAt(rev string) (map[string][]byte, error) {
 		return nil
 	})
 	return out, err
+}
+
+// Resolve finds a commit of the clone's history by its hash or the first
+// characters of it, as image tags name commits.
+func (c *Checkout) Resolve(rev string) (*plumbing.Hash, error) {
+	if hash, err := c.repo.ResolveRevision(plumbing.Revision(rev)); err == nil {
+		return hash, nil
+	}
+	iter, err := c.repo.CommitObjects()
+	if err != nil {
+		return nil, err
+	}
+	var found []plumbing.Hash
+	_ = iter.ForEach(func(cm *object.Commit) error {
+		if strings.HasPrefix(cm.Hash.String(), strings.ToLower(rev)) {
+			found = append(found, cm.Hash)
+		}
+		return nil
+	})
+	switch len(found) {
+	case 1:
+		return &found[0], nil
+	case 0:
+		return nil, fmt.Errorf("the branch's history has no commit %s", rev)
+	}
+	return nil, fmt.Errorf("%d commits of the branch's history start with %s", len(found), rev)
 }
 
 // Push commits the edit on a new branch from the checked out head, as

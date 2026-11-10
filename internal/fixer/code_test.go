@@ -336,3 +336,16 @@ func TestTheLabsVerdictIsKeptWhenTheForgeRefusesItsComment(t *testing.T) {
 type roundTrip func(*http.Request) (*http.Response, error)
 
 func (f roundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// A change moved into Tried counts once: a model asked once, whose change
+// the Lab failed, is asked again while its attempts last.
+func TestAModelsFailedChangeCountsOnce(t *testing.T) {
+	cf := &v1alpha1.CodeFix{Tried: []v1alpha1.CodeAttempt{{Fixer: "llm", Verdict: "Failed"}}}
+	if n := llmAttempts(cf); n != 1 {
+		t.Fatalf("%d model attempts counted, want 1", n)
+	}
+	cf.Fixer = "llm"
+	if n := llmAttempts(cf); n != 2 {
+		t.Fatalf("with a current model change, %d counted, want 2", n)
+	}
+}

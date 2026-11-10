@@ -1,0 +1,49 @@
+# A small local language model for the Fixer's llm fixer in the end-to-end
+# cluster: Ollama serving qwen2.5-coder:1.5b on CPU, through its
+# OpenAI-compatible API at http://ollama.ollama.svc:11434/v1. Proves the
+# llm fixer works with a weak model and no key.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ollama
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ollama
+  namespace: ollama
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: ollama}
+  template:
+    metadata:
+      labels: {app: ollama}
+    spec:
+      containers:
+        - name: ollama
+          image: ollama/ollama:0.12.6
+          command: [sh, -c, "ollama serve & sleep 5; ollama pull qwen2.5-coder:1.5b && touch /tmp/ready; wait"]
+          ports:
+            - containerPort: 11434
+          readinessProbe:
+            exec:
+              command: [test, -f, /tmp/ready]
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 500m
+              memory: 2Gi
+            limits:
+              memory: 4Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ollama
+  namespace: ollama
+spec:
+  selector: {app: ollama}
+  ports:
+    - port: 11434
+      targetPort: 11434

@@ -26,6 +26,36 @@ var hexRevision = regexp.MustCompile(`^[0-9a-f]{7,40}$`)
 // that is the same commit, as most pipelines tag an image, is a second,
 // independent one. Without two that agree the Fixer does not touch code.
 func ResolveSource(image string, labels map[string]string) (Built, error) {
+	return ResolveSourceWith(image, labels, nil)
+}
+
+// ResolveSourceWith resolves an image's source as ResolveSource does, and
+// where its labels do not name its source, from sources, which maps image
+// repositories (registry/name) to the repositories they are built from; the
+// commit is then the one its tag names, as pipelines tag images with the
+// commit or "sha-" and its first characters.
+func ResolveSourceWith(image string, labels map[string]string, sources map[string]string) (Built, error) {
+	if labels["org.opencontainers.image.source"] == "" || labels["org.opencontainers.image.revision"] == "" {
+		ref, err := ParseReference(image)
+		if err != nil {
+			return Built{}, err
+		}
+		repo := labels["org.opencontainers.image.source"]
+		if repo == "" {
+			repo = sources[ref.Registry+"/"+ref.Repository]
+			if repo == "" && ref.Registry == "registry-1.docker.io" {
+				repo = sources[ref.Repository]
+			}
+		}
+		tag := strings.TrimPrefix(strings.ToLower(ref.Tag), "sha-")
+		switch {
+		case repo == "":
+			return Built{}, fmt.Errorf("%s does not name its source and commit in its labels, and the Fixer's code.sources does not name its repository", image)
+		case !hexRevision.MatchString(tag):
+			return Built{}, fmt.Errorf("%s does not name its commit in its labels, and its tag %q is no commit", image, ref.Tag)
+		}
+		return Built{Repository: repo, Revision: tag}, nil
+	}
 	repo, rev := labels["org.opencontainers.image.source"], strings.ToLower(labels["org.opencontainers.image.revision"])
 	switch {
 	case repo == "" || rev == "":

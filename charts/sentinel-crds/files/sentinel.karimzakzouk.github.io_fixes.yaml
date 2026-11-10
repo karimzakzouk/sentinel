@@ -116,6 +116,16 @@ spec:
                 - frames
                 - language
                 type: object
+              errors:
+                description: |-
+                  Errors are the error lines the failing revision logged, as masked
+                  templates; where no stack says where it failed, the source that logs
+                  them may.
+                items:
+                  type: string
+                maxItems: 5
+                type: array
+                x-kubernetes-list-type: atomic
               faultClass:
                 description: |-
                   FaultClass is the class Sentinel gave the incident. When that
