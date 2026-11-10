@@ -66,7 +66,8 @@ type Fixer struct {
 	Registry      *codefix.Registry
 	LabNamespaces []string
 	// CodeFixers are the fixers tried, in order, for a crash in code:
-	// restore, template, revert and llm; empty is all four, in that order.
+	// restore, template, mine, revert and llm; empty is all five, in that
+	// order.
 	CodeFixers []string
 	// LLM, when set, is the language model the llm fixer asks, at most
 	// LLMAttempts times a fix, after the other fixers have nothing left.

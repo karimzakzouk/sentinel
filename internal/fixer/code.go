@@ -13,6 +13,7 @@ import (
 	"github.com/karimzakzouk/sentinel/internal/codefix"
 	"github.com/karimzakzouk/sentinel/internal/forge"
 	"github.com/karimzakzouk/sentinel/internal/logs"
+	"github.com/karimzakzouk/sentinel/internal/mine"
 	"github.com/karimzakzouk/sentinel/internal/model"
 	"github.com/karimzakzouk/sentinel/internal/verify"
 )
@@ -105,6 +106,9 @@ type codeSource struct {
 	goodImage   string
 	in          codefix.Input
 	head        map[string][]byte
+	// mined are repair patterns learned once from the clone's history.
+	mined   []mine.Pattern
+	didMine bool
 }
 
 func (f *Fixer) codeSource(ctx context.Context, fix *v1alpha1.Fix, good, bad string) (*codeSource, string) {
@@ -174,13 +178,22 @@ func (f *Fixer) codeSource(ctx context.Context, fix *v1alpha1.Fix, good, bad str
 }
 
 // Fixer names, in the order they are tried by default.
-var defaultCodeFixers = []string{"restore", "template", "revert", "llm"}
+var defaultCodeFixers = []string{"restore", "template", "mine", "revert", "llm"}
 
 func (f *Fixer) codeFixers() []string {
 	if len(f.CodeFixers) > 0 {
 		return f.CodeFixers
 	}
 	return defaultCodeFixers
+}
+
+func (src *codeSource) patterns() []mine.Pattern {
+	if src.didMine {
+		return src.mined
+	}
+	src.didMine = true
+	src.mined, _ = src.co.MinePatterns(mine.Options{})
+	return src.mined
 }
 
 // nextChange is the first change, in the fixers' order, not tried yet that
@@ -196,6 +209,8 @@ func (f *Fixer) nextChange(ctx context.Context, src *codeSource, cf *v1alpha1.Co
 			fixers = append(fixers, codefix.Restorer{})
 		case "template":
 			fixers = append(fixers, codefix.Templates{})
+		case "mine":
+			fixers = append(fixers, codefix.Mined{Patterns: src.patterns()})
 		case "revert":
 			fixers = append(fixers, codefix.Reverter{})
 		case "llm":
@@ -459,6 +474,8 @@ func codeBody(fix *v1alpha1.Fix, c *codefix.Change, good, bad string, src codefi
 	switch {
 	case strings.HasPrefix(c.Fixer, "template:"):
 		what = "This pull request changes only the line that crashed, or guards it, with a fixed template (" + strings.TrimPrefix(c.Fixer, "template:") + "). A guard can hide a bug as well as fix it: read it as a stopgap."
+	case c.Fixer == "mine":
+		what = "This pull request applies a repair pattern mined from the repository's own history: a before/after change that looked like a past fix. Read it as a stopgap until a person judges it."
 	case c.Fixer == "revert":
 		what = "This pull request undoes the culprit commit: every file it changed, put back as it was."
 	case c.Fixer == "llm":

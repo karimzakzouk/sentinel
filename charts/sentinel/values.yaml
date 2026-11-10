@@ -107,11 +107,12 @@ fixer:
     platform: amd64
     # The fixers tried for a crash, in order, each change raced in the Lab
     # before the next is tried: restore (the crashing function put back as
-    # it was), template (a fixed change at the crash's line), revert (every
-    # file the culprit commit changed put back) and llm (a language
-    # model's change, asked only once the others have nothing left). Leave
-    # one out to turn it off.
-    fixers: [restore, template, revert, llm]
+    # it was), template (a fixed change at the crash's line), mine (a
+    # before/after repair learned from the repository's own fix history),
+    # revert (every file the culprit commit changed put back) and llm (a
+    # language model's change, asked only once the others have nothing
+    # left). Leave one out to turn it off.
+    fixers: [restore, template, mine, revert, llm]
     # A crash nothing was rolled back from, as a bug older than the newest
     # revision, gets a fix to its code too: the culprit is whichever commit
     # last changed the code the crash ran through.

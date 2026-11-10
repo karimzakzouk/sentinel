@@ -254,8 +254,8 @@ spec:
                   fixer:
                     description: |-
                       Fixer names what proposed the current change: restore (a function
-                      put back as it was), template, revert (every file the commit changed
-                      put back), history or llm.
+                      put back as it was), template, mine (a repair from the repository's
+                      own history), revert (every file the commit changed put back) or llm.
                     type: string
                   function:
                     description: Function is what the fix puts back as it was.

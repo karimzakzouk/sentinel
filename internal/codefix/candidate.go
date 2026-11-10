@@ -14,8 +14,8 @@ import (
 // Change is one fixer's proposal for a crash: edits to the source at the
 // commit the failing image was built from, what they change, and why.
 type Change struct {
-	// Fixer names what proposed it: restore, template:NAME, revert,
-	// history or llm.
+	// Fixer names what proposed it: restore, template:NAME, mine, revert
+	// or llm.
 	Fixer string
 	// Function is what it changes, for people.
 	Function string
