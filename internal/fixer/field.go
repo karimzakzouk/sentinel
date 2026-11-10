@@ -12,12 +12,14 @@ import (
 
 // Fields a fix restores beside the image: a container's command and
 // arguments, an environment variable's literal value ("env:NAME"), and its
-// memory limit, which a fix sets to a learned value rather than restores.
+// memory or CPU limit, which a fix sets to a learned value rather than
+// restores.
 const (
 	fieldImage       = "image"
 	fieldCommand     = "command"
 	fieldArgs        = "args"
 	fieldMemoryLimit = "limits.memory"
+	fieldCPULimit    = "limits.cpu"
 	envPrefix        = "env:"
 )
 
@@ -53,10 +55,11 @@ func valueIn(container map[string]any, field string) any {
 			s, _ := e["value"].(string)
 			return s
 		}
-	case field == fieldMemoryLimit:
+	case field == fieldMemoryLimit || field == fieldCPULimit:
 		res, _ := container["resources"].(map[string]any)
 		limits, _ := res["limits"].(map[string]any)
-		if v, ok := limits["memory"]; ok && v != nil {
+		key := strings.TrimPrefix(field, "limits.")
+		if v, ok := limits[key]; ok && v != nil {
 			return fmt.Sprint(v)
 		}
 	}
@@ -112,11 +115,12 @@ func setValue(container map[string]any, field string, v any) {
 			return
 		}
 		container["env"] = kept
-	case field == fieldMemoryLimit:
+	case field == fieldMemoryLimit || field == fieldCPULimit:
 		res, _ := container["resources"].(map[string]any)
 		limits, _ := res["limits"].(map[string]any)
+		key := strings.TrimPrefix(field, "limits.")
 		if v == nil {
-			delete(limits, "memory")
+			delete(limits, key)
 			return
 		}
 		if res == nil {
@@ -127,16 +131,16 @@ func setValue(container map[string]any, field string, v any) {
 			limits = map[string]any{}
 			res["limits"] = limits
 		}
-		limits["memory"] = v
+		limits[key] = v
 	}
 }
 
 func sameValue(a, b any) bool { return reflect.DeepEqual(a, b) }
 
 // same reports whether two values of the change's field are equal: memory
-// limits as quantities, since "64Mi" and "67108864" are one limit.
+// and CPU limits as quantities, since "64Mi" and "67108864" are one limit.
 func (c Change) same(a, b any) bool {
-	if c.field() != fieldMemoryLimit {
+	if c.field() != fieldMemoryLimit && c.field() != fieldCPULimit {
 		return sameValue(a, b)
 	}
 	as, aok := a.(string)
@@ -168,6 +172,8 @@ func what(field string) string {
 		return "arguments"
 	case field == fieldMemoryLimit:
 		return "memory limit"
+	case field == fieldCPULimit:
+		return "CPU limit"
 	case strings.HasPrefix(field, envPrefix):
 		return "environment variable " + strings.TrimPrefix(field, envPrefix)
 	}
@@ -229,10 +235,11 @@ func editField(src []byte, kind, name string, c Change) ([]byte, int, error) {
 		dash := entry.Column - 2
 		out, err := deleteLines(src, entry.Line, blockEnd(src, entry.Line, dash, false))
 		return out, entry.Line, err
-	case field == fieldMemoryLimit:
-		node := valueOf(valueOf(valueOf(container, "resources"), "limits"), "memory")
+	case field == fieldMemoryLimit || field == fieldCPULimit:
+		key := strings.TrimPrefix(field, "limits.")
+		node := valueOf(valueOf(valueOf(container, "resources"), "limits"), key)
 		if node == nil || c.Good == nil {
-			return nil, 0, fmt.Errorf("container %s sets no memory limit here", c.Container)
+			return nil, 0, fmt.Errorf("container %s sets no %s here", c.Container, what(field))
 		}
 		out, err := splice(src, node, c.Good.(string))
 		return out, node.Line, err

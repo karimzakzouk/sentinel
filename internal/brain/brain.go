@@ -69,6 +69,9 @@ type Brain struct {
 	// MemoryUse, when set, reports per container the working sets a
 	// workload had in revisions other than the one given, in bytes.
 	MemoryUse func(model.ObjectRef, string) map[string][]float64
+	// CPUUse, when set, reports per container the CPU use a workload had
+	// in revisions other than the one given, in cores.
+	CPUUse func(model.ObjectRef, string) map[string][]float64
 	// MergePolicy, when set, reports the level a namespace's policies grant
 	// fix.merge, and whether they make fixes earn it.
 	MergePolicy func(namespace string) (model.AutonomyLevel, bool)
@@ -85,9 +88,9 @@ type Brain struct {
 	// Lab, when set, verifies proposed rollbacks before anyone acts on them.
 	Lab Verifier
 	// ValueLab, when set, races the failing revision with learned limits
-	// (container to memory limit) in place, before the Fixer is asked for
-	// the pull request that sets them.
-	ValueLab func(ctx context.Context, incident model.ID, target model.ObjectRef, revision string, limits map[string]string) (string, bool, error)
+	// (container to memory and/or CPU limit) in place, before the Fixer is
+	// asked for the pull request that sets them.
+	ValueLab func(ctx context.Context, incident model.ID, target model.ObjectRef, revision string, memory, cpu map[string]string) (string, bool, error)
 	// CodeFixWithoutRollback asks the Fixer for a fix to the code of a
 	// crash with nothing to roll back, as for a bug older than the newest
 	// revision.

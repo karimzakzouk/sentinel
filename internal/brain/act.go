@@ -33,7 +33,7 @@ func actionArgs(action string, top *RankedChange, revision string) map[string]st
 	}
 	c := top.Change
 	switch {
-	case action == ActionRolloutUndo && c.Kind == string(watcher.ChangeTemplate) && c.ProducedNewestRevision && revision != "":
+	case (action == ActionRolloutUndo || action == ActionRolloutsAbort) && c.Kind == string(watcher.ChangeTemplate) && c.ProducedNewestRevision && revision != "":
 		return map[string]string{argFromTemplateHash: revision}
 	case action == ActionScaleRestore && c.Kind == string(watcher.ChangeScale):
 		for _, f := range c.Fields {
@@ -49,6 +49,7 @@ func actionArgs(action string, top *RankedChange, revision string) map[string]st
 // classLabels name the fault classes for people, as the UI does.
 var classLabels = map[string]string{
 	ClassBadImage: "Bad image", ClassCrashOnStart: "Crash on start", ClassMemoryLimit: "Memory limit too low",
+	ClassCPULimit: "CPU limit too low",
 	ClassProbe: "Broken health check", ClassConfigError: "Configuration error", ClassUnschedulable: "Cannot schedule",
 	ClassRuntimeCrash: "Crashing", ClassNewErrors: "New errors after a deploy", ClassDependencyUnavailable: "Dependency unavailable",
 	ClassRuntimeErrors: "Errors without a change",
@@ -63,8 +64,9 @@ func classLabel(c string) string {
 
 // verbs say what an action does and did, for people.
 var verbs = map[string][2]string{
-	ActionRolloutUndo:  {"roll back", "rolled back"},
-	ActionScaleRestore: {"restore the replicas of", "restored the replicas of"},
+	ActionRolloutUndo:   {"roll back", "rolled back"},
+	ActionRolloutsAbort: {"abort the rollout of", "aborted the rollout of"},
+	ActionScaleRestore:  {"restore the replicas of", "restored the replicas of"},
 }
 
 func verb(action string, past bool) string {

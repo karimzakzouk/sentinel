@@ -1,7 +1,7 @@
 // Package learn proposes values a fix sets from what a workload did while
 // it was healthy, for settings where putting back the old value can be as
-// wrong as the new one: a memory limit lowered by a commit may have been
-// lowered on purpose, just too far.
+// wrong as the new one: a memory or CPU limit lowered by a commit may have
+// been lowered on purpose, just too far.
 package learn
 
 import (
@@ -15,6 +15,10 @@ const MinSamples = 20
 
 const mebibyte = 1 << 20
 
+// millicoreFloor is the least absolute room a learned CPU limit keeps
+// above the 99th percentile of healthy use, in cores (20m).
+const millicoreFloor = 0.020
+
 // MemoryLimit is a memory limit for a container from its working sets
 // while healthy, in bytes: the 99th percentile with room for a peak the
 // samples missed, the larger of 30% and 8 MiB, rounded up to a mebibyte
@@ -26,6 +30,19 @@ func MemoryLimit(workingSets []float64) (string, error) {
 	p := Quantile(workingSets, 0.99)
 	limit := math.Max(1.3*p, p+8*mebibyte)
 	return fmt.Sprintf("%dMi", int64(math.Ceil(limit/mebibyte))), nil
+}
+
+// CPULimit is a CPU limit for a container from its use while healthy, in
+// cores: the 99th percentile with room for a peak the samples missed, the
+// larger of 30% and 20m, rounded up to a millicore and written as a
+// Kubernetes millicore quantity.
+func CPULimit(cores []float64) (string, error) {
+	if len(cores) < MinSamples {
+		return "", fmt.Errorf("%d samples of its CPU use; %d are the fewest a limit is learned from", len(cores), MinSamples)
+	}
+	p := Quantile(cores, 0.99)
+	limit := math.Max(1.3*p, p+millicoreFloor)
+	return fmt.Sprintf("%dm", int64(math.Ceil(limit*1000))), nil
 }
 
 // Quantile is the q-quantile of values, 0 < q <= 1: the smallest value

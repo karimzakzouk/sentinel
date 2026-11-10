@@ -20,7 +20,11 @@ const (
 	ClassBadImage      = "deploy.bad-image"
 	ClassCrashOnStart  = "deploy.crash-on-start"
 	ClassMemoryLimit   = "resource.memory-limit"
-	ClassProbe         = "config.probe"
+	// ClassCPULimit is a CPU limit set too low. There is no throttle fact
+	// yet that distinguishes it from other resource faults; the Fixer and
+	// learn path still propose a learned limit when this class is set.
+	ClassCPULimit = "resource.cpu-limit"
+	ClassProbe    = "config.probe"
 	ClassConfigError   = "config.error"
 	ClassUnschedulable = "capacity.unschedulable"
 	ClassRuntimeCrash  = "runtime.crash"
@@ -382,6 +386,9 @@ func relevance(classes slot.Distribution[string], group string) float64 {
 // Action types the Brain chooses among.
 const (
 	ActionRolloutUndo = "rollout.undo"
+	// ActionRolloutsAbort aborts an Argo Rollouts progressive delivery
+	// instead of rewriting its template.
+	ActionRolloutsAbort = "rollouts.abort"
 	// ActionScaleRestore sets a workload's replicas back to what they were
 	// before a scale change: rolling back its template would not.
 	ActionScaleRestore = "scale.restore"
@@ -390,7 +397,7 @@ const (
 )
 
 // ReversibleActions undo a recorded change.
-var ReversibleActions = []string{ActionRolloutUndo, ActionScaleRestore}
+var ReversibleActions = []string{ActionRolloutUndo, ActionRolloutsAbort, ActionScaleRestore}
 
 // DecideInput is what the expected-loss decision needs.
 type DecideInput struct {
@@ -411,7 +418,7 @@ type Decision struct {
 // Validate checks the decision names a known action with finite losses.
 func (d Decision) Validate() error {
 	switch d.Action {
-	case ActionRolloutUndo, ActionScaleRestore, ActionNone, ActionEscalate:
+	case ActionRolloutUndo, ActionRolloutsAbort, ActionScaleRestore, ActionNone, ActionEscalate:
 	default:
 		return fmt.Errorf("unknown action %q", d.Action)
 	}
@@ -440,13 +447,17 @@ type ExpectedLoss struct {
 func (ExpectedLoss) ID() string { return "expected-loss-v1" }
 
 func (e ExpectedLoss) Decide(_ context.Context, in DecideInput) (Decision, error) {
-	// Undoing the likeliest culprit: a rollback for a template change, the
-	// old replica count for a scale change.
+	// Undoing the likeliest culprit: a rollback for a template change (or an
+	// Argo Rollouts abort, which puts the previous ReplicaSet back), the old
+	// replica count for a scale change.
 	undo, pHelps := "", 0.0
 	if tc := in.TopChange; tc != nil && tc.Change.Object == in.Workload {
 		switch tc.Change.Kind {
 		case "template":
 			undo = ActionRolloutUndo
+			if in.Workload.Kind == "Rollout" {
+				undo = ActionRolloutsAbort
+			}
 		case "scale":
 			undo = ActionScaleRestore
 		}
@@ -466,7 +477,7 @@ func (e ExpectedLoss) Decide(_ context.Context, in DecideInput) (Decision, error
 		losses[undo] = e.Disruption + (1-pHelps)*e.PReal*e.Impact
 	}
 	best := ActionNone
-	for _, a := range []string{ActionRolloutUndo, ActionScaleRestore, ActionEscalate, ActionNone} {
+	for _, a := range []string{ActionRolloutUndo, ActionRolloutsAbort, ActionScaleRestore, ActionEscalate, ActionNone} {
 		if l, ok := losses[a]; ok && l < losses[best] {
 			best = a
 		}

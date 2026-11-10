@@ -423,6 +423,13 @@ func (in *FixSpec) DeepCopyInto(out *FixSpec) {
 			(*out)[key] = val
 		}
 	}
+	if in.CPULimits != nil {
+		in, out := &in.CPULimits, &out.CPULimits
+		*out = make(map[string]string, len(*in))
+		for key, val := range *in {
+			(*out)[key] = val
+		}
+	}
 	if in.Crash != nil {
 		in, out := &in.Crash, &out.Crash
 		*out = new(Crash)

@@ -163,6 +163,9 @@ type metricsState struct {
 	// memory holds, per workload key and container, the working sets its
 	// pods had at the latest polls, each with the revision it ran.
 	memory map[string]map[string][]memorySample
+	// cpu holds, per workload key and container, the CPU use its pods had
+	// at the latest polls, each with the revision it ran, in cores.
+	cpu map[string]map[string][]cpuSample
 }
 
 // memorySample is one container's working set at one poll.
@@ -171,8 +174,15 @@ type memorySample struct {
 	bytes    float64
 }
 
+// cpuSample is one container's CPU use at one poll, in cores.
+type cpuSample struct {
+	revision string
+	cores    float64
+}
+
 // memorySamples is how many working sets are kept per container of a
-// workload: six hours of one pod polled every 30 seconds.
+// workload: six hours of one pod polled every 30 seconds. The same bound
+// keeps CPU samples.
 const memorySamples = 720
 
 func (m *metricsState) addMemory(workload, container, revision string, bytes float64) {
@@ -184,4 +194,15 @@ func (m *metricsState) addMemory(workload, container, revision string, bytes flo
 	}
 	s := append(m.memory[workload][container], memorySample{revision: revision, bytes: bytes})
 	m.memory[workload][container] = s[max(0, len(s)-memorySamples):]
+}
+
+func (m *metricsState) addCPU(workload, container, revision string, cores float64) {
+	if m.cpu == nil {
+		m.cpu = map[string]map[string][]cpuSample{}
+	}
+	if m.cpu[workload] == nil {
+		m.cpu[workload] = map[string][]cpuSample{}
+	}
+	s := append(m.cpu[workload][container], cpuSample{revision: revision, cores: cores})
+	m.cpu[workload][container] = s[max(0, len(s)-memorySamples):]
 }

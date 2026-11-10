@@ -31,6 +31,12 @@ type FixSpec struct {
 	// as wrong as the new one.
 	// +optional
 	MemoryLimits map[string]string `json:"memoryLimits,omitempty"`
+	// CPULimits are, per container, the CPU limit Sentinel learned from
+	// what the workload used while it was healthy. For a cpu-limit
+	// incident a fix proposes it, since putting back the old limit can be
+	// as wrong as the new one.
+	// +optional
+	CPULimits map[string]string `json:"cpuLimits,omitempty"`
 	// Merge lets the Fixer merge its pull request itself: the namespace's
 	// policy grants fix.merge at autonomous, and Sentinel's fixes for this
 	// fault on this workload have earned it where the policy asks them to.

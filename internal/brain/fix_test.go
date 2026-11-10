@@ -137,6 +137,31 @@ func TestTheFixerIsToldTheClassAndALearnedLimit(t *testing.T) {
 	}
 }
 
+// A CPU-limit fault learns a limit from healthy CPU use the same way.
+func TestTheFixerIsToldALearnedCPULimit(t *testing.T) {
+	b, _ := newBrain(t)
+	fixer := &fakeFixer{}
+	b.Fixer = fixer
+	var except string
+	b.CPUUse = func(_ model.ObjectRef, rev string) map[string][]float64 {
+		except = rev
+		used := make([]float64, 40)
+		for i := range used {
+			used[i] = 0.050 + 0.010*float64(i%2)
+		}
+		return map[string][]float64{"web": used, "sidecar": used[:3]}
+	}
+	inc := &incident{rec: model.Incident{ID: "inc-1", Assessment: &model.Assessment{Class: ClassCPULimit}}}
+	a := &model.Action{Type: ActionRolloutUndo, Target: web, Params: map[string]string{argFromTemplateHash: "bad"}}
+	if drafts := b.askFix(ctx, inc, a); len(drafts) != 1 || len(fixer.requests) != 1 {
+		t.Fatalf("drafts %d, requests %d", len(drafts), len(fixer.requests))
+	}
+	r := fixer.requests[0]
+	if r.FaultClass != ClassCPULimit || except != "bad" || r.CPULimits["web"] != "80m" || len(r.CPULimits) != 1 {
+		t.Fatalf("request %+v, learned outside %q", r, except)
+	}
+}
+
 // Where a policy grants fix.merge at autonomous but makes fixes earn it, a
 // person merges until fixes of that fault on that workload have held often
 // enough; then the Fixer may. A fix that held counts for it.
@@ -345,12 +370,12 @@ func TestALearnedLimitIsRacedBeforeItsPullRequest(t *testing.T) {
 			b.Fixer = fixer
 			busy := 1
 			var asked []map[string]string
-			b.ValueLab = func(_ context.Context, _ model.ID, _ model.ObjectRef, revision string, limits map[string]string) (string, bool, error) {
+			b.ValueLab = func(_ context.Context, _ model.ID, _ model.ObjectRef, revision string, memory, _ map[string]string) (string, bool, error) {
 				if busy > 0 {
 					busy--
 					return "", false, nil
 				}
-				asked = append(asked, limits)
+				asked = append(asked, memory)
 				return "sentinel-lab-0/values", true, nil
 			}
 			used := make([]float64, 40)
@@ -382,5 +407,35 @@ func TestALearnedLimitIsRacedBeforeItsPullRequest(t *testing.T) {
 				t.Fatalf("%s: request %+v", phase, r)
 			}
 		})
+	}
+}
+
+// A learned CPU limit is raced the same way before its pull request.
+func TestALearnedCPULimitIsRacedBeforeItsPullRequest(t *testing.T) {
+	b, _ := newBrain(t)
+	fixer := &fakeFixer{}
+	b.Fixer = fixer
+	var askedCPU map[string]string
+	b.ValueLab = func(_ context.Context, _ model.ID, _ model.ObjectRef, _ string, _, cpu map[string]string) (string, bool, error) {
+		askedCPU = cpu
+		return "sentinel-lab-0/values", true, nil
+	}
+	used := make([]float64, 40)
+	for i := range used {
+		used[i] = 0.050 + 0.010*float64(i%2)
+	}
+	b.CPUUse = func(model.ObjectRef, string) map[string][]float64 { return map[string][]float64{"web": used} }
+	inc := &incident{rec: model.Incident{ID: "inc-1", Assessment: &model.Assessment{Class: ClassCPULimit}}}
+	b.open = map[string]*incident{web.String(): inc}
+	b.askFix(ctx, inc, &model.Action{Type: ActionRolloutUndo, Target: web, Params: map[string]string{argFromTemplateHash: "bad"}})
+	if askedCPU["web"] != "80m" || len(fixer.requests) != 0 {
+		t.Fatalf("Lab %v, fixer %d", askedCPU, len(fixer.requests))
+	}
+	if err := b.OnLabVerdict(ctx, LabVerdict{IncidentID: "inc-1", Experiment: "sentinel-lab-0/sentinel-c-values", Phase: "Passed",
+		Message: "the failing revision with web's limits.cpu at 80m works"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(fixer.requests) != 1 || fixer.requests[0].CPULimits["web"] != "80m" {
+		t.Fatalf("request %+v", fixer.requests)
 	}
 }

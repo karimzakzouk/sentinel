@@ -84,3 +84,18 @@ func TestMemoryUseLeavesOutTheFailedRevision(t *testing.T) {
 		t.Fatalf("kept %d samples, want %d", len(all), memorySamples)
 	}
 }
+
+func TestCPUUseLeavesOutTheFailedRevision(t *testing.T) {
+	w := &Watcher{}
+	for i := range memorySamples + 10 {
+		w.metrics.addCPU(web.String(), "web", "good", float64(i)/1000)
+	}
+	w.metrics.addCPU(web.String(), "web", "bad", 1)
+	use := w.CPUUse(web, "bad")["web"]
+	if len(use) != memorySamples-1 || use[0] != 11.0/1000 {
+		t.Fatalf("kept %d samples from %v; want %d from 0.011", len(use), use[0], memorySamples-1)
+	}
+	if all := w.CPUUse(web, "")["web"]; len(all) != memorySamples {
+		t.Fatalf("kept %d samples, want %d", len(all), memorySamples)
+	}
+}
