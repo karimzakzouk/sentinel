@@ -50,6 +50,9 @@ func Run(ctx context.Context, cfg Config) error {
 		cfg.BatchSize = 200
 	}
 	if cfg.Node == "" {
+		cfg.Node = os.Getenv("NODE_NAME")
+	}
+	if cfg.Node == "" {
 		cfg.Node, _ = os.Hostname()
 	}
 	log := cfg.Log
@@ -114,7 +117,7 @@ func pollOnce(ctx context.Context, cfg Config, r *redact.Redactor, sender *Sende
 				At: at, Namespace: pl.Namespace, Pod: pl.Pod, UID: pl.UID,
 				Container: pl.Container, Text: text,
 			})
-			if len(batch.Lines) >= cfg.BatchSize {
+			if cfg.BatchSize > 0 && len(batch.Lines) >= cfg.BatchSize {
 				if err := sender.Send(ctx, batch); err != nil {
 					return err
 				}

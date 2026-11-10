@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"k8s.io/client-go/dynamic"
@@ -22,8 +23,11 @@ import (
 	"github.com/karimzakzouk/sentinel/internal/config"
 	"github.com/karimzakzouk/sentinel/internal/fixes"
 	"github.com/karimzakzouk/sentinel/internal/ledger"
+	"github.com/karimzakzouk/sentinel/internal/logs"
 	"github.com/karimzakzouk/sentinel/internal/model"
+	"github.com/karimzakzouk/sentinel/internal/nodeagent"
 	"github.com/karimzakzouk/sentinel/internal/notify"
+	"github.com/karimzakzouk/sentinel/internal/redact"
 	"github.com/karimzakzouk/sentinel/internal/slot"
 	"github.com/karimzakzouk/sentinel/internal/topology"
 	"github.com/karimzakzouk/sentinel/internal/verify"
@@ -84,7 +88,7 @@ func servesActing(client kubernetes.Interface) error {
 // newObserver wires the Watcher to the Brain, and the Brain to the actor
 // when the configuration names one.
 func newObserver(ctx context.Context, log *slog.Logger, cfg *config.Config, client kubernetes.Interface, dyn dynamic.Interface,
-	l *ledger.Ledger, captured *capture.Store,
+	l *ledger.Ledger, captured *capture.Store, nodeLogs *nodeagent.Store,
 ) (*watcher.Watcher, *act.Requests, error) {
 	reg, err := Registry()
 	if err != nil {
@@ -258,6 +262,55 @@ func newObserver(ctx context.Context, log *slog.Logger, cfg *config.Config, clie
 			}
 		})
 		w.SampleInterval = cfg.Logs.SampleEvery()
+	}
+	// The node agent's OnBatch hook turns tailed lines into log evidence for
+	// open incidents. It does not feed the error-rate detector (ReasonSample
+	// does), so API sampling and the agent do not double-count. Cgroup
+	// samples stay on the batch for a later fact hook.
+	if nodeLogs != nil {
+		redactor := redact.New()
+		nodeLogs.OnBatch = func(batch nodeagent.Batch) {
+			type key struct{ ns, pod, container string }
+			grouped := map[key][]nodeagent.Line{}
+			for _, line := range batch.Lines {
+				k := key{line.Namespace, line.Pod, line.Container}
+				grouped[k] = append(grouped[k], line)
+			}
+			for k, lines := range grouped {
+				workload, rev, ok := w.ResolvePod(k.ns, k.pod)
+				if !ok {
+					continue
+				}
+				var raw strings.Builder
+				var from, to time.Time
+				for _, line := range lines {
+					if from.IsZero() || line.At.Before(from) {
+						from = line.At
+					}
+					if line.At.After(to) {
+						to = line.At
+					}
+					ts := line.At.UTC().Format(time.RFC3339Nano)
+					raw.WriteString(ts)
+					raw.WriteByte(' ')
+					raw.WriteString(line.Text)
+					raw.WriteByte('\n')
+				}
+				sum := logs.Summarize([]byte(raw.String()), redactor)
+				ev := watcher.LogEvidence{
+					Workload: workload, Revision: rev, Pod: k.pod, Container: k.container,
+					Reason: "node-agent", CollectedAt: time.Now().UTC(), Bytes: raw.Len(), Summary: sum,
+				}
+				if !from.IsZero() && !to.IsZero() {
+					ev.Exposure = to.Sub(from).Seconds()
+				}
+				if w.Logs != nil && w.Logs.OnEvidence != nil {
+					w.Logs.OnEvidence(ctx, ev)
+				} else if err := b.OnEvidence(ctx, ev); err != nil {
+					log.Error("could not record node-agent log evidence", "workload", workload.String(), "pod", k.pod, "error", err)
+				}
+			}
+		}
 	}
 	return w, acting, nil
 }

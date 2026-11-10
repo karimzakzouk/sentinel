@@ -66,6 +66,11 @@ capture:
   address: ":4318"
   tokenFile: /etc/sentinel-capture/token
 {{- end }}
+{{- if .Values.nodeAgent.enabled }}
+nodeAgent:
+  address: ":4319"
+  tokenFile: /etc/sentinel-node-agent/token
+{{- end }}
 {{- with .Values.console.oidc }}
 {{- if .issuer }}
 ui:

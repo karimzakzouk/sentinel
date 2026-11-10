@@ -83,6 +83,10 @@ spec:
             - name: capture
               containerPort: 4318
             {{- end }}
+            {{- if .Values.nodeAgent.enabled }}
+            - name: node-agent
+              containerPort: 4319
+            {{- end }}
           livenessProbe:
             httpGet:
               path: /healthz
@@ -111,6 +115,11 @@ spec:
               mountPath: /etc/sentinel-capture
               readOnly: true
             {{- end }}
+            {{- if .Values.nodeAgent.enabled }}
+            - name: node-agent-token
+              mountPath: /etc/sentinel-node-agent
+              readOnly: true
+            {{- end }}
             {{- if .Values.console.oidc.clientSecret.secretName }}
             - name: oidc
               mountPath: /etc/sentinel-oidc
@@ -131,6 +140,11 @@ spec:
           secret:
             secretName: sentinel-capture-token
         {{- end }}
+        {{- if .Values.nodeAgent.enabled }}
+        - name: node-agent-token
+          secret:
+            secretName: sentinel-node-agent-token
+        {{- end }}
         {{- with .Values.console.oidc.clientSecret.secretName }}
         - name: oidc
           secret:
@@ -150,7 +164,7 @@ spec:
       {{- end }}
 ---
 # The controller only talks to the API server and DNS, and only kubelet
-# health checks and traffic capture's agent reach it.
+# health checks, traffic capture's agent and the node agent reach it.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -176,6 +190,17 @@ spec:
               app.kubernetes.io/name: sentinel-capture
       ports:
         - port: 4318
+    {{- end }}
+    {{- if .Values.nodeAgent.enabled }}
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.nodeAgent.namespace }}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: sentinel-node-agent
+      ports:
+        - port: 4319
     {{- end }}
   egress:
     - ports:

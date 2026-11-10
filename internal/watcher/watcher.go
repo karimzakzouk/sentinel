@@ -518,6 +518,21 @@ func (w *Watcher) changes(ctx context.Context, cs []Change) {
 	}
 }
 
+// ResolvePod attributes a pod to its workload using the watcher's informers.
+// ok is false when the namespace is not watched or the pod is unknown.
+func (w *Watcher) ResolvePod(namespace, name string) (model.ObjectRef, string, bool) {
+	l := w.ns[namespace]
+	if l == nil {
+		return model.ObjectRef{}, "", false
+	}
+	pod, err := l.pods.Pods(namespace).Get(name)
+	if err != nil {
+		return model.ObjectRef{}, "", false
+	}
+	ref, rev := l.owners.Resolve(pod)
+	return ref, rev, true
+}
+
 // NewestRevision reports the pod revision a workload is rolling out, or ""
 // when it cannot tell.
 func (w *Watcher) NewestRevision(ref model.ObjectRef) string {
