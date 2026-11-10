@@ -8,6 +8,7 @@ const actions: { id: string; label: string }[] = [
   { id: "scale", label: "Restore replicas" },
   { id: "argocd.rollback", label: "Pause Argo CD, then roll back" },
   { id: "flux.rollback", label: "Suspend Flux, then roll back" },
+  { id: "rollouts.abort", label: "Abort an Argo Rollout" },
   { id: "fix.merge", label: "Merge its own fix in Git" },
 ];
 

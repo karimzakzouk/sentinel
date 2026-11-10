@@ -110,7 +110,7 @@ func TestSynthesisCopiesTheWorkloadAndWhatItCalls(t *testing.T) {
 		t.Fatalf("volumes %+v; want the secret emptied and the ConfigMap kept", spec.Volumes)
 	}
 	for _, e := range spec.Containers[0].Env {
-		if e.Name == "TOKEN" && (e.ValueFrom != nil || e.Value != SecretPlaceholder("front-secrets", "token")) {
+		if e.Name == "TOKEN" && (e.ValueFrom != nil || e.Value != Honeytoken("front-secrets", "token")) {
 			t.Fatalf("the secret value was not replaced: %+v", e)
 		}
 	}
@@ -119,7 +119,7 @@ func TestSynthesisCopiesTheWorkloadAndWhatItCalls(t *testing.T) {
 		"Deployment/shop/front runs without its service account front or any API token",
 		"Deployment/shop/front runs at the default priority, so it never preempts production",
 		"Deployment/shop/front runs without its service mesh container istio-proxy",
-		"Deployment/shop/front's TOKEN holds a placeholder instead of secret front-secrets",
+		"Deployment/shop/front's TOKEN holds a honeytoken instead of secret front-secrets",
 		"Deployment/shop/front runs without the variables of secret front-env",
 		"Deployment/shop/front's volume tls is an empty directory instead of secret front-tls",
 		"Deployment/shop/front names api.stripe.com, which is outside the Lab and unreachable there",
