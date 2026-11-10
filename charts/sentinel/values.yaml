@@ -182,6 +182,14 @@ capture:
   enabled: false
   namespace: sentinel-capture
   image: otel/ebpf-instrument:v1.0.0
+  # When true, OBI exports http.request.body.content and
+  # http.response.body.content on OTLP traces (JSON HTTP/1 payloads via
+  # ebpf enrichment; not TLS ciphertext). Off by default. Sentinel keeps
+  # bodies only for namespaces whose SentinelPolicy also sets capture.bodies.
+  exportBodies: false
+  # Per-side HTTP buffer for OBI body extraction; align with the ~4KiB cap
+  # Sentinel applies after redaction.
+  bodyBufferBytes: 8192
   resources:
     requests:
       cpu: 50m

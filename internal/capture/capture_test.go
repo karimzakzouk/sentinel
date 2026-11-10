@@ -233,6 +233,25 @@ func TestBodiesAreKeptOnlyWhenEnabledBodies(t *testing.T) {
 	}
 }
 
+// attachBodies accepts semantic-convention keys with or without the .content suffix.
+func TestAttachBodiesAcceptsPlainBodyKeys(t *testing.T) {
+	q := &Request{}
+	attachBodies(q, map[string]string{
+		"http.request.body":        `{"a":1}`,
+		"http.response.body":       `{"b":2}`,
+	})
+	if q.Body != `{"a":1}` || q.ResponseBody != `{"b":2}` {
+		t.Fatalf("plain keys %+v", q)
+	}
+	attachBodies(q, map[string]string{
+		"http.request.body.content":  "req",
+		"http.response.body.content": "res",
+	})
+	if q.Body != "req" || q.ResponseBody != "res" {
+		t.Fatalf(".content wins %+v", q)
+	}
+}
+
 func TestClippedBodyCapsAtAbout4KiB(t *testing.T) {
 	big := strings.Repeat("a", bodyMax+100)
 	got := clippedBody(big)
