@@ -50,7 +50,7 @@ func actionArgs(action string, top *RankedChange, revision string) map[string]st
 var classLabels = map[string]string{
 	ClassBadImage: "Bad image", ClassCrashOnStart: "Crash on start", ClassMemoryLimit: "Memory limit too low",
 	ClassCPULimit: "CPU limit too low",
-	ClassProbe: "Broken health check", ClassConfigError: "Configuration error", ClassUnschedulable: "Cannot schedule",
+	ClassProbe:    "Broken health check", ClassConfigError: "Configuration error", ClassUnschedulable: "Cannot schedule",
 	ClassRuntimeCrash: "Crashing", ClassNewErrors: "New errors after a deploy", ClassDependencyUnavailable: "Dependency unavailable",
 	ClassRuntimeErrors: "Errors without a change",
 }

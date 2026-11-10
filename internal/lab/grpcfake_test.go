@@ -125,7 +125,7 @@ func TestServeFakeGRPCReturnsCapturedBodyOrEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// Wait until the server accepts.
 	deadline := time.Now().Add(2 * time.Second)

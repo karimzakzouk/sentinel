@@ -20,11 +20,11 @@ func ServeTransparentMITM(cfg MITMConfig) error {
 	if _, err := strconv.Atoi(cfg.Listen); err == nil {
 		cfg.Listen = ":" + cfg.Listen
 	}
-	certPEM, err := os.ReadFile(cfg.CACertFile) //nolint:gosec // operator-mounted capture CA
+	certPEM, err := os.ReadFile(cfg.CACertFile)
 	if err != nil {
 		return fmt.Errorf("read capture CA certificate: %w", err)
 	}
-	keyPEM, err := os.ReadFile(cfg.CAKeyFile) //nolint:gosec // operator-mounted capture CA
+	keyPEM, err := os.ReadFile(cfg.CAKeyFile)
 	if err != nil {
 		return fmt.Errorf("read capture CA key: %w", err)
 	}
@@ -34,14 +34,14 @@ func ServeTransparentMITM(cfg MITMConfig) error {
 	}
 	if cfg.DialTLS == nil {
 		cfg.DialTLS = func(network, addr string) (net.Conn, error) {
-			return tls.Dial(network, addr, &tls.Config{MinVersion: tls.VersionTLS12}) //nolint:gosec // dials real origins with system trust
+			return tls.Dial(network, addr, &tls.Config{MinVersion: tls.VersionTLS12})
 		}
 	}
 	ln, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
 		return err
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 	certs := &certCache{ca: ca}
 	for {
 		conn, err := ln.Accept()
@@ -53,7 +53,7 @@ func ServeTransparentMITM(cfg MITMConfig) error {
 }
 
 func handleTransparent(conn net.Conn, certs *certCache, cfg MITMConfig) {
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	_ = conn.SetDeadline(time.Now().Add(30 * time.Second))
 	hostPort, err := originalDestination(conn)
 	if err != nil {
@@ -87,7 +87,7 @@ func handleTransparent(conn net.Conn, certs *certCache, cfg MITMConfig) {
 	if err := tlsClient.Handshake(); err != nil {
 		return
 	}
-	defer tlsClient.Close()
+	defer func() { _ = tlsClient.Close() }()
 	dialHost := hostPort
 	if sni != "" && net.ParseIP(sni) == nil {
 		// Prefer SNI hostname for the upstream name when REDIRECT only saw an IP.
@@ -99,6 +99,6 @@ func handleTransparent(conn net.Conn, certs *certCache, cfg MITMConfig) {
 	if err != nil {
 		return
 	}
-	defer upstream.Close()
+	defer func() { _ = upstream.Close() }()
 	proxyCapture(tlsClient, upstream, host, clientIP, cfg)
 }

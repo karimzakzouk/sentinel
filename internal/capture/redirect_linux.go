@@ -27,7 +27,7 @@ func ApplyRedirect(listenPort uint16) error {
 		return fmt.Errorf("open netfilter: %w", err)
 	}
 	_ = ClearRedirect()
-	uid := uint32(os.Geteuid())
+	uid := uint32(os.Geteuid()) //nolint:gosec // euid fits uint32
 	table := c.AddTable(&nftables.Table{Family: nftables.TableFamilyIPv4, Name: RedirectTable})
 	for _, ch := range []*nftables.Chain{
 		{Name: "prerouting", Table: table, Type: nftables.ChainTypeNAT,

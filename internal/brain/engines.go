@@ -17,9 +17,9 @@ import (
 
 // Fault classes the classifier distinguishes.
 const (
-	ClassBadImage      = "deploy.bad-image"
-	ClassCrashOnStart  = "deploy.crash-on-start"
-	ClassMemoryLimit   = "resource.memory-limit"
+	ClassBadImage     = "deploy.bad-image"
+	ClassCrashOnStart = "deploy.crash-on-start"
+	ClassMemoryLimit  = "resource.memory-limit"
 	// ClassCPULimit is a CPU limit set too low. There is no throttle fact
 	// yet that distinguishes it from other resource faults; the Fixer and
 	// learn path still propose a learned limit when this class is set.
@@ -27,9 +27,9 @@ const (
 	// ClassDiskLimit is an ephemeral-storage limit set too low. Until a
 	// separate fact exists, the Fixer and learn path still propose a learned
 	// limit when this class is set.
-	ClassDiskLimit = "resource.disk-limit"
-	ClassProbe     = "config.probe"
-	ClassTimeout   = "config.timeout"
+	ClassDiskLimit     = "resource.disk-limit"
+	ClassProbe         = "config.probe"
+	ClassTimeout       = "config.timeout"
 	ClassConfigError   = "config.error"
 	ClassUnschedulable = "capacity.unschedulable"
 	ClassRuntimeCrash  = "runtime.crash"

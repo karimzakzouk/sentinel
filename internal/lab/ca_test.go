@@ -82,7 +82,7 @@ func TestAnHTTPSFakeAnswersRecordedStatusesWithALabCertificate(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s %s: %v", method, path, err)
 		}
-		defer res.Body.Close()
+		defer func() { _ = res.Body.Close() }()
 		return res.StatusCode
 	}
 	if got := ask(http.MethodGet, "/v1/balance"); got != 200 {

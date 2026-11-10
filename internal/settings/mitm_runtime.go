@@ -21,12 +21,12 @@ func syncMITMRuntime(ctx context.Context, client kubernetes.Interface, t Targets
 	// Transparent implies trust-only inject (no HTTPS_PROXY).
 	trustOnly := transparent
 	data := map[string]string{
-		"transparent":              strconv.FormatBool(transparent && enabled),
-		"clientTLS":                strconv.FormatBool(clientTLS && enabled),
-		"trustOnly":                strconv.FormatBool(trustOnly),
+		"transparent":                strconv.FormatBool(transparent && enabled),
+		"clientTLS":                  strconv.FormatBool(clientTLS && enabled),
+		"trustOnly":                  strconv.FormatBool(trustOnly),
 		capture.ClientTLSEnabledFile: boolFile(clientTLS && enabled),
-		"trust-only":               boolFile(trustOnly),
-		"transparent-enabled":      boolFile(transparent && enabled),
+		"trust-only":                 boolFile(trustOnly),
+		"transparent-enabled":        boolFile(transparent && enabled),
 	}
 	desired := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{

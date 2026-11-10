@@ -29,21 +29,21 @@ func TestLoadAppliesDefaults(t *testing.T) {
 
 func TestLoadRejectsUnsafeOrAmbiguousConfig(t *testing.T) {
 	cases := map[string]string{
-		"wildcard namespace":    "namespaces: ['*']\nledger: {path: /l.db}\n",
-		"duplicate namespace":   "namespaces: [a, a]\nledger: {path: /l.db}\n",
-		"relative ledger path":  "namespaces: [a]\nledger: {path: l.db}\n",
-		"typo in field":         "namespaces: [a]\nledger: {path: /l.db}\nnamespacess: [b]\n",
-		"lab ns is watched":     "namespaces: [a]\nlabNamespaces: [a]\nledger: {path: /l.db}\n",
-		"interval too short":    "namespaces: [a]\nledger: {path: /l.db}\ncapabilities: {interval: 5s}\n",
-		"slot without champion": "namespaces: [a]\nledger: {path: /l.db}\nslots: {brain.classify: {shadows: [x]}}\n",
-		"samples under a tick":  "namespaces: [a]\nledger: {path: /l.db}\nlogs: {sampleInterval: 5s}\n",
-		"samples over a window": "namespaces: [a]\nledger: {path: /l.db}\nlogs: {sampleInterval: 10m}\n",
-		"negative warm-up":      "namespaces: [a]\nledger: {path: /l.db}\ndetection: {warmUp: -1m}\n",
+		"wildcard namespace":       "namespaces: ['*']\nledger: {path: /l.db}\n",
+		"duplicate namespace":      "namespaces: [a, a]\nledger: {path: /l.db}\n",
+		"relative ledger path":     "namespaces: [a]\nledger: {path: l.db}\n",
+		"typo in field":            "namespaces: [a]\nledger: {path: /l.db}\nnamespacess: [b]\n",
+		"lab ns is watched":        "namespaces: [a]\nlabNamespaces: [a]\nledger: {path: /l.db}\n",
+		"interval too short":       "namespaces: [a]\nledger: {path: /l.db}\ncapabilities: {interval: 5s}\n",
+		"slot without champion":    "namespaces: [a]\nledger: {path: /l.db}\nslots: {brain.classify: {shadows: [x]}}\n",
+		"samples under a tick":     "namespaces: [a]\nledger: {path: /l.db}\nlogs: {sampleInterval: 5s}\n",
+		"samples over a window":    "namespaces: [a]\nledger: {path: /l.db}\nlogs: {sampleInterval: 10m}\n",
+		"negative warm-up":         "namespaces: [a]\nledger: {path: /l.db}\ndetection: {warmUp: -1m}\n",
 		"capture without token":    "namespaces: [a]\nledger: {path: /l.db}\ncapture: {address: ':4318'}\n",
 		"node agent without token": "namespaces: [a]\nledger: {path: /l.db}\nnodeAgent: {address: ':4319'}\n",
-		"oidc over http":        "namespaces: [a]\nledger: {path: /l.db}\nui: {oidc: {issuer: 'http://idp.example', clientID: s, redirectURL: 'http://localhost:8090/api/session/oidc/callback'}}\n",
-		"oidc without a client": "namespaces: [a]\nledger: {path: /l.db}\nui: {oidc: {issuer: 'https://idp.example', redirectURL: 'http://localhost:8090/api/session/oidc/callback'}}\n",
-		"oidc elsewhere":        "namespaces: [a]\nledger: {path: /l.db}\nui: {oidc: {issuer: 'https://idp.example', clientID: s, redirectURL: 'http://localhost:8090/'}}\n",
+		"oidc over http":           "namespaces: [a]\nledger: {path: /l.db}\nui: {oidc: {issuer: 'http://idp.example', clientID: s, redirectURL: 'http://localhost:8090/api/session/oidc/callback'}}\n",
+		"oidc without a client":    "namespaces: [a]\nledger: {path: /l.db}\nui: {oidc: {issuer: 'https://idp.example', redirectURL: 'http://localhost:8090/api/session/oidc/callback'}}\n",
+		"oidc elsewhere":           "namespaces: [a]\nledger: {path: /l.db}\nui: {oidc: {issuer: 'https://idp.example', clientID: s, redirectURL: 'http://localhost:8090/'}}\n",
 	}
 	for name, content := range cases {
 		if _, err := Load(write(t, content)); err == nil {

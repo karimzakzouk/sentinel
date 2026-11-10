@@ -217,7 +217,7 @@ func graceTemplate(seconds int64) corev1.PodTemplateSpec {
 	c := corev1.Container{Name: "web", Image: "web:1"}
 	return corev1.PodTemplateSpec{Spec: corev1.PodSpec{
 		TerminationGracePeriodSeconds: &seconds,
-		Containers:                      []corev1.Container{c},
+		Containers:                    []corev1.Container{c},
 	}}
 }
 

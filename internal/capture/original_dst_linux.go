@@ -34,8 +34,8 @@ func originalDestination(conn net.Conn) (hostPort string, err error) {
 			fd,
 			unix.IPPROTO_IP,
 			uintptr(unix.SO_ORIGINAL_DST),
-			uintptr(unsafe.Pointer(&sa)),
-			uintptr(unsafe.Pointer(&size)),
+			uintptr(unsafe.Pointer(&sa)),   //nolint:gosec // SO_ORIGINAL_DST sockaddr
+			uintptr(unsafe.Pointer(&size)), //nolint:gosec // sockopt length
 			0,
 		)
 		if errno != 0 {
@@ -43,7 +43,7 @@ func originalDestination(conn net.Conn) (hostPort string, err error) {
 			return
 		}
 		ip = net.IPv4(sa.Addr[0], sa.Addr[1], sa.Addr[2], sa.Addr[3])
-		pb := (*[2]byte)(unsafe.Pointer(&sa.Port))
+		pb := (*[2]byte)(unsafe.Pointer(&sa.Port)) //nolint:gosec // network-order port
 		port = int(binary.BigEndian.Uint16(pb[:]))
 	})
 	if err != nil {

@@ -257,8 +257,8 @@ func TestSeedSamplesPrefersWritesThenReadResponseBodies(t *testing.T) {
 func TestAttachBodiesAcceptsPlainBodyKeys(t *testing.T) {
 	q := &Request{}
 	attachBodies(q, map[string]string{
-		"http.request.body":        `{"a":1}`,
-		"http.response.body":       `{"b":2}`,
+		"http.request.body":  `{"a":1}`,
+		"http.response.body": `{"b":2}`,
 	})
 	if q.Body != `{"a":1}` || q.ResponseBody != `{"b":2}` {
 		t.Fatalf("plain keys %+v", q)

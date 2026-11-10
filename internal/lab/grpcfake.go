@@ -148,7 +148,7 @@ func ServeFakeGRPC(listen, routesFile string) error {
 	if err != nil {
 		return err
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 	s := grpc.NewServer(
 		grpc.ForceServerCodec(rawCodec{}),
 		grpc.UnknownServiceHandler(func(_ any, stream grpc.ServerStream) error {

@@ -46,4 +46,3 @@ func TestCaptureAndBodies(t *testing.T) {
 		t.Fatal("requests alone, or both flags, should turn on")
 	}
 }
-

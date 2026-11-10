@@ -1,4 +1,10 @@
-{{- $existing := lookup "sentinel.karimzakzouk.github.io/v1alpha1" "SentinelSettings" .Release.Namespace "sentinel" }}
+{{- /* lookup needs the CRD registered; on a fresh install the CRDs subchart
+       has not been applied yet, so Capabilities is the safe gate. Start false
+       (not dict): an empty map is truthy in Go templates. */ -}}
+{{- $existing := false }}
+{{- if .Capabilities.APIVersions.Has "sentinel.karimzakzouk.github.io/v1alpha1/SentinelSettings" }}
+{{- $existing = lookup "sentinel.karimzakzouk.github.io/v1alpha1" "SentinelSettings" .Release.Namespace "sentinel" }}
+{{- end }}
 {{- if not $existing }}
 {{- $fa := int .Values.detection.falseAlarmsPerWeek }}
 {{- $perHour := int .Values.actor.actions.perHour }}

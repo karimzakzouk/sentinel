@@ -101,4 +101,3 @@ func CaptureBodies(policies []v1alpha1.SentinelPolicy) bool {
 	}
 	return false
 }
-

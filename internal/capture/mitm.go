@@ -46,11 +46,11 @@ func ServeMITM(cfg MITMConfig) error {
 	if _, err := strconv.Atoi(cfg.Listen); err == nil {
 		cfg.Listen = ":" + cfg.Listen
 	}
-	certPEM, err := os.ReadFile(cfg.CACertFile) //nolint:gosec // operator-mounted capture CA
+	certPEM, err := os.ReadFile(cfg.CACertFile)
 	if err != nil {
 		return fmt.Errorf("read capture CA certificate: %w", err)
 	}
-	keyPEM, err := os.ReadFile(cfg.CAKeyFile) //nolint:gosec // operator-mounted capture CA
+	keyPEM, err := os.ReadFile(cfg.CAKeyFile)
 	if err != nil {
 		return fmt.Errorf("read capture CA key: %w", err)
 	}
@@ -60,7 +60,7 @@ func ServeMITM(cfg MITMConfig) error {
 	}
 	if cfg.DialTLS == nil {
 		cfg.DialTLS = func(network, addr string) (net.Conn, error) {
-			return tls.Dial(network, addr, &tls.Config{MinVersion: tls.VersionTLS12}) //nolint:gosec // dials real origins with system trust
+			return tls.Dial(network, addr, &tls.Config{MinVersion: tls.VersionTLS12})
 		}
 	}
 	if cfg.HTTP == nil {
@@ -70,7 +70,7 @@ func ServeMITM(cfg MITMConfig) error {
 	if err != nil {
 		return err
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 	srv := &http.Server{
 		Handler:           mitmHandler(ca, cfg),
 		ReadHeaderTimeout: 10 * time.Second,
@@ -111,12 +111,12 @@ func handleCaptureConnect(w http.ResponseWriter, r *http.Request, certs *certCac
 	if err != nil {
 		return
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	if _, err := bufrw.WriteString("HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
 		return
 	}
 	_ = bufrw.Flush()
-	raw := net.Conn(client)
+	raw := client
 	if bufrw.Reader.Buffered() > 0 {
 		raw = &bufConn{Conn: client, r: bufrw.Reader}
 	}
@@ -134,12 +134,12 @@ func handleCaptureConnect(w http.ResponseWriter, r *http.Request, certs *certCac
 	if err := tlsClient.Handshake(); err != nil {
 		return
 	}
-	defer tlsClient.Close()
+	defer func() { _ = tlsClient.Close() }()
 	upstream, err := dialOrigin(cfg, clientIP, hostPort)
 	if err != nil {
 		return
 	}
-	defer upstream.Close()
+	defer func() { _ = upstream.Close() }()
 	proxyCapture(tlsClient, upstream, host, clientIP, cfg)
 }
 
@@ -147,7 +147,7 @@ func dialOrigin(cfg MITMConfig, clientIP, addr string) (net.Conn, error) {
 	dial := cfg.DialTLS
 	if dial == nil {
 		dial = func(network, a string) (net.Conn, error) {
-			return tls.Dial(network, a, &tls.Config{MinVersion: tls.VersionTLS12}) //nolint:gosec // system trust
+			return tls.Dial(network, a, &tls.Config{MinVersion: tls.VersionTLS12})
 		}
 	}
 	if cfg.ClientTLS == nil {
@@ -158,7 +158,7 @@ func dialOrigin(cfg MITMConfig, clientIP, addr string) (net.Conn, error) {
 		return dial("tcp", addr)
 	}
 	return tls.Dial("tcp", addr, &tls.Config{
-		MinVersion:   tls.VersionTLS12, //nolint:gosec // system trust + opted client cert
+		MinVersion:   tls.VersionTLS12,
 		Certificates: []tls.Certificate{*cert},
 	})
 }
@@ -184,7 +184,7 @@ func proxyCapture(client, upstream net.Conn, host, clientIP string, cfg MITMConf
 	if err != nil {
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, bodyMax+1))
 	resp.Body = io.NopCloser(bytes.NewReader(respBody))
 	resp.ContentLength = int64(len(respBody))

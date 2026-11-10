@@ -89,7 +89,7 @@ func ServeMITM(listen, caCertFile, caKeyFile, routesFile string) error {
 	if err != nil {
 		return err
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 	srv := &http.Server{
 		Handler:           mitmHandler(ca, byHost),
 		ReadHeaderTimeout: 5 * time.Second,
@@ -135,14 +135,14 @@ func handleMITMConnect(w http.ResponseWriter, r *http.Request, certs *mitmCertCa
 	if err != nil {
 		return
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	if _, err := bufrw.WriteString("HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
 		return
 	}
 	if err := bufrw.Flush(); err != nil {
 		return
 	}
-	raw := net.Conn(client)
+	raw := client
 	if bufrw.Reader.Buffered() > 0 {
 		raw = &bufConn{Conn: client, r: bufrw.Reader}
 	}
@@ -159,7 +159,7 @@ func handleMITMConnect(w http.ResponseWriter, r *http.Request, certs *mitmCertCa
 	if err := tlsConn.Handshake(); err != nil {
 		return
 	}
-	defer tlsConn.Close()
+	defer func() { _ = tlsConn.Close() }()
 	serveMITMOnce(tlsConn, fakeHTTPHandler(byHost[host]))
 }
 

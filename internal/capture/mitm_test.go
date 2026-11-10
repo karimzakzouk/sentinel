@@ -74,7 +74,7 @@ func TestCaptureMITMForwardsAndPostsBodies(t *testing.T) {
 			Token:      "tok",
 			Resolve:    func(string) (string, string, string, bool) { return "shop", "Deployment", "cart", true },
 			DialTLS: func(network, _ string) (net.Conn, error) {
-				return tls.Dial(network, strings.TrimPrefix(origin.URL, "https://"), &tls.Config{InsecureSkipVerify: true}) //nolint:gosec // test origin
+				return tls.Dial(network, strings.TrimPrefix(origin.URL, "https://"), &tls.Config{InsecureSkipVerify: true})
 			},
 			HTTP: otlp.Client(),
 		})
@@ -104,7 +104,7 @@ func TestCaptureMITMForwardsAndPostsBodies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 	out, _ := io.ReadAll(res.Body)
 	if res.StatusCode != 200 || string(out) != `{"ok":true}` {
 		t.Fatalf("response %d %s", res.StatusCode, out)

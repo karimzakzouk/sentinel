@@ -47,9 +47,9 @@ func SyncTrustConfigMap(ctx context.Context, client kubernetes.Interface, namesp
 			Name:      TrustConfigMap,
 			Namespace: namespace,
 			Labels: map[string]string{
-				"app.kubernetes.io/name":       "sentinel-capture-mitm",
-				"app.kubernetes.io/component":  "capture-mitm-ca",
-				InjectAnnotation:               InjectValue,
+				"app.kubernetes.io/name":      "sentinel-capture-mitm",
+				"app.kubernetes.io/component": "capture-mitm-ca",
+				InjectAnnotation:              InjectValue,
 			},
 		},
 		BinaryData: map[string][]byte{"ca.crt": certPEM, "ca.p12": p12},

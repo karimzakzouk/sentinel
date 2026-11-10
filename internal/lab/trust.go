@@ -156,7 +156,7 @@ func likelyClientAuth(spec corev1.PodSpec, fidelity []string, ref string) bool {
 	}
 	for _, v := range spec.Volumes {
 		name := strings.ToLower(v.Name)
-		if !(strings.Contains(name, "tls") || strings.Contains(name, "cert") || strings.Contains(name, "mtls") || strings.Contains(name, "client")) {
+		if !strings.Contains(name, "tls") && !strings.Contains(name, "cert") && !strings.Contains(name, "mtls") && !strings.Contains(name, "client") {
 			continue
 		}
 		if v.Name == labCAVolume {
