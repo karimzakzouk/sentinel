@@ -85,12 +85,16 @@ func sealChild(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = unix.Close(sock) }()
-	for req, addr := range map[uint]netip.Addr{unix.SIOCSIFADDR: netip.MustParseAddr("10.9.0.1"), unix.SIOCSIFNETMASK: netip.MustParseAddr("255.255.255.0")} {
+	// The address first: a netmask needs one to apply to.
+	for _, set := range []struct {
+		req  uint
+		addr string
+	}{{unix.SIOCSIFADDR, "10.9.0.1"}, {unix.SIOCSIFNETMASK, "255.255.255.0"}} {
 		ifr, _ := unix.NewIfreq("seal0")
-		if err := ifr.SetInet4Addr(addr.AsSlice()); err != nil {
+		if err := ifr.SetInet4Addr(netip.MustParseAddr(set.addr).AsSlice()); err != nil {
 			t.Fatal(err)
 		}
-		if err := unix.IoctlIfreq(sock, req, ifr); err != nil {
+		if err := unix.IoctlIfreq(sock, set.req, ifr); err != nil {
 			t.Fatalf("address seal0: %v", err)
 		}
 	}
