@@ -54,6 +54,10 @@ type FixSpec struct {
 	// crash ran through.
 	// +optional
 	CodeOnly bool `json:"codeOnly,omitempty"`
+	// LabVerdict is what the Lab found of the values the fix sets, raced
+	// in a copy of the workload before the pull request opens.
+	// +optional
+	LabVerdict string `json:"labVerdict,omitempty"`
 }
 
 // Crash is a crash's stack as Sentinel parsed it from redacted logs.

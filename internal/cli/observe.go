@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
+	"slices"
 	"time"
 
 	"k8s.io/client-go/dynamic"
@@ -177,9 +179,10 @@ func newObserver(ctx context.Context, log *slog.Logger, cfg *config.Config, clie
 			log.Warn("the Lab verifies nothing", "reason", err)
 		case cfg.VerifyRollbacks:
 			b.Lab, b.ImageLab = lab, lab
+			b.ValueLab = valueLab(lab)
 			log.Info("the Lab verifies proposed rollbacks and fixes to code", "pool", cfg.LabNamespaces)
 		default:
-			b.ImageLab = lab
+			b.ImageLab, b.ValueLab = lab, valueLab(lab)
 			log.Info("the Lab races fixes to code", "pool", cfg.LabNamespaces)
 		}
 	}
@@ -229,4 +232,16 @@ func newObserver(ctx context.Context, log *slog.Logger, cfg *config.Config, clie
 		w.SampleInterval = cfg.Logs.SampleEvery()
 	}
 	return w, acting, nil
+}
+
+// valueLab asks the Lab to race the failing revision with learned memory
+// limits in place.
+func valueLab(lab *verify.Lab) func(context.Context, model.ID, model.ObjectRef, string, map[string]string) (string, bool, error) {
+	return func(ctx context.Context, incident model.ID, target model.ObjectRef, revision string, limits map[string]string) (string, bool, error) {
+		var overrides []v1alpha1.ValueOverride
+		for _, container := range slices.Sorted(maps.Keys(limits)) {
+			overrides = append(overrides, v1alpha1.ValueOverride{Container: container, Field: "limits.memory", Value: limits[container]})
+		}
+		return lab.VerifyValues(ctx, incident, target, revision, overrides)
+	}
 }

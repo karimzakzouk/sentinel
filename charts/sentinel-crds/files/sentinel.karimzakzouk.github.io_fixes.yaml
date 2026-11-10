@@ -149,6 +149,11 @@ spec:
                 description: IncidentID links the fix to its incident in the Ledger.
                 minLength: 1
                 type: string
+              labVerdict:
+                description: |-
+                  LabVerdict is what the Lab found of the values the fix sets, raced
+                  in a copy of the workload before the pull request opens.
+                type: string
               memoryLimits:
                 additionalProperties:
                   type: string

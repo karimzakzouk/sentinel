@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"path"
 	"strings"
 	"time"
 
@@ -306,6 +307,24 @@ func (f *Fixer) propose(ctx context.Context, fix *v1alpha1.Fix) (v1alpha1.FixPha
 	}
 	field := what(change.field())
 	fix.Status.Change = []string{fmt.Sprintf("%s:%d: %s's %s %s -> %s", edit.Path, edit.Line, change.Container, field, shown(change.Bad), shown(change.Good))}
+	edits := []codefix.Edit{{Path: edit.Path, After: edit.After}}
+	if change.field() == fieldMemoryLimit {
+		// Heap settings sized for the old limit must fit in the new one.
+		for _, fc := range runtimeFlags(dep.Spec.Template.Spec, change.Container, fmt.Sprint(change.Good)) {
+			last := edits[len(edits)-1]
+			if err := files.WriteFile(path.Join("/", last.Path), last.After); err != nil {
+				break
+			}
+			e, err := Locate(files, src.Path, Target{Kind: "Deployment", Name: dep.Name, NamePrefix: src.NamePrefix, NameSuffix: src.NameSuffix}, fc)
+			if err != nil {
+				f.Log.Info("a heap setting that no longer fits the new limit stays as it is", "fix", fix.Name, "setting", fc.Field, "reason", err)
+				continue
+			}
+			edits = append(edits, codefix.Edit{Path: e.Path, After: e.After})
+			fix.Status.Change = append(fix.Status.Change, fmt.Sprintf("%s:%d: %s's %s %s -> %s, to fit the new limit", e.Path, e.Line, fc.Container,
+				what(fc.Field), shown(fc.Bad), shown(fc.Good)))
+		}
+	}
 	title := fmt.Sprintf("Set %s's %s back to %s", change.Container, field, shown(change.Good))
 	switch {
 	case change.field() == fieldMemoryLimit:
@@ -316,7 +335,7 @@ func (f *Fixer) propose(ctx context.Context, fix *v1alpha1.Fix) (v1alpha1.FixPha
 	why := strings.ToUpper(edit.Why[:1]) + edit.Why[1:]
 	message := fmt.Sprintf("%s\n\n%s. Sentinel rolled %s/%s back from it in incident %s.\n", title, why, w.Namespace, w.Name, fix.Spec.IncidentID)
 	branch := "sentinel/fix-" + shortID(fix.Spec.IncidentID)
-	if _, err := co.Push(ctx, edit, branch, message, f.Author); err != nil {
+	if _, err := co.PushChange(ctx, &codefix.Change{Edits: edits}, branch, message, f.Author); err != nil {
 		return "", "", err
 	}
 	pr, err := f.Forge.Open(ctx, owner, repo, branch, co.Branch, title, body(fix, src, edit, change, kept))
@@ -341,8 +360,11 @@ func body(fix *v1alpha1.Fix, src *Source, edit *Edit, change Change, kept []Chan
 		back = fmt.Sprintf("%s's %s goes, as the workload ran before it was set", change.Container, field)
 	}
 	also := ""
+	if change.field() == fieldMemoryLimit && fix.Spec.LabVerdict != "" {
+		also += "\n- **The Lab**: it raced the workload's failing revision with this limit in a sealed copy: " + fix.Spec.LabVerdict + "."
+	}
 	if len(kept) > 0 {
-		also = fmt.Sprintf("\n- **Left as it is**: the same revision also changed %s; a %s fault is not blamed on that, so it stays.",
+		also += fmt.Sprintf("\n- **Left as it is**: the same revision also changed %s; a %s fault is not blamed on that, so it stays.",
 			listed(kept), fix.Spec.FaultClass)
 	}
 	return fmt.Sprintf(`Sentinel rolled **%s/%s** back from the revision that set container %s's %s to %s, and paused the %s so the rollback holds.

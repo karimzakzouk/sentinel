@@ -332,3 +332,55 @@ func TestAFixToTheCodeBuiltBeforeARestartIsRaced(t *testing.T) {
 		t.Fatalf("asked %v", lab.asked)
 	}
 }
+
+// A learned limit is raced in the Lab before the Fixer is asked: the
+// Fixer is asked once the verdict is in, with it, and without the limit
+// when the Lab found it does not fix the failure. A busy Lab is asked
+// again at the sweep.
+func TestALearnedLimitIsRacedBeforeItsPullRequest(t *testing.T) {
+	for _, phase := range []string{"Passed", "Failed"} {
+		t.Run(phase, func(t *testing.T) {
+			b, _ := newBrain(t)
+			fixer := &fakeFixer{}
+			b.Fixer = fixer
+			busy := 1
+			var asked []map[string]string
+			b.ValueLab = func(_ context.Context, _ model.ID, _ model.ObjectRef, revision string, limits map[string]string) (string, bool, error) {
+				if busy > 0 {
+					busy--
+					return "", false, nil
+				}
+				asked = append(asked, limits)
+				return "sentinel-lab-0/values", true, nil
+			}
+			used := make([]float64, 40)
+			for i := range used {
+				used[i] = 6 << 20
+			}
+			b.MemoryUse = func(model.ObjectRef, string) map[string][]float64 { return map[string][]float64{"web": used} }
+			inc := &incident{rec: model.Incident{ID: "inc-1", Assessment: &model.Assessment{Class: ClassMemoryLimit}}}
+			b.open = map[string]*incident{web.String(): inc}
+			b.askFix(ctx, inc, &model.Action{Type: ActionRolloutUndo, Target: web, Params: map[string]string{argFromTemplateHash: "bad"}})
+			if len(fixer.requests) != 0 || len(asked) != 0 {
+				t.Fatalf("with the Lab busy: fixer %d, Lab %d", len(fixer.requests), len(asked))
+			}
+			if err := b.Sweep(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if len(asked) != 1 || asked[0]["web"] == "" || len(fixer.requests) != 0 {
+				t.Fatalf("after the sweep: Lab %v, fixer %d", asked, len(fixer.requests))
+			}
+			if err := b.OnLabVerdict(ctx, LabVerdict{IncidentID: "inc-1", Experiment: "sentinel-lab-0/sentinel-c-values", Phase: phase,
+				Message: "the failing revision with web's limits.memory at 15Mi works"}); err != nil {
+				t.Fatal(err)
+			}
+			if len(fixer.requests) != 1 {
+				t.Fatalf("the Fixer was asked %d times after the verdict", len(fixer.requests))
+			}
+			r := fixer.requests[0]
+			if !strings.Contains(r.LabVerdict, "15Mi") || (phase == "Passed") != (r.MemoryLimits["web"] != "") {
+				t.Fatalf("%s: request %+v", phase, r)
+			}
+		})
+	}
+}

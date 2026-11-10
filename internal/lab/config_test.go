@@ -5,6 +5,8 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+
+	"github.com/karimzakzouk/sentinel/api/v1alpha1"
 )
 
 // The configuration reverted is the failing copy with the previous
@@ -52,5 +54,26 @@ func TestImageCandidateReplacesTheFailingImage(t *testing.T) {
 	}
 	if _, err := ImageCandidate(failing, "registry.test/other:1"); err == nil {
 		t.Fatal("an image of another repository was raced")
+	}
+}
+
+// A learned limit is raced as the failing copy with the limit in place.
+func TestValuesCandidateSetsTheLearnedLimits(t *testing.T) {
+	failing := &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "echo", Image: "echo:2",
+		Resources: corev1.ResourceRequirements{Limits: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("6Mi")}}}}}}
+	pod, err := ValuesCandidate(failing, []v1alpha1.ValueOverride{{Container: "echo", Field: "limits.memory", Value: "15Mi"},
+		{Container: "echo", Field: "requests.cpu", Value: "20m"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := pod.Spec.Containers[0].Resources
+	if r.Limits.Memory().String() != "15Mi" || r.Requests.Cpu().String() != "20m" || failing.Spec.Containers[0].Resources.Limits.Memory().String() != "6Mi" {
+		t.Fatalf("resources %+v", r)
+	}
+	if _, err := ValuesCandidate(failing, []v1alpha1.ValueOverride{{Container: "sidecar", Field: "limits.memory", Value: "1Mi"}}); err == nil {
+		t.Fatal("a container the copy lacks was accepted")
+	}
+	if got := Overridden([]v1alpha1.ValueOverride{{Container: "echo", Field: "limits.memory", Value: "15Mi"}}); got != "echo's limits.memory at 15Mi" {
+		t.Fatalf("%q", got)
 	}
 }
