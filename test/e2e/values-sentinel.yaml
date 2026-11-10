@@ -2,11 +2,11 @@
 profile: full
 fence:
   enabled: true
-watch:
-  namespaces: [e2e-smoke, boutique, e2e-gitops, e2e-delivery]
 global:
   watchNamespaces: [e2e-smoke, boutique, e2e-gitops, e2e-delivery]
   labPoolSize: 1
+watch:
+  namespaces: [e2e-smoke, boutique, e2e-gitops, e2e-delivery]
 actor:
   enabled: true
 lab:

@@ -18,16 +18,16 @@ profile: observe
 fence:
   enabled: true
 
-# Shared with the fence subchart so one list of namespaces is enough.
-# Prefer watch.namespaces; when that is set, hack/sentinel-install.sh (and
-# NOTES) copy it here. You can also set only global.watchNamespaces.
+# Namespaces Sentinel may watch. This is the company install knob — one list
+# shared with the fence subchart via Helm globals:
+#   helm install … --set-json 'global.watchNamespaces=["my-app"]'
+# Empty fails the install; Sentinel never guesses the whole cluster.
 global:
   watchNamespaces: []
   labNamespacePrefix: sentinel-lab-
   labPoolSize: 2
 
-# Namespaces Sentinel may watch. Required: an empty list fails the install,
-# because Sentinel never guesses where it is allowed to look.
+# Optional alias for from-source installs / e2e. Prefer global.watchNamespaces.
 watch:
   namespaces: []
 
@@ -279,15 +279,14 @@ notify:
 # Subchart defaults when fence.enabled (one helm install). Namespaces and Lab
 # pool follow global.* / watch.* via the fence helpers.
 sentinel-fence:
-  controller:
-    namespace: "" # filled to the release namespace by hack/sentinel-install.sh
+  # Empty controller/lab/fixer namespaces → release namespace (plain helm install).
   namespaces: []
   lab:
-    namespace: ""
     pool: []
     poolSize: 2
     namespacePrefix: sentinel-lab-
-    sealImage: ""
+    # Defaults to the same image the chart runs; override when using a private registry.
+    sealImage: ghcr.io/karimzakzouk/sentinel:0.1.0
 
 capabilities:
   interval: 10m

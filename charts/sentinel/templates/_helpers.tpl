@@ -22,10 +22,10 @@ app.kubernetes.io/component: controller
 {{- end }}
 
 {{- define "sentinel.watchList" -}}
-{{- if .Values.watch.namespaces -}}
-{{- .Values.watch.namespaces | toJson -}}
-{{- else if .Values.global.watchNamespaces -}}
+{{- if .Values.global.watchNamespaces -}}
 {{- .Values.global.watchNamespaces | toJson -}}
+{{- else if .Values.watch.namespaces -}}
+{{- .Values.watch.namespaces | toJson -}}
 {{- else -}}
 []
 {{- end -}}
@@ -144,7 +144,7 @@ attributes:
 {{- define "sentinel.validate" -}}
 {{- $watch := include "sentinel.watchList" . | fromJsonArray -}}
 {{- if not $watch -}}
-{{- fail "watch.namespaces is empty: list the namespaces Sentinel may watch (or set global.watchNamespaces)" -}}
+{{- fail "global.watchNamespaces is empty: list the namespaces Sentinel may watch" -}}
 {{- end -}}
 {{- if not (has .Values.profile (list "observe" "full")) -}}
 {{- fail (printf "profile is %q: use observe or full" .Values.profile) -}}
