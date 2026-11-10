@@ -54,6 +54,11 @@ type ExperimentSpec struct {
 	// +optional
 	// +kubebuilder:validation:MaxItems=20
 	Replay []ReplayRequest `json:"replay,omitempty"`
+	// Fakes lists outbound calls traffic capture saw to outside hosts,
+	// which Lab stubs answer with the recorded HTTP status (metadata only).
+	// +optional
+	// +kubebuilder:validation:MaxItems=50
+	Fakes []FakeCall `json:"fakes,omitempty"`
 	// Overrides, for verify-fix, make the candidate the failing revision
 	// with these values in place: a limit learned from healthy use, raced
 	// before the pull request that sets it opens.
@@ -61,6 +66,27 @@ type ExperimentSpec struct {
 	// +listType=atomic
 	// +kubebuilder:validation:MaxItems=20
 	Overrides []ValueOverride `json:"overrides,omitempty"`
+}
+
+// FakeCall is one outbound call capture saw, which a Lab fake answers.
+type FakeCall struct {
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	Host string `json:"host"`
+	// +optional
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=65535
+	Port int32 `json:"port,omitempty"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=16
+	Method string `json:"method"`
+	// Path or route template, with no query string.
+	// +kubebuilder:validation:Pattern=`^/[^?#\s]*$`
+	// +kubebuilder:validation:MaxLength=1024
+	Path string `json:"path"`
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=999
+	Status int32 `json:"status"`
 }
 
 // ValueOverride is one value a candidate sets: a container's resource

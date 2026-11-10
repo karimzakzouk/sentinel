@@ -197,7 +197,7 @@ func Synthesize(w World, target model.ObjectRef, ns string) (*Plan, error) {
 			plan.Services = append(plan.Services, fake.Service)
 			plan.Pods = append(plan.Pods, fake.Pod)
 			if fake.Recorded {
-				note("%s's %s is a fake of the outside service from captured traffic", ref, host)
+				note("%s's %s is a fake of the outside service from captured traffic; unmatched calls answer 404", ref, host)
 			} else {
 				note("%s's %s is a Lab fake of the outside host (no captured statuses)", ref, host)
 			}

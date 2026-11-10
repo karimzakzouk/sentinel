@@ -54,7 +54,7 @@ func TestAnExternalAPIHostGetsAFakeServiceAndPod(t *testing.T) {
 	if cm == nil || !strings.Contains(cm.Data["respond.sh"], "GET") || !strings.Contains(cm.Data["respond.sh"], "/v1/charges") {
 		t.Fatalf("fake ConfigMap %+v", cm)
 	}
-	want := "Deployment/shop/front's api.stripe.com is a fake of the outside service from captured traffic"
+	want := "Deployment/shop/front's api.stripe.com is a fake of the outside service from captured traffic; unmatched calls answer 404"
 	if !slices.Contains(plan.Fidelity, want) {
 		t.Fatalf("fidelity lacks %q:\n%s", want, strings.Join(plan.Fidelity, "\n"))
 	}

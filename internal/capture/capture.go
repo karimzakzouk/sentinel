@@ -132,41 +132,73 @@ func Replayable(requests []Request, n int) []Read {
 	return out[:min(len(out), n)]
 }
 
-// Call is one distinct outbound call a workload made.
+// Call is one distinct outbound call a workload made: where, how, and the
+// status production typically got.
 type Call struct {
 	Host, Method, Path, Route string
 	Port, Status              int
+	// Count is how often this call was seen among the requests.
+	Count int
 }
 
-// Calls returns distinct client calls (Served==false) from requests, most frequent first, at most n.
-// Prefer Route over Path when set. Skip redacted paths. Include gRPC (Method == "gRPC").
+type callKey struct {
+	Host, Method, Path string
+	Port               int
+}
+
+// Calls returns, from a workload's recent requests, the distinct outbound
+// calls (HTTP and gRPC), most frequent first, at most n. Path prefers the
+// route template when the agent knew it. Status is the one seen most often
+// for that host, port, method and path; a tie keeps the last. Redacted
+// paths and calls with no host are skipped.
 func Calls(requests []Request, n int) []Call {
-	count := map[Call]int{}
+	type agg struct {
+		call     Call
+		statuses map[int]int
+		last     int
+	}
+	by := map[callKey]*agg{}
 	for _, r := range requests {
-		if r.Served || r.Redacted {
+		if r.Served || r.Redacted || r.Host == "" || r.Method == "" {
 			continue
 		}
-		path := r.Path
-		if r.Route != "" {
-			path = r.Route
+		path := cmp.Or(r.Route, r.Path)
+		if path == "" {
+			continue
 		}
-		count[Call{Host: r.Host, Method: r.Method, Path: path, Route: r.Route, Port: r.Port, Status: r.Status}]++
+		k := callKey{Host: strings.ToLower(r.Host), Port: r.Port, Method: r.Method, Path: path}
+		a := by[k]
+		if a == nil {
+			a = &agg{call: Call{Host: k.Host, Method: k.Method, Path: k.Path, Route: r.Route, Port: k.Port}, statuses: map[int]int{}}
+			by[k] = a
+		}
+		a.call.Count++
+		a.statuses[r.Status]++
+		a.last = r.Status
+		if r.Route != "" {
+			a.call.Route = r.Route
+		}
 	}
-	out := make([]Call, 0, len(count))
-	for k := range count {
-		out = append(out, k)
+	out := make([]Call, 0, len(by))
+	for _, a := range by {
+		best, nBest := a.last, 0
+		for status, c := range a.statuses {
+			if c > nBest || c == nBest && status == a.last {
+				best, nBest = status, c
+			}
+		}
+		a.call.Status = best
+		out = append(out, a.call)
 	}
 	slices.SortFunc(out, func(a, b Call) int {
-		if count[a] != count[b] {
-			return count[b] - count[a]
+		if a.Count != b.Count {
+			return b.Count - a.Count
 		}
 		return cmp.Or(
 			strings.Compare(a.Host, b.Host),
+			a.Port-b.Port,
 			strings.Compare(a.Method, b.Method),
 			strings.Compare(a.Path, b.Path),
-			strings.Compare(a.Route, b.Route),
-			a.Port-b.Port,
-			a.Status-b.Status,
 		)
 	})
 	return out[:min(len(out), n)]

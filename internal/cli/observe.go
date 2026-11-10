@@ -178,10 +178,26 @@ func newObserver(ctx context.Context, log *slog.Logger, cfg *config.Config, clie
 				}
 			}}
 		if captured != nil {
+			recent := func(target model.ObjectRef) []capture.Request {
+				return captured.Recent(target, time.Now().Add(-24*time.Hour))
+			}
 			lab.Replay = func(target model.ObjectRef) []v1alpha1.ReplayRequest {
 				var out []v1alpha1.ReplayRequest
-				for _, r := range capture.Replayable(captured.Recent(target, time.Now().Add(-24*time.Hour)), 20) {
+				for _, r := range capture.Replayable(recent(target), 20) {
 					out = append(out, v1alpha1.ReplayRequest{Path: r.Path, Port: int32(r.Port)}) //nolint:gosec // a port the agent saw, below 65536
+				}
+				return out
+			}
+			lab.Fakes = func(target model.ObjectRef) []v1alpha1.FakeCall {
+				var out []v1alpha1.FakeCall
+				for _, c := range capture.Calls(recent(target), 50) {
+					if c.Method == "gRPC" {
+						continue
+					}
+					out = append(out, v1alpha1.FakeCall{
+						Host: c.Host, Method: c.Method, Path: c.Path,
+						Port: int32(c.Port), Status: int32(c.Status), //nolint:gosec // port and status the agent saw
+					})
 				}
 				return out
 			}

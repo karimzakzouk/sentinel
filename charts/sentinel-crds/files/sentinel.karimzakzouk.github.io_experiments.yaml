@@ -69,6 +69,45 @@ spec:
               candidate:
                 description: Candidate identifies the fix under test.
                 type: string
+              fakes:
+                description: |-
+                  Fakes lists outbound calls traffic capture saw to outside hosts,
+                  which Lab stubs answer with the recorded HTTP status (metadata only).
+                items:
+                  description: FakeCall is one outbound call capture saw, which a
+                    Lab fake answers.
+                  properties:
+                    host:
+                      maxLength: 253
+                      minLength: 1
+                      type: string
+                    method:
+                      maxLength: 16
+                      minLength: 1
+                      type: string
+                    path:
+                      description: Path or route template, with no query string.
+                      maxLength: 1024
+                      pattern: ^/[^?#\s]*$
+                      type: string
+                    port:
+                      format: int32
+                      maximum: 65535
+                      minimum: 1
+                      type: integer
+                    status:
+                      format: int32
+                      maximum: 999
+                      minimum: 0
+                      type: integer
+                  required:
+                  - host
+                  - method
+                  - path
+                  - status
+                  type: object
+                maxItems: 50
+                type: array
               incidentId:
                 description: IncidentID links the experiment to its incident in the
                   Ledger.

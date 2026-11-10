@@ -94,24 +94,30 @@ func TestReplayableAreReadsThatWorked(t *testing.T) {
 }
 
 // What a Lab fakes are the distinct outbound calls, most frequent first.
+// Outbound calls the Lab can fake are the distinct client spans, keyed by
+// host, port, method and path or route, with the status seen most often.
 func TestCallsAreDistinctOutboundCalls(t *testing.T) {
 	got := Calls([]Request{
+		{Served: false, Method: "POST", Host: "pay.example", Path: "/v1/charges", Port: 443, Status: 502},
+		{Served: false, Method: "POST", Host: "pay.example", Path: "/v1/charges", Port: 443, Status: 502},
+		{Served: false, Method: "POST", Host: "Pay.Example", Path: "/v1/charges", Port: 443, Status: 201},
 		{Served: false, Method: "GET", Host: "rates.example", Path: "/v1/rates", Port: 443, Status: 200},
 		{Served: false, Method: "GET", Host: "rates.example", Path: "/v1/rates", Port: 443, Status: 200},
 		{Served: false, Method: "GET", Host: "api.example", Path: "/reset/[REDACTED:token]", Status: 200, Redacted: true},
 		{Served: false, Method: "GET", Host: "api.example", Path: "/items/1", Route: "/items/{id}", Port: 80, Status: 200},
 		{Served: false, Method: "GET", Host: "api.example", Path: "/items/2", Route: "/items/{id}", Port: 80, Status: 200},
-		{Served: false, Method: "POST", Host: "pay.example", Path: "/v1/charges", Port: 443, Status: 502},
 		{Served: false, Method: "gRPC", Host: "currencyservice", Path: "/hipstershop.CurrencyService/Convert", Port: 7000, Status: 200},
 		{Served: true, Method: "GET", Path: "/cart/12345", Port: 8080, Status: 200},
+		{Served: false, Method: "GET", Path: "/no-host", Status: 200},
 	}, 5)
-	if want := []Call{
-		{Host: "api.example", Method: "GET", Path: "/items/{id}", Route: "/items/{id}", Port: 80, Status: 200},
-		{Host: "rates.example", Method: "GET", Path: "/v1/rates", Port: 443, Status: 200},
-		{Host: "currencyservice", Method: "gRPC", Path: "/hipstershop.CurrencyService/Convert", Port: 7000, Status: 200},
-		{Host: "pay.example", Method: "POST", Path: "/v1/charges", Port: 443, Status: 502},
-	}; !slices.Equal(got, want) {
-		t.Fatalf("calls %+v", got)
+	want := []Call{
+		{Host: "pay.example", Method: "POST", Path: "/v1/charges", Port: 443, Status: 502, Count: 3},
+		{Host: "api.example", Method: "GET", Path: "/items/{id}", Route: "/items/{id}", Port: 80, Status: 200, Count: 2},
+		{Host: "rates.example", Method: "GET", Path: "/v1/rates", Port: 443, Status: 200, Count: 2},
+		{Host: "currencyservice", Method: "gRPC", Path: "/hipstershop.CurrencyService/Convert", Port: 7000, Status: 200, Count: 1},
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("calls %+v; want %+v", got, want)
 	}
 }
 

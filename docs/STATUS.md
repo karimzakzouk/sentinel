@@ -84,7 +84,7 @@ To look at it on a cluster where it runs:
 | 2. Synthesize the stateless world | The world built and proven: synthesis, the Lab DNS (decision 51), production's images under the fence's bounds (decision 50), the seal proven before the world starts and again with it running; Online Boutique's frontend and the ten services it calls ran in a Lab on the development cluster, every copy ready within 95 seconds and answering by its production name, once copies were fitted to Pod Security `restricted` (decision 59) | `TestTheLabBuildsAWorkloadsStatelessWorld`, as the Lab's identity: a front and the backend it calls answer by their production names, the API server's name resolves to nothing, and a canary Secret never reaches the Lab. `TestALabReproductionRunsTheWorldBehindAProvenSeal` in CI's enforcing clusters |
 | 3. Reproduce and judge | Races and verdicts built (decisions 52 and 53): reproduce and verify-fix Experiments, the previous revision as the first candidate, a deletion control. The gate's repetitions passed on the self-hosted runner under Calico | `TestTheLabTellsAFixFromTheFailure` on the development cluster: against a front that crashes as it starts, its previous revision passed after 15 blocks (15 of 15 against 0 of 15), the deletion control failed. Through the Lab in CI, on Calico and Cilium: "the previous revision front-9964bb8bd fixes it: it worked in 15 of 15 runs where the failing revision failed in 15 of 15", and a healthy front's failure "did not reproduce"; kindnet and Flannel were refused. Unit simulations: 3.4% false PASS at the null's edge for α = 5%. The `Lab gate` workflow's first round, on the development cluster: the fix passed in 15 blocks, a revision that still crashes and a deletion-style candidate failed in 3, and a flaky revision raced against itself ran out of its 60 blocks, NOT SURE. The `Lab gate` workflow on the self-hosted runner, Calico, 10 races of each kind at α = 5%: a fix passed 10 of 10 (median 15 blocks); a revision that still crashes and a deletion that does nothing failed 10 of 10 (3 blocks); a flaky revision against itself failed 7 and was NOT SURE 3 (51 blocks). No false PASS in 30 races that must not pass. Beside it, Online Boutique's frontend and the ten services it calls were copied into a sealed world, every copy ready and every name the world asked for provided |
 | Verified rollbacks | The controller asks the Lab about each proposed rollback (decision 54); the verdict joins the incident and its notices; at `lab-verified` it carries the rollback out (decision 57) | On the development cluster a bad image on `web` opened an incident, the controller asked the Lab, and the Lab, refusing a cluster without enforcement, answered NOT SURE within 35 seconds; the verdict shows on the incident page. In CI on Calico and Cilium, a request at `lab-verified` waited while the Lab raced a crashing revision of the front against its predecessor (15 of 15 against 15 of 15), then the actor rolled the front back, approved by the Lab |
-| 4. Datastores and replay | Part built: datastores run empty in the Lab with production's engine and version (decision 78), each secret key has its own placeholder, so a name looked up from one says which secret the world lacks, and a second candidate, the failing revision with its configuration reverted, is raced beside the previous revision (decision 77). With traffic capture on, each run replays up to 20 reads production answered to its copy, which must answer them all (decision 86). Fakes of outside services and the Lab's certificate authority are next | Unit tests, among them a race against a fake cluster where the deletion control stays ready but answers nothing and fails; the replay's script run in the probe image against a server answering 200, 404, 503 and a panic. The race and the Lab's end-to-end tests run on the self-hosted runner, which the soak holds until Thursday |
+| 4. Datastores and replay | Part built: datastores run empty in the Lab with production's engine and version (decision 78), each secret key has its own placeholder, so a name looked up from one says which secret the world lacks, and a second candidate, the failing revision with its configuration reverted, is raced beside the previous revision (decision 77). With traffic capture on, each run replays up to 20 reads production answered to its copy, which must answer them all (decision 86). **Fakes of outside services from captured traffic are built for metadata-only HTTP** (decision 100): `capture.Calls`, synthesis stubs, Lab DNS and seal positives; the Lab's certificate authority and body replay are next | Unit tests for the call catalog, synthesis with an external API host, stub status matching and the respond script; a race against a fake cluster where the deletion control stays ready but answers nothing and fails; the replay's script run in the probe image against a server answering 200, 404, 503 and a panic. The race and the Lab's end-to-end tests run on the self-hosted runner, which the soak holds until Thursday |
 
 ## Phase 4 progress
 
@@ -110,7 +110,8 @@ To look at it on a cluster where it runs:
 | Argo Rollouts abort | Built (decision 97): `rollouts.abort` sets `status.abort`; Flagger still deferred to its analysis | Unit tests in `internal/actor`, `internal/watcher`, `internal/brain` |
 | Honeytoken Secrets | Built: Lab env and named-key volumes get shape-preserving stand-ins; looking one up through Lab DNS fails the race | Unit tests in `internal/lab` |
 | Outbound call catalog | Built: `capture.Calls` lists distinct client calls for Lab fakes | Unit tests in `internal/capture` |
-| Own faker, mined fix patterns | Fakes started (catalog); mined patterns not started | |
+| Frontier fakes (metadata HTTP) | Built (decision 100): outside hosts get a Lab Service + stub answering recorded statuses; DNS, Allow and world probes include them | Unit tests in `internal/lab` (`fake_test`, synthesis with `api.stripe.com`) |
+| Own faker, mined fix patterns | Metadata HTTP fakes built; full faker (bodies, gRPC, TLS) and mined patterns not started | |
 
 ## Acting session
 
@@ -400,10 +401,11 @@ Full reasoning in [decisions.md](decisions.md).
 
 ## Next
 
-- **Lab realism:** frontier fakes that answer from `capture.Calls`, the
-  Lab's certificate authority, and an opt-in recorder of request and
-  response bodies for write replay, response comparison and filled
-  databases. Honeytoken Secrets that fail a race on DNS lookup are built.
+- **Lab realism:** frontier fakes from captured traffic are started/built
+  for metadata-only HTTP (decision 100); left: the Lab's certificate
+  authority, and an opt-in recorder of request and response bodies for
+  write replay, response comparison and filled databases. Honeytoken
+  Secrets that fail a race on DNS lookup are built.
 - **More rollback kinds:** DaemonSets, StatefulSets (with approval) and
   Argo Rollouts abort are built; Flagger stays deferred.
 - **Hardening:** baselines that survive restarts and dependency links from
@@ -415,8 +417,9 @@ Full reasoning in [decisions.md](decisions.md).
   started with `hack/azure-runner/wake.sh` when needed (decision 99).
 
 - **Phase 3:** memory and CPU limits race in the Lab before their pull
-  requests; left: fakes of outside services from capture, and the Lab's
-  certificate authority for copies that serve TLS.
+  requests; metadata-only HTTP fakes of outside services from capture are
+  built (decision 100); left: the Lab's certificate authority for copies
+  that serve TLS.
 - **After the soak ends on Thursday:** its report, the network-plugin
   matrix and the Lab's end-to-end tests on the runner, and whether daily
   cycles call for seasonal baselines.

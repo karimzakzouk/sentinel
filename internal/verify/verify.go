@@ -49,6 +49,9 @@ type Lab struct {
 	// Replay, when traffic capture is on, returns the reads production
 	// answered that each run sends its copy.
 	Replay func(model.ObjectRef) []v1alpha1.ReplayRequest
+	// Fakes, when traffic capture is on, returns outbound calls production
+	// made to outside hosts, which Lab stubs answer.
+	Fakes func(model.ObjectRef) []v1alpha1.FakeCall
 
 	mu        sync.Mutex
 	stores    map[string]cache.Store
@@ -133,6 +136,9 @@ func (l *Lab) ask(ctx context.Context, name string, incident model.ID, target mo
 	}
 	if l.Replay != nil {
 		exp.Spec.Replay = l.Replay(target)
+	}
+	if l.Fakes != nil {
+		exp.Spec.Fakes = l.Fakes(target)
 	}
 	obj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(exp)
 	if err != nil {
