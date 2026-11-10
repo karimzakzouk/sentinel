@@ -85,6 +85,9 @@ type Built struct {
 	// Gate holds every pod the world starts until its seal applies.
 	Gate     corev1.Container
 	Services []*corev1.Service
+	// Allow is where the world's pods may connect, for a firewall seal: the
+	// Lab DNS and the world's own Services.
+	Allow []Allow
 	// States says how each copied workload's pod is doing, by workload.
 	States map[string]string
 }
@@ -115,10 +118,12 @@ func (p *Prover) Build(ctx context.Context, ns, prodNS, domain string, plan *Pla
 		}
 		built.Services = append(built.Services, created)
 	}
+	built.Allow = append(dnsAllow(built.DNS), serviceAllow(built.Services)...)
 	cm, pod := dnsObjects(ns, Zone(built.Services, prodNS, domain))
 	if _, err := core.ConfigMaps(ns).Create(ctx, cm, metav1.CreateOptions{}); err != nil {
 		return nil, fmt.Errorf("configure the Lab DNS: %w", err)
 	}
+	pod = p.seal(pod, nil)
 	if _, err := core.Pods(ns).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
 		return nil, fmt.Errorf("start the Lab DNS: %w", err)
 	}
@@ -126,7 +131,7 @@ func (p *Prover) Build(ctx context.Context, ns, prodNS, domain string, plan *Pla
 		return nil, fmt.Errorf("the Lab DNS did not become ready: %w", err)
 	}
 	for _, pod := range plan.Pods {
-		pod = gated(pod, built.Gate)
+		pod = p.seal(gated(pod, built.Gate), built.Allow)
 		pod.Spec.DNSConfig = DNSConfig(built.DNS, prodNS, domain)
 		if _, err := core.Pods(ns).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
 			return nil, fmt.Errorf("start the copy of %s: %w", pod.Labels[CopyOf], err)

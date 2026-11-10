@@ -72,6 +72,10 @@ type Prover struct {
 	// Forbidden is the destination the seal gate tries, which must be
 	// refused; the API server's Service when empty.
 	Forbidden string
+	// SealImage, when set, has every pod the Prover starts seal itself with
+	// the firewall from this image, Sentinel's own, before anything else in
+	// it runs: the seal for clusters that do not enforce NetworkPolicy.
+	SealImage string
 }
 
 // Seal adds the one allow rule a Lab needs: its pods may reach each other.
@@ -158,11 +162,13 @@ func (p *Prover) Matrix(ctx context.Context, ns string, echo *corev1.Pod, echoSe
 
 func hostPort(host string, port int) string { return net.JoinHostPort(host, strconv.Itoa(port)) }
 
-// Inside is a running world, seen by the matrix: the controls it adds, and
-// the DNS the prober must ask, as the world's pods do.
+// Inside is a running world, seen by the matrix: the controls it adds, the
+// DNS the prober must ask, as the world's pods do, and, for a firewall
+// seal, where the world's pods may connect, which the prober may too.
 type Inside struct {
 	Probes []Probe
 	DNS    *corev1.PodDNSConfig
+	Allow  []Allow
 }
 
 // Prove starts the echo control and the prober in a sealed namespace and
@@ -179,13 +185,16 @@ func (p *Prover) Prove(ctx context.Context, ns string, inside *Inside) ([]Result
 		return nil, err
 	}
 	prober := proberPod(ns, probes)
+	allow := append(serviceAllow([]*corev1.Service{svc}), podAllow(echo.Status.PodIP, 8080)...)
 	if inside != nil {
 		probes = append(probes, inside.Probes...)
 		prober = proberPod(ns, probes)
 		if inside.DNS != nil {
 			prober.Spec.DNSPolicy, prober.Spec.DNSConfig = corev1.DNSNone, inside.DNS
 		}
+		allow = append(allow, inside.Allow...)
 	}
+	prober = p.seal(prober, allow)
 	if _, err := p.Client.CoreV1().Pods(ns).Create(ctx, prober, metav1.CreateOptions{}); err != nil {
 		return nil, fmt.Errorf("start the prober: %w", err)
 	}
@@ -205,6 +214,7 @@ func (p *Prover) startEcho(ctx context.Context, ns string) (*corev1.Pod, *corev1
 	pod.Spec.Containers[0].Ports = []corev1.ContainerPort{{ContainerPort: 8080}}
 	pod.Spec.Containers[0].ReadinessProbe = &corev1.Probe{ProbeHandler: corev1.ProbeHandler{
 		TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt32(8080)}}, PeriodSeconds: 2}
+	pod = p.seal(pod, nil)
 	if _, err := p.Client.CoreV1().Pods(ns).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
 		return nil, nil, fmt.Errorf("start the echo control: %w", err)
 	}

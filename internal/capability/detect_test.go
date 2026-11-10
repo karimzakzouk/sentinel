@@ -197,6 +197,20 @@ func TestActorAndProvenNetworkPolicyEnableActAndLab(t *testing.T) {
 	wantFeature(t, rep, "lab", true)
 }
 
+// Without enforcement the Lab still runs where its pods seal themselves,
+// and stays off where it must rely on policy.
+func TestTheLabRunsWithoutPolicyWhereItsPodsSealThemselves(t *testing.T) {
+	c := newCluster(t, kindNode("n1"))
+	c.allow(WatcherRules("shop")...)
+	notProven := &Check{Status: Unavailable, Detail: "the deny policy did not block traffic"}
+	for seal, want := range map[string]bool{"auto": true, "firewall": true, "policy": false, "": false} {
+		f := wantFeature(t, run(t, c, Options{Namespaces: []string{"shop"}, LabNamespace: "sentinel-lab-0", LabSeal: seal, NetworkPolicy: notProven}), "lab", want)
+		if want != strings.Contains(f.Reason, "seals itself") {
+			t.Errorf("seal %q: %s", seal, f.Reason)
+		}
+	}
+}
+
 // Traffic capture is a feature like any other: off where it is not
 // installed, and not claimed until its agent's requests arrive.
 func TestCaptureIsOnOnlyWhileItsAgentSendsRequests(t *testing.T) {

@@ -93,7 +93,7 @@ func (p *Prover) RunRace(ctx context.Context, ns string, built *Built, dns *core
 			order := append([]Variant(nil), all...)
 			rand.Shuffle(len(order), func(i, j int) { order[i], order[j] = order[j], order[i] }) //nolint:gosec // randomizes start order, not a secret
 			for _, v := range order {
-				pod := gated(v.Pod, built.Gate)
+				pod := p.seal(gated(v.Pod, built.Gate), built.Allow)
 				pod.Name = fmt.Sprintf("%s-%s-%d", baseline.Name, v.Slug, b)
 				pod.Labels[VariantLabel] = v.Slug
 				pod.Spec.DNSPolicy, pod.Spec.DNSConfig = corev1.DNSNone, dns
@@ -211,7 +211,11 @@ func (p *Prover) startReplay(ctx context.Context, ns string, rp *racePod, copied
 	if len(traffic.Requests) == 0 || rp.replay != "" || copied.Status.PodIP == "" {
 		return nil
 	}
-	pod := replayPod(ns, rp.name+"-replay", copied.Status.PodIP, traffic.Requests)
+	var ports []int32
+	for _, r := range traffic.Requests {
+		ports = append(ports, r.Port)
+	}
+	pod := p.seal(replayPod(ns, rp.name+"-replay", copied.Status.PodIP, traffic.Requests), podAllow(copied.Status.PodIP, ports...))
 	_, err := p.Client.CoreV1().Pods(ns).Create(ctx, pod, metav1.CreateOptions{})
 	switch {
 	case err == nil:

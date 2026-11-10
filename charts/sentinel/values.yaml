@@ -37,6 +37,17 @@ lab:
   poolSize: 2
   # The cluster's DNS domain, which a world's copies use to name each other.
   clusterDomain: cluster.local
+  # How the Lab seals its namespaces:
+  #   policy    NetworkPolicy, which the cluster must be proven to enforce
+  #   firewall  every Lab pod seals itself first, with a firewall from
+  #             Sentinel's own image, on any network plugin
+  #   auto      policy where the cluster enforces it, the firewall elsewhere
+  # The firewall is one init container per Lab pod holding NET_ADMIN, so
+  # with firewall or auto the Lab's namespaces enforce Pod Security's
+  # privileged level, and the sentinel-fence chart (with lab.sealImage set
+  # to this chart's image) holds every other container to restricted.
+  # Either way the Lab proves the seal with live traffic before it runs.
+  seal: auto
   # Ask the Lab whether each proposed rollback fixes its incident.
   verifyRollbacks: true
   quota:

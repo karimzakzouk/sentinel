@@ -32,7 +32,13 @@ type LabConfig struct {
 	Twins []string `json:"twins"`
 	// ClusterDomain is the cluster's DNS domain.
 	ClusterDomain string `json:"clusterDomain,omitempty"`
-	HealthAddr    string `json:"healthAddr,omitempty"`
+	// Seal is how the Lab seals its namespaces: policy, firewall, or auto
+	// (the default), which uses policy where the cluster enforces it.
+	Seal string `json:"seal,omitempty"`
+	// SealImage is the firewall's image, Sentinel's own, for firewall and
+	// auto.
+	SealImage  string `json:"sealImage,omitempty"`
+	HealthAddr string `json:"healthAddr,omitempty"`
 	// LeaderElection, when set, has replicas hold this Lease in turn; only
 	// its holder works.
 	LeaderElection *lead.Config `json:"leaderElection,omitempty"`
@@ -56,7 +62,54 @@ func loadLabConfig(path string) (LabConfig, error) {
 	if c.ClusterDomain == "" {
 		c.ClusterDomain = "cluster.local"
 	}
+	switch c.Seal {
+	case "":
+		c.Seal = lab.SealAuto
+	case lab.SealAuto, lab.SealPolicy:
+	case lab.SealFirewall:
+		if c.SealImage == "" {
+			return LabConfig{}, fmt.Errorf("%s: seal is firewall, but no sealImage names the firewall's image", path)
+		}
+	default:
+		return LabConfig{}, fmt.Errorf("%s: seal is %q, not policy, firewall or auto", path, c.Seal)
+	}
 	return c, nil
+}
+
+func newLabSealCmd() *cobra.Command {
+	var allows []string
+	cmd := &cobra.Command{
+		Use:    "lab-seal",
+		Short:  "Seal the network of the Lab pod this runs in, so it may open connections only to the destinations named",
+		Hidden: true,
+		Args:   cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			var allow []lab.Allow
+			for _, s := range allows {
+				a, err := lab.ParseAllow(s)
+				if err != nil {
+					return terminate(err)
+				}
+				allow = append(allow, a)
+			}
+			n, err := lab.ApplySeal(allow)
+			if err != nil {
+				return terminate(err)
+			}
+			msg := fmt.Sprintf("sealed: %d rules; new connections may go only to %d destinations", n, len(allow))
+			_ = os.WriteFile("/dev/termination-log", []byte(msg), 0o600)
+			_, err = fmt.Fprintln(cmd.OutOrStdout(), msg)
+			return err
+		},
+	}
+	cmd.Flags().StringArrayVar(&allows, "allow", nil, "a destination new connections may go to: tcp/ADDRESS:PORT or udp/ADDRESS:PORT")
+	return cmd
+}
+
+// terminate records why a pod's container failed where Kubernetes shows it.
+func terminate(err error) error {
+	_ = os.WriteFile("/dev/termination-log", []byte(err.Error()), 0o600)
+	return err
 }
 
 func newLabCmd(kf *kube.Flags) *cobra.Command {
@@ -84,6 +137,7 @@ func newLabCmd(kf *kube.Flags) *cobra.Command {
 				return err
 			}
 			l := &lab.Lab{Prover: &lab.Prover{Client: client, Twins: cfg.Twins, Timeout: 3 * time.Minute}, Dynamic: dyn, Pool: cfg.Pool, Domain: cfg.ClusterDomain, Log: log,
+				Seal: cfg.Seal, SealImage: cfg.SealImage,
 				Enforced: func(ctx context.Context, ns string) (bool, string) {
 					r := capability.NetworkPolicyProbe{Client: client, Namespace: ns, Settle: 30 * time.Second}.Run(ctx)
 					return r.Status == capability.Available, r.Detail

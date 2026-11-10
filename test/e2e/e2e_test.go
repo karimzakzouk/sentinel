@@ -10,6 +10,7 @@ import (
 	"io"
 	"math/rand/v2"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/exec"
 	"slices"
@@ -299,20 +300,70 @@ func TestTheLabSealHoldsOnlyWherePolicyIsEnforced(t *testing.T) {
 	}
 }
 
-// An Experiment runs only behind a proven seal: the Lab passes it where the
-// cluster enforces NetworkPolicy, and elsewhere stays off and says why
-// rather than running unsealed. Where it is enforced, a policy someone else
-// added that opens the namespace must fail the next experiment: the Lab
-// trusts traffic, not the policies it reads. Either way it leaves nothing
-// behind.
+// sealImage is the image the Lab's pods seal themselves with: Sentinel's
+// own, as the Lab runs it.
+func sealImage(t *testing.T) string {
+	t.Helper()
+	dep, err := clientAs(t, "").AppsV1().Deployments(sentinelNS).Get(context.Background(), "sentinel-lab", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dep.Spec.Template.Spec.Containers[0].Image
+}
+
+// Where every Lab pod seals itself with Sentinel's firewall, the seal holds
+// on any network plugin, enforcing NetworkPolicy or not: every forbidden
+// destination is refused, from the first packet, and the controls answer.
+// The fence admits the firewall, run as the Lab's own identity.
+func TestTheLabSealsItselfOnAnyNetworkPlugin(t *testing.T) {
+	ctx := context.Background()
+	client := clientAs(t, labUser)
+	p := &lab.Prover{Client: client, Twins: []string{smokeNS, "boutique"}, Timeout: 3 * time.Minute, SealImage: sealImage(t)}
+	if err := p.Seal(ctx, labNS); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = client.NetworkingV1().NetworkPolicies(labNS).Delete(ctx, "lab-internal", metav1.DeleteOptions{})
+	})
+	results, err := p.Prove(ctx, labNS, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refused := 0
+	for _, r := range results {
+		t.Logf("%-40s %-22s allowed=%-5v reached=%-5v later=%v", r.Name, r.Address, r.Allowed, r.Reached, r.Later)
+		switch {
+		case r.Allowed && !r.Reached:
+			t.Errorf("the positive control %s did not answer: a refusal would mean nothing", r.Name)
+		case !r.Holds():
+			t.Errorf("the firewall let a pod reach %s", r.Name)
+		case !r.Allowed:
+			refused++
+		}
+	}
+	if refused < 5 {
+		t.Fatalf("only %d forbidden destinations were tried", refused)
+	}
+}
+
+// An Experiment runs only behind a proven seal: the Lab seals with
+// NetworkPolicy where the cluster enforces it, and elsewhere each pod seals
+// itself, the seal proven either way before anything runs. Where policy
+// seals, a policy someone else added that opens the namespace must fail the
+// next experiment: the Lab trusts traffic, not the policies it reads.
+// Either way it leaves nothing behind.
 func TestALabExperimentRunsOnlyBehindAProvenSeal(t *testing.T) {
 	ctx := context.Background()
 	client := clientAs(t, "")
 	phase, msg := runExperiment(t, "prove-seal")
 	enforced := capability.NetworkPolicyProbe{Client: client, Namespace: labNS, Settle: 30 * time.Second}.Run(ctx)
-	switch enforced.Status {
-	case capability.Available:
-		if phase != lab.PhasePassed && !pluginLimit(phase, msg) {
+	switch {
+	case strings.Contains(msg, "own firewall"):
+		if phase != lab.PhasePassed {
+			t.Fatalf("the pods sealed themselves, yet the experiment ended %s: %s", phase, msg)
+		}
+	case enforced.Status == capability.Available:
+		if phase != lab.PhasePassed {
 			t.Fatalf("NetworkPolicy is enforced, yet the experiment ended %s: %s", phase, msg)
 		}
 		leak := &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: "e2e-leak", Namespace: labNS},
@@ -325,15 +376,11 @@ func TestALabExperimentRunsOnlyBehindAProvenSeal(t *testing.T) {
 			_ = client.NetworkingV1().NetworkPolicies(labNS).Delete(ctx, leak.Name, metav1.DeleteOptions{})
 		})
 		phase, msg = runExperiment(t, "prove-leaky-seal")
-		if phase != lab.PhaseFailed || !strings.Contains(msg, "the seal leaks") {
+		if !strings.Contains(msg, "the seal leaks") && !strings.Contains(msg, "own firewall") {
 			t.Fatalf("a policy opened the Lab, yet the experiment ended %s: %s", phase, msg)
 		}
-	case capability.Unavailable:
-		if phase != lab.PhaseFailed || !strings.Contains(msg, "the Lab stays off") {
-			t.Fatalf("NetworkPolicy is not enforced, yet the experiment ended %s: %s", phase, msg)
-		}
 	default:
-		t.Fatalf("the NetworkPolicy probe could not decide: %s", enforced.Detail)
+		t.Fatalf("NetworkPolicy is not enforced (%s), and the pods did not seal themselves: %s %s", enforced.Detail, phase, msg)
 	}
 	if _, err := client.NetworkingV1().NetworkPolicies(labNS).Get(ctx, "lab-internal", metav1.GetOptions{}); !apierrors.IsNotFound(err) {
 		t.Fatalf("the seal outlived the experiment (%v)", err)
@@ -557,9 +604,6 @@ func TestTheLabTellsAFixFromTheFailure(t *testing.T) {
 func TestTheLabVerifiesTheRollbackOfACrashingRevision(t *testing.T) {
 	ctx := context.Background()
 	client := clientAs(t, "")
-	if enforced := (capability.NetworkPolicyProbe{Client: client, Namespace: labNS, Settle: 30 * time.Second}).Run(ctx); enforced.Status != capability.Available {
-		t.Skipf("the Lab refuses this cluster (%s); TestALabExperimentRunsOnlyBehindAProvenSeal covers that", enforced.Detail)
-	}
 	deployments := client.AppsV1().Deployments(smokeNS)
 	crash := `{"spec":{"template":{"spec":{"containers":[{"name":"front","command":["sh","-c","echo starting; exit 3"]}]}}}}`
 	if _, err := deployments.Patch(ctx, "front", types.StrategicMergePatchType, []byte(crash), metav1.PatchOptions{}); err != nil {
@@ -638,13 +682,8 @@ func TestTheLabVerifiesTheRollbackOfACrashingRevision(t *testing.T) {
 
 // A reproduction through the Lab of a front that works: it proves the seal,
 // copies the front's world, proves the seal again with the world up, and
-// races the front's copy, which must not count as a failure reproduced. It
-// only means something where the Lab runs.
+// races the front's copy, which must not count as a failure reproduced.
 func TestALabReproductionRunsTheWorldBehindAProvenSeal(t *testing.T) {
-	enforced := capability.NetworkPolicyProbe{Client: clientAs(t, ""), Namespace: labNS, Settle: 30 * time.Second}.Run(context.Background())
-	if enforced.Status != capability.Available {
-		t.Skipf("the Lab refuses this cluster (%s); TestALabExperimentRunsOnlyBehindAProvenSeal covers that", enforced.Detail)
-	}
 	phase, msg, fidelity := runExperimentOn(t, "reproduce-front",
 		map[string]any{"apiVersion": "apps/v1", "kind": "Deployment", "namespace": smokeNS, "name": "front"})
 	if pluginLimit(phase, msg) {
@@ -747,6 +786,26 @@ func TestFenceBlocksForbiddenWrites(t *testing.T) {
 			return err
 		}
 	}
+	// A Lab pod whose firewall seals it first, changed by change.
+	sealed := sealImage(t)
+	firewallPod := func(change func(*corev1.Pod)) func() error {
+		return func() error {
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Name: "fence-test", Namespace: labNS},
+				Spec: corev1.PodSpec{AutomountServiceAccountToken: ptr.To(false),
+					SecurityContext: &corev1.PodSecurityContext{RunAsNonRoot: ptr.To(true), RunAsUser: ptr.To(int64(65532)),
+						SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}},
+					InitContainers: []corev1.Container{lab.Firewall(sealed, []lab.Allow{{Proto: "udp", Addr: netip.MustParseAddrPort("10.96.0.10:53")}})},
+					Containers: []corev1.Container{{Name: "c", Image: capability.ProbeImage, SecurityContext: &corev1.SecurityContext{
+						AllowPrivilegeEscalation: ptr.To(false), Capabilities: &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}}}}}},
+			}
+			if change != nil {
+				change(pod)
+			}
+			_, err := labClient.CoreV1().Pods(labNS).Create(ctx, pod, metav1.CreateOptions{DryRun: []string{metav1.DryRunAll}})
+			return err
+		}
+	}
 	labPolicy := func(peer networkingv1.NetworkPolicyPeer) func() error {
 		return func() error {
 			np := &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: "fence-test", Namespace: labNS},
@@ -787,6 +846,18 @@ func TestFenceBlocksForbiddenWrites(t *testing.T) {
 		{"lab seals its namespace", labPolicy(networkingv1.NetworkPolicyPeer{PodSelector: &metav1.LabelSelector{}}), true, false},
 		{"lab opens its seal to an address", labPolicy(networkingv1.NetworkPolicyPeer{IPBlock: &networkingv1.IPBlock{CIDR: "0.0.0.0/0"}}), false, true},
 		{"lab opens its seal to another namespace", labPolicy(networkingv1.NetworkPolicyPeer{NamespaceSelector: &metav1.LabelSelector{}}), false, true},
+		{"lab seals a pod with its firewall", firewallPod(nil), true, false},
+		{"lab runs a firewall from another image", firewallPod(func(p *corev1.Pod) { p.Spec.InitContainers[0].Image = capability.ProbeImage }), false, true},
+		{"lab runs another command as the firewall", firewallPod(func(p *corev1.Pod) { p.Spec.InitContainers[0].Args = []string{"lab"} }), false, true},
+		{"lab runs its firewall after another container", firewallPod(func(p *corev1.Pod) {
+			p.Spec.InitContainers = append([]corev1.Container{{Name: "first", Image: capability.ProbeImage, SecurityContext: p.Spec.Containers[0].SecurityContext}},
+				p.Spec.InitContainers...)
+		}), false, true},
+		{"lab gives a copy NET_ADMIN", firewallPod(func(p *corev1.Pod) {
+			p.Spec.Containers[0].SecurityContext.Capabilities.Add = []corev1.Capability{"NET_ADMIN"}
+		}), false, true},
+		{"lab runs a copy as root", firewallPod(func(p *corev1.Pod) { p.Spec.Containers[0].SecurityContext.RunAsUser = ptr.To(int64(0)) }), false, true},
+		{"lab runs a copy on the node's network", firewallPod(func(p *corev1.Pod) { p.Spec.HostNetwork = true }), false, true},
 		{"a person approves as themselves", approveAs(me.Status.UserInfo.Username), true, false},
 		{"a person approves in someone else's name", approveAs("mallory"), false, true},
 		{"actor scales within bounds", patch(actor, smokeNS, "deployment", "web", `{"spec":{"replicas":2}}`), true, false},

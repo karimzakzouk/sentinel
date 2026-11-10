@@ -99,6 +99,9 @@ discovery:
 {{- end -}}
 {{- end -}}
 {{- $own = concat $own (include "sentinel.labNamespaces" . | fromJsonArray) -}}
+{{- if not (has .Values.lab.seal (list "auto" "policy" "firewall")) -}}
+{{- fail (printf "lab.seal is %q: use auto, policy or firewall" .Values.lab.seal) -}}
+{{- end -}}
 {{- range .Values.watch.namespaces -}}
 {{- if has . $own -}}
 {{- fail (printf "namespace %q cannot be both watched and one of Sentinel's own" .) -}}
