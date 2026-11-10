@@ -54,6 +54,11 @@ jobs:
       - name: Switch Sentinel to production settings
         run: hack/soak.sh start
       - name: Watch
+        env:
+          # Stream a false-alarm report into the job log every 10 minutes so
+          # the Actions UI shows what the soak has seen so far, not only hourly.
+          SOAK_REPORT_EVERY_MIN: "10"
+          PYTHONUNBUFFERED: "1"
         run: |
           # A push of the request file has no inputs; it holds the hours.
           HOURS="${HOURS:-$(awk '/^hours:/ {print $2}' .github/requests/soak)}"
@@ -64,19 +69,15 @@ jobs:
             echo "::error::hours must be between 1 and 72"
             exit 1
           fi
-          for h in $(seq 1 "$HOURS"); do
-            sleep 3600
-            echo "== after ${h}h"
-            hack/soak.sh report
-            # The runner is burstable: once its CPU credits run out it slows to
-            # 40%, which could cause alarms of its own, so log how busy it is.
-            uptime
-            docker stats --no-stream --format '{{.Name}} cpu {{.CPUPerc}} memory {{.MemUsage}}' | grep -- '-control-plane\|-worker' || true
-          done
+          # stdbuf keeps each report line visible in the live job log.
+          stdbuf -oL -eL hack/soak.sh watch "$HOURS"
       - name: Report
         if: always()
         run: |
           hack/soak.sh report > soak-report.txt 2>&1 || true
+          if [ -f test/results/soak-progress.txt ]; then
+            cp test/results/soak-progress.txt soak-progress.txt
+          fi
           kubectl --context "kind-$E2E_CLUSTER" -n sentinel logs deploy/sentinel > controller.log 2>&1 || true
           {
             echo "## Soak"
@@ -86,6 +87,15 @@ jobs:
             echo '```'
             cat soak-report.txt
             echo '```'
+            if [ -f soak-progress.txt ]; then
+              echo
+              echo "### Progress log (streamed during the watch)"
+              echo
+              echo '```'
+              # Keep the summary short; full stream is in the artifact.
+              tail -n 80 soak-progress.txt
+              echo '```'
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
@@ -93,6 +103,7 @@ jobs:
           name: soak
           path: |
             soak-report.txt
+            soak-progress.txt
             controller.log
           retention-days: 30
       - name: Delete the cluster
