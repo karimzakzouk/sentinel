@@ -54,6 +54,13 @@ type ExperimentSpec struct {
 	// +optional
 	// +kubebuilder:validation:MaxItems=20
 	Replay []ReplayRequest `json:"replay,omitempty"`
+	// Writes lists non-GET requests traffic capture kept with bodies, which
+	// each run sends its copy once the copy is ready: a copy works only if
+	// it answers every one with the same status production saw, unless its
+	// world's datastores are throwaway and empty.
+	// +optional
+	// +kubebuilder:validation:MaxItems=20
+	Writes []WriteReplay `json:"writes,omitempty"`
 	// Fakes lists outbound calls traffic capture saw to outside hosts,
 	// which Lab stubs answer with the recorded HTTP status (metadata only).
 	// +optional
@@ -93,9 +100,33 @@ type FakeCall struct {
 // limit or request, as "limits.memory" or "requests.cpu".
 type ValueOverride struct {
 	Container string `json:"container"`
-	// +kubebuilder:validation:Enum=limits.memory;limits.cpu;requests.memory;requests.cpu
+	// +kubebuilder:validation:Enum=limits.memory;limits.cpu;limits.ephemeral-storage;requests.memory;requests.cpu;requests.ephemeral-storage
 	Field string `json:"field"`
 	Value string `json:"value"`
+}
+
+// WriteReplay is one non-GET request a run sends its copy.
+type WriteReplay struct {
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=16
+	Method string `json:"method"`
+	// Path, with no query string.
+	// +kubebuilder:validation:Pattern=`^/[^?#\s]*$`
+	// +kubebuilder:validation:MaxLength=1024
+	Path string `json:"path"`
+	// Port the copy serves it on; its first declared port when omitted.
+	// +optional
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=65535
+	Port int32 `json:"port,omitempty"`
+	// Body is production's redacted request body when capture kept one.
+	// +optional
+	// +kubebuilder:validation:MaxLength=4096
+	Body string `json:"body,omitempty"`
+	// Status is the HTTP status production answered.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=999
+	Status int32 `json:"status"`
 }
 
 // ReplayRequest is one GET a run sends its copy.

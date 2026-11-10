@@ -117,6 +117,31 @@ func TestTheLabIsAskedToReplayCapturedReads(t *testing.T) {
 	}
 }
 
+func TestTheLabIsAskedToReplayCapturedWrites(t *testing.T) {
+	ctx := context.Background()
+	l, _ := newLab(t)
+	l.Writes = func(target model.ObjectRef) []v1alpha1.WriteReplay {
+		if target != front {
+			t.Fatalf("writes asked for %s", target)
+		}
+		return []v1alpha1.WriteReplay{{Method: "POST", Path: "/cart", Port: 8080, Body: "{}", Status: 201}}
+	}
+	if _, asked, err := l.Verify(ctx, incident, front, "front-7d9c"); err != nil || !asked {
+		t.Fatalf("Verify: %v, %v", asked, err)
+	}
+	got, err := l.Dynamic.Resource(ExperimentsResource).Namespace("lab-0").Get(ctx, ExperimentName(incident), metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var e v1alpha1.Experiment
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(got.Object, &e); err != nil {
+		t.Fatal(err)
+	}
+	if len(e.Spec.Writes) != 1 || e.Spec.Writes[0].Method != "POST" || e.Spec.Writes[0].Status != 201 {
+		t.Fatalf("writes %+v", e.Spec.Writes)
+	}
+}
+
 func TestTheLabIsNotAskedWhenBusyOrOutsideWatchedNamespaces(t *testing.T) {
 	ctx := context.Background()
 	l, _ := newLab(t, experimentIn(t, "lab-0", "a", "Sealing"), experimentIn(t, "lab-1", "b", "Running"))

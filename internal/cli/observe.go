@@ -22,6 +22,7 @@ import (
 	"github.com/karimzakzouk/sentinel/internal/capture"
 	"github.com/karimzakzouk/sentinel/internal/config"
 	"github.com/karimzakzouk/sentinel/internal/fixes"
+	labpkg "github.com/karimzakzouk/sentinel/internal/lab"
 	"github.com/karimzakzouk/sentinel/internal/ledger"
 	"github.com/karimzakzouk/sentinel/internal/logs"
 	"github.com/karimzakzouk/sentinel/internal/model"
@@ -205,6 +206,9 @@ func newObserver(ctx context.Context, log *slog.Logger, cfg *config.Config, clie
 				}
 				return out
 			}
+			lab.Writes = func(target model.ObjectRef) []v1alpha1.WriteReplay {
+				return labpkg.FromBodies(capture.Bodies(recent(target), 20), 20)
+			}
 		}
 		switch err := lab.Start(ctx); {
 		case err != nil:
@@ -317,14 +321,17 @@ func newObserver(ctx context.Context, log *slog.Logger, cfg *config.Config, clie
 
 // valueLab asks the Lab to race the failing revision with learned memory
 // and CPU limits in place.
-func valueLab(lab *verify.Lab) func(context.Context, model.ID, model.ObjectRef, string, map[string]string, map[string]string) (string, bool, error) {
-	return func(ctx context.Context, incident model.ID, target model.ObjectRef, revision string, memory, cpu map[string]string) (string, bool, error) {
+func valueLab(lab *verify.Lab) func(context.Context, model.ID, model.ObjectRef, string, map[string]string, map[string]string, map[string]string) (string, bool, error) {
+	return func(ctx context.Context, incident model.ID, target model.ObjectRef, revision string, memory, cpu, disk map[string]string) (string, bool, error) {
 		var overrides []v1alpha1.ValueOverride
 		for _, container := range slices.Sorted(maps.Keys(memory)) {
 			overrides = append(overrides, v1alpha1.ValueOverride{Container: container, Field: "limits.memory", Value: memory[container]})
 		}
 		for _, container := range slices.Sorted(maps.Keys(cpu)) {
 			overrides = append(overrides, v1alpha1.ValueOverride{Container: container, Field: "limits.cpu", Value: cpu[container]})
+		}
+		for _, container := range slices.Sorted(maps.Keys(disk)) {
+			overrides = append(overrides, v1alpha1.ValueOverride{Container: container, Field: "limits.ephemeral-storage", Value: disk[container]})
 		}
 		return lab.VerifyValues(ctx, incident, target, revision, overrides)
 	}
