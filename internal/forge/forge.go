@@ -48,7 +48,22 @@ type Client struct {
 	// followed by /rest/api/1.0.
 	API   string
 	Token string
-	HTTP  *http.Client
+	// App, when set on GitHub, gives the token instead: an installation's,
+	// renewed as it expires.
+	App  *App
+	HTTP *http.Client
+}
+
+// CurrentToken is the token to act with now: the App installation's, or
+// the configured one.
+func (c *Client) CurrentToken(ctx context.Context) (string, error) {
+	if c.App != nil {
+		return c.App.Token(ctx)
+	}
+	if c.Token == "" {
+		return "", fmt.Errorf("no token for %s", c.Web)
+	}
+	return c.Token, nil
 }
 
 // PullRequest is what the Fixer reads of a pull request, or merge request.
@@ -357,16 +372,17 @@ func (c *Client) call(ctx context.Context, method, path string, in, out any) err
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Type", "application/json")
-	if c.Token == "" {
-		return fmt.Errorf("no token for %s", c.Web)
+	token, err := c.CurrentToken(ctx)
+	if err != nil {
+		return err
 	}
 	switch c.kind() {
 	case GitLab:
-		req.Header.Set("PRIVATE-TOKEN", c.Token)
+		req.Header.Set("PRIVATE-TOKEN", token)
 	case Bitbucket, BitbucketServer:
-		req.Header.Set("Authorization", "Bearer "+c.Token)
+		req.Header.Set("Authorization", "Bearer "+token)
 	default:
-		req.Header.Set("Authorization", "token "+c.Token)
+		req.Header.Set("Authorization", "token "+token)
 	}
 	client := c.HTTP
 	if client == nil {

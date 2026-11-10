@@ -262,7 +262,14 @@ func (f *Fixer) holds(ctx context.Context, fix *v1alpha1.Fix, commit string) (bo
 }
 
 func (f *Fixer) auth() *githttp.BasicAuth {
-	return &githttp.BasicAuth{Username: f.GitUser, Password: f.Forge.Token}
+	token := f.Forge.Token
+	if f.Forge.App != nil {
+		// An App's installation token pushes as x-access-token.
+		if t, err := f.Forge.App.Token(context.Background()); err == nil {
+			return &githttp.BasicAuth{Username: "x-access-token", Password: t}
+		}
+	}
+	return &githttp.BasicAuth{Username: f.GitUser, Password: token}
 }
 
 // propose turns a Fix into a pull request. A refusal is a phase, Abstained,
