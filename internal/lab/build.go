@@ -261,16 +261,26 @@ func WorldProbes(services []*corev1.Service, prodNS, domain string) []Probe {
 	return append(out, Probe{Name: "API server by name", Address: hostPort("kubernetes.default.svc."+domain, 443)})
 }
 
-// withFakeTLSImage runs HTTPS fakes from SealImage (Sentinel's own binary,
-// which holds lab-fake) when the Lab has one; otherwise the stub keeps the
-// probe image and falls back to agnhost netexec for the TLS handshake.
+// withFakeTLSImage runs HTTPS fakes and the Lab MITM from SealImage
+// (Sentinel's own binary, which holds lab-fake and lab-mitm) when the Lab has
+// one; otherwise HTTPS stubs keep the probe image and fall back to agnhost
+// netexec for the TLS handshake.
 func withFakeTLSImage(pod *corev1.Pod, sealImage string) *corev1.Pod {
-	if pod == nil || sealImage == "" || pod.Annotations[FakeTLS] != "true" {
+	if pod == nil || sealImage == "" {
 		return pod
 	}
-	for i := range pod.Spec.Containers {
-		if pod.Spec.Containers[i].Name == "fake" {
-			pod.Spec.Containers[i].Image = sealImage
+	switch {
+	case pod.Annotations[FakeTLS] == "true":
+		for i := range pod.Spec.Containers {
+			if pod.Spec.Containers[i].Name == "fake" {
+				pod.Spec.Containers[i].Image = sealImage
+			}
+		}
+	case pod.Annotations[FakeMITM] == "true":
+		for i := range pod.Spec.Containers {
+			if pod.Spec.Containers[i].Name == "mitm" {
+				pod.Spec.Containers[i].Image = sealImage
+			}
 		}
 	}
 	return pod

@@ -1,7 +1,6 @@
 package lab
 
 import (
-	"strconv"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -25,10 +24,9 @@ var trustEnv = []string{"SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "NODE_EXTRA_CA_CE
 
 // injectTrust mounts the Lab CA (PEM and PKCS#12) and sets trust environment
 // variables on a copied pod so its HTTPS clients accept Lab-issued fake
-// certificates. When mitm is true, HTTPS_PROXY points at the Lab MITM so
-// clients that only speak TLS through a proxy still reach HTTPS fakes.
-// Existing values of those variables are left alone.
-func injectTrust(spec *corev1.PodSpec, note func(string, ...any), ref interface{ String() string }, mitm bool) {
+// certificates. Existing values of those variables are left alone.
+// HTTPS_PROXY rewriting for MITM clients is rewriteProxyEnv's job.
+func injectTrust(spec *corev1.PodSpec, note func(string, ...any), ref interface{ String() string }) {
 	if spec == nil {
 		return
 	}
@@ -68,24 +66,11 @@ func injectTrust(spec *corev1.PodSpec, note func(string, ...any), ref interface{
 			} else {
 				kept["JAVA_TOOL_OPTIONS"] = true
 			}
-			if mitm {
-				proxy := "http://" + MITMName + ":" + strconv.Itoa(MITMPort)
-				for _, name := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"} {
-					if hasEnv(c.Env, name) {
-						kept[name] = true
-						continue
-					}
-					c.Env = append(c.Env, corev1.EnvVar{Name: name, Value: proxy})
-				}
-			}
 		}
 	}
 	note("%s trusts the Lab CA at %s via SSL_CERT_FILE, REQUESTS_CA_BUNDLE, NODE_EXTRA_CA_CERTS and a PKCS#12 truststore for the JVM where unset; certificate pinning stays NOT SURE",
 		ref, labCAPath)
-	if mitm {
-		note("%s sends HTTPS through the Lab MITM proxy %s:%d so TLS-only clients that honour HTTPS_PROXY reach body-aware fakes", ref, MITMName, MITMPort)
-	}
-	for _, name := range append(append([]string{}, trustEnv...), "JAVA_TOOL_OPTIONS", "HTTPS_PROXY", "HTTP_PROXY") {
+	for _, name := range append(append([]string{}, trustEnv...), "JAVA_TOOL_OPTIONS") {
 		if kept[name] {
 			note("%s already sets %s; the Lab CA was mounted but that variable was left as production set it", ref, name)
 		}
