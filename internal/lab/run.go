@@ -151,6 +151,7 @@ func (l *Lab) handle(ctx context.Context, exp *v1alpha1.Experiment) Verdict {
 		if world, err = ReadWorld(ctx, l.Prover.Client, target.Namespace, ref, exp.Spec.Revision); err != nil {
 			return failed("could not read %s: %v", ref, err)
 		}
+		world.Calls = outboundFrom(exp.Spec.Fakes)
 		if plan, err = Synthesize(world, ref, ns); err != nil {
 			return failed("%v", err)
 		}

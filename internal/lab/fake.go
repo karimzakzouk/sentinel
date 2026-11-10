@@ -14,12 +14,25 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
 
+	"github.com/karimzakzouk/sentinel/api/v1alpha1"
 	"github.com/karimzakzouk/sentinel/internal/capture"
 )
 
 // FakeHost names the outside host a Lab fake Service stands in for. The Lab
 // DNS answers it with the Service's address.
 const FakeHost = "sentinel.karimzakzouk.github.io/fake-host"
+
+// outboundFrom turns Experiment fake calls into the catalog synthesis uses.
+func outboundFrom(fakes []v1alpha1.FakeCall) []capture.Call {
+	out := make([]capture.Call, 0, len(fakes))
+	for _, f := range fakes {
+		if f.Host == "" || f.Method == "" || f.Path == "" {
+			continue
+		}
+		out = append(out, capture.Call{Host: f.Host, Method: f.Method, Path: f.Path, Port: int(f.Port), Status: int(f.Status)})
+	}
+	return out
+}
 
 // Fake is a Lab Service and stub pod that answer an outside host's recorded
 // HTTP statuses inside the seal.
@@ -103,9 +116,13 @@ func fakeOf(host string, calls []capture.Call, ns string) *Fake {
 }
 
 // fakeListenScript runs one busybox netcat stub per Service target port.
+// A fresh listen per connection is more reliable than nc -lk in the probe
+// image.
 const fakeListenScript = `set -e
 for p in "$@"; do
-  busybox nc -lk -p "$p" -e /bin/sh /etc/lab-fake/respond.sh &
+  (
+    while true; do busybox nc -l -p "$p" -w 5 -e /bin/sh /etc/lab-fake/respond.sh; done
+  ) &
 done
 wait
 `
