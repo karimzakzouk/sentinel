@@ -108,7 +108,9 @@ To look at it on a cluster where it runs:
 | Fingerprints | fp2 for logged exceptions (decision 84) | One Redis outage logged with two messages is one exception |
 | Traffic capture | Built (decisions 85 and 86): an optional eBPF agent (OpenTelemetry's OBI), a switch per namespace in its SentinelPolicy and the console, request details only, and replay in the Lab | On the development cluster: the agent ran on both nodes with eBPF's capabilities, not privileged; Online Boutique's frontend's requests (`GET /cart`, `/product/<id>`, `POST /cart/checkout`) and its gRPC calls to seven services arrived with methods, paths, statuses and timings; Redis statements, which carry keys, stayed out; the incident page lists them |
 | Argo Rollouts abort | Built (decision 97): `rollouts.abort` sets `status.abort`; Flagger still deferred to its analysis | Unit tests in `internal/actor`, `internal/watcher`, `internal/brain` |
-| Own faker, mined fix patterns | Not started | |
+| Honeytoken Secrets | Built: Lab env and named-key volumes get shape-preserving stand-ins; looking one up through Lab DNS fails the race | Unit tests in `internal/lab` |
+| Outbound call catalog | Built: `capture.Calls` lists distinct client calls for Lab fakes | Unit tests in `internal/capture` |
+| Own faker, mined fix patterns | Fakes started (catalog); mined patterns not started | |
 
 ## Acting session
 
@@ -398,25 +400,26 @@ Full reasoning in [decisions.md](decisions.md).
 
 ## Next
 
-- **Lab realism:** fakes of outside services from captured traffic, the
-  Lab's certificate authority, fake secrets that raise an alarm, and an
-  opt-in recorder of request and response bodies for write replay,
-  response comparison and filled databases.
-- **More rollback kinds:** DaemonSets and StatefulSets (with a person's
-  approval) are built; Argo Rollouts abort (`rollouts.abort`, decision 97)
-  is built; Flagger stays deferred to its own analysis.
-- **Hardening:** baselines that survive restarts, a standby controller,
-  dependency links from error logs, and the node agent.
+- **Lab realism:** frontier fakes that answer from `capture.Calls`, the
+  Lab's certificate authority, and an opt-in recorder of request and
+  response bodies for write replay, response comparison and filled
+  databases. Honeytoken Secrets that fail a race on DNS lookup are built.
+- **More rollback kinds:** DaemonSets, StatefulSets (with approval) and
+  Argo Rollouts abort are built; Flagger stays deferred.
+- **Hardening:** baselines that survive restarts and dependency links from
+  error logs are built; left: the node agent. Standby for actor/Lab/Fixer
+  already exists.
 - **Settings:** every switch in the console as well as the YAML.
+- **CI:** with hosted Actions minutes spent and a $0 budget, CI and E2E
+  run on the Azure self-hosted runner; wake may fail and the VM is
+  started with `hack/azure-runner/wake.sh` when needed (decision 99).
 
-- **Phase 3:** the Lab racing a learned memory limit before its pull
-  request opens; fakes of outside services from the calls capture
-  recorded, and the Lab's certificate authority for copies that serve TLS.
+- **Phase 3:** memory and CPU limits race in the Lab before their pull
+  requests; left: fakes of outside services from capture, and the Lab's
+  certificate authority for copies that serve TLS.
 - **After the soak ends on Thursday:** its report, the network-plugin
   matrix and the Lab's end-to-end tests on the runner, and whether daily
   cycles call for seasonal baselines.
-- **Smaller items:** baselines are relearned after every restart (decision
-  35); dependency edges from connection errors in logs.
 
 ## Blocked or flaky on the development VM
 
