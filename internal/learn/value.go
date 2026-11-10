@@ -1,6 +1,7 @@
 // Package learn proposes values a fix sets from what a workload did while
 // it was healthy, for settings where putting back the old value can be as
-// wrong as the new one: a memory or CPU limit lowered by a commit may have
+// wrong as the new one: a memory, CPU or ephemeral-storage limit lowered by a
+// commit may have
 // been lowered on purpose, just too far.
 package learn
 
