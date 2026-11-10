@@ -164,6 +164,12 @@ func TestExpectedLossDecisions(t *testing.T) {
 	if d.Validate() != nil || d.Action != ActionScaleRestore {
 		t.Fatalf("decision = %+v; want the replicas restored", d)
 	}
+	// An Argo Rollouts progressive delivery is aborted, not template-rewritten.
+	ro := model.ObjectRef{Group: "argoproj.io", Kind: "Rollout", Namespace: "shop", Name: "web"}
+	d, _ = e.Decide(ctx, DecideInput{Workload: ro, Classes: badImage, TopChange: &RankedChange{Change: CandidateChange{Kind: "template", Object: ro}, P: 0.9}})
+	if d.Validate() != nil || d.Action != ActionRolloutsAbort {
+		t.Fatalf("decision = %+v; want rollouts.abort", d)
+	}
 }
 
 func TestEveryClassStatesEveryFeature(t *testing.T) {

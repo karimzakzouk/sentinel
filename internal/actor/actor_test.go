@@ -100,7 +100,7 @@ func newActor(t *testing.T, replicas int32, policies ...*v1alpha1.SentinelPolicy
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
 		map[schema.GroupVersionResource]string{PoliciesResource: "SentinelPolicyList", RequestsResource: "ActionRequestList",
 			ApplicationsResource: "ApplicationList", ApplicationSetsResource: "ApplicationSetList", KustomizationsResource: "KustomizationList",
-			HelmReleasesResource: "HelmReleaseList", ExperimentsResource: "ExperimentList"}, objects...)
+			HelmReleasesResource: "HelmReleaseList", ExperimentsResource: "ExperimentList", RolloutsResource: "RolloutList"}, objects...)
 	dyn.PrependReactor("patch", "*", func(action k8stesting.Action) (bool, runtime.Object, error) {
 		if p, ok := action.(k8stesting.PatchActionImpl); ok && len(p.PatchOptions.DryRun) > 0 {
 			return true, &unstructured.Unstructured{Object: map[string]any{}}, nil
@@ -700,6 +700,55 @@ func TestStatefulSetsAndDaemonSetsRollBackFromTheirRevisions(t *testing.T) {
 				t.Fatalf("%s %s, image %s", phase, msg, image())
 			}
 		})
+	}
+}
+
+// An Argo Rollouts progressive delivery is aborted through status.abort,
+// which puts the previous ReplicaSet back, rather than rewriting the
+// Rollout's template as a Deployment rollback would.
+func TestAnArgoRolloutIsAborted(t *testing.T) {
+	a, _, _ := newActor(t, 1, sentinelPolicy(v1alpha1.AutonomyAutonomous, ActionRolloutsAbort))
+	ro := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "argoproj.io/v1alpha1", "kind": "Rollout",
+		"metadata": map[string]any{"name": "web", "namespace": "shop"},
+		"spec":     map[string]any{"replicas": int64(2), "strategy": map[string]any{"canary": map[string]any{}}},
+		"status":   map[string]any{"currentPodHash": "bbb", "stableRS": "aaa", "abort": false},
+	}}
+	if _, err := a.Dynamic.Resource(RolloutsResource).Namespace("shop").Create(ctx, ro, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	req := &v1alpha1.ActionRequest{ObjectMeta: metav1.ObjectMeta{Name: "req", Namespace: "shop"},
+		Spec: v1alpha1.ActionRequestSpec{IncidentID: "inc-1", Action: ActionRolloutsAbort, Reason: "test",
+			Params:    map[string]string{ParamFromTemplateHash: "bbb"},
+			ExpiresAt: metav1.NewTime(t0.Add(10 * time.Minute)),
+			Target:    v1alpha1.TargetRef{APIVersion: "argoproj.io/v1alpha1", Kind: "Rollout", Namespace: "shop", Name: "web"}}}
+	if phase, msg := a.Handle(ctx, req); phase != v1alpha1.ActionSucceeded || !strings.Contains(msg, "aborted Argo Rollout web") {
+		t.Fatalf("%s %s", phase, msg)
+	}
+	got, err := a.Dynamic.Resource(RolloutsResource).Namespace("shop").Get(ctx, "web", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if aborted, _, _ := unstructuredBool(got.Object, "status", "abort"); !aborted {
+		t.Fatalf("status.abort = %v; want true", got.Object["status"])
+	}
+	if strategy, _, _ := unstructuredMap(got.Object, "spec", "strategy"); strategy == nil {
+		t.Fatal("spec.strategy was cleared")
+	}
+	// A stale hash means the Rollout moved on since the decision.
+	req.Spec.Params[ParamFromTemplateHash] = "old"
+	if _, err := a.Dynamic.Resource(RolloutsResource).Namespace("shop").Update(ctx, got, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	// Reset abort so the contract runs again, then refuse the stale hash.
+	got.Object["status"].(map[string]any)["abort"] = false
+	if _, err := a.Dynamic.Resource(RolloutsResource).Namespace("shop").Update(ctx, got, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	a2, _, _ := newActor(t, 1, sentinelPolicy(v1alpha1.AutonomyAutonomous, ActionRolloutsAbort))
+	a2.Dynamic = a.Dynamic
+	if phase, msg := a2.Handle(ctx, req); phase != v1alpha1.ActionFailed || !strings.Contains(msg, "current pod hash is bbb, not old") {
+		t.Fatalf("stale hash: %s %s", phase, msg)
 	}
 }
 

@@ -135,7 +135,7 @@ func (r *Requests) Acting() bool {
 	namespaces := slices.Collect(maps.Keys(r.policies))
 	r.mu.Unlock()
 	for _, ns := range namespaces {
-		for _, action := range []string{actor.ActionRolloutUndo, actor.ActionArgoCDRollback, actor.ActionFluxRollback, actor.ActionScale} {
+		for _, action := range []string{actor.ActionRolloutUndo, actor.ActionArgoCDRollback, actor.ActionFluxRollback, actor.ActionRolloutsAbort, actor.ActionScale} {
 			if level := r.Autonomy(ns, action); level == v1alpha1.AutonomyAutonomous || level == v1alpha1.AutonomyLabVerified {
 				return true
 			}
@@ -149,6 +149,8 @@ func RequestAction(brainAction string) (string, bool) {
 	switch brainAction {
 	case "rollout.undo":
 		return actor.ActionRolloutUndo, true
+	case "rollouts.abort":
+		return actor.ActionRolloutsAbort, true
 	case "scale.restore":
 		return actor.ActionScale, true
 	}
@@ -177,6 +179,10 @@ func (r *Requests) Request(ctx context.Context, a model.Action, reason string) (
 	action, ok := RequestAction(a.Type)
 	if !ok {
 		return false, nil
+	}
+	if action == actor.ActionRolloutUndo && a.Target.Kind == "Rollout" {
+		// Progressive delivery: abort rather than rewriting the template.
+		action = actor.ActionRolloutsAbort
 	}
 	if action == actor.ActionRolloutUndo && r.Client != nil && a.Target.Kind == "Deployment" {
 		dep, err := r.Client.AppsV1().Deployments(a.Target.Namespace).Get(ctx, a.Target.Name, metav1.GetOptions{})
