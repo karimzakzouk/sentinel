@@ -80,7 +80,7 @@ func TestAnExternalAPIHostGetsAFakeServiceAndPod(t *testing.T) {
 		t.Fatalf("copy lacks SSL_CERT_FILE trust: %+v", front.Spec.Containers[0].Env)
 	}
 	for _, want := range []string{
-		"Deployment/shop/front's api.stripe.com is a fake of the outside service from captured traffic; unmatched HTTP calls answer 404; gRPC calls get the recorded status with an empty payload",
+		"Deployment/shop/front's api.stripe.com is a fake of the outside service from captured traffic; unmatched HTTP calls answer 404; gRPC calls get the recorded status and a captured response body when present, otherwise an empty payload",
 		"Deployment/shop/front's api.stripe.com speaks TLS with a certificate the Lab CA issued",
 		"Deployment/shop/front likely presents a client certificate to an HTTPS fake; pinned or mutual TLS is NOT SURE",
 	} {
