@@ -83,10 +83,20 @@ func TestAnExternalAPIHostGetsAFakeServiceAndPod(t *testing.T) {
 		"Deployment/shop/front's api.stripe.com is a fake of the outside service from captured traffic; unmatched HTTP calls answer 404; gRPC calls get the recorded status and a captured response body when present, otherwise an empty payload",
 		"Deployment/shop/front's api.stripe.com speaks TLS with a certificate the Lab CA issued",
 		"Deployment/shop/front likely presents a client certificate to an HTTPS fake; pinned or mutual TLS is NOT SURE",
+		"Lab MITM " + MITMProxyURL + " terminates TLS with the Lab CA for HTTPS_PROXY clients and answers recorded bodies without leaving the seal; direct DNS+trust to per-host fakes stays the default",
 	} {
 		if !slices.Contains(plan.Fidelity, want) {
 			t.Fatalf("fidelity lacks %q:\n%s", want, strings.Join(plan.Fidelity, "\n"))
 		}
+	}
+	var mitm bool
+	for _, p := range plan.Pods {
+		if p.Annotations[FakeMITM] == "true" {
+			mitm = true
+		}
+	}
+	if !mitm {
+		t.Fatal("HTTPS world lacks the Lab MITM pod")
 	}
 }
 

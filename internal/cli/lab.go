@@ -149,14 +149,14 @@ func newLabFakeCmd() *cobra.Command {
 }
 
 func newLabMITMCmd() *cobra.Command {
-	var listen, caCert, caKey string
+	var listen, caCert, caKey, routes string
 	cmd := &cobra.Command{
 		Use:    "lab-mitm",
-		Short:  "CONNECT proxy that MITMs HTTPS with the Lab CA toward Lab fakes",
+		Short:  "Terminate TLS with the Lab CA for HTTPS_PROXY clients and answer recorded bodies inside the seal",
 		Hidden: true,
 		Args:   cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if err := lab.ServeMITM(listen, caCert, caKey); err != nil {
+			if err := lab.ServeMITM(listen, caCert, caKey, routes); err != nil {
 				return terminate(err)
 			}
 			return nil
@@ -165,6 +165,7 @@ func newLabMITMCmd() *cobra.Command {
 	cmd.Flags().StringVar(&listen, "listen", "", "TCP port or address to listen on")
 	cmd.Flags().StringVar(&caCert, "ca-cert", "/etc/lab-ca/ca.crt", "Lab CA certificate")
 	cmd.Flags().StringVar(&caKey, "ca-key", "/etc/lab-ca/ca.key", "Lab CA private key")
+	cmd.Flags().StringVar(&routes, "routes", "/etc/lab-mitm/routes", "recorded host method path status lines")
 	_ = cmd.MarkFlagRequired("listen")
 	return cmd
 }
