@@ -20,19 +20,19 @@ import (
 // value rather than restores, and pod-template or replica fields put back
 // from the good revision.
 const (
-	fieldImage          = "image"
-	fieldCommand        = "command"
-	fieldArgs           = "args"
-	fieldReadinessProbe = "readinessProbe"
-	fieldLivenessProbe  = "livenessProbe"
-	fieldStartupProbe   = "startupProbe"
-	fieldMemoryLimit    = "limits.memory"
-	fieldCPULimit       = "limits.cpu"
-	fieldDiskLimit      = "limits.ephemeral-storage"
-	fieldReplicas       = "replicas"
+	fieldImage            = "image"
+	fieldCommand          = "command"
+	fieldArgs             = "args"
+	fieldReadinessProbe   = "readinessProbe"
+	fieldLivenessProbe    = "livenessProbe"
+	fieldStartupProbe     = "startupProbe"
+	fieldMemoryLimit      = "limits.memory"
+	fieldCPULimit         = "limits.cpu"
+	fieldDiskLimit        = "limits.ephemeral-storage"
+	fieldReplicas         = "replicas"
 	fieldTerminationGrace = "terminationGracePeriodSeconds"
 	fieldActiveDeadline   = "activeDeadlineSeconds"
-	envPrefix           = "env:"
+	envPrefix             = "env:"
 )
 
 func isLimitField(field string) bool {

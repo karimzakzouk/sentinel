@@ -24,7 +24,7 @@ import (
 // credentials stay out of the UI on purpose (Git write blast radius).
 const (
 	slackSecretName = "sentinel-slack"
-	slackSecretKey  = "webhook-url"
+	slackSecretKey  = "webhook-url" //nolint:gosec // Secret data key name, not a credential
 	llmSecretName   = "sentinel-fixer-llm"
 	llmSecretKey    = "key"
 )
@@ -146,10 +146,10 @@ func (c *Console) listNamespaces(w http.ResponseWriter, r *http.Request, _ *sess
 		return
 	}
 	type row struct {
-		Name     string `json:"name"`
-		Watched  bool   `json:"watched"`
-		Blocked  bool   `json:"blocked"`
-		Reason   string `json:"reason,omitempty"`
+		Name    string `json:"name"`
+		Watched bool   `json:"watched"`
+		Blocked bool   `json:"blocked"`
+		Reason  string `json:"reason,omitempty"`
 	}
 	blocked := map[string]string{
 		"kube-system": "Kubernetes system", "kube-public": "Kubernetes system", "kube-node-lease": "Kubernetes system",

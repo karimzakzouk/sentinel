@@ -76,7 +76,7 @@ func watchOnce(ctx context.Context, dyn dynamic.Interface, ns string, apply func
 		apply(decode(&list.Items[i]))
 	}
 	w, err := dyn.Resource(Resource).Namespace(ns).Watch(ctx, metav1.ListOptions{
-		FieldSelector:  "metadata.name=" + Name,
+		FieldSelector:   "metadata.name=" + Name,
 		ResourceVersion: list.GetResourceVersion(),
 	})
 	if err != nil {

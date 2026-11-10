@@ -89,7 +89,6 @@ func readNewLines(path string, state *tailState, fromStart bool) ([]string, erro
 // stripCRIPrefix drops the kubelet/CRI log prefix:
 // "2024-01-02T03:04:05.678901234Z stdout F message"
 func stripCRIPrefix(line string) (at time.Time, text string) {
-	text = line
 	parts := strings.SplitN(line, " ", 4)
 	if len(parts) < 4 {
 		return time.Time{}, line

@@ -334,7 +334,7 @@ func (a *Actor) flaggerAbort(ctx context.Context, req *v1alpha1.ActionRequest, d
 	case "Failed":
 		return fmt.Sprintf("Flagger Canary %s was already failed", t.Name), nil
 	case "Succeeded", "Terminated", "Terminating":
-		return "", fmt.Errorf("Flagger Canary %s is %s; there is no progressive delivery to abort", t.Name, phase)
+		return "", fmt.Errorf("flagger Canary %s is %s; there is no progressive delivery to abort", t.Name, phase)
 	}
 	if from := req.Spec.Params[ParamFromTemplateHash]; from != "" {
 		// lastAppliedSpec is Flagger's fingerprint of the advancing target.

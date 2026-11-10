@@ -175,11 +175,17 @@ func syncNamespaceLabels(ctx context.Context, client kubernetes.Interface, prev,
 
 func syncRoleBindings(ctx context.Context, client kubernetes.Interface, t Targets, release string, prev, want []string, actorInstalled bool) error {
 	wantSet := toSet(want)
-	kinds := []struct{ binding, role string; sa rbacv1.Subject }{
+	kinds := []struct {
+		binding, role string
+		sa            rbacv1.Subject
+	}{
 		{release + "-watch", release + "-watch", rbacv1.Subject{Kind: "ServiceAccount", Name: "sentinel", Namespace: t.AgentNamespace}},
 	}
 	if actorInstalled {
-		kinds = append(kinds, struct{ binding, role string; sa rbacv1.Subject }{
+		kinds = append(kinds, struct {
+			binding, role string
+			sa            rbacv1.Subject
+		}{
 			release + "-act", release + "-act",
 			rbacv1.Subject{Kind: "ServiceAccount", Name: "sentinel-actor", Namespace: t.ActorNamespace},
 		})

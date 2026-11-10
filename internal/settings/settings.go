@@ -29,18 +29,18 @@ var Resource = v1alpha1.GroupVersion.WithResource("sentinelsettings")
 
 // Targets names where Helm put each component's ConfigMap and workload.
 type Targets struct {
-	AgentNamespace   string
-	ActorNamespace   string
-	CaptureNamespace string
-	ControllerCM     string
-	ActorCM          string
-	FixerCM          string
-	LabCM            string
-	CaptureCM        string
-	ControllerDeploy string
-	ActorDeploy      string
-	FixerDeploy      string
-	LabDeploy        string
+	AgentNamespace         string
+	ActorNamespace         string
+	CaptureNamespace       string
+	ControllerCM           string
+	ActorCM                string
+	FixerCM                string
+	LabCM                  string
+	CaptureCM              string
+	ControllerDeploy       string
+	ActorDeploy            string
+	FixerDeploy            string
+	LabDeploy              string
 	CaptureDaemonSet       string
 	CaptureMITM            string
 	CaptureMITMTransparent string

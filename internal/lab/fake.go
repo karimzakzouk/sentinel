@@ -92,7 +92,7 @@ func fakeOf(host string, calls []capture.Call, ns string, ca *Authority, https b
 	svcPorts := make([]corev1.ServicePort, len(ports))
 	var listenArgs []string
 	for i, p := range ports {
-		targets[i] = int32(8080 + i) //nolint:gosec // 8080+i stays well below 65536
+		targets[i] = int32(8080 + i)
 		svcPorts[i] = corev1.ServicePort{
 			Name: "p" + strconv.Itoa(p), Protocol: corev1.ProtocolTCP,
 			Port: int32(p), TargetPort: intstr.FromInt32(targets[i]), //nolint:gosec // port from capture or 80

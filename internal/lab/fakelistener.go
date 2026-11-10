@@ -32,7 +32,7 @@ func ServeFakeTLS(listen, certFile, keyFile, routesFile string) error {
 	if err != nil {
 		return err
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 	cfg := &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
 	srv := &http.Server{
 		Handler:           fakeHTTPHandler(parseRoutes(string(raw))),

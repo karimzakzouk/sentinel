@@ -2,7 +2,7 @@ package lab
 
 import (
 	"context"
-	"crypto/sha1"
+	"crypto/sha1" //nolint:gosec // stable lab ConfigMap key, not security
 	"fmt"
 	"strings"
 	"time"
@@ -148,7 +148,7 @@ func seedBodies(samples []capture.BodySample) []seedItem {
 		}
 		key := seedKeyPrefix + fmt.Sprint(len(out))
 		if path := strings.TrimSpace(s.Path); path != "" {
-			sum := sha1.Sum([]byte(s.Method + " " + path))
+			sum := sha1.Sum([]byte(s.Method + " " + path)) //nolint:gosec // stable lab ConfigMap key
 			key = seedKeyPrefix + fmt.Sprintf("%x", sum[:6])
 		}
 		out = append(out, seedItem{Key: key, Body: body})

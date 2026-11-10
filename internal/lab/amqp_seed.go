@@ -130,7 +130,7 @@ func amqpWriteFrame(conn net.Conn, kind byte, channel uint16, payload []byte) er
 	frame := make([]byte, 8+len(payload))
 	frame[0] = kind
 	binary.BigEndian.PutUint16(frame[1:], channel)
-	binary.BigEndian.PutUint32(frame[3:], uint32(len(payload)))
+	binary.BigEndian.PutUint32(frame[3:], uint32(len(payload))) //nolint:gosec // AMQP frame size
 	copy(frame[7:], payload)
 	frame[7+len(payload)] = amqpFrameEnd
 	_, err := conn.Write(frame)
@@ -215,8 +215,8 @@ func amqpTuneOKArgs(channelMax uint16, frameMax uint32, heartbeat uint16) []byte
 func amqpOpenArgs(vhost string) []byte {
 	var b []byte
 	b = append(b, amqpShortStr(vhost)...)
-	b = append(b, 0)       // capabilities empty
-	b = append(b, 0)       // insist
+	b = append(b, 0) // capabilities empty
+	b = append(b, 0) // insist
 	return b
 }
 
@@ -251,14 +251,14 @@ func amqpShortStr(s string) []byte {
 		s = s[:255]
 	}
 	b := make([]byte, 1+len(s))
-	b[0] = byte(len(s))
+	b[0] = byte(len(s)) //nolint:gosec // shortstr capped at 255 above
 	copy(b[1:], s)
 	return b
 }
 
 func amqpLongStr(s string) []byte {
 	b := make([]byte, 4+len(s))
-	binary.BigEndian.PutUint32(b, uint32(len(s)))
+	binary.BigEndian.PutUint32(b, uint32(len(s))) //nolint:gosec // lab fixture payload
 	copy(b[4:], s)
 	return b
 }
@@ -271,7 +271,7 @@ func amqpTable(entries map[string]string) []byte {
 		inner = append(inner, amqpLongStr(v)...)
 	}
 	b := make([]byte, 4+len(inner))
-	binary.BigEndian.PutUint32(b, uint32(len(inner)))
+	binary.BigEndian.PutUint32(b, uint32(len(inner))) //nolint:gosec // lab fixture table
 	copy(b[4:], inner)
 	return b
 }

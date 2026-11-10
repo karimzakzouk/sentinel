@@ -16,7 +16,10 @@ import (
 // FromBodies turns captured non-GET body samples into Experiment writes, at
 // most n, each distinct method and path once, most recent first.
 func FromBodies(samples []capture.BodySample, n int) []v1alpha1.WriteReplay {
-	type key struct{ method, path string; port int }
+	type key struct {
+		method, path string
+		port         int
+	}
 	seen := map[key]bool{}
 	var out []v1alpha1.WriteReplay
 	for i := len(samples) - 1; i >= 0; i-- {
@@ -30,7 +33,7 @@ func FromBodies(samples []capture.BodySample, n int) []v1alpha1.WriteReplay {
 		}
 		seen[k] = true
 		out = append(out, v1alpha1.WriteReplay{
-			Method: s.Method, Path: s.Path, Port: int32(s.Port), Body: s.Body,
+			Method: s.Method, Path: s.Path, Port: int32(s.Port), Body: s.Body, //nolint:gosec // captured service port
 			Status: int32(s.Status), //nolint:gosec // status the agent saw, below 1000
 		})
 		if n >= 0 && len(out) >= n {
@@ -96,7 +99,6 @@ func FromSeedSamples(samples []capture.BodySample, n int) []v1alpha1.SeedBody {
 	}
 	return out
 }
-
 
 // WriteFidelity notes how many writes each run sends and how statuses are
 // judged; emptyDatastores forgives server errors when the response matched
