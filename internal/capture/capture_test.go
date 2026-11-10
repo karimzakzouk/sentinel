@@ -93,6 +93,28 @@ func TestReplayableAreReadsThatWorked(t *testing.T) {
 	}
 }
 
+// What a Lab fakes are the distinct outbound calls, most frequent first.
+func TestCallsAreDistinctOutboundCalls(t *testing.T) {
+	got := Calls([]Request{
+		{Served: false, Method: "GET", Host: "rates.example", Path: "/v1/rates", Port: 443, Status: 200},
+		{Served: false, Method: "GET", Host: "rates.example", Path: "/v1/rates", Port: 443, Status: 200},
+		{Served: false, Method: "GET", Host: "api.example", Path: "/reset/[REDACTED:token]", Status: 200, Redacted: true},
+		{Served: false, Method: "GET", Host: "api.example", Path: "/items/1", Route: "/items/{id}", Port: 80, Status: 200},
+		{Served: false, Method: "GET", Host: "api.example", Path: "/items/2", Route: "/items/{id}", Port: 80, Status: 200},
+		{Served: false, Method: "POST", Host: "pay.example", Path: "/v1/charges", Port: 443, Status: 502},
+		{Served: false, Method: "gRPC", Host: "currencyservice", Path: "/hipstershop.CurrencyService/Convert", Port: 7000, Status: 200},
+		{Served: true, Method: "GET", Path: "/cart/12345", Port: 8080, Status: 200},
+	}, 5)
+	if want := []Call{
+		{Host: "api.example", Method: "GET", Path: "/items/{id}", Route: "/items/{id}", Port: 80, Status: 200},
+		{Host: "rates.example", Method: "GET", Path: "/v1/rates", Port: 443, Status: 200},
+		{Host: "currencyservice", Method: "gRPC", Path: "/hipstershop.CurrencyService/Convert", Port: 7000, Status: 200},
+		{Host: "pay.example", Method: "POST", Path: "/v1/charges", Port: 443, Status: 502},
+	}; !slices.Equal(got, want) {
+		t.Fatalf("calls %+v", got)
+	}
+}
+
 // A secret in a path is redacted, and the request is not replayed.
 func TestASecretInAPathIsRedacted(t *testing.T) {
 	q, ok := requestOf(span{Kind: kindServer, Attributes: []attribute{

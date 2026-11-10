@@ -132,6 +132,46 @@ func Replayable(requests []Request, n int) []Read {
 	return out[:min(len(out), n)]
 }
 
+// Call is one distinct outbound call a workload made.
+type Call struct {
+	Host, Method, Path, Route string
+	Port, Status              int
+}
+
+// Calls returns distinct client calls (Served==false) from requests, most frequent first, at most n.
+// Prefer Route over Path when set. Skip redacted paths. Include gRPC (Method == "gRPC").
+func Calls(requests []Request, n int) []Call {
+	count := map[Call]int{}
+	for _, r := range requests {
+		if r.Served || r.Redacted {
+			continue
+		}
+		path := r.Path
+		if r.Route != "" {
+			path = r.Route
+		}
+		count[Call{Host: r.Host, Method: r.Method, Path: path, Route: r.Route, Port: r.Port, Status: r.Status}]++
+	}
+	out := make([]Call, 0, len(count))
+	for k := range count {
+		out = append(out, k)
+	}
+	slices.SortFunc(out, func(a, b Call) int {
+		if count[a] != count[b] {
+			return count[b] - count[a]
+		}
+		return cmp.Or(
+			strings.Compare(a.Host, b.Host),
+			strings.Compare(a.Method, b.Method),
+			strings.Compare(a.Path, b.Path),
+			strings.Compare(a.Route, b.Route),
+			a.Port-b.Port,
+			a.Status-b.Status,
+		)
+	})
+	return out[:min(len(out), n)]
+}
+
 // replayablePath is a path a Lab can send as it is: absolute, no longer
 // than an Experiment allows, without a fragment or a space.
 func replayablePath(p string) bool {
