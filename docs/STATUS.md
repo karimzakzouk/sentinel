@@ -295,9 +295,14 @@ cluster on CPU (`test/apps/ollama.yaml`): the model's first change was a
 guard that skipped the assignment and left the catalog `None`, so pyshop
 still crashed, and the Lab failed it in 3 runs. The Fixer asked the model
 again with that verdict (decisions 92 and 93), pushed its second change,
-`items = {}`, to the same pull request, the pipeline built it, and the Lab
-raced it. The run found that a change moved to the tried list counted
-twice against the model's attempts, so it was not asked again; fixed.
+`items = {}`, to the same pull request; the pipeline built
+`pyshop:ea14f88`; and the Lab passed it, 15 of 15 runs against 15 of 15
+(development cluster, Wednesday morning Cairo time). kind's
+`docker.io/library/import-…` ImageIDs had rewritten Lab digest pins away
+from the named registry image so `ImageCandidate` returned NOT SURE; the
+Lab now skips those pins (decision 117). The run also found that a change
+moved to the tried list counted twice against the model's attempts, so it
+was not asked again; fixed.
 
 ## Scored session (observe only)
 
