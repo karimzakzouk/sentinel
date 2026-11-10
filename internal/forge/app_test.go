@@ -49,7 +49,7 @@ func TestAGitHubAppActsWithItsInstallationsToken(t *testing.T) {
 			}
 			issued++
 			w.WriteHeader(http.StatusCreated)
-			fmt.Fprintf(w, `{"token":"ghs_%d","expires_at":"%s"}`, issued, now.Add(time.Hour).Format(time.RFC3339))
+			_, _ = fmt.Fprintf(w, `{"token":"ghs_%d","expires_at":"%s"}`, issued, now.Add(time.Hour).Format(time.RFC3339))
 		case r.URL.Path == "/repos/team/shop/pulls/3":
 			used = r.Header.Get("Authorization")
 			_, _ = w.Write([]byte(`{"number":3,"state":"open"}`))
