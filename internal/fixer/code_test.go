@@ -188,23 +188,86 @@ func TestACrashInCodeGetsAFixInItsSource(t *testing.T) {
 		t.Fatalf("code %+v", got.Status.Code)
 	}
 	// The Lab races it; once it has a verdict, the pull request says it.
-	exp := unstr(map[string]any{"apiVersion": v1alpha1.GroupVersion.String(), "kind": "Experiment",
-		"metadata": map[string]any{"name": verify.CodeExperimentName("01a1c008-0123-4567-89ab-0123456789ab"), "namespace": "sentinel-lab-0"},
-		"status":   map[string]any{"phase": "Running"}})
-	if _, err := dyn.Resource(verify.ExperimentsResource).Namespace("sentinel-lab-0").Create(ctx, exp, metav1.CreateOptions{}); err != nil {
-		t.Fatal(err)
+	race := func(image string) *unstructured.Unstructured {
+		t.Helper()
+		exp := unstr(map[string]any{"apiVersion": v1alpha1.GroupVersion.String(), "kind": "Experiment",
+			"metadata": map[string]any{"name": verify.CodeExperimentName("01a1c008-0123-4567-89ab-0123456789ab", image), "namespace": "sentinel-lab-0"},
+			"status":   map[string]any{"phase": "Running"}})
+		if _, err := dyn.Resource(verify.ExperimentsResource).Namespace("sentinel-lab-0").Create(ctx, exp, metav1.CreateOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		return exp
 	}
+	exp := race(got.Status.Code.Image)
 	if got = step(); got.Status.Code.Verdict != "" || len(srv.comments) != 0 {
 		t.Fatalf("a verdict before the Lab had one: %+v", got.Status.Code)
 	}
-	exp.Object["status"] = map[string]any{"phase": "Passed", "message": "the image fixes it: it worked in 15 of 15 runs"}
+	// The Lab finds the restored function does not fix it: the Fixer
+	// tries the next fixer's change, the whole commit reverted, on the
+	// same pull request.
+	exp.Object["status"] = map[string]any{"phase": "Failed", "message": "the image does not fix it: it failed in 3 of 3 runs", "runs": int64(3)}
 	if _, err := dyn.Resource(verify.ExperimentsResource).Namespace("sentinel-lab-0").Update(ctx, exp, metav1.UpdateOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	got = step()
-	if got.Status.Code.Verdict != "Passed" || len(srv.comments) != 1 || !strings.Contains(srv.comments[0], "it fixes the crash") {
+	cf = got.Status.Code
+	if cf.Attempt != 2 || cf.Fixer != "revert" || cf.Image != "" || cf.Verdict != "" || len(cf.Tried) != 1 || cf.Tried[0].Verdict != "Failed" ||
+		cf.Tried[0].Fixer != "restore" || cf.Number != 2 {
+		t.Fatalf("after the Lab failed the restore: %+v", cf)
+	}
+	if len(srv.comments) != 2 || !strings.Contains(srv.comments[0], "it does not fix the crash") || !strings.Contains(srv.comments[1], "now tries **revert**") {
+		t.Fatalf("comments %q", srv.comments)
+	}
+	if pushed := gitRun(t, bareShop, "show", "sentinel/code-fix-0123456789ab:cart/store.go"); !strings.Contains(pushed, "if c == nil") {
+		t.Fatalf("the revert pushed:\n%s", pushed)
+	}
+	if out, err := exec.Command("git", "-C", bareShop, "cat-file", "-e", "sentinel/code-fix-0123456789ab:README.md").CombinedOutput(); err == nil {
+		t.Fatalf("the revert kept the README the commit added: %s", out)
+	}
+	registry.mu.Lock()
+	registry.commits[cf.Commit[:7]] = cf.Commit
+	registry.mu.Unlock()
+	if got = step(); got.Status.Code.Image != host+"/sentinel/shop:"+cf.Commit[:7] {
+		t.Fatalf("the revert's image was not found: %+v", got.Status.Code)
+	}
+	exp = race(got.Status.Code.Image)
+	exp.Object["status"] = map[string]any{"phase": "Passed", "message": "the image fixes it: it worked in 15 of 15 runs", "runs": int64(15)}
+	if _, err := dyn.Resource(verify.ExperimentsResource).Namespace("sentinel-lab-0").Update(ctx, exp, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	got = step()
+	if got.Status.Code.Verdict != "Passed" || len(srv.comments) != 3 || !strings.Contains(srv.comments[2], "it fixes the crash") {
 		t.Fatalf("code %+v, comments %q", got.Status.Code, srv.comments)
 	}
+	// A person closes it anyway: the next fixer, a model here, gets a new
+	// pull request, told what was tried.
+	model := &replies{text: "FILE: cart/store.go\nFUNCTION: Store.Get\n```go\nfunc (s *Store) Get(id string) *Cart {\n\tif c := s.carts[id]; c != nil {\n\t\treturn c\n\t}\n\treturn &Cart{}\n}\n```\n"}
+	f.LLM = model
+	srv.mu.Lock()
+	srv.closed = map[string]bool{"2": true}
+	srv.mu.Unlock()
+	got = step()
+	cf = got.Status.Code
+	if cf.Number != 3 || cf.Fixer != "llm" || cf.State != "open" || len(cf.Tried) != 2 || cf.Tried[1].Verdict != "Declined" ||
+		srv.openedCode["head"] != "sentinel/code-fix-0123456789ab-2" {
+		t.Fatalf("after a person closed it: %+v, opened %+v", cf, srv.openedCode)
+	}
+	if !strings.Contains(model.asked, "revert") || !strings.Contains(model.asked, "Declined") || !strings.Contains(srv.openedCode["body"], "language model") {
+		t.Fatalf("the model was asked:\n%s\nthe pull request says:\n%s", model.asked, srv.openedCode["body"])
+	}
+	if pushed := gitRun(t, bareShop, "show", "sentinel/code-fix-0123456789ab-2:cart/store.go"); !strings.Contains(pushed, "if c := s.carts[id]; c != nil") {
+		t.Fatalf("pushed:\n%s", pushed)
+	}
+}
+
+// replies is a model that always says the same.
+type replies struct {
+	text, asked string
+}
+
+func (r *replies) Complete(_ context.Context, _, user string) (string, error) {
+	r.asked = user
+	return r.text, nil
 }
 
 func writeFile(name, content string) error {
@@ -217,7 +280,7 @@ func writeFile(name, content string) error {
 // Where no Lab is installed, a fix to the code says it will not be raced.
 func TestAFixToTheCodeSaysWhenNoLabWillRaceIt(t *testing.T) {
 	fix := &v1alpha1.Fix{Spec: v1alpha1.FixSpec{IncidentID: "inc-1", Workload: v1alpha1.TargetRef{Namespace: "shop", Name: "cart"}}}
-	p := &codefix.Patch{Function: "main.load", Path: "catalog.go", Line: 17, Why: "it changed"}
+	p := &codefix.Change{Fixer: "restore", Function: "main.load", Why: "it changed", Edits: []codefix.Edit{{Path: "catalog.go", Line: 17}}}
 	src := codefix.Built{Repository: "http://forge/person/shop-src", Revision: "c2fe9e2bcce8aa"}
 	if body := codeBody(fix, p, "shop:95e2311", "shop:c2fe9e2", src, true); !strings.Contains(body, "races it against the failing one in its Lab") {
 		t.Fatalf("with a Lab:\n%s", body)
@@ -241,7 +304,7 @@ func TestTheLabsVerdictIsKeptWhenTheForgeRefusesItsComment(t *testing.T) {
 			http.Error(w, `{"message": "token does not have the required scope"}`, tc.status)
 		}))
 		exp := &unstructured.Unstructured{Object: map[string]any{"apiVersion": v1alpha1.GroupVersion.String(), "kind": "Experiment",
-			"metadata": map[string]any{"name": verify.CodeExperimentName("inc-1"), "namespace": "sentinel-lab-0"},
+			"metadata": map[string]any{"name": verify.CodeExperimentName("inc-1", "registry.test/shop:cfb0fc6"), "namespace": "sentinel-lab-0"},
 			"status":   map[string]any{"phase": "NotSure", "message": "the Lab stays off"}}}
 		dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
 			map[schema.GroupVersionResource]string{verify.ExperimentsResource: "ExperimentList"}, exp)

@@ -20,6 +20,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/go-git/go-git/v5/storage/memory"
 	"sigs.k8s.io/kustomize/kyaml/filesys"
+
+	"github.com/karimzakzouk/sentinel/internal/codefix"
 )
 
 // maxRepoBytes bounds what a checkout copies for rendering: a repository
@@ -165,18 +167,45 @@ func (c *Checkout) FilesAt(rev string) (map[string][]byte, error) {
 // attempt that stopped before its pull request: the branch is Sentinel's.
 // It returns the commit.
 func (c *Checkout) Push(ctx context.Context, edit *Edit, branch, message string, author object.Signature) (string, error) {
+	return c.push(ctx, branch, message, author, []codefix.Edit{{Path: edit.Path, After: edit.After}})
+}
+
+// PushChange commits a fixer's change on a new branch from the checkout's
+// head, and pushes it in place of whatever the branch held: each attempt
+// is one commit on the base.
+func (c *Checkout) PushChange(ctx context.Context, change *codefix.Change, branch, message string, author object.Signature) (string, error) {
+	return c.push(ctx, branch, message, author, change.Edits)
+}
+
+func (c *Checkout) push(ctx context.Context, branch, message string, author object.Signature, edits []codefix.Edit) (string, error) {
 	w, err := c.repo.Worktree()
 	if err != nil {
 		return "", err
 	}
-	if err := w.Checkout(&git.CheckoutOptions{Branch: plumbing.NewBranchReferenceName(branch), Create: true}); err != nil {
+	head, err := c.repo.Head()
+	if err != nil {
 		return "", err
 	}
-	if err := util.WriteFile(c.tree, edit.Path, edit.After, 0o644); err != nil {
+	ref := plumbing.NewBranchReferenceName(branch)
+	if err := c.repo.Storer.SetReference(plumbing.NewHashReference(ref, head.Hash())); err != nil {
 		return "", err
 	}
-	if _, err := w.Add(edit.Path); err != nil {
+	if err := w.Checkout(&git.CheckoutOptions{Branch: ref, Force: true}); err != nil {
 		return "", err
+	}
+	for _, e := range edits {
+		if e.After == nil {
+			if _, err := w.Remove(e.Path); err != nil {
+				return "", err
+			}
+			continue
+		}
+		if err := util.WriteFile(c.tree, e.Path, e.After, 0o644); err != nil {
+			return "", err
+		}
+		if _, err := w.Add(e.Path); err != nil {
+			return "", err
+		}
 	}
 	if author.When.IsZero() {
 		author.When = time.Now()

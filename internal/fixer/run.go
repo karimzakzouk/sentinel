@@ -64,6 +64,13 @@ type Fixer struct {
 	// images built from them.
 	Registry      *codefix.Registry
 	LabNamespaces []string
+	// CodeFixers are the fixers tried, in order, for a crash in code:
+	// restore, template, revert and llm; empty is all four, in that order.
+	CodeFixers []string
+	// LLM, when set, is the language model the llm fixer asks, at most
+	// LLMAttempts times a fix, after the other fixers have nothing left.
+	LLM         codefix.Completer
+	LLMAttempts int
 	// Poll is how often it reads an open pull request, and a merged fix's
 	// source.
 	Poll    time.Duration
@@ -132,7 +139,7 @@ func (f *Fixer) process(ctx context.Context, store cache.Store, key string, trie
 	if poll <= 0 {
 		poll = 30 * time.Second
 	}
-	if f.awaitBuild(ctx, &fix, time.Now()) || f.reportVerdict(ctx, &fix) {
+	if f.awaitBuild(ctx, &fix, time.Now()) || f.reportVerdict(ctx, &fix) || f.codeClosed(ctx, &fix) {
 		return poll, f.setStatus(ctx, &fix, fix.Status.Phase, fix.Status.Message)
 	}
 	// A code fix's build is looked for whatever phase the fix that pins

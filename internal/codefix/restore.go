@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -108,6 +109,7 @@ var jsGrammar = grammar{
 }
 
 var grammarsByName = map[string]grammar{
+	"go":         {set("function_declaration", "method_declaration"), set()},
 	"python":     {set("function_definition"), set("class_definition")},
 	"javascript": jsGrammar,
 	"typescript": jsGrammar,
@@ -231,6 +233,17 @@ func (p *parsed) funcName(n *gts.Node) (string, []string) {
 		}
 	case "impl_item":
 		return generic(p.text(p.field(n, "type"))), nil
+	case "method_declaration":
+		if recv := p.field(n, "receiver"); recv != nil && p.field(n, "name") != nil {
+			words := strings.Fields(strings.Trim(p.text(recv), "()"))
+			if len(words) > 0 {
+				typ := strings.TrimPrefix(words[len(words)-1], "*")
+				if i := strings.IndexByte(typ, '['); i > 0 {
+					typ = typ[:i]
+				}
+				return p.text(p.field(n, "name")), []string{typ}
+			}
+		}
 	}
 	if name := p.field(n, "name"); name != nil {
 		return p.text(name), nil
@@ -419,6 +432,10 @@ func (p *parsed) named(file, runtimeName string) (*fn, error) {
 // the scope before it: Shop#load, App\Catalog->items, shop::Catalog::load,
 // com.example.Catalog.load, Catalog$Inner.load.
 func splitName(s string) (name, scope string) {
+	s = goClosure.ReplaceAllString(s, "")
+	if m := goMethod.FindStringSubmatch(s); m != nil {
+		return m[2], m[1]
+	}
 	if i := strings.IndexAny(s, "(<["); i > 0 {
 		s = s[:i]
 	}
@@ -439,6 +456,13 @@ func splitName(s string) (name, scope string) {
 	}
 	return name, scope
 }
+
+var (
+	// goMethod reads a Go frame's method: example.com/shop/cart.(*Store).Get.
+	goMethod = regexp.MustCompile(`\.\(\*?([A-Za-z_]\w*)(?:\[[^\]]*\])?\)\.([A-Za-z_]\w*)$`)
+	// goClosure is a closure's suffix, which stands for the function it is in.
+	goClosure = regexp.MustCompile(`(\.func\d+)+(\.\d+)*$`)
+)
 
 // repoFiles are the repository's files a frame's file may be, best match
 // first: the most trailing path parts in common. A Java frame names only
