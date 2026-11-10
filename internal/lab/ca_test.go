@@ -41,6 +41,10 @@ func TestTheLabCAIssuesAHostCertificateCopiesTrust(t *testing.T) {
 	if _, err := leaf.Verify(x509.VerifyOptions{DNSName: "api.stripe.com", Roots: otherPool}); err == nil {
 		t.Fatal("a different Lab CA must not verify the host cert")
 	}
+	p12, err := ca.TrustStorePKCS12()
+	if err != nil || len(p12) == 0 {
+		t.Fatalf("PKCS#12 truststore: %v len=%d", err, len(p12))
+	}
 }
 
 func TestAnHTTPSFakeAnswersRecordedStatusesWithALabCertificate(t *testing.T) {

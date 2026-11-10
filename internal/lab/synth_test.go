@@ -84,8 +84,8 @@ func TestSynthesisCopiesTheWorkloadAndWhatItCalls(t *testing.T) {
 			t.Fatalf("Service %s is not a fresh Lab copy: %+v", s.Name, s)
 		}
 	}
-	if !slices.Equal(names, []string{"front", "backend", "fake-api-stripe-com"}) {
-		t.Fatalf("copied Services %v; want front, backend and a fake of api.stripe.com", names)
+	if !slices.Equal(names, []string{"front", "backend", "fake-api-stripe-com", MITMName}) {
+		t.Fatalf("copied Services %v; want front, backend, a fake of api.stripe.com and the Lab MITM", names)
 	}
 	var frontConfig *corev1.ConfigMap
 	for _, cm := range plan.ConfigMaps {

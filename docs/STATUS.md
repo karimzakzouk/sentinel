@@ -413,9 +413,10 @@ Full reasoning in [decisions.md](decisions.md).
   a body (decisions 100, 111, 113, 114 and 116); write replay compares statuses
   and seeds empty redis/valkey, postgres, mysql/mariadb, mongo, kafka and
   rabbitmq from captured bodies (decisions 105, 112 and 118). Chart
-  `capture.exportBodies` wires OBI JSON body export (decision 115). Left:
-  HTTPS MITM for TLS-only clients. Honeytoken Secrets that fail a race on DNS
-  lookup are built.
+  `capture.exportBodies` wires OBI JSON body export (decision 115). Lab HTTPS
+  copies get a JVM PKCS#12 truststore and a CONNECT MITM with `HTTPS_PROXY`
+  (decision 119). Left: production-capture MITM for OBI ciphertext. Honeytoken
+  Secrets that fail a race on DNS lookup are built.
 - **More rollback kinds:** DaemonSets, StatefulSets (with approval) and
   Argo Rollouts abort are built; Flagger stays deferred.
 - **Hardening:** baselines that survive restarts and dependency links from

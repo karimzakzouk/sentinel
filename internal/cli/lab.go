@@ -148,6 +148,27 @@ func newLabFakeCmd() *cobra.Command {
 	return cmd
 }
 
+func newLabMITMCmd() *cobra.Command {
+	var listen, caCert, caKey string
+	cmd := &cobra.Command{
+		Use:    "lab-mitm",
+		Short:  "CONNECT proxy that MITMs HTTPS with the Lab CA toward Lab fakes",
+		Hidden: true,
+		Args:   cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if err := lab.ServeMITM(listen, caCert, caKey); err != nil {
+				return terminate(err)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&listen, "listen", "", "TCP port or address to listen on")
+	cmd.Flags().StringVar(&caCert, "ca-cert", "/etc/lab-ca/ca.crt", "Lab CA certificate")
+	cmd.Flags().StringVar(&caKey, "ca-key", "/etc/lab-ca/ca.key", "Lab CA private key")
+	_ = cmd.MarkFlagRequired("listen")
+	return cmd
+}
+
 // terminate records why a pod's container failed where Kubernetes shows it.
 func terminate(err error) error {
 	_ = os.WriteFile("/dev/termination-log", []byte(err.Error()), 0o600)

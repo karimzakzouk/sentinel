@@ -11,6 +11,8 @@ import (
 	"math/big"
 	"net"
 	"time"
+
+	"software.sslmate.com/src/go-pkcs12"
 )
 
 // Authority is an ephemeral Lab certificate authority. One is minted per
@@ -73,6 +75,19 @@ func (a *Authority) KeyPEM() []byte {
 		return nil
 	}
 	return append([]byte(nil), a.keyPEM...)
+}
+
+// TrustStorePassword is the PKCS#12 password JVM clients expect for the Lab
+// CA truststore (Java's conventional default).
+const TrustStorePassword = pkcs12.DefaultPassword
+
+// TrustStorePKCS12 is a PKCS#12 truststore holding only the Lab CA, for
+// runtimes (notably the JVM) that ignore PEM trust env vars.
+func (a *Authority) TrustStorePKCS12() ([]byte, error) {
+	if a == nil || a.cert == nil {
+		return nil, fmt.Errorf("no Lab CA")
+	}
+	return pkcs12.Legacy.EncodeTrustStore([]*x509.Certificate{a.cert}, TrustStorePassword)
 }
 
 // Issue returns a certificate and key PEM for host, signed by the Lab CA.
