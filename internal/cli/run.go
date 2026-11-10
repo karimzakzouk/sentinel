@@ -26,6 +26,7 @@ import (
 	"github.com/karimzakzouk/sentinel/internal/config"
 	"github.com/karimzakzouk/sentinel/internal/kube"
 	"github.com/karimzakzouk/sentinel/internal/ledger"
+	"github.com/karimzakzouk/sentinel/internal/nodeagent"
 	webui "github.com/karimzakzouk/sentinel/internal/ui"
 	"github.com/karimzakzouk/sentinel/internal/version"
 )
@@ -99,7 +100,7 @@ func runController(ctx context.Context, log *slog.Logger, cfg *config.Config, cl
 
 	var ready atomic.Bool
 	var acting atomic.Pointer[act.Requests]
-	serveErr := make(chan error, 3)
+	serveErr := make(chan error, 4)
 	var captured *capture.Store
 	if cfg.Capture.Address != "" {
 		token, err := os.ReadFile(cfg.Capture.TokenFile)
@@ -112,6 +113,28 @@ func runController(ctx context.Context, log *slog.Logger, cfg *config.Config, cl
 		}}
 		go func() { serveErr <- rx.ListenAndServe() }()
 		log.Info("receiving traffic capture", "address", cfg.Capture.Address)
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer cancel()
+			_ = rx.Shutdown(shutdownCtx)
+		}()
+	}
+	var nodeLogs *nodeagent.Store
+	if cfg.NodeAgent.Address != "" {
+		token, err := os.ReadFile(cfg.NodeAgent.TokenFile)
+		if err != nil {
+			return fmt.Errorf("node agent token: %w", err)
+		}
+		allowed := map[string]bool{}
+		for _, ns := range cfg.Namespaces {
+			allowed[ns] = true
+		}
+		nodeLogs = &nodeagent.Store{Allowed: func(ns string) bool { return allowed[ns] }}
+		rx := &http.Server{Addr: cfg.NodeAgent.Address, ReadHeaderTimeout: 5 * time.Second, Handler: &nodeagent.Receiver{
+			Store: nodeLogs, Token: strings.TrimSpace(string(token)), Log: log,
+		}}
+		go func() { serveErr <- rx.ListenAndServe() }()
+		log.Info("receiving node agent batches", "address", cfg.NodeAgent.Address)
 		defer func() {
 			shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 			defer cancel()
@@ -139,7 +162,7 @@ func runController(ctx context.Context, log *slog.Logger, cfg *config.Config, cl
 		_ = ui.Shutdown(shutdownCtx)
 	}()
 
-	w, requests, err := newObserver(ctx, log, cfg, client, dyn, l, captured)
+	w, requests, err := newObserver(ctx, log, cfg, client, dyn, l, captured, nodeLogs)
 	if err != nil {
 		return err
 	}

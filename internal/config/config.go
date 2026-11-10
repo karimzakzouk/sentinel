@@ -45,6 +45,7 @@ type Config struct {
 	Logs         Logs                   `json:"logs,omitempty"`
 	UI           UI                     `json:"ui,omitempty"`
 	Capture      Capture                `json:"capture,omitempty"`
+	NodeAgent    NodeAgent              `json:"nodeAgent,omitempty"`
 	HealthAddr   string                 `json:"healthAddr,omitempty"`
 	Slots        map[string]slot.Config `json:"slots,omitempty"`
 }
@@ -128,6 +129,14 @@ type OIDC struct {
 // Capture configures the receiver for traffic capture's agent.
 type Capture struct {
 	// Address to receive OTLP traces on; empty when capture is off.
+	Address string `json:"address,omitempty"`
+	// TokenFile holds the bearer token the agent sends.
+	TokenFile string `json:"tokenFile,omitempty"`
+}
+
+// NodeAgent configures the receiver for the tier-1 node agent's batches.
+type NodeAgent struct {
+	// Address to receive JSON log batches on; empty when the agent is off.
 	Address string `json:"address,omitempty"`
 	// TokenFile holds the bearer token the agent sends.
 	TokenFile string `json:"tokenFile,omitempty"`
@@ -246,6 +255,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Capture.Address != "" && !filepath.IsAbs(c.Capture.TokenFile) {
 		errs = append(errs, fmt.Errorf("capture.tokenFile %q must be an absolute path when capture.address is set", c.Capture.TokenFile))
+	}
+	if c.NodeAgent.Address != "" && !filepath.IsAbs(c.NodeAgent.TokenFile) {
+		errs = append(errs, fmt.Errorf("nodeAgent.tokenFile %q must be an absolute path when nodeAgent.address is set", c.NodeAgent.TokenFile))
 	}
 	for name, s := range c.Slots {
 		if s.Champion == "" {

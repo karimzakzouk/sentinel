@@ -1,0 +1,183 @@
+{{- if .Values.nodeAgent.enabled }}
+{{- $token := "" }}
+{{- with lookup "v1" "Secret" .Release.Namespace "sentinel-node-agent-token" }}
+{{- $token = index .data "token" | b64dec }}
+{{- end }}
+{{- if not $token }}
+{{- $token = randAlphaNum 40 }}
+{{- end }}
+# The node agent runs as root to read host pod logs and cgroup files, so it
+# lives in a namespace of its own that allows that; it needs no Kubernetes
+# API access and posts only to the controller.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Values.nodeAgent.namespace }}
+  labels:
+    {{- include "sentinel.labels" . | nindent 4 }}
+    pod-security.kubernetes.io/enforce: privileged
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sentinel-node-agent
+  namespace: {{ .Values.nodeAgent.namespace }}
+  labels:
+    {{- include "sentinel.labels" . | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: sentinel-node-agent-token
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "sentinel.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  token: {{ $token | quote }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: sentinel-node-agent-token
+  namespace: {{ .Values.nodeAgent.namespace }}
+  labels:
+    {{- include "sentinel.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  token: {{ $token | quote }}
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: sentinel-node-agent
+  namespace: {{ .Values.nodeAgent.namespace }}
+  labels:
+    {{- include "sentinel.labels" . | nindent 4 }}
+    app.kubernetes.io/component: node-agent
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sentinel-node-agent
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: sentinel-node-agent
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: node-agent
+      annotations:
+        checksum/token: {{ $token | sha256sum | trunc 16 }}
+    spec:
+      serviceAccountName: sentinel-node-agent
+      enableServiceLinks: false
+      # Root without capabilities, matching the capability probe's shape.
+      securityContext:
+        runAsNonRoot: false
+        runAsUser: 0
+        runAsGroup: 0
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: agent
+          image: {{ include "sentinel.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - node-agent
+            - --log-root=/host/var/log/pods
+            - --cgroup-root=/host/sys/fs/cgroup
+            - --endpoint=http://sentinel-node-agent.{{ .Release.Namespace }}.svc:4319
+            {{- range .Values.watch.namespaces }}
+            - --namespaces={{ . }}
+            {{- end }}
+          env:
+            - name: SENTINEL_NODE_AGENT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: sentinel-node-agent-token
+                  key: token
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: SENTINEL_LOG_LEVEL
+              value: {{ .Values.logLevel | quote }}
+          resources:
+            {{- toYaml .Values.nodeAgent.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsUser: 0
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: pod-logs
+              mountPath: /host/var/log/pods
+              readOnly: true
+            - name: cgroup
+              mountPath: /host/sys/fs/cgroup
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      tolerations:
+        - effect: NoSchedule
+          operator: Exists
+        - effect: NoExecute
+          operator: Exists
+      volumes:
+        - name: pod-logs
+          hostPath:
+            path: /var/log/pods
+            type: Directory
+        - name: cgroup
+          hostPath:
+            path: /sys/fs/cgroup
+            type: Directory
+        - name: tmp
+          emptyDir:
+            sizeLimit: 16Mi
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sentinel-node-agent
+  namespace: {{ .Values.nodeAgent.namespace }}
+  labels:
+    {{- include "sentinel.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: sentinel-node-agent
+  policyTypes: [Ingress, Egress]
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Release.Namespace }}
+          podSelector:
+            matchLabels:
+              {{- include "sentinel.selectorLabels" . | nindent 14 }}
+      ports:
+        - port: 4319
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sentinel-node-agent
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "sentinel.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "sentinel.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: node-agent
+      port: 4319
+      targetPort: node-agent
+{{- end }}

@@ -14,6 +14,9 @@ func readCgroupSamples(cgroupRoot string, pods []PodLog) []CgroupSample {
 	if cgroupRoot == "" || len(pods) == 0 {
 		return nil
 	}
+	if _, err := os.Stat(cgroupRoot); err != nil {
+		return nil
+	}
 	want := map[string]PodLog{}
 	for _, p := range pods {
 		if p.UID == "" {
