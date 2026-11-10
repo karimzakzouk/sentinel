@@ -9,22 +9,26 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
+
+	"github.com/karimzakzouk/sentinel/internal/redact"
 )
 
 // A temp dir of fake kubelet log files is tailed, redacted and posted as a
-// JSON batch the controller accepts.
+// JSON batch; optional cgroup memory.peak and pressure ride along.
 func TestTheAgentTailsFakePodLogsAndPostsABatch(t *testing.T) {
 	root := t.TempDir()
 	podDir := filepath.Join(root, "shop_web-abc_uid-1", "web")
 	if err := os.MkdirAll(podDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	logPath := filepath.Join(podDir, "0.log")
-	line := "2024-01-02T03:04:05.000000000Z stdout F password=s3cret-value-here-ok failed to connect\n"
-	if err := os.WriteFile(logPath, []byte(line), 0o644); err != nil {
+	content := strings.Join([]string{
+		"2024-01-02T03:04:05.000000000Z stdout F password=s3cretValueHereXXXX failed",
+		"2024-01-02T03:04:06.000000000Z stdout F all good",
+	}, "\n") + "\n"
+	if err := os.WriteFile(filepath.Join(podDir, "0.log"), []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	cgroupRoot := t.TempDir()
 	cg := filepath.Join(cgroupRoot, "kubepods-poduid_1.slice")
 	if err := os.MkdirAll(cg, 0o755); err != nil {
@@ -53,58 +57,10 @@ func TestTheAgentTailsFakePodLogsAndPostsABatch(t *testing.T) {
 	cfg := Config{
 		LogRoot: root, CgroupRoot: cgroupRoot, Endpoint: srv.URL, Token: "t0ken",
 		Node: "node-a", Namespaces: map[string]bool{"shop": true}, FromStart: true,
-		Poll: time.Hour, BatchSize: 50,
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	states := map[string]*tailState{}
-	if err := pollOnce(ctx, cfg, nil /* set below */, &Sender{Endpoint: srv.URL, Token: "t0ken"}, states); err != nil {
-		// redact.New needed
+	if err := pollOnce(context.Background(), cfg, redact.New(), &Sender{Endpoint: srv.URL, Token: "t0ken"}, map[string]*tailState{}); err != nil {
 		t.Fatal(err)
 	}
-}
-
-func TestPollOncePostsRedactedLinesAndCgroups(t *testing.T) {
-	root := t.TempDir()
-	podDir := filepath.Join(root, "shop_web-abc_uid-1", "web")
-	if err := os.MkdirAll(podDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	logPath := filepath.Join(podDir, "0.log")
-	content := strings.Join([]string{
-		"2024-01-02T03:04:05.000000000Z stdout F password=s3cretValueHereXXXX failed",
-		"2024-01-02T03:04:06.000000000Z stdout F all good",
-	}, "\n") + "\n"
-	if err := os.WriteFile(logPath, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	cgroupRoot := t.TempDir()
-	cg := filepath.Join(cgroupRoot, "kubepods-poduid_1.slice")
-	if err := os.MkdirAll(cg, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	_ = os.WriteFile(filepath.Join(cg, "memory.peak"), []byte("1048576\n"), 0o644)
-	_ = os.WriteFile(filepath.Join(cg, "memory.pressure"), []byte("some avg10=1.00\n"), 0o644)
-
-	var got Batch
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer t0ken" {
-			http.Error(w, "no", http.StatusUnauthorized)
-			return
-		}
-		_ = json.NewDecoder(r.Body).Decode(&got)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-
-	cfg := Config{
-		LogRoot: root, CgroupRoot: cgroupRoot, Endpoint: srv.URL, Token: "t0ken",
-		Node: "node-a", Namespaces: map[string]bool{"shop": true}, FromStart: true,
-	}
-	// Import redact in pollOnce via agent - use Run's helper with redact.New inside pollOnce
-	// Actually pollOnce takes *redact.Redactor - need to pass one.
-	import_redact_via_poll(t, cfg, &got)
-
 	if got.Node != "node-a" || len(got.Lines) != 2 {
 		t.Fatalf("batch %+v", got)
 	}
@@ -114,19 +70,69 @@ func TestPollOncePostsRedactedLinesAndCgroups(t *testing.T) {
 	if got.Lines[0].Namespace != "shop" || got.Lines[0].Pod != "web-abc" || got.Lines[0].Container != "web" {
 		t.Fatalf("line meta %+v", got.Lines[0])
 	}
-	if len(got.Cgroups) != 1 || got.Cgroups[0].MemoryPeak != 1048576 || got.Cgroups[0].Pressure == "" {
+	if !strings.Contains(got.Lines[0].Text, "failed") || got.Lines[1].Text != "all good" {
+		t.Fatalf("texts %q %q", got.Lines[0].Text, got.Lines[1].Text)
+	}
+	if len(got.Cgroups) != 1 || got.Cgroups[0].MemoryPeak != 1048576 || !strings.Contains(got.Cgroups[0].Pressure, "avg10") {
 		t.Fatalf("cgroups %+v", got.Cgroups)
 	}
 }
 
-func import_redact_via_poll(t *testing.T, cfg Config, got *Batch) {
-	t.Helper()
-	// Re-run through the package's pollOnce with a real redactor by calling
-	// the unexported path via a tiny wrapper in this file's sibling — pollOnce
-	// needs redact.New(). Do it here.
-	runPoll(t, cfg)
-	// got is filled by the server in the caller; re-bind by reusing cfg.Endpoint.
+func TestTheAgentSkipsOtherNamespacesAndSeeksToEnd(t *testing.T) {
+	root := t.TempDir()
+	other := filepath.Join(root, "other_db_uid-2", "db")
+	watch := filepath.Join(root, "shop_api_uid-3", "api")
+	for _, d := range []string{other, watch} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = os.WriteFile(filepath.Join(other, "0.log"), []byte("2024-01-02T03:04:05.000000000Z stdout F secret\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(watch, "0.log"), []byte("2024-01-02T03:04:05.000000000Z stdout F old\n"), 0o644)
+
+	posts := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		posts++
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	states := map[string]*tailState{}
+	cfg := Config{LogRoot: root, Endpoint: srv.URL, Token: "t", Namespaces: map[string]bool{"shop": true}}
+	sender := &Sender{Endpoint: srv.URL, Token: "t"}
+	if err := pollOnce(context.Background(), cfg, redact.New(), sender, states); err != nil {
+		t.Fatal(err)
+	}
+	if posts != 0 {
+		t.Fatalf("first sight from end should post nothing, got %d posts", posts)
+	}
+	if err := os.WriteFile(filepath.Join(watch, "0.log"), []byte(
+		"2024-01-02T03:04:05.000000000Z stdout F old\n"+
+			"2024-01-02T03:04:06.000000000Z stdout F new line\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var got Batch
+	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv2.Close()
+	cfg.Endpoint = srv2.URL
+	sender.Endpoint = srv2.URL
+	if err := pollOnce(context.Background(), cfg, redact.New(), sender, states); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Lines) != 1 || got.Lines[0].Text != "new line" {
+		t.Fatalf("expected only the new line, got %+v", got.Lines)
+	}
 }
 
-// Avoid a circular issue: call poll with redact from a helper in agent_test that
-// imports redact.
+func TestStripCRIPrefix(t *testing.T) {
+	at, text := stripCRIPrefix("2024-01-02T03:04:05.123456789Z stderr F boom")
+	if at.IsZero() || text != "boom" {
+		t.Fatalf("%v %q", at, text)
+	}
+	if _, text := stripCRIPrefix("plain"); text != "plain" {
+		t.Fatalf("%q", text)
+	}
+}
