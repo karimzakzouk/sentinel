@@ -1,6 +1,7 @@
 # Lint, unit tests and build on the self-hosted Azure runner. A short
-# GitHub-hosted wake job starts the VM when it is deallocated; the rest
-# does not spend Actions minutes.
+# GitHub-hosted wake job starts the VM when Actions minutes remain; with a
+# $0 budget it is allowed to fail so a VM already running (or woken with
+# hack/azure-runner/wake.sh) can still take the job.
 name: CI
 
 on:
@@ -21,6 +22,7 @@ jobs:
     name: wake the runner
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    continue-on-error: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -40,6 +42,7 @@ jobs:
   check:
     name: Lint, test, build
     needs: [wake]
+    if: ${{ !cancelled() && (needs.wake.result == 'success' || needs.wake.result == 'failure') }}
     runs-on: [self-hosted, sentinel-lab]
     timeout-minutes: 30
     steps:
