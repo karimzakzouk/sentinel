@@ -167,6 +167,10 @@ func (f *Fixer) process(ctx context.Context, store cache.Store, key string, trie
 		f.Log.Info("fix "+strings.ToLower(string(phase)), "fix", key, "incident", fix.Spec.IncidentID, "pullRequest", fix.Status.PullRequest, "message", msg)
 		return poll, f.setStatus(ctx, &fix, phase, msg)
 	case PhaseProposed:
+		if fix.Spec.CodeOnly {
+			// Only the fix to the code is followed, above.
+			return poll, nil
+		}
 		owner, repo, err := f.Forge.Repo(fix.Status.Repository)
 		if err != nil {
 			return 0, f.setStatus(ctx, &fix, PhaseFailed, err.Error())
@@ -266,6 +270,9 @@ func (f *Fixer) propose(ctx context.Context, fix *v1alpha1.Fix) (v1alpha1.FixPha
 	w := fix.Spec.Workload
 	if w.Kind != "Deployment" {
 		return PhaseAbstained, fmt.Sprintf("the Fixer restores Deployments only so far, not a %s", w.Kind), nil
+	}
+	if fix.Spec.CodeOnly {
+		return f.proposeCode(ctx, fix)
 	}
 	dep, err := f.Client.AppsV1().Deployments(w.Namespace).Get(ctx, w.Name, metav1.GetOptions{})
 	if err != nil {

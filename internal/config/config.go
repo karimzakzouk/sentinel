@@ -33,6 +33,10 @@ type Config struct {
 	// FixerNamespace, when set, is where the Fixer takes Fix requests: the
 	// controller asks it to make each verified rollback hold at its source.
 	FixerNamespace string `json:"fixerNamespace,omitempty"`
+	// CodeFixWithoutRollback asks the Fixer for a fix to the code of a
+	// crash with nothing to roll back, as for a bug older than the newest
+	// revision; off unless set.
+	CodeFixWithoutRollback bool `json:"codeFixWithoutRollback,omitempty"`
 	// ActorUser is the identity that executes actions.
 	ActorUser    string                 `json:"actorUser,omitempty"`
 	Ledger       Ledger                 `json:"ledger"`

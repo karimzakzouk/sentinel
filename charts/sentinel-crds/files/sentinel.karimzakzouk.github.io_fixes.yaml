@@ -58,6 +58,13 @@ spec:
               GitOps owner deploys from, the change that undoes the blamed change. It
               cannot be changed after creation.
             properties:
+              codeOnly:
+                description: |-
+                  CodeOnly asks for a fix to the code alone, for a crash nothing was
+                  rolled back from: FromRevision is the revision that crashes, still
+                  running, and the culprit is the commit that last changed the code the
+                  crash ran through.
+                type: boolean
               crash:
                 description: |-
                   Crash is the stack the failing revision crashed with, when its logs
@@ -208,6 +215,12 @@ spec:
                       one included.
                     format: int32
                     type: integer
+                  base:
+                    description: |-
+                      Base is the commit fixes are measured from: the previous image's, or,
+                      for a crash nothing was rolled back from, the parent of the commit
+                      that last changed the code the crash ran through.
+                    type: string
                   change:
                     items:
                       type: string
