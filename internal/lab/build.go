@@ -245,11 +245,16 @@ func WorldProbes(services []*corev1.Service, prodNS, domain string) []Probe {
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
 	for _, s := range sorted {
 		for _, port := range s.Spec.Ports {
-			if port.Protocol == "" || port.Protocol == corev1.ProtocolTCP {
+			if port.Protocol != "" && port.Protocol != corev1.ProtocolTCP {
+				continue
+			}
+			if host := s.Annotations[FakeHost]; host != "" {
+				out = append(out, Probe{Name: "fake of " + host, Address: hostPort(host, int(port.Port)), Allowed: true})
+			} else {
 				out = append(out, Probe{Name: "copy of " + s.Name + " by its production name",
 					Address: hostPort(s.Name+"."+prodNS+".svc."+domain, int(port.Port)), Allowed: true})
-				break
 			}
+			break
 		}
 	}
 	return append(out, Probe{Name: "API server by name", Address: hostPort("kubernetes.default.svc."+domain, 443)})

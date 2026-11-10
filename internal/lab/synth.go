@@ -14,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/utils/ptr"
 
+	"github.com/karimzakzouk/sentinel/internal/capture"
 	"github.com/karimzakzouk/sentinel/internal/model"
 	"github.com/karimzakzouk/sentinel/internal/topology"
 )
@@ -69,6 +70,9 @@ type World struct {
 	// Digests maps an image, as templates name it, to the digest-pinned
 	// reference production's pods run.
 	Digests map[string]string
+	// Calls are outbound calls traffic capture saw, used to fake outside
+	// hosts with the statuses production got.
+	Calls []capture.Call
 }
 
 // Plan is the Lab's copy of a world, and every way it differs from
@@ -174,9 +178,29 @@ func Synthesize(w World, target model.ObjectRef, ns string) (*Plan, error) {
 		copied[svc.Name] = true
 		plan.Services = append(plan.Services, copyService(svc, ns, note))
 	}
+	faked := map[string]bool{}
 	for _, ref := range closure {
 		for _, host := range topology.ExternalHosts(w.Workloads[ref].Template, w.Namespace, copied) {
-			note("%s names %s, which is outside the Lab and unreachable there", ref, host)
+			if !fakeableHost(host) {
+				note("%s names %s, which is outside the Lab and unreachable there", ref, host)
+				continue
+			}
+			if faked[host] {
+				continue
+			}
+			faked[host] = true
+			fake := fakeOf(host, w.Calls, ns)
+			if reserved[fake.Service.Name] || copied[fake.Service.Name] {
+				return nil, fmt.Errorf("outside host %s fakes as %s, which the Lab already uses", host, fake.Service.Name)
+			}
+			plan.ConfigMaps = append(plan.ConfigMaps, fake.ConfigMap)
+			plan.Services = append(plan.Services, fake.Service)
+			plan.Pods = append(plan.Pods, fake.Pod)
+			if fake.Recorded {
+				note("%s's %s is a fake of the outside service from captured traffic", ref, host)
+			} else {
+				note("%s's %s is a Lab fake of the outside host (no captured statuses)", ref, host)
+			}
 		}
 	}
 	sort.Strings(plan.Fidelity)

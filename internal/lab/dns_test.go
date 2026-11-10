@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 func TestTheZoneAnswersProductionNamesWithLabAddresses(t *testing.T) {
@@ -13,10 +14,14 @@ func TestTheZoneAnswersProductionNamesWithLabAddresses(t *testing.T) {
 	backend.Name = "backend"
 	headless := &corev1.Service{Spec: corev1.ServiceSpec{ClusterIP: corev1.ClusterIPNone}}
 	headless.Name = "peers"
-	zone := Zone([]*corev1.Service{headless, backend}, "shop", "cluster.local")
+	fake := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "fake-api-stripe-com",
+		Annotations: map[string]string{FakeHost: "api.stripe.com"}},
+		Spec: corev1.ServiceSpec{ClusterIP: "10.96.88.88"}}
+	zone := Zone([]*corev1.Service{headless, backend, fake}, "shop", "cluster.local")
 	for _, want := range []string{
 		"backend. IN A 10.96.77.77", "backend.shop. IN A 10.96.77.77",
 		"backend.shop.svc. IN A 10.96.77.77", "backend.shop.svc.cluster.local. IN A 10.96.77.77",
+		"api.stripe.com. IN A 10.96.88.88",
 	} {
 		if !strings.Contains(zone, want+"\n") {
 			t.Errorf("the zone lacks %q:\n%s", want, zone)
