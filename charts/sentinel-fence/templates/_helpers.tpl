@@ -7,8 +7,21 @@ app.kubernetes.io/part-of: sentinel
 helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version }}
 {{- end }}
 
+{{- /* Empty namespace values mean "this release's namespace" so a plain helm install needs no extra --set. */ -}}
+{{- define "fence.controllerNamespace" -}}
+{{- .Values.controller.namespace | default .Release.Namespace -}}
+{{- end }}
+
+{{- define "fence.labNamespace" -}}
+{{- .Values.lab.namespace | default .Release.Namespace -}}
+{{- end }}
+
+{{- define "fence.fixerNamespace" -}}
+{{- .Values.fixer.namespace | default .Release.Namespace -}}
+{{- end }}
+
 {{- define "fence.controllerUser" -}}
-system:serviceaccount:{{ .Values.controller.namespace }}:{{ .Values.controller.serviceAccount }}
+system:serviceaccount:{{ include "fence.controllerNamespace" . }}:{{ .Values.controller.serviceAccount }}
 {{- end }}
 
 {{- define "fence.actorUser" -}}

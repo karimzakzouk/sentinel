@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
-# One-command install: CRDs + Sentinel + fence.
-#   ./hack/sentinel-install.sh --namespaces my-app[,other] [--profile observe|full] [--context CTX]
+# From-source helper for developers with this repo checked out.
+# Companies do not use this — they install the published chart:
+#   helm install sentinel oci://ghcr.io/karimzakzouk/charts/sentinel \
+#     -n sentinel --create-namespace \
+#     --set-json 'global.watchNamespaces=["my-app"]'
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 namespaces=""
@@ -13,22 +16,16 @@ extra=()
 
 usage() {
   cat <<EOF
-Install Sentinel with one Helm release (CRDs, controller, fence).
+From-source install (this git checkout). Companies should use:
 
-Usage:
+  helm install sentinel oci://ghcr.io/karimzakzouk/charts/sentinel \\
+    -n sentinel --create-namespace \\
+    --set-json 'global.watchNamespaces=["my-app"]'
+
+Usage (repo checkout only):
   $(basename "$0") --namespaces NS[,NS...] [--profile observe|full] [helm flags…]
 
-Examples:
-  $(basename "$0") --namespaces shop
-  $(basename "$0") --namespaces shop,payments --profile full
-  $(basename "$0") --namespaces shop --set capture.enabled=true
-
-Profiles:
-  observe  (default) watch and record only
-  full     also install actor + Lab (rollbacks and sealed verification)
-
-Day-2 (policies, kill switch, MITM toggles, LLM/Slack secrets) is the UI:
-  kubectl -n $ns port-forward deploy/sentinel 8090
+Profiles: observe (default) | full (actor + Lab)
 EOF
 }
 
@@ -74,29 +71,18 @@ echo "Installing $release in namespace $ns (profile=$profile)…"
 helm "${helm_ctx[@]}" upgrade --install "$release" "$chart" \
   --namespace "$ns" --create-namespace \
   --set profile="$profile" \
-  --set-json "watch.namespaces=$json_ns" \
   --set-json "global.watchNamespaces=$json_ns" \
+  --set-json "watch.namespaces=$json_ns" \
   --set-json "sentinel-fence.namespaces=$json_ns" \
-  --set "sentinel-fence.controller.namespace=$ns" \
-  --set "sentinel-fence.lab.namespace=$ns" \
-  --set "sentinel-fence.fixer.namespace=$ns" \
   --set-json "sentinel-fence.lab.pool=$lab_pool" \
-  --set "sentinel-fence.lab.sealImage=ghcr.io/karimzakzouk/sentinel:0.1.0" \
   --set "global.labPoolSize=$pool_size" \
+  --set "sentinel-fence.lab.sealImage=ghcr.io/karimzakzouk/sentinel:0.1.0" \
   "${extra[@]}" \
   --wait --timeout 10m
 
 cat <<EOF
 
-Sentinel is up (profile=$profile).
+Sentinel is up (profile=$profile). From-source only — prefer the OCI chart in production.
 
   kubectl -n $ns port-forward deploy/sentinel 8090
-  open http://localhost:8090
-
-Sign in with a Kubernetes token, then:
-  • Cluster — what works here
-  • Settings — kill switch, detection, Slack/LLM secrets, MITM
-  • Policies — let Sentinel act in a namespace
-
-Forge tokens (GitHub App / PAT) stay as kubectl secrets on purpose.
 EOF

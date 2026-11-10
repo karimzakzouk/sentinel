@@ -56,9 +56,6 @@ helm --kube-context "$ctx" upgrade --install sentinel "$root/charts/sentinel" \
   -f "$root/test/e2e/values-sentinel.yaml" \
   --set image.repository="${image%:*}" --set image.tag="${image##*:}" --set image.pullPolicy=Never \
   --set sentinel-fence.lab.sealImage="$image" \
-  --set sentinel-fence.controller.namespace=sentinel \
-  --set sentinel-fence.lab.namespace=sentinel \
-  --set sentinel-fence.fixer.namespace=sentinel \
   ${E2E_ARGOCD:+--set sentinel-fence.argocdNamespace=argocd} \
   ${E2E_FLUX:+--set 'sentinel-fence.fluxNamespaces={flux-system}'} \
   "${argocd[@]}" "${flux[@]}" "${fixer[@]}" \

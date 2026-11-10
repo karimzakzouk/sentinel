@@ -16,19 +16,19 @@ spec:
         resources: ["*/*"]
   matchConditions:
     - name: is-sentinel-fixer
-      expression: request.userInfo.username == "system:serviceaccount:{{ .Values.fixer.namespace }}:{{ .Values.fixer.serviceAccount }}"
+      expression: request.userInfo.username == "system:serviceaccount:{{ include "fence.fixerNamespace" . }}:{{ .Values.fixer.serviceAccount }}"
     # The Lease replicas take in turn, so that one acts at a time, is the
     # only object outside these rules it may write.
     - name: not-its-lease
       expression: >-
         !(request.resource.group == 'coordination.k8s.io' && request.resource.resource == 'leases' &&
-          request.namespace == '{{ .Values.fixer.namespace }}' && request.name == 'sentinel-fixer')
+          request.namespace == '{{ include "fence.fixerNamespace" . }}' && request.name == 'sentinel-fixer')
   variables:
     {{- include "fence.requestVariables" . | nindent 4 }}
   validations:
     - expression: >-
         request.resource.group == 'sentinel.karimzakzouk.github.io' && request.resource.resource == 'fixes' &&
-        variables.subResource == 'status' && request.operation == 'UPDATE' && variables.requestNamespace == '{{ .Values.fixer.namespace }}'
+        variables.subResource == 'status' && request.operation == 'UPDATE' && variables.requestNamespace == '{{ include "fence.fixerNamespace" . }}'
       message: "Sentinel's Fixer may only report on Fixes; it never changes the cluster"
       reason: Forbidden
 ---

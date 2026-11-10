@@ -1,0 +1,40 @@
+# Package and push the Sentinel Helm chart to GHCR as an OCI chart.
+# Companies install: helm install sentinel oci://ghcr.io/<owner>/charts/sentinel
+name: Charts
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: charts-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    name: Publish OCI chart
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Helm
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+      - name: Package
+        run: |
+          helm dependency update charts/sentinel
+          mkdir -p dist
+          helm package charts/sentinel -d dist
+      - name: Push to GHCR
+        env:
+          HELM_EXPERIMENTAL_OCI: "1"
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u ${{ github.actor }} --password-stdin
+          chart=$(ls dist/sentinel-*.tgz)
+          # oci://ghcr.io/<owner>/charts — artifact name is the chart name (sentinel)
+          helm push "$chart" "oci://ghcr.io/${{ github.repository_owner }}/charts"

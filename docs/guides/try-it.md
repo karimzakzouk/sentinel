@@ -5,15 +5,17 @@ half an hour. Run it on a machine with at least 4 CPUs and 12 GB of memory
 (a cloud VM or the CUFE server), not a laptop: the cluster, Online Boutique
 and its load generator need the room.
 
-On a real cluster (not this kind walkthrough), one release is enough:
+On a real cluster (not this kind walkthrough), install the published chart:
 
 ```bash
-./hack/sentinel-install.sh --namespaces my-app --profile observe
-# or --profile full for actor + Lab
+helm install sentinel oci://ghcr.io/karimzakzouk/charts/sentinel \
+  --namespace sentinel --create-namespace \
+  --set-json 'global.watchNamespaces=["my-app"]'
+# optional: --set profile=full
 kubectl -n sentinel port-forward deploy/sentinel 8090
 ```
 
-Day-2 (policies, kill switch, Slack/LLM keys, MITM toggles) is the UI.
+Day-2 (policies, kill switch, Slack/LLM keys, MITM toggles) is the UI. No repo clone.
 
 ## 1. Bring it up
 

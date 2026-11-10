@@ -27,7 +27,7 @@ spec:
          variables.subResource == '' && request.operation == 'CREATE' && variables.requestNamespace in {{ include "fence.labPoolCEL" . }} &&
          object.spec.purpose in ['verify-fix', 'reproduce'] && object.spec.labNamespace == variables.requestNamespace) ||
         (request.resource.group == 'sentinel.karimzakzouk.github.io' && request.resource.resource == 'fixes' &&
-         variables.subResource == '' && request.operation == 'CREATE' && variables.requestNamespace == '{{ .Values.fixer.namespace }}')
+         variables.subResource == '' && request.operation == 'CREATE' && variables.requestNamespace == '{{ include "fence.fixerNamespace" . }}')
       message: "Sentinel's controller may only run dry-run pod probes and access reviews, ask the actor for actions, ask the Lab to verify them and ask the Fixer for fixes; it never changes the cluster directly"
       reason: Forbidden
 ---
