@@ -151,6 +151,10 @@ func Replayable(requests []Request, n int) []Read {
 type Call struct {
 	Host, Method, Path, Route string
 	Port, Status              int
+	// GRPC names the gRPC status when Method is gRPC.
+	GRPC string
+	// ResponseBody is a redacted response body sample when body capture kept one.
+	ResponseBody string
 	// Count is how often this call was seen among the requests.
 	Count int
 }
@@ -191,6 +195,12 @@ func Calls(requests []Request, n int) []Call {
 		a.last = r.Status
 		if r.Route != "" {
 			a.call.Route = r.Route
+		}
+		if r.GRPC != "" {
+			a.call.GRPC = r.GRPC
+		}
+		if r.ResponseBody != "" && a.call.ResponseBody == "" {
+			a.call.ResponseBody = r.ResponseBody
 		}
 	}
 	out := make([]Call, 0, len(by))

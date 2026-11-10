@@ -196,12 +196,10 @@ func newObserver(ctx context.Context, log *slog.Logger, cfg *config.Config, clie
 			lab.Fakes = func(target model.ObjectRef) []v1alpha1.FakeCall {
 				var out []v1alpha1.FakeCall
 				for _, c := range capture.Calls(recent(target), 50) {
-					if c.Method == "gRPC" {
-						continue
-					}
 					out = append(out, v1alpha1.FakeCall{
 						Host: c.Host, Method: c.Method, Path: c.Path,
 						Port: int32(c.Port), Status: int32(c.Status), //nolint:gosec // port and status the agent saw
+						ResponseBody: c.ResponseBody,
 					})
 				}
 				return out

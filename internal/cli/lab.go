@@ -106,6 +106,26 @@ func newLabSealCmd() *cobra.Command {
 	return cmd
 }
 
+func newLabGRPCFakeCmd() *cobra.Command {
+	var routes, listen string
+	cmd := &cobra.Command{
+		Use:    "lab-grpc-fake",
+		Short:  "Answer recorded gRPC statuses for a Lab fake of an outside host",
+		Hidden: true,
+		Args:   cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if err := lab.ServeFakeGRPC(listen, routes); err != nil {
+				return terminate(err)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&routes, "routes", "/etc/lab-fake/grpc-routes", "recorded RPC path and gRPC status code lines")
+	cmd.Flags().StringVar(&listen, "listen", "", "TCP port or address to listen on")
+	_ = cmd.MarkFlagRequired("listen")
+	return cmd
+}
+
 func newLabFakeCmd() *cobra.Command {
 	var cert, key, routes, listen string
 	cmd := &cobra.Command{

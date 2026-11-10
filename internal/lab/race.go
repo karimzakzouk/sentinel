@@ -58,9 +58,23 @@ type Variant struct {
 func DeletionControl(failing *corev1.Pod) *corev1.Pod {
 	pod := failing.DeepCopy()
 	pod.Spec.InitContainers = nil
+	// The probe image runs as root by default; Lab copies are restricted to
+	// non-root, so without an explicit user the deletion control never starts
+	// and each race block waits the full readiness timeout.
+	const nonRoot int64 = 65532
+	if pod.Spec.SecurityContext == nil {
+		pod.Spec.SecurityContext = &corev1.PodSecurityContext{}
+	}
+	pod.Spec.SecurityContext.RunAsNonRoot = ptr.To(true)
+	pod.Spec.SecurityContext.RunAsUser = ptr.To(nonRoot)
 	for i := range pod.Spec.Containers {
 		c := &pod.Spec.Containers[i]
 		c.Image, c.Command, c.Args, c.Lifecycle = Image, nil, []string{"pause"}, nil
+		if c.SecurityContext == nil {
+			c.SecurityContext = &corev1.SecurityContext{}
+		}
+		c.SecurityContext.RunAsNonRoot = ptr.To(true)
+		c.SecurityContext.RunAsUser = ptr.To(nonRoot)
 	}
 	return pod
 }

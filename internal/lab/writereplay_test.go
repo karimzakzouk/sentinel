@@ -7,7 +7,9 @@ import (
 
 	"github.com/karimzakzouk/sentinel/api/v1alpha1"
 	"github.com/karimzakzouk/sentinel/internal/capture"
+	"github.com/karimzakzouk/sentinel/internal/model"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 func TestFromBodiesTurnsCapturesIntoExperimentWrites(t *testing.T) {
@@ -69,7 +71,12 @@ func TestWriteReplayCodesAndPorts(t *testing.T) {
 	if len(got) != 2 || got[0].Port != 8080 || got[1].Port != 9090 {
 		t.Fatalf("ports %+v", got)
 	}
-	if got := SeedNotes([]capture.BodySample{{Method: "POST", Path: "/x"}}); len(got) != 1 || !strings.Contains(got[0], "seeding is not run yet") {
-		t.Fatalf("seed notes %v", got)
+	plan := &Plan{
+		Empty: []model.ObjectRef{{Kind: "StatefulSet", Name: "redis"}},
+		Pods: []*corev1.Pod{{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{CopyOf: "StatefulSet.redis"}},
+			Spec: corev1.PodSpec{Containers: []corev1.Container{{Image: "redis:7"}}}}},
+	}
+	if got := SeedFidelity(plan, []capture.BodySample{{Method: "POST", Path: "/x", Body: "{}"}}); len(got) == 0 || !strings.Contains(got[0], "sentinel:lab:seed") {
+		t.Fatalf("seed fidelity %v", got)
 	}
 }
