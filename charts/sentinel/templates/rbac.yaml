@@ -17,9 +17,14 @@ rules:
   - apiGroups: [apps]
     resources: [deployments, replicasets, statefulsets, daemonsets, controllerrevisions]
     verbs: [get, list, watch]
+  # Argo Rollouts: attribute ReplicaSets to their Rollout when present.
+  - apiGroups: [argoproj.io]
+    resources: [rollouts]
+    verbs: [get, list, watch]
   - apiGroups: [discovery.k8s.io]
     resources: [endpointslices]
     verbs: [get, list, watch]
+
   - apiGroups: [metrics.k8s.io]
     resources: [pods]
     verbs: [get, list]
@@ -131,6 +136,10 @@ rules:
   - apiGroups: [apps]
     resources: [replicasets, controllerrevisions]
     verbs: [get, list]
+  # Abort an Argo Rollouts progressive delivery (status.abort).
+  - apiGroups: [argoproj.io]
+    resources: [rollouts, rollouts/status]
+    verbs: [get, update, patch]
   - apiGroups: [sentinel.karimzakzouk.github.io]
     resources: [actionrequests, sentinelpolicies]
     verbs: [get, list, watch]

@@ -31,6 +31,8 @@ spec:
       expression: "request.resource.group == 'apps' && request.resource.resource in ['deployments', 'statefulsets', 'daemonsets']"
     - name: argoApplication
       expression: "request.resource.group == 'argoproj.io' && request.resource.resource == 'applications'"
+    - name: argoRollout
+      expression: "request.resource.group == 'argoproj.io' && request.resource.resource == 'rollouts'"
     - name: fluxSync
       expression: >-
         (request.resource.group == 'kustomize.toolkit.fluxcd.io' && request.resource.resource == 'kustomizations') ||
@@ -46,11 +48,12 @@ spec:
     - expression: >-
         request.resource.group in ['authorization.k8s.io', 'authentication.k8s.io'] ||
         (request.operation == 'UPDATE' && variables.workload && variables.subResource in ['', 'scale']) ||
+        (request.operation == 'UPDATE' && variables.argoRollout && variables.subResource in ['', 'status']) ||
         (request.operation == 'UPDATE' && request.resource.group == 'sentinel.karimzakzouk.github.io' &&
          request.resource.resource == 'actionrequests' && variables.subResource == 'status'){{ if .Values.argocdNamespace }} ||
         (request.operation == 'UPDATE' && variables.argoApplication && variables.subResource == ''){{ end }}{{ if .Values.fluxNamespaces }} ||
         (request.operation == 'UPDATE' && variables.fluxSync && variables.subResource == ''){{ end }}
-      message: "Sentinel may only update existing Deployments, StatefulSets and DaemonSets, or their scale, and the status of action requests"
+      message: "Sentinel may only update existing Deployments, StatefulSets and DaemonSets, or their scale, abort Argo Rollouts, and the status of action requests"
       reason: Forbidden
     - expression: "variables.subResource != 'scale' || (object.spec.?replicas.orValue(0) >= {{ .Values.replicas.min }} && object.spec.?replicas.orValue(0) <= {{ .Values.replicas.max }})"
       message: "replicas must stay between {{ .Values.replicas.min }} and {{ .Values.replicas.max }}"
@@ -64,6 +67,71 @@ metadata:
     {{- include "fence.labels" . | nindent 4 }}
 spec:
   policyName: sentinel-fence-actor
+  validationActions: [Deny]
+---
+# Argo Rollouts: the actor may only set status.abort (and its companion
+# abortedAt), so a progressive delivery stops and the previous ReplicaSet
+# becomes active; the Rollout's template and strategy stay fixed.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: sentinel-fence-actor-rollouts
+  labels:
+    {{- include "fence.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [argoproj.io]
+        apiVersions: ["*"]
+        operations: [UPDATE]
+        resources: [rollouts, rollouts/status]
+  matchConditions:
+    - name: is-sentinel-actor
+      expression: request.userInfo.username == "{{ include "fence.actorUser" . }}"
+  validations:
+    - expression: "object.spec == oldObject.spec"
+      message: "Sentinel may not change an Argo Rollout's spec"
+      reason: Forbidden
+    - expression: "object.metadata.?labels == oldObject.metadata.?labels"
+      message: "Sentinel may not change an Argo Rollout's labels"
+      reason: Forbidden
+    - expression: "object.metadata.?annotations == oldObject.metadata.?annotations"
+      message: "Sentinel may not change an Argo Rollout's annotations"
+      reason: Forbidden
+    - expression: "object.status.?abort.orValue(false) == true"
+      message: "Sentinel may abort an Argo Rollout, never clear its abort"
+      reason: Forbidden
+    - expression: >-
+        object.status.?blueGreen == oldObject.status.?blueGreen &&
+        object.status.?canary == oldObject.status.?canary &&
+        object.status.?currentPodHash == oldObject.status.?currentPodHash &&
+        object.status.?currentStepHash == oldObject.status.?currentStepHash &&
+        object.status.?currentStepIndex == oldObject.status.?currentStepIndex &&
+        object.status.?pauseConditions == oldObject.status.?pauseConditions &&
+        object.status.?controllerPause == oldObject.status.?controllerPause &&
+        object.status.?replicas == oldObject.status.?replicas &&
+        object.status.?updatedReplicas == oldObject.status.?updatedReplicas &&
+        object.status.?readyReplicas == oldObject.status.?readyReplicas &&
+        object.status.?availableReplicas == oldObject.status.?availableReplicas &&
+        object.status.?collisionCount == oldObject.status.?collisionCount &&
+        object.status.?conditions == oldObject.status.?conditions &&
+        object.status.?observedGeneration == oldObject.status.?observedGeneration &&
+        object.status.?selector == oldObject.status.?selector &&
+        object.status.?stableRS == oldObject.status.?stableRS &&
+        object.status.?phase == oldObject.status.?phase &&
+        object.status.?message == oldObject.status.?message
+      message: "Sentinel may only set an Argo Rollout's abort status"
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: sentinel-fence-actor-rollouts
+  labels:
+    {{- include "fence.labels" . | nindent 4 }}
+spec:
+  policyName: sentinel-fence-actor-rollouts
   validationActions: [Deny]
 ---
 # Deployment updates: replicas within bounds, and the pod template, which a

@@ -6,10 +6,13 @@ import (
 	"fmt"
 	"strings"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+
+	"github.com/karimzakzouk/sentinel/api/v1alpha1"
 )
 
 // Owner adapters act through the GitOps controller that keeps a workload in
@@ -21,12 +24,20 @@ import (
 // then rolls the Deployment back as rollout.undo does.
 const ActionArgoCDRollback = "argocd.rollback"
 
+// ActionRolloutsAbort aborts an Argo Rollouts Rollout: the controller
+// stops the progressive delivery and makes the previous ReplicaSet active
+// again (status.abort), without rewriting the Rollout's template.
+const ActionRolloutsAbort = "rollouts.abort"
+
 // AnnotationPausedSync records on the owner what Sentinel paused, so a
 // person or Sentinel can resume it as it was.
 const AnnotationPausedSync = "sentinel.karimzakzouk.github.io/paused-sync"
 
 // ApplicationsResource is Argo CD's Application.
 var ApplicationsResource = schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applications"}
+
+// RolloutsResource is Argo Rollouts' Rollout.
+var RolloutsResource = schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "rollouts"}
 
 // ActionFluxRollback suspends the Flux Kustomization that applies a
 // Deployment, then rolls the Deployment back as rollout.undo does.
@@ -255,4 +266,46 @@ func unstructuredMap(obj map[string]any, path ...string) (map[string]any, bool, 
 		cur = m
 	}
 	return cur, true, nil
+}
+
+// rolloutsAbort asks Argo Rollouts to stop a progressive delivery and put
+// the previous ReplicaSet back in service, as `kubectl argo rollouts abort`
+// does: status.abort, never a rewrite of the Rollout's template. Flagger
+// canaries stay deferred (refuseReconciled on their Deployments).
+func (a *Actor) rolloutsAbort(ctx context.Context, req *v1alpha1.ActionRequest, dryRun bool) (string, error) {
+	t := req.Spec.Target
+	if t.APIVersion != "argoproj.io/v1alpha1" || t.Kind != "Rollout" {
+		return "", fmt.Errorf("%s applies to Argo Rollouts only", req.Spec.Action)
+	}
+	rollouts := a.Dynamic.Resource(RolloutsResource).Namespace(t.Namespace)
+	ro, err := rollouts.Get(ctx, t.Name, metav1.GetOptions{})
+	if err != nil {
+		return "", fmt.Errorf("the Argo Rollout %s/%s: %w", t.Namespace, t.Name, err)
+	}
+	if aborted, _, _ := unstructuredBool(ro.Object, "status", "abort"); aborted {
+		return fmt.Sprintf("Argo Rollout %s was already aborted", t.Name), nil
+	}
+	// When the request names the failing revision, it must still be the one
+	// Rollouts is advancing, as a Deployment rollback checks its newest hash.
+	if from := req.Spec.Params[ParamFromTemplateHash]; from != "" {
+		hash, _, _ := unstructured.NestedString(ro.Object, "status", "currentPodHash")
+		if hash != "" && hash != from {
+			return "", fmt.Errorf("%s changed since the decision: its current pod hash is %s, not %s", t.Name, hash, from)
+		}
+	}
+	patch := []byte(`{"status":{"abort":true}}`)
+	opts := metav1.PatchOptions{FieldManager: FieldManager}
+	if dryRun {
+		opts.DryRun = []string{metav1.DryRunAll}
+	}
+	// Prefer the status subresource, as `kubectl argo rollouts abort` does;
+	// fall back to the same patch on the object when the CRD has none.
+	_, err = rollouts.Patch(ctx, t.Name, types.MergePatchType, patch, opts, "status")
+	if apierrors.IsNotFound(err) {
+		_, err = rollouts.Patch(ctx, t.Name, types.MergePatchType, patch, opts)
+	}
+	if err != nil {
+		return "", fmt.Errorf("abort Argo Rollout %s: %w", t.Name, err)
+	}
+	return fmt.Sprintf("aborted Argo Rollout %s; the previous ReplicaSet is active again", t.Name), nil
 }
