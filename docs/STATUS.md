@@ -85,7 +85,7 @@ To look at it on a cluster where it runs:
 | 2. Synthesize the stateless world | The world built and proven: synthesis, the Lab DNS (decision 51), production's images under the fence's bounds (decision 50), the seal proven before the world starts and again with it running; Online Boutique's frontend and the ten services it calls ran in a Lab on the development cluster, every copy ready within 95 seconds and answering by its production name, once copies were fitted to Pod Security `restricted` (decision 59) | `TestTheLabBuildsAWorkloadsStatelessWorld`, as the Lab's identity: a front and the backend it calls answer by their production names, the API server's name resolves to nothing, and a canary Secret never reaches the Lab. `TestALabReproductionRunsTheWorldBehindAProvenSeal` in CI's enforcing clusters |
 | 3. Reproduce and judge | Races and verdicts built (decisions 52 and 53): reproduce and verify-fix Experiments, the previous revision as the first candidate, a deletion control. The gate's repetitions passed on the self-hosted runner under Calico | `TestTheLabTellsAFixFromTheFailure` on the development cluster: against a front that crashes as it starts, its previous revision passed after 15 blocks (15 of 15 against 0 of 15), the deletion control failed. Through the Lab in CI, on Calico and Cilium: "the previous revision front-9964bb8bd fixes it: it worked in 15 of 15 runs where the failing revision failed in 15 of 15", and a healthy front's failure "did not reproduce"; kindnet and Flannel were refused. Unit simulations: 3.4% false PASS at the null's edge for α = 5%. The `Lab gate` workflow's first round, on the development cluster: the fix passed in 15 blocks, a revision that still crashes and a deletion-style candidate failed in 3, and a flaky revision raced against itself ran out of its 60 blocks, NOT SURE. The `Lab gate` workflow on the self-hosted runner, Calico, 10 races of each kind at α = 5%: a fix passed 10 of 10 (median 15 blocks); a revision that still crashes and a deletion that does nothing failed 10 of 10 (3 blocks); a flaky revision against itself failed 7 and was NOT SURE 3 (51 blocks). No false PASS in 30 races that must not pass. Beside it, Online Boutique's frontend and the ten services it calls were copied into a sealed world, every copy ready and every name the world asked for provided |
 | Verified rollbacks | The controller asks the Lab about each proposed rollback (decision 54); the verdict joins the incident and its notices; at `lab-verified` it carries the rollback out (decision 57) | On the development cluster a bad image on `web` opened an incident, the controller asked the Lab, and the Lab, refusing a cluster without enforcement, answered NOT SURE within 35 seconds; the verdict shows on the incident page. In CI on Calico and Cilium, a request at `lab-verified` waited while the Lab raced a crashing revision of the front against its predecessor (15 of 15 against 15 of 15), then the actor rolled the front back, approved by the Lab |
-| 4. Datastores and replay | Part built: datastores run empty in the Lab with production's engine and version (decision 78), each secret key has its own placeholder, so a name looked up from one says which secret the world lacks, and a second candidate, the failing revision with its configuration reverted, is raced beside the previous revision (decision 77). With traffic capture on, each run replays up to 20 reads production answered to its copy, which must answer them all (decision 86). **With body capture on, each run also replays up to 20 non-GET writes with redacted bodies and compares response status to production** (decision 105); fidelity notes datastore seeding as a hook only. **Fakes of outside services from captured traffic are built for metadata HTTP and HTTPS with a Lab CA** (decisions 100 and 111): `capture.Calls`, synthesis stubs, Lab DNS, seal positives and trust injection; filled response-body stubs and gRPC fakes are next | Unit tests for the call catalog, synthesis with an external API host, stub status matching and the respond script; write replay from `capture.Bodies`, status comparison and seed notes; a race against a fake cluster where the deletion control stays ready but answers nothing and fails; the replay's script run in the probe image against a server answering 200, 404, 503 and a panic. The race and the Lab's end-to-end tests run on the self-hosted runner, which the soak holds until Thursday |
+| 4. Datastores and replay | Built through first-cut fidelity: datastores run empty (decision 78), secret placeholders, configuration-revert candidate (decision 77), read replay (decision 86), **write replay with status comparison** (decision 105), and **redis/valkey seeding from captured write bodies before write replay** (decision 112). **Outside fakes** use metadata HTTP and HTTPS with a Lab CA (decisions 100 and 111), **optional redacted response bodies** (decision 113), and **gRPC status stubs** (decision 114) from `capture.Calls` | Unit tests for the call catalog, synthesis with an external API host, stub bodies and gRPC routes, write replay and seed fidelity; a race against a fake cluster where the deletion control stays ready but answers nothing and fails; the replay's script run in the probe image. The race and the Lab's end-to-end tests run on the self-hosted runner, which the soak holds until Thursday |
 
 ## Phase 4 progress
 
@@ -107,12 +107,12 @@ To look at it on a cluster where it runs:
 | High availability | Standby replicas for the actor, the Lab and the Fixer (decision 81) | On the development cluster with two of each: one Lease holder each, the fence allowed the Leases, a standby took over a second after the holder was deleted |
 | Console | Sign in with your own token, or through the cluster's identity provider (decision 89); approve, veto, resume, set policies, as yourself (decision 82) | Unit tests of sign-in, the person's own approval, refusals from another page, and of single sign-on's state, nonce and replay checks; on the development cluster a real token signed in, the cluster refused what it may not see, and a bad token got 401; `hack/oidc-live.sh` signs in through a real Dex as a browser would |
 | Fingerprints | fp2 for logged exceptions (decision 84) | One Redis outage logged with two messages is one exception |
-| Traffic capture | Built (decisions 85, 86, 103, 105 and 112): optional OBI agent, per-namespace `capture.requests`, Lab read replay, write replay from `capture.Bodies`, and opt-in body capture (`capture.bodies` with requests, plus chart `capture.exportBodies` for OBI): redacted ~4KiB Body/ResponseBody only when EnabledBodies is on |
+| Traffic capture | Built (decisions 85, 86, 103, 105 and 115): optional OBI agent, per-namespace `capture.requests`, Lab read replay, write replay from `capture.Bodies`, and opt-in body capture (`capture.bodies` with requests, plus chart `capture.exportBodies` for OBI): redacted ~4KiB Body/ResponseBody only when EnabledBodies is on |
 | Argo Rollouts abort | Built (decision 97): `rollouts.abort` sets `status.abort`; Flagger still deferred to its analysis | Unit tests in `internal/actor`, `internal/watcher`, `internal/brain` |
 | Honeytoken Secrets | Built: Lab env and named-key volumes get shape-preserving stand-ins; looking one up through Lab DNS fails the race | Unit tests in `internal/lab` |
 | Outbound call catalog | Built: `capture.Calls` lists distinct client calls for Lab fakes | Unit tests in `internal/capture` |
 | Frontier fakes (HTTP + Lab CA HTTPS) | Built (decisions 100 and 111): outside hosts get a Lab Service + stub; HTTPS gets a Lab-issued leaf and copies trust the ephemeral Lab CA | Unit tests in `internal/lab` (`fake_test`, `ca_test`, synthesis with `api.stripe.com`) |
-| Own faker, mined fix patterns | Metadata HTTP and Lab CA HTTPS built; body capture and write replay built (decisions 103 and 105); filled response-body stubs and gRPC next. **Mined fix patterns: first cut built** (decision 101) |
+| Own faker, mined fix patterns | HTTP, Lab CA HTTPS, response-body stubs and gRPC fakes built (decisions 100, 111, 113 and 114); body capture and write replay with redis/valkey seeding (decisions 103, 105 and 112). **Mined fix patterns: first cut built** (decision 101) |
 | Tier-1 node agent | First cut (decision 102): optional DaemonSet tails `/var/log/pods`, redacts on the node, optional cgroup memory.peak/pressure, posts batches; controller Store + OnBatch log evidence for open incidents | Unit tests in `internal/nodeagent` and `internal/cli` |
 
 ## Acting session
@@ -403,14 +403,13 @@ Full reasoning in [decisions.md](decisions.md).
 
 ## Next
 
-- **Lab realism:** frontier fakes from captured traffic are built for
-  metadata HTTP and HTTPS with a Lab CA (decisions 100 and 111); opt-in
-  body capture and write replay with status comparison are built
-  (decisions 103 and 105); datastore seeding from bodies is fidelity-only
-  for now. Left: filled response-body stubs, gRPC fakes, and HTTPS MITM so
-  bodies appear on TLS-only traffic. Chart `capture.exportBodies` wires OBI
-  JSON body export (decision 112). Honeytoken Secrets that fail a race on DNS
-  lookup are built.
+- **Lab realism:** frontier fakes cover HTTP, Lab CA HTTPS, redacted
+  response bodies and gRPC status stubs (decisions 100, 111, 113 and 114);
+  write replay compares statuses and seeds empty redis or valkey from captured
+  bodies (decisions 105 and 112). Chart `capture.exportBodies` wires OBI JSON
+  body export (decision 115). Left: seeding other datastore engines, typed gRPC
+  payloads, and HTTPS MITM for TLS-only clients. Honeytoken Secrets that fail
+  a race on DNS lookup are built.
 - **More rollback kinds:** DaemonSets, StatefulSets (with approval) and
   Argo Rollouts abort are built; Flagger stays deferred.
 - **Hardening:** baselines that survive restarts and dependency links from
@@ -428,9 +427,9 @@ Full reasoning in [decisions.md](decisions.md).
   started with `hack/azure-runner/wake.sh` when needed (decision 99).
 
 - **Phase 3:** memory and CPU limits race in the Lab before their pull
-  requests; HTTP and HTTPS fakes of outside services from capture are
-  built (decisions 100 and 111), including Lab CA trust injection into
-  copies.
+  requests; outside fakes from capture include HTTP, Lab CA HTTPS,
+  response bodies and gRPC (decisions 100, 111, 113 and 114); datastore
+  seeding runs for redis and valkey (decision 112).
 - **After the soak ends on Thursday:** its report, the network-plugin
   matrix and the Lab's end-to-end tests on the runner, and whether daily
   cycles call for seasonal baselines.

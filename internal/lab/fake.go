@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"encoding/base64"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -34,7 +35,7 @@ func outboundFrom(fakes []v1alpha1.FakeCall) []capture.Call {
 		if f.Host == "" || f.Method == "" || f.Path == "" {
 			continue
 		}
-		out = append(out, capture.Call{Host: f.Host, Method: f.Method, Path: f.Path, Port: int(f.Port), Status: int(f.Status)})
+		out = append(out, capture.Call{Host: f.Host, Method: f.Method, Path: f.Path, Port: int(f.Port), Status: int(f.Status), ResponseBody: f.ResponseBody})
 	}
 	return out
 }
@@ -58,6 +59,8 @@ type Fake struct {
 type fakeRoute struct {
 	Method, Path string
 	Status       int
+	// Body is a redacted response body when capture kept one.
+	Body string
 }
 
 // fakeOf builds a Service, ConfigMap and stub pod for host from calls to it.
@@ -66,7 +69,7 @@ type fakeRoute struct {
 // When ca is set and the host needs TLS (port 443 or an https:// name), the
 // stub mounts a Lab-issued certificate and speaks TLS on those ports.
 func fakeOf(host string, calls []capture.Call, ns string, ca *Authority, https bool) (*Fake, error) {
-	routes, ports, recorded := fakeRoutes(host, calls)
+	routes, grpcs, ports, recorded := fakeRoutes(host, calls)
 	if len(ports) == 0 {
 		if https {
 			ports = []int{443}
@@ -95,14 +98,21 @@ func fakeOf(host string, calls []capture.Call, ns string, ca *Authority, https b
 			Port: int32(p), TargetPort: intstr.FromInt32(targets[i]), //nolint:gosec // port from capture or 80
 		}
 		mode := "plain"
-		if tlsPorts[p] && useTLS {
+		switch {
+		case grpcOnlyPort(host, calls, p) && len(grpcs) > 0:
+			mode = "grpc"
+		case tlsPorts[p] && useTLS:
 			mode = "tls"
 		}
 		listenArgs = append(listenArgs, mode+":"+strconv.Itoa(int(targets[i])))
 	}
+	cmData := map[string]string{"respond.sh": respondScript(routes), "routes": routesFile(routes)}
+	if len(grpcs) > 0 {
+		cmData["grpc-routes"] = grpcRoutesFile(grpcs)
+	}
 	cm := &corev1.ConfigMap{
 		ObjectMeta: worldMeta(ns, name, nil),
-		Data:       map[string]string{"respond.sh": respondScript(routes), "routes": routesFile(routes)},
+		Data:       cmData,
 	}
 	labels := map[string]string{"app": name}
 	meta := worldMeta(ns, name, labels)
@@ -223,6 +233,12 @@ for spec in "$@"; do
           --tls-cert-file /etc/lab-tls/tls.crt --tls-private-key-file /etc/lab-tls/tls.key &
         wait
       fi
+    elif [ "$mode" = grpc ]; then
+      if [ -x /sentinel ]; then
+        while true; do /sentinel lab-grpc-fake --routes=/etc/lab-fake/grpc-routes --listen="$p" || true; done
+      else
+        while true; do busybox nc -l -p "$p" -w 5 -e /bin/true; done
+      fi
     else
       while true; do busybox nc -l -p "$p" -w 5 -e /bin/sh /etc/lab-fake/respond.sh; done
     fi
@@ -239,14 +255,14 @@ func containerPorts(ports []int32) []corev1.ContainerPort {
 	return out
 }
 
-// fakeRoutes lists distinct HTTP method+path statuses for host, most frequent
-// first as Calls ordered them, and the ports those calls used.
-func fakeRoutes(host string, calls []capture.Call) (routes []fakeRoute, ports []int, recorded bool) {
-	seenPath := map[string]bool{}
+// fakeRoutes lists distinct HTTP and gRPC routes for host and the ports those calls used.
+func fakeRoutes(host string, calls []capture.Call) (routes []fakeRoute, grpcs []grpcRoute, ports []int, recorded bool) {
+	seenHTTP := map[string]bool{}
+	seenGRPC := map[string]bool{}
 	seenPort := map[int]bool{}
 	host = strings.ToLower(host)
 	for _, c := range calls {
-		if strings.ToLower(c.Host) != host || c.Method == "" || c.Method == "gRPC" {
+		if strings.ToLower(c.Host) != host || c.Method == "" || c.Path == "" {
 			continue
 		}
 		recorded = true
@@ -254,19 +270,49 @@ func fakeRoutes(host string, calls []capture.Call) (routes []fakeRoute, ports []
 			seenPort[c.Port] = true
 			ports = append(ports, c.Port)
 		}
-		key := c.Method + " " + c.Path
-		if c.Path == "" || seenPath[key] {
+		if c.Method == "gRPC" {
+			if seenGRPC[c.Path] {
+				continue
+			}
+			seenGRPC[c.Path] = true
+			grpcs = append(grpcs, grpcRoute{Path: c.Path, Code: grpcCodeFor(c.GRPC, c.Status)})
 			continue
 		}
-		seenPath[key] = true
+		key := c.Method + " " + c.Path
+		if seenHTTP[key] {
+			continue
+		}
+		seenHTTP[key] = true
 		status := c.Status
 		if status == 0 {
 			status = 200
 		}
-		routes = append(routes, fakeRoute{Method: c.Method, Path: c.Path, Status: status})
+		routes = append(routes, fakeRoute{Method: c.Method, Path: c.Path, Status: status, Body: c.ResponseBody})
 	}
 	sort.Ints(ports)
-	return routes, ports, recorded
+	return routes, grpcs, ports, recorded
+}
+
+// grpcOnlyPort is true when every call on port is gRPC for host.
+func grpcOnlyPort(host string, calls []capture.Call, port int) bool {
+	host = strings.ToLower(host)
+	var httpish, grpcish bool
+	for _, c := range calls {
+		if strings.ToLower(c.Host) != host {
+			continue
+		}
+		if port > 0 && c.Port > 0 && c.Port != port {
+			continue
+		}
+		switch c.Method {
+		case "gRPC":
+			grpcish = true
+		case "":
+		default:
+			httpish = true
+		}
+	}
+	return grpcish && !httpish
 }
 
 // stubStatus is the recorded HTTP status for method+path against calls to
@@ -275,7 +321,7 @@ func fakeRoutes(host string, calls []capture.Call) (routes []fakeRoute, ports []
 func stubStatus(host string, calls []capture.Call, method, path string) int {
 	host = strings.ToLower(host)
 	for _, c := range calls {
-		if strings.ToLower(c.Host) != host || c.Method != method || c.Method == "gRPC" {
+		if strings.ToLower(c.Host) != host || c.Method != method {
 			continue
 		}
 		if pathMatch(c.Path, path) {
@@ -327,7 +373,11 @@ func splitPath(p string) []string {
 func routesFile(routes []fakeRoute) string {
 	var b strings.Builder
 	for _, r := range routes {
-		fmt.Fprintf(&b, "%s %s %d\n", r.Method, r.Path, r.Status)
+		if r.Body == "" {
+			fmt.Fprintf(&b, "%s %s %d\n", r.Method, r.Path, r.Status)
+			continue
+		}
+		fmt.Fprintf(&b, "%s %s %d %s\n", r.Method, r.Path, r.Status, base64.StdEncoding.EncodeToString([]byte(r.Body)))
 	}
 	return b.String()
 }
@@ -341,14 +391,20 @@ func parseRoutes(data string) []fakeRoute {
 			continue
 		}
 		parts := strings.Fields(line)
-		if len(parts) != 3 {
+		if len(parts) < 3 {
 			continue
 		}
 		status, err := strconv.Atoi(parts[2])
 		if err != nil {
 			continue
 		}
-		out = append(out, fakeRoute{Method: parts[0], Path: parts[1], Status: status})
+		route := fakeRoute{Method: parts[0], Path: parts[1], Status: status}
+		if len(parts) >= 4 {
+			if raw, err := base64.StdEncoding.DecodeString(parts[3]); err == nil {
+				route.Body = string(raw)
+			}
+		}
+		out = append(out, route)
 	}
 	return out
 }
@@ -357,15 +413,20 @@ func parseRoutes(data string) []fakeRoute {
 func fakeHTTPHandler(routes []fakeRoute) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		status := 404
+		var body []byte
 		for _, route := range routes {
 			if r.Method == route.Method && pathMatch(route.Path, r.URL.Path) {
 				status = route.Status
+				body = []byte(route.Body)
 				break
 			}
 		}
-		w.Header().Set("Content-Length", "0")
 		w.Header().Set("Connection", "close")
+		w.Header().Set("Content-Length", strconv.Itoa(len(body)))
 		w.WriteHeader(status)
+		if len(body) > 0 {
+			_, _ = w.Write(body)
+		}
 	})
 }
 
@@ -398,17 +459,28 @@ while IFS= read -r line; do
   [ -z "$line" ] && break
 done
 status=404
+body=""
+clen=0
 `)
 	for _, r := range routes {
+		extra := ""
+		if r.Body != "" {
+			b64 := base64.StdEncoding.EncodeToString([]byte(r.Body))
+			extra = fmt.Sprintf("; body=$(printf %%s %s | busybox base64 -d); clen=${#body}", shellQuote(b64))
+		}
 		if strings.Contains(r.Path, "{") {
-			fmt.Fprintf(&b, "if [ \"$method\" = %s ] && path_match %s \"$path\"; then status=%d; fi\n",
-				shellQuote(r.Method), shellQuote(r.Path), r.Status)
+			fmt.Fprintf(&b, "if [ \"$method\" = %s ] && path_match %s \"$path\"; then status=%d%s; fi\n",
+				shellQuote(r.Method), shellQuote(r.Path), r.Status, extra)
 		} else {
-			fmt.Fprintf(&b, "if [ \"$method\" = %s ] && [ \"$path\" = %s ]; then status=%d; fi\n",
-				shellQuote(r.Method), shellQuote(r.Path), r.Status)
+			fmt.Fprintf(&b, "if [ \"$method\" = %s ] && [ \"$path\" = %s ]; then status=%d%s; fi\n",
+				shellQuote(r.Method), shellQuote(r.Path), r.Status, extra)
 		}
 	}
-	b.WriteString(`printf "HTTP/1.1 %s x\r\nContent-Length: 0\r\nConnection: close\r\n\r\n" "$status"
+	b.WriteString(`if [ "$clen" -gt 0 ]; then
+  printf "HTTP/1.1 %s x\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s" "$status" "$clen" "$body"
+else
+  printf "HTTP/1.1 %s x\r\nContent-Length: 0\r\nConnection: close\r\n\r\n" "$status"
+fi
 `)
 	return b.String()
 }

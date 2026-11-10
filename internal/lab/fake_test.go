@@ -3,6 +3,7 @@ package lab
 import (
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -79,7 +80,7 @@ func TestAnExternalAPIHostGetsAFakeServiceAndPod(t *testing.T) {
 		t.Fatalf("copy lacks SSL_CERT_FILE trust: %+v", front.Spec.Containers[0].Env)
 	}
 	for _, want := range []string{
-		"Deployment/shop/front's api.stripe.com is a fake of the outside service from captured traffic; unmatched calls answer 404",
+		"Deployment/shop/front's api.stripe.com is a fake of the outside service from captured traffic; unmatched HTTP calls answer 404; gRPC calls get the recorded status with an empty payload",
 		"Deployment/shop/front's api.stripe.com speaks TLS with a certificate the Lab CA issued",
 		"Deployment/shop/front likely presents a client certificate to an HTTPS fake; pinned or mutual TLS is NOT SURE",
 	} {
@@ -106,7 +107,7 @@ func TestStubStatusMatchesMethodAndPathOrRoute(t *testing.T) {
 		{"POST", "/v1/charges", 502},
 		{"GET", "/v1/charges", 0},
 		{"GET", "/missing", 0},
-		{"gRPC", "/pkg.Svc/Method", 0},
+		{"gRPC", "/pkg.Svc/Method", 200},
 	}
 	for _, tc := range cases {
 		if got := stubStatus("api.example", calls, tc.method, tc.path); got != tc.want {
@@ -157,5 +158,19 @@ func TestTheFakeRespondScriptAnswersRecordedStatuses(t *testing.T) {
 	}
 	if got := ask(http.MethodGet, "/nope"); got != 404 {
 		t.Fatalf("unmatched -> %d", got)
+	}
+}
+
+func TestFakeHTTPHandlerReturnsRecordedResponseBodies(t *testing.T) {
+	h := fakeHTTPHandler([]fakeRoute{{Method: http.MethodGet, Path: "/v1/x", Status: 200, Body: `{"ok":true}`}})
+	req, _ := http.NewRequest(http.MethodGet, "/v1/x", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != 200 || rec.Body.String() != `{"ok":true}` {
+		t.Fatalf("got %d %q", rec.Code, rec.Body.String())
+	}
+	got := parseRoutes(routesFile([]fakeRoute{{Method: http.MethodGet, Path: "/v1/x", Status: 200, Body: "hi"}}))
+	if len(got) != 1 || got[0].Body != "hi" {
+		t.Fatalf("routes %+v", got)
 	}
 }

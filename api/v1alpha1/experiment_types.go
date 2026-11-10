@@ -94,6 +94,10 @@ type FakeCall struct {
 	// +kubebuilder:validation:Minimum=0
 	// +kubebuilder:validation:Maximum=999
 	Status int32 `json:"status"`
+	// ResponseBody is a redacted response body sample when capture.bodies kept one.
+	// +optional
+	// +kubebuilder:validation:MaxLength=4096
+	ResponseBody string `json:"responseBody,omitempty"`
 }
 
 // ValueOverride is one value a candidate sets: a container's resource

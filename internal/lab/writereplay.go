@@ -56,14 +56,6 @@ func bodiesForSeed(writes []v1alpha1.WriteReplay) []capture.BodySample {
 	return out
 }
 
-// SeedNotes says what captured writes would seed in empty datastores; the Lab
-// does not seed yet, only records the hook.
-func SeedNotes(samples []capture.BodySample) []string {
-	if len(samples) == 0 {
-		return nil
-	}
-	return []string{fmt.Sprintf("%d captured writes could seed empty datastores; seeding is not run yet", len(samples))}
-}
 
 // WriteFidelity notes how many writes each run sends and how statuses are
 // judged; emptyDatastores forgives server errors when the response matched
