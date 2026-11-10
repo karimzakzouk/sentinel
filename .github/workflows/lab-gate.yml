@@ -25,31 +25,9 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  wake:
-    name: wake the runner
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          sparse-checkout: |
-            .github/actions
-            hack/azure-runner
-      - uses: ./.github/actions/wake-runner
-        env:
-          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-        with:
-          resource-group: ${{ vars.RUNNER_RESOURCE_GROUP || 'sentinel-ci' }}
-          vm-name: ${{ vars.RUNNER_VM_NAME }}
-
+  # Start the VM with hack/azure-runner/wake.sh when deallocated (decision 99).
   gate:
     name: gate
-    needs: [wake]
-    if: ${{ !cancelled() && (needs.wake.result == 'success' || needs.wake.result == 'failure') }}
     runs-on: [self-hosted, sentinel-lab]
     timeout-minutes: 1440
     env:

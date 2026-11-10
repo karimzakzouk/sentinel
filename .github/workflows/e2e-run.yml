@@ -43,7 +43,7 @@ on:
         type: string
         default: ""
       self-hosted:
-        description: run on Sentinel's self-hosted Azure runner, waking it first
+        description: run on Sentinel's self-hosted Azure runner (start it with hack/azure-runner/wake.sh when deallocated)
         required: false
         type: boolean
         default: false
@@ -52,36 +52,11 @@ permissions:
   contents: read
 
 jobs:
-  # The self-hosted runner deallocates itself when idle; a GitHub-hosted
-  # minute starts it when the account still has Actions minutes. With a $0
-  # budget the wake is blocked: continue anyway so a VM already up (or one
-  # started with hack/azure-runner/wake.sh) can pick the job up.
-  wake:
-    name: wake the runner
-    if: inputs.self-hosted
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          sparse-checkout: |
-            .github/actions
-            hack/azure-runner
-      - uses: ./.github/actions/wake-runner
-        env:
-          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-        with:
-          resource-group: ${{ vars.RUNNER_RESOURCE_GROUP || 'sentinel-ci' }}
-          vm-name: ${{ vars.RUNNER_VM_NAME }}
-
+  # No GitHub-hosted wake: with a $0 Actions budget hosted jobs never start.
+  # Start the VM with hack/azure-runner/wake.sh; the job queues until the
+  # runner is online (decision 99).
   run:
     name: ${{ inputs.network }}${{ inputs.label }}
-    needs: [wake]
-    if: ${{ !cancelled() && (needs.wake.result == 'success' || needs.wake.result == 'skipped' || needs.wake.result == 'failure') }}
     runs-on: ${{ inputs.self-hosted && fromJSON('["self-hosted", "sentinel-lab"]') || 'ubuntu-24.04' }}
     timeout-minutes: 50
     env:
