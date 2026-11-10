@@ -22,6 +22,7 @@ require (
 	sigs.k8s.io/kustomize/api v0.21.2
 	sigs.k8s.io/kustomize/kyaml v0.21.2
 	sigs.k8s.io/yaml v1.6.0
+	software.sslmate.com/src/go-pkcs12 v0.4.0
 )
 
 require (
@@ -107,7 +108,6 @@ require (
 	sigs.k8s.io/json v0.0.0-20250730193827-2d320260d730 // indirect
 	sigs.k8s.io/randfill v1.0.0 // indirect
 	sigs.k8s.io/structured-merge-diff/v6 v6.4.2 // indirect
-	software.sslmate.com/src/go-pkcs12 v0.4.0 // indirect
 )
 
 tool (

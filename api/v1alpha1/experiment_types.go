@@ -61,6 +61,12 @@ type ExperimentSpec struct {
 	// +optional
 	// +kubebuilder:validation:MaxItems=20
 	Writes []WriteReplay `json:"writes,omitempty"`
+	// Seed lists captured bodies used only to fill empty Lab datastores
+	// before write replay when Writes carry no bodies (for example GET
+	// response bodies from capture.bodies).
+	// +optional
+	// +kubebuilder:validation:MaxItems=20
+	Seed []SeedBody `json:"seed,omitempty"`
 	// Fakes lists outbound calls traffic capture saw to outside hosts,
 	// which Lab stubs answer with the recorded HTTP status (metadata only).
 	// +optional
@@ -107,6 +113,19 @@ type ValueOverride struct {
 	// +kubebuilder:validation:Enum=limits.memory;limits.cpu;limits.ephemeral-storage;requests.memory;requests.cpu;requests.ephemeral-storage
 	Field string `json:"field"`
 	Value string `json:"value"`
+}
+
+// SeedBody is one captured body used only to seed empty Lab datastores.
+type SeedBody struct {
+	// Path is the request path the body came from, when known.
+	// +optional
+	// +kubebuilder:validation:Pattern=`^/[^?#\s]*$`
+	// +kubebuilder:validation:MaxLength=1024
+	Path string `json:"path,omitempty"`
+	// Body is the redacted request or response body.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=4096
+	Body string `json:"body"`
 }
 
 // WriteReplay is one non-GET request a run sends its copy.

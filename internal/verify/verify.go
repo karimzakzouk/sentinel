@@ -55,6 +55,9 @@ type Lab struct {
 	// Writes, when body capture is on, returns non-GET requests production
 	// made with bodies, which each run replays to its copy.
 	Writes func(model.ObjectRef) []v1alpha1.WriteReplay
+	// Seed, when body capture is on, returns bodies for empty datastore
+	// seeding (writes preferred, else GET/HEAD response bodies).
+	Seed func(model.ObjectRef) []v1alpha1.SeedBody
 
 	mu        sync.Mutex
 	stores    map[string]cache.Store
@@ -145,6 +148,9 @@ func (l *Lab) ask(ctx context.Context, name string, incident model.ID, target mo
 	}
 	if l.Writes != nil {
 		exp.Spec.Writes = l.Writes(target)
+	}
+	if l.Seed != nil {
+		exp.Spec.Seed = l.Seed(target)
 	}
 	obj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(exp)
 	if err != nil {

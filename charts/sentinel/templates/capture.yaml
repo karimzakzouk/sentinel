@@ -258,8 +258,8 @@ metadata:
     {{- include "sentinel.labels" . | nindent 4 }}
 rules:
   - apiGroups: [""]
-    resources: [secrets]
-    verbs: [get, create]
+    resources: [secrets, configmaps]
+    verbs: [get, create, update, patch]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -271,6 +271,38 @@ metadata:
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
+  name: sentinel-capture-mitm
+subjects:
+  - kind: ServiceAccount
+    name: sentinel-capture
+    namespace: {{ .Values.capture.namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: sentinel-capture-mitm
+  labels:
+    {{- include "sentinel.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [list, watch, get]
+  - apiGroups: [apps]
+    resources: [replicasets]
+    verbs: [get]
+  - apiGroups: [admissionregistration.k8s.io]
+    resources: [mutatingwebhookconfigurations]
+    verbs: [get, patch, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: sentinel-capture-mitm
+  labels:
+    {{- include "sentinel.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
   name: sentinel-capture-mitm
 subjects:
   - kind: ServiceAccount
@@ -306,6 +338,8 @@ spec:
           args:
             - capture-mitm
             - --listen=8888
+            - --webhook-listen=9443
+            - --webhook-config=sentinel-capture-mitm
             - --otlp=http://sentinel-capture.{{ .Release.Namespace }}.svc:4318/v1/traces
             - --token-file=/etc/sentinel-capture/token
             - --namespace={{ .Values.capture.namespace }}
@@ -317,6 +351,8 @@ spec:
           ports:
             - name: mitm
               containerPort: 8888
+            - name: webhook
+              containerPort: 9443
           volumeMounts:
             - name: token
               mountPath: /etc/sentinel-capture
@@ -355,5 +391,39 @@ spec:
     - name: mitm
       port: 8888
       targetPort: mitm
+    - name: webhook
+      port: 443
+      targetPort: webhook
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: sentinel-capture-mitm
+  labels:
+    {{- include "sentinel.labels" . | nindent 4 }}
+webhooks:
+  - name: capture-mitm.sentinel.karimzakzouk.github.io
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: Ignore
+    matchPolicy: Equivalent
+    timeoutSeconds: 5
+    namespaceSelector:
+      matchLabels:
+        sentinel.karimzakzouk.github.io/capture-mitm: inject
+    clientConfig:
+      service:
+        name: sentinel-capture-mitm
+        namespace: {{ .Values.capture.namespace }}
+        path: /
+        port: 443
+      # Replaced at runtime by capture-mitm with the serving certificate.
+      caBundle: Cg==
+    rules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE"]
+        resources: ["pods"]
+        scope: Namespaced
 {{- end }}
 {{- end }}

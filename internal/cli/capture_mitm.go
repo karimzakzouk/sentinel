@@ -18,7 +18,7 @@ import (
 )
 
 func newCaptureMITMCmd(kf *kube.Flags) *cobra.Command {
-	var listen, otlp, tokenFile, caDir, caSecret, namespace string
+	var listen, webhookListen, otlp, tokenFile, caDir, caSecret, namespace, webhookConfig string
 	cmd := &cobra.Command{
 		Use:    "capture-mitm",
 		Short:  "Terminate HTTPS for opted-in clients and post bodies to Sentinel's capture receiver",
@@ -43,7 +43,7 @@ func newCaptureMITMCmd(kf *kube.Flags) *cobra.Command {
 			if namespace == "" {
 				return fmt.Errorf("capture-mitm needs --namespace or POD_NAMESPACE")
 			}
-			certPEM, keyPEM, err := capture.EnsureCASecret(cmd.Context(), client, namespace, caSecret)
+			certPEM, keyPEM, p12, err := capture.EnsureTrustMaterial(cmd.Context(), client, namespace, caSecret)
 			if err != nil {
 				return err
 			}
@@ -58,6 +58,24 @@ func newCaptureMITMCmd(kf *kube.Flags) *cobra.Command {
 			if err := os.WriteFile(keyFile, keyPEM, 0o600); err != nil {
 				return err
 			}
+			_ = os.WriteFile(filepath.Join(caDir, "ca.p12"), p12, 0o600)
+			if err := capture.SyncTrustConfigMap(cmd.Context(), client, namespace, certPEM, p12); err != nil {
+				return err
+			}
+
+			proxyURL := capture.ProxyURLFor(namespace)
+			if webhookListen != "" {
+				serviceDNS := fmt.Sprintf("sentinel-capture-mitm.%s.svc", namespace)
+				wCert, wKey, err := capture.EnsureWebhookTLS(cmd.Context(), client, namespace, serviceDNS, webhookConfig)
+				if err != nil {
+					return err
+				}
+				go func() {
+					h := &capture.InjectWebhook{ProxyURL: proxyURL}
+					_ = capture.ListenAndServeTLS(listenAddr(webhookListen), wCert, wKey, h)
+				}()
+			}
+
 			if err := capture.ServeMITM(capture.MITMConfig{
 				Listen: listen, CACertFile: certFile, CAKeyFile: keyFile,
 				OTLP: otlp, Token: strings.TrimSpace(string(token)),
@@ -71,12 +89,21 @@ func newCaptureMITMCmd(kf *kube.Flags) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&listen, "listen", "8888", "TCP port or address to listen on")
+	cmd.Flags().StringVar(&webhookListen, "webhook-listen", "", "HTTPS address for the pod inject webhook (empty disables it)")
+	cmd.Flags().StringVar(&webhookConfig, "webhook-config", "sentinel-capture-mitm", "MutatingWebhookConfiguration to patch with the serving caBundle")
 	cmd.Flags().StringVar(&otlp, "otlp", "http://sentinel-capture:4318/v1/traces", "OTLP HTTP traces URL")
 	cmd.Flags().StringVar(&tokenFile, "token-file", "/etc/sentinel-capture/token", "bearer token file for the capture receiver")
 	cmd.Flags().StringVar(&caDir, "ca-dir", "/var/run/sentinel-capture-mitm", "directory to write the CA PEM files")
 	cmd.Flags().StringVar(&caSecret, "ca-secret", capture.MITMCASecret, "Secret that holds or receives the capture CA")
 	cmd.Flags().StringVar(&namespace, "namespace", "", "namespace of the CA Secret (defaults to POD_NAMESPACE)")
 	return cmd
+}
+
+func listenAddr(v string) string {
+	if strings.Contains(v, ":") {
+		return v
+	}
+	return ":" + v
 }
 
 func resolvePodWorkload(ctx context.Context, client kubernetes.Interface, clientIP string) (ns, kind, name string, ok bool) {

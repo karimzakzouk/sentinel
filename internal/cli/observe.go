@@ -207,6 +207,9 @@ func newObserver(ctx context.Context, log *slog.Logger, cfg *config.Config, clie
 			lab.Writes = func(target model.ObjectRef) []v1alpha1.WriteReplay {
 				return labpkg.FromBodies(capture.Bodies(recent(target), 20), 20)
 			}
+			lab.Seed = func(target model.ObjectRef) []v1alpha1.SeedBody {
+				return labpkg.FromSeedSamples(capture.SeedSamples(recent(target), 20), 20)
+			}
 		}
 		switch err := lab.Start(ctx); {
 		case err != nil:

@@ -41,7 +41,7 @@ func Reconcile(ctx context.Context, client kubernetes.Interface, dyn dynamic.Int
 			}
 			return
 		}
-		got, err := Apply(ctx, client, t, s.Spec)
+		got, err := ApplyWithDynamic(ctx, client, dyn, t, s.Spec)
 		if err != nil {
 			log.Error("could not apply SentinelSettings", "error", err)
 			_ = setStatus(ctx, dyn, t.AgentNamespace, s, got.Installed, "apply failed: "+err.Error())

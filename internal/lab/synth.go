@@ -243,8 +243,12 @@ func Synthesize(w World, target model.ObjectRef, ns string) (*Plan, error) {
 				continue
 			}
 			ref := model.ObjectRef{Kind: kind, Name: name, Namespace: w.Namespace}
+			hadProxy := hasProxyEnv(plan.Pods[i].Spec)
 			injectTrust(&plan.Pods[i].Spec, note, ref)
 			rewriteProxyEnv(&plan.Pods[i].Spec, note, ref)
+			if !hadProxy && !trustEnvApplied(plan.Pods[i].Spec) {
+				note("%s has HTTPS fakes but neither an HTTP(S)_PROXY to rewrite nor a Lab trust environment override; clients that ignore the mounted CA stay NOT SURE", ref)
+			}
 			if likelyClientAuth(plan.Pods[i].Spec, plan.Fidelity, ref.String()) {
 				note("%s likely presents a client certificate to an HTTPS fake; pinned or mutual TLS is NOT SURE", ref)
 			}

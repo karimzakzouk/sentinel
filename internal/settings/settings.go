@@ -14,6 +14,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/yaml"
 
@@ -72,8 +73,13 @@ type Applied struct {
 
 // Apply writes Spec into the installed ConfigMaps and bumps pod-template
 // annotations so those pods reload. Missing components are skipped and
-// reported on Installed.
+// reported on Installed. dyn may be nil; MITM inject sync then no-ops.
 func Apply(ctx context.Context, client kubernetes.Interface, t Targets, spec v1alpha1.SentinelSettingsSpec) (Applied, error) {
+	return ApplyWithDynamic(ctx, client, nil, t, spec)
+}
+
+// ApplyWithDynamic is Apply plus MITM CA inject sync against SentinelPolicies.
+func ApplyWithDynamic(ctx context.Context, client kubernetes.Interface, dyn dynamic.Interface, t Targets, spec v1alpha1.SentinelSettingsSpec) (Applied, error) {
 	out := Applied{Installed: probe(ctx, client, t)}
 	var parts []string
 	if err := patchController(ctx, client, t, spec); err != nil {
@@ -114,6 +120,14 @@ func Apply(ctx context.Context, client kubernetes.Interface, t Targets, spec v1a
 			}
 		}
 		parts = append(parts, "capture-mitm")
+	}
+	if out.Installed.CaptureMITM {
+		if err := syncMITMInject(ctx, client, dyn, t, spec); err != nil {
+			return out, err
+		}
+		if spec.Capture.MitmInject != nil {
+			parts = append(parts, "capture-mitm-inject")
+		}
 	}
 	if err := bounce(ctx, client, t, out.Installed, spec.LogLevel); err != nil {
 		return out, err

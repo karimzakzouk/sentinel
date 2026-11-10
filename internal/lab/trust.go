@@ -20,11 +20,12 @@ const labTrustStorePath = "/etc/ssl/certs/lab-ca.p12"
 // trustEnv are the environment variables common HTTPS clients read for an
 // extra or replacement CA bundle. Setting them is one portable mechanism;
 // certificate pinning still stays NOT SURE.
-var trustEnv = []string{"SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "NODE_EXTRA_CA_CERTS"}
+var trustEnv = []string{"SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "NODE_EXTRA_CA_CERTS", "CURL_CA_BUNDLE", "AWS_CA_BUNDLE"}
 
 // injectTrust mounts the Lab CA (PEM and PKCS#12) and sets trust environment
 // variables on a copied pod so its HTTPS clients accept Lab-issued fake
-// certificates. Existing values of those variables are left alone.
+// certificates. Existing values of those variables are left alone, except a
+// literal JAVA_TOOL_OPTIONS is appended with Lab truststore opts when missing.
 // HTTPS_PROXY rewriting for MITM clients is rewriteProxyEnv's job.
 func injectTrust(spec *corev1.PodSpec, note func(string, ...any), ref interface{ String() string }) {
 	if spec == nil {
@@ -47,6 +48,7 @@ func injectTrust(spec *corev1.PodSpec, note func(string, ...any), ref interface{
 	})
 	kept := map[string]bool{}
 	jvmOpts := "-Djavax.net.ssl.trustStore=" + labTrustStorePath + " -Djavax.net.ssl.trustStorePassword=" + TrustStorePassword + " -Djavax.net.ssl.trustStoreType=PKCS12"
+	setAnyTrust := false
 	for _, cs := range [][]corev1.Container{spec.InitContainers, spec.Containers} {
 		for i := range cs {
 			c := &cs[i]
@@ -60,27 +62,77 @@ func injectTrust(spec *corev1.PodSpec, note func(string, ...any), ref interface{
 					continue
 				}
 				c.Env = append(c.Env, corev1.EnvVar{Name: name, Value: labCAPath})
+				setAnyTrust = true
 			}
-			if !hasEnv(c.Env, "JAVA_TOOL_OPTIONS") {
+			switch {
+			case !hasEnv(c.Env, "JAVA_TOOL_OPTIONS"):
 				c.Env = append(c.Env, corev1.EnvVar{Name: "JAVA_TOOL_OPTIONS", Value: jvmOpts})
-			} else {
-				kept["JAVA_TOOL_OPTIONS"] = true
+				setAnyTrust = true
+			default:
+				if e := envVar(c.Env, "JAVA_TOOL_OPTIONS"); e != nil && e.ValueFrom == nil {
+					if !strings.Contains(e.Value, labTrustStorePath) {
+						e.Value = strings.TrimSpace(e.Value + " " + jvmOpts)
+						setAnyTrust = true
+					}
+				} else {
+					kept["JAVA_TOOL_OPTIONS"] = true
+				}
 			}
 		}
 	}
-	note("%s trusts the Lab CA at %s via SSL_CERT_FILE, REQUESTS_CA_BUNDLE, NODE_EXTRA_CA_CERTS and a PKCS#12 truststore for the JVM where unset; certificate pinning stays NOT SURE",
+	note("%s trusts the Lab CA at %s via SSL_CERT_FILE, REQUESTS_CA_BUNDLE, NODE_EXTRA_CA_CERTS, CURL_CA_BUNDLE, AWS_CA_BUNDLE and a PKCS#12 truststore for the JVM where unset; certificate pinning stays NOT SURE",
 		ref, labCAPath)
 	for _, name := range append(append([]string{}, trustEnv...), "JAVA_TOOL_OPTIONS") {
 		if kept[name] {
 			note("%s already sets %s; the Lab CA was mounted but that variable was left as production set it", ref, name)
 		}
 	}
+	if !setAnyTrust {
+		note("%s already sets every Lab trust environment variable; the CA was mounted but no trust override was applied", ref)
+	}
 }
 
 func hasEnv(env []corev1.EnvVar, name string) bool {
-	for _, e := range env {
-		if e.Name == name {
-			return true
+	return envVar(env, name) != nil
+}
+
+func envVar(env []corev1.EnvVar, name string) *corev1.EnvVar {
+	for i := range env {
+		if env[i].Name == name {
+			return &env[i]
+		}
+	}
+	return nil
+}
+
+// hasProxyEnv reports whether any container already sets an HTTP(S)_PROXY value.
+func hasProxyEnv(spec corev1.PodSpec) bool {
+	for _, c := range append(append([]corev1.Container{}, spec.InitContainers...), spec.Containers...) {
+		for _, e := range c.Env {
+			if isProxyEnv(e.Name) && e.Value != "" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// trustEnvApplied is true when at least one Lab trust variable points at the
+// Lab CA path or JAVA_TOOL_OPTIONS names the Lab truststore.
+func trustEnvApplied(spec corev1.PodSpec) bool {
+	for _, c := range append(append([]corev1.Container{}, spec.InitContainers...), spec.Containers...) {
+		for _, e := range c.Env {
+			if e.ValueFrom != nil {
+				continue
+			}
+			for _, name := range trustEnv {
+				if e.Name == name && e.Value == labCAPath {
+					return true
+				}
+			}
+			if e.Name == "JAVA_TOOL_OPTIONS" && strings.Contains(e.Value, labTrustStorePath) {
+				return true
+			}
 		}
 	}
 	return false

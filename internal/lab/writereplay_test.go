@@ -80,3 +80,15 @@ func TestWriteReplayCodesAndPorts(t *testing.T) {
 		t.Fatalf("seed fidelity %v", got)
 	}
 }
+
+func TestSamplesForSeedFallsBackToSpecSeed(t *testing.T) {
+	if got := samplesForSeed(nil, []v1alpha1.SeedBody{{Path: "/a", Body: `{"x":1}`}}); len(got) != 1 || got[0].Body != `{"x":1}` {
+		t.Fatalf("fallback %+v", got)
+	}
+	if got := samplesForSeed([]v1alpha1.WriteReplay{{Method: "POST", Path: "/w", Body: "w"}}, []v1alpha1.SeedBody{{Body: "s"}}); len(got) != 1 || got[0].Body != "w" {
+		t.Fatalf("prefer writes %+v", got)
+	}
+	if got := FromSeedSamples([]capture.BodySample{{Path: "/g", ResponseBody: "rb"}}, 5); len(got) != 1 || got[0].Body != "rb" {
+		t.Fatalf("FromSeedSamples %+v", got)
+	}
+}
