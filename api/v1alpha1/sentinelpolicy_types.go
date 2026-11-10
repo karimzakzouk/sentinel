@@ -91,11 +91,9 @@ type Capture struct {
 	// is also on.
 	// +optional
 	Requests bool `json:"requests,omitempty"`
-	// Bodies is an opt-in to also keep redacted request and response bodies
-	// (capped), only when Requests is on. Off by default. The body recorder
-	// is not fully live yet, so this field reserves the policy switch the
-	// console exposes; turning it on stores no bodies until the agent and
-	// controller keep them.
+	// Bodies also keeps redacted request and response bodies (capped), only
+	// when Requests is on. Off by default. Full TLS interception is not
+	// required: bodies arrive only when the capture agent includes them.
 	// +optional
 	Bodies bool `json:"bodies,omitempty"`
 }

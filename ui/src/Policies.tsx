@@ -103,7 +103,7 @@ function PolicyCard({ policy, onSaved }: { policy: Policy; onSaved: () => void }
       </label>
       <label
         className="check capture"
-        title="Reserves the policy switch for a body recorder that is not fully live yet; turning it on stores no bodies today"
+        title="Also keep redacted request and response bodies, capped ~4KiB, for Lab write replay. Only with request details on."
       >
         <input
           type="checkbox"

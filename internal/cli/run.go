@@ -107,7 +107,10 @@ func runController(ctx context.Context, log *slog.Logger, cfg *config.Config, cl
 		if err != nil {
 			return fmt.Errorf("capture token: %w", err)
 		}
-		captured = &capture.Store{Enabled: func(ns string) bool { r := acting.Load(); return r != nil && r.Capture(ns) }}
+		captured = &capture.Store{
+			Enabled:       func(ns string) bool { r := acting.Load(); return r != nil && r.Capture(ns) },
+			EnabledBodies: func(ns string) bool { r := acting.Load(); return r != nil && r.CaptureBodies(ns) },
+		}
 		rx := &http.Server{Addr: cfg.Capture.Address, ReadHeaderTimeout: 5 * time.Second, Handler: &capture.Receiver{
 			Store: captured, Token: strings.TrimSpace(string(token)), Log: log,
 		}}

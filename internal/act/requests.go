@@ -122,6 +122,12 @@ func (r *Requests) Capture(namespace string) bool {
 	return policy.Capture(r.namespacePolicies(namespace))
 }
 
+// CaptureBodies reports whether the namespace's policies also keep
+// request and response bodies (only with capture.requests).
+func (r *Requests) CaptureBodies(namespace string) bool {
+	return policy.CaptureBodies(r.namespacePolicies(namespace))
+}
+
 // Earned reports whether the namespace's policies make an action earn its
 // level through its track record.
 func (r *Requests) Earned(namespace, action string) bool {

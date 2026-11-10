@@ -212,7 +212,8 @@ export interface Evidence {
 }
 
 // CapturedRequest is one request a workload served, or one call it made,
-// as traffic capture saw it: never a body or a header.
+// as traffic capture saw it: never a header. body/responseBody only when
+// the namespace's policy sets capture.bodies.
 export interface CapturedRequest {
   served: boolean;
   method: string;
@@ -224,6 +225,8 @@ export interface CapturedRequest {
   grpc?: string;
   duration: number;
   at: string;
+  body?: string;
+  responseBody?: string;
 }
 
 async function get<T>(path: string): Promise<T> {

@@ -177,3 +177,69 @@ func TestGRPCCallsAreKeptAndDatastoreStatementsAreNot(t *testing.T) {
 		t.Fatalf("kept a datastore's statement: %+v", q)
 	}
 }
+
+// Bodies stay out of the store unless EnabledBodies says so, even when
+// the OTLP span carries them. When on, they are redacted and capped.
+func TestBodiesAreKeptOnlyWhenEnabledBodies(t *testing.T) {
+	secret := "ghp_" + strings.Repeat("a1B2", 9)
+	withBodies := `{"resourceSpans": [{
+  "resource": {"attributes": [
+    {"key": "k8s.namespace.name", "value": {"stringValue": "shop"}},
+    {"key": "k8s.deployment.name", "value": {"stringValue": "cart"}}]},
+  "scopeSpans": [{"spans": [
+    {"name": "POST /checkout", "kind": 2, "startTimeUnixNano": "1762700000000000000", "endTimeUnixNano": "1762700000100000000",
+     "attributes": [
+       {"key": "http.request.method", "value": {"stringValue": "POST"}},
+       {"key": "url.path", "value": {"stringValue": "/checkout"}},
+       {"key": "http.response.status_code", "value": {"intValue": "200"}},
+       {"key": "http.request.body.content", "value": {"stringValue": "{\"token\":\"` + secret + `\"}"}},
+       {"key": "http.response.body.content", "value": {"stringValue": "{\"ok\":true}"}}]}]}]}]}`
+
+	post := func(store *Store) {
+		rc := &Receiver{Store: store, Token: "t0ken"}
+		req := httptest.NewRequest(http.MethodPost, "/v1/traces", strings.NewReader(withBodies))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer t0ken")
+		w := httptest.NewRecorder()
+		rc.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("traces: %d", w.Code)
+		}
+	}
+	cart := model.ObjectRef{Group: "apps", Kind: "Deployment", Namespace: "shop", Name: "cart"}
+
+	meta := &Store{Enabled: func(ns string) bool { return ns == "shop" }}
+	post(meta)
+	got := meta.Recent(cart, time.Time{})
+	if len(got) != 1 || got[0].Body != "" || got[0].ResponseBody != "" {
+		t.Fatalf("metadata path kept bodies: %+v", got)
+	}
+
+	full := &Store{
+		Enabled:       func(ns string) bool { return ns == "shop" },
+		EnabledBodies: func(ns string) bool { return ns == "shop" },
+	}
+	post(full)
+	got = full.Recent(cart, time.Time{})
+	if len(got) != 1 || got[0].Body == "" || strings.Contains(got[0].Body, "ghp_") || got[0].ResponseBody != `{"ok":true}` {
+		t.Fatalf("bodies %+v", got[0])
+	}
+	samples := Bodies(got, 5)
+	if len(samples) != 1 || samples[0].Method != "POST" || samples[0].Path != "/checkout" || samples[0].Body == "" {
+		t.Fatalf("Bodies helper %+v", samples)
+	}
+	if empty := Bodies([]Request{{Method: "GET", Body: "x"}, {Method: "POST"}}, 5); len(empty) != 0 {
+		t.Fatalf("GET or empty body should stay out: %+v", empty)
+	}
+}
+
+func TestClippedBodyCapsAtAbout4KiB(t *testing.T) {
+	big := strings.Repeat("a", bodyMax+100)
+	got := clippedBody(big)
+	if len(got) != bodyMax {
+		t.Fatalf("len %d", len(got))
+	}
+	if clippedBody("") != "" {
+		t.Fatal("empty")
+	}
+}
