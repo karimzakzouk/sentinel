@@ -41,6 +41,7 @@ type Targets struct {
 	FixerDeploy      string
 	LabDeploy        string
 	CaptureDaemonSet string
+	CaptureMITM      string
 }
 
 // DefaultTargets are the chart's fixed names.
@@ -59,6 +60,7 @@ func DefaultTargets(agentNamespace string) Targets {
 		FixerDeploy:      "sentinel-fixer",
 		LabDeploy:        "sentinel-lab",
 		CaptureDaemonSet: "sentinel-capture",
+		CaptureMITM:      "sentinel-capture-mitm",
 	}
 }
 
@@ -96,6 +98,23 @@ func Apply(ctx context.Context, client kubernetes.Interface, t Targets, spec v1a
 		}
 		parts = append(parts, "capture")
 	}
+	if out.Installed.CaptureMITM && spec.Capture.MitmEnabled != nil {
+		replicas := int32(0)
+		if *spec.Capture.MitmEnabled {
+			replicas = 1
+		}
+		scale, err := client.AppsV1().Deployments(t.CaptureNamespace).GetScale(ctx, t.CaptureMITM, metav1.GetOptions{})
+		if err != nil {
+			return out, fmt.Errorf("capture mitm scale: %w", err)
+		}
+		if scale.Spec.Replicas != replicas {
+			scale.Spec.Replicas = replicas
+			if _, err := client.AppsV1().Deployments(t.CaptureNamespace).UpdateScale(ctx, t.CaptureMITM, scale, metav1.UpdateOptions{FieldManager: "sentinel-settings"}); err != nil {
+				return out, fmt.Errorf("capture mitm scale: %w", err)
+			}
+		}
+		parts = append(parts, "capture-mitm")
+	}
 	if err := bounce(ctx, client, t, out.Installed, spec.LogLevel); err != nil {
 		return out, err
 	}
@@ -108,12 +127,17 @@ func probe(ctx context.Context, client kubernetes.Interface, t Targets) v1alpha1
 		_, err := client.CoreV1().ConfigMaps(ns).Get(ctx, name, metav1.GetOptions{})
 		return err == nil
 	}
+	hasDeploy := func(ns, name string) bool {
+		_, err := client.AppsV1().Deployments(ns).Get(ctx, name, metav1.GetOptions{})
+		return err == nil
+	}
 	return v1alpha1.InstalledComponents{
-		Actor:     hasCM(t.ActorNamespace, t.ActorCM),
-		Lab:       hasCM(t.AgentNamespace, t.LabCM),
-		Fixer:     hasCM(t.AgentNamespace, t.FixerCM),
-		Capture:   hasCM(t.CaptureNamespace, t.CaptureCM),
-		NodeAgent: hasCM(t.AgentNamespace, "sentinel-node-agent-token") || hasCM("sentinel-node-agent", "sentinel-node-agent-token"),
+		Actor:       hasCM(t.ActorNamespace, t.ActorCM),
+		Lab:         hasCM(t.AgentNamespace, t.LabCM),
+		Fixer:       hasCM(t.AgentNamespace, t.FixerCM),
+		Capture:     hasCM(t.CaptureNamespace, t.CaptureCM),
+		CaptureMITM: hasDeploy(t.CaptureNamespace, t.CaptureMITM),
+		NodeAgent:   hasCM(t.AgentNamespace, "sentinel-node-agent-token") || hasCM("sentinel-node-agent", "sentinel-node-agent-token"),
 	}
 }
 

@@ -29,6 +29,10 @@ const ActionArgoCDRollback = "argocd.rollback"
 // again (status.abort), without rewriting the Rollout's template.
 const ActionRolloutsAbort = "rollouts.abort"
 
+// ActionFlaggerAbort aborts a Flagger Canary: status.phase Failed, so
+// Flagger rolls the primary back, without rewriting the target Deployment.
+const ActionFlaggerAbort = "flagger.abort"
+
 // AnnotationPausedSync records on the owner what Sentinel paused, so a
 // person or Sentinel can resume it as it was.
 const AnnotationPausedSync = "sentinel.karimzakzouk.github.io/paused-sync"
@@ -38,6 +42,9 @@ var ApplicationsResource = schema.GroupVersionResource{Group: "argoproj.io", Ver
 
 // RolloutsResource is Argo Rollouts' Rollout.
 var RolloutsResource = schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "rollouts"}
+
+// CanariesResource is Flagger's Canary.
+var CanariesResource = schema.GroupVersionResource{Group: "flagger.app", Version: "v1beta1", Resource: "canaries"}
 
 // ActionFluxRollback suspends the Flux Kustomization that applies a
 // Deployment, then rolls the Deployment back as rollout.undo does.
@@ -270,8 +277,7 @@ func unstructuredMap(obj map[string]any, path ...string) (map[string]any, bool, 
 
 // rolloutsAbort asks Argo Rollouts to stop a progressive delivery and put
 // the previous ReplicaSet back in service, as `kubectl argo rollouts abort`
-// does: status.abort, never a rewrite of the Rollout's template. Flagger
-// canaries stay deferred (refuseReconciled on their Deployments).
+// does: status.abort, never a rewrite of the Rollout's template.
 func (a *Actor) rolloutsAbort(ctx context.Context, req *v1alpha1.ActionRequest, dryRun bool) (string, error) {
 	t := req.Spec.Target
 	if t.APIVersion != "argoproj.io/v1alpha1" || t.Kind != "Rollout" {
@@ -308,4 +314,46 @@ func (a *Actor) rolloutsAbort(ctx context.Context, req *v1alpha1.ActionRequest, 
 		return "", fmt.Errorf("abort Argo Rollout %s: %w", t.Name, err)
 	}
 	return fmt.Sprintf("aborted Argo Rollout %s; the previous ReplicaSet is active again", t.Name), nil
+}
+
+// flaggerAbort asks Flagger to fail the canary analysis so it rolls the
+// primary back: status.phase Failed, never a rewrite of the target
+// Deployment (those stay refused by refuseReconciled).
+func (a *Actor) flaggerAbort(ctx context.Context, req *v1alpha1.ActionRequest, dryRun bool) (string, error) {
+	t := req.Spec.Target
+	if !strings.HasPrefix(t.APIVersion, "flagger.app/") || t.Kind != "Canary" {
+		return "", fmt.Errorf("%s applies to Flagger Canaries only", req.Spec.Action)
+	}
+	canaries := a.Dynamic.Resource(CanariesResource).Namespace(t.Namespace)
+	c, err := canaries.Get(ctx, t.Name, metav1.GetOptions{})
+	if err != nil {
+		return "", fmt.Errorf("the Flagger Canary %s/%s: %w", t.Namespace, t.Name, err)
+	}
+	phase, _, _ := unstructured.NestedString(c.Object, "status", "phase")
+	switch phase {
+	case "Failed":
+		return fmt.Sprintf("Flagger Canary %s was already failed", t.Name), nil
+	case "Succeeded", "Terminated", "Terminating":
+		return "", fmt.Errorf("Flagger Canary %s is %s; there is no progressive delivery to abort", t.Name, phase)
+	}
+	if from := req.Spec.Params[ParamFromTemplateHash]; from != "" {
+		// lastAppliedSpec is Flagger's fingerprint of the advancing target.
+		applied, _, _ := unstructured.NestedString(c.Object, "status", "lastAppliedSpec")
+		if applied != "" && applied != from {
+			return "", fmt.Errorf("%s changed since the decision: its last applied spec is %s, not %s", t.Name, applied, from)
+		}
+	}
+	patch := []byte(`{"status":{"phase":"Failed"}}`)
+	opts := metav1.PatchOptions{FieldManager: FieldManager}
+	if dryRun {
+		opts.DryRun = []string{metav1.DryRunAll}
+	}
+	_, err = canaries.Patch(ctx, t.Name, types.MergePatchType, patch, opts, "status")
+	if apierrors.IsNotFound(err) {
+		_, err = canaries.Patch(ctx, t.Name, types.MergePatchType, patch, opts)
+	}
+	if err != nil {
+		return "", fmt.Errorf("abort Flagger Canary %s: %w", t.Name, err)
+	}
+	return fmt.Sprintf("aborted Flagger Canary %s; Flagger will roll the primary back", t.Name), nil
 }

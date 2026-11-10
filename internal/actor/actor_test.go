@@ -100,7 +100,8 @@ func newActor(t *testing.T, replicas int32, policies ...*v1alpha1.SentinelPolicy
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
 		map[schema.GroupVersionResource]string{PoliciesResource: "SentinelPolicyList", RequestsResource: "ActionRequestList",
 			ApplicationsResource: "ApplicationList", ApplicationSetsResource: "ApplicationSetList", KustomizationsResource: "KustomizationList",
-			HelmReleasesResource: "HelmReleaseList", ExperimentsResource: "ExperimentList", RolloutsResource: "RolloutList"}, objects...)
+			HelmReleasesResource: "HelmReleaseList", ExperimentsResource: "ExperimentList", RolloutsResource: "RolloutList",
+			CanariesResource: "CanaryList"}, objects...)
 	dyn.PrependReactor("patch", "*", func(action k8stesting.Action) (bool, runtime.Object, error) {
 		if p, ok := action.(k8stesting.PatchActionImpl); ok && len(p.PatchOptions.DryRun) > 0 {
 			return true, &unstructured.Unstructured{Object: map[string]any{}}, nil
@@ -753,7 +754,7 @@ func TestAnArgoRolloutIsAborted(t *testing.T) {
 }
 
 // A Deployment Flagger promotes as a canary's primary is Flagger's to roll
-// back: the actor defers to its analysis.
+// back through the Canary, not a Deployment template rewrite.
 func TestAFlaggerPrimaryIsLeftToFlagger(t *testing.T) {
 	a, client, _ := newActor(t, 1, sentinelPolicy(v1alpha1.AutonomyAutonomous, ActionRolloutUndo))
 	dep, _ := client.AppsV1().Deployments("shop").Get(ctx, "web", metav1.GetOptions{})
@@ -764,5 +765,48 @@ func TestAFlaggerPrimaryIsLeftToFlagger(t *testing.T) {
 	phase, msg := a.Handle(ctx, request(ActionRolloutUndo, map[string]string{ParamFromTemplateHash: "bbb"}))
 	if phase != v1alpha1.ActionFailed || !strings.Contains(msg, "Flagger's canary web") {
 		t.Fatalf("%s %s", phase, msg)
+	}
+}
+
+// A Flagger Canary is aborted by failing its analysis (status.phase), which
+// rolls the primary back without rewriting the target Deployment.
+func TestAFlaggerCanaryIsAborted(t *testing.T) {
+	a, _, _ := newActor(t, 1, sentinelPolicy(v1alpha1.AutonomyAutonomous, ActionFlaggerAbort))
+	c := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "flagger.app/v1beta1", "kind": "Canary",
+		"metadata": map[string]any{"name": "web", "namespace": "shop"},
+		"spec":     map[string]any{"targetRef": map[string]any{"apiVersion": "apps/v1", "kind": "Deployment", "name": "web"}},
+		"status":   map[string]any{"phase": "Progressing", "lastAppliedSpec": "bbb"},
+	}}
+	if _, err := a.Dynamic.Resource(CanariesResource).Namespace("shop").Create(ctx, c, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	req := &v1alpha1.ActionRequest{ObjectMeta: metav1.ObjectMeta{Name: "req", Namespace: "shop"},
+		Spec: v1alpha1.ActionRequestSpec{IncidentID: "inc-1", Action: ActionFlaggerAbort, Reason: "test",
+			Params:    map[string]string{ParamFromTemplateHash: "bbb"},
+			ExpiresAt: metav1.NewTime(t0.Add(10 * time.Minute)),
+			Target:    v1alpha1.TargetRef{APIVersion: "flagger.app/v1beta1", Kind: "Canary", Namespace: "shop", Name: "web"}}}
+	if phase, msg := a.Handle(ctx, req); phase != v1alpha1.ActionSucceeded || !strings.Contains(msg, "aborted Flagger Canary web") {
+		t.Fatalf("%s %s", phase, msg)
+	}
+	got, err := a.Dynamic.Resource(CanariesResource).Namespace("shop").Get(ctx, "web", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if phase, _, _ := unstructured.NestedString(got.Object, "status", "phase"); phase != "Failed" {
+		t.Fatalf("status.phase = %v; want Failed", got.Object["status"])
+	}
+	req.Spec.Params[ParamFromTemplateHash] = "old"
+	if _, err := a.Dynamic.Resource(CanariesResource).Namespace("shop").Update(ctx, got, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	got.Object["status"].(map[string]any)["phase"] = "Progressing"
+	if _, err := a.Dynamic.Resource(CanariesResource).Namespace("shop").Update(ctx, got, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	a2, _, _ := newActor(t, 1, sentinelPolicy(v1alpha1.AutonomyAutonomous, ActionFlaggerAbort))
+	a2.Dynamic = a.Dynamic
+	if phase, msg := a2.Handle(ctx, req); phase != v1alpha1.ActionFailed || !strings.Contains(msg, "last applied spec is bbb, not old") {
+		t.Fatalf("stale hash: %s %s", phase, msg)
 	}
 }

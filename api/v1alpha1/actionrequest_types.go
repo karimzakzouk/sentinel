@@ -26,7 +26,7 @@ type ActionRequestSpec struct {
 	IncidentID string `json:"incidentId"`
 	// Action is the action type. Each type has a contract the actor checks
 	// before running it.
-	// +kubebuilder:validation:Enum=rollout.undo;scale;restart;argocd.rollback;flux.rollback;helm.rollback;rollouts.abort
+	// +kubebuilder:validation:Enum=rollout.undo;scale;restart;argocd.rollback;flux.rollback;helm.rollback;rollouts.abort;flagger.abort
 	Action string `json:"action"`
 	// Target is the object the action changes.
 	Target TargetRef `json:"target"`

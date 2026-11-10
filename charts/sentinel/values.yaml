@@ -195,6 +195,11 @@ capture:
   # Per-side HTTP buffer for OBI body extraction; align with the ~4KiB cap
   # Sentinel applies after redaction.
   bodyBufferBytes: 8192
+  # Opt-in HTTPS CONNECT MITM for apps that set HTTPS_PROXY and trust the
+  # capture CA. Posts cleartext bodies to the OTLP receiver; separate from
+  # the Lab's seal-only MITM. Install with Helm; toggle from Settings.
+  mitm:
+    enabled: false
   resources:
     requests:
       cpu: 50m

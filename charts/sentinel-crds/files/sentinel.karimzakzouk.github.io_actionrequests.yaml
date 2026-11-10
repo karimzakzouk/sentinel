@@ -71,6 +71,7 @@ spec:
                 - flux.rollback
                 - helm.rollback
                 - rollouts.abort
+                - flagger.abort
                 type: string
               dryRunOnly:
                 description: DryRunOnly asks for the server-side dry run and nothing

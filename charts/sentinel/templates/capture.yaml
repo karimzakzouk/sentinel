@@ -216,4 +216,144 @@ spec:
     - name: otlp
       port: 4318
       targetPort: capture
+{{- if .Values.capture.mitm.enabled }}
+---
+# HTTPS CONNECT MITM for apps that trust the capture CA and set HTTPS_PROXY.
+# Posts cleartext bodies to the OTLP receiver; not the Lab's seal-only MITM.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: sentinel-capture-mitm
+  labels:
+    {{- include "sentinel.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, watch]
+  - apiGroups: [apps]
+    resources: [replicasets]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: sentinel-capture-mitm
+  labels:
+    {{- include "sentinel.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: sentinel-capture-mitm
+subjects:
+  - kind: ServiceAccount
+    name: sentinel-capture
+    namespace: {{ .Values.capture.namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: sentinel-capture-mitm
+  namespace: {{ .Values.capture.namespace }}
+  labels:
+    {{- include "sentinel.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [get, create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: sentinel-capture-mitm
+  namespace: {{ .Values.capture.namespace }}
+  labels:
+    {{- include "sentinel.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: sentinel-capture-mitm
+subjects:
+  - kind: ServiceAccount
+    name: sentinel-capture
+    namespace: {{ .Values.capture.namespace }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sentinel-capture-mitm
+  namespace: {{ .Values.capture.namespace }}
+  labels:
+    {{- include "sentinel.labels" . | nindent 4 }}
+    app.kubernetes.io/component: capture-mitm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sentinel-capture-mitm
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: sentinel-capture-mitm
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      serviceAccountName: sentinel-capture
+      enableServiceLinks: false
+      containers:
+        - name: mitm
+          image: {{ include "sentinel.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - capture-mitm
+            - --listen=8888
+            - --otlp=http://sentinel-capture.{{ .Release.Namespace }}.svc:4318/v1/traces
+            - --token-file=/etc/sentinel-capture/token
+            - --namespace={{ .Values.capture.namespace }}
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          ports:
+            - name: mitm
+              containerPort: 8888
+          volumeMounts:
+            - name: token
+              mountPath: /etc/sentinel-capture
+              readOnly: true
+            - name: run
+              mountPath: /var/run/sentinel-capture-mitm
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            {{- toYaml .Values.capture.resources | nindent 12 }}
+      volumes:
+        - name: token
+          secret:
+            secretName: sentinel-capture-token
+            items:
+              - key: token
+                path: token
+        - name: run
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sentinel-capture-mitm
+  namespace: {{ .Values.capture.namespace }}
+  labels:
+    {{- include "sentinel.labels" . | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/name: sentinel-capture-mitm
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: mitm
+      port: 8888
+      targetPort: mitm
+{{- end }}
 {{- end }}

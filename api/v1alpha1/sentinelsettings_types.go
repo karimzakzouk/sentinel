@@ -147,6 +147,11 @@ type CaptureSettings struct {
 	// +kubebuilder:validation:Minimum=1024
 	// +kubebuilder:validation:Maximum=65536
 	BodyBufferBytes *int32 `json:"bodyBufferBytes,omitempty"`
+	// MitmEnabled runs the HTTPS CONNECT MITM that posts bodies for clients
+	// that trust the capture CA and set HTTPS_PROXY. Requires capture.mitm
+	// installed by Helm.
+	// +optional
+	MitmEnabled *bool `json:"mitmEnabled,omitempty"`
 }
 
 // CapabilitiesSettings holds capability-probe timing.
@@ -167,6 +172,8 @@ type InstalledComponents struct {
 	Fixer bool `json:"fixer,omitempty"`
 	// +optional
 	Capture bool `json:"capture,omitempty"`
+	// +optional
+	CaptureMITM bool `json:"captureMitm,omitempty"`
 	// +optional
 	NodeAgent bool `json:"nodeAgent,omitempty"`
 }

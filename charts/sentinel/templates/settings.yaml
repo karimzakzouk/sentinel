@@ -48,6 +48,7 @@ spec:
   capture:
     exportBodies: {{ .Values.capture.exportBodies }}
     bodyBufferBytes: {{ $buf }}
+    mitmEnabled: {{ .Values.capture.mitm.enabled }}
   capabilities:
     interval: {{ .Values.capabilities.interval | quote }}
 {{- end }}

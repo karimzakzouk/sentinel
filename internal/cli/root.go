@@ -25,7 +25,7 @@ func NewRoot() *cobra.Command {
 	pf.StringVar(&kf.As, "as", "", "user to impersonate, for example system:serviceaccount:sentinel:sentinel")
 	pf.StringSliceVar(&kf.AsGroups, "as-group", nil, "group to impersonate; repeatable")
 
-	root.AddCommand(newVersionCmd(), newCapabilitiesCmd(&kf), newLedgerCmd(), newCheckProofCmd(), newIncidentsCmd(), newReportCmd(), newRunCmd(&kf), newActorCmd(&kf), newApproveCmd(&kf), newVetoCmd(&kf), newResumeCmd(&kf), newLabCmd(&kf), newLabSealCmd(), newLabFakeCmd(), newLabGRPCFakeCmd(), newLabMITMCmd(), newFixerCmd(&kf), newNodeAgentCmd())
+	root.AddCommand(newVersionCmd(), newCapabilitiesCmd(&kf), newLedgerCmd(), newCheckProofCmd(), newIncidentsCmd(), newReportCmd(), newRunCmd(&kf), newActorCmd(&kf), newApproveCmd(&kf), newVetoCmd(&kf), newResumeCmd(&kf), newLabCmd(&kf), newLabSealCmd(), newLabFakeCmd(), newLabGRPCFakeCmd(), newLabMITMCmd(), newCaptureMITMCmd(&kf), newFixerCmd(&kf), newNodeAgentCmd())
 	return root
 }
 

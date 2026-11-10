@@ -92,6 +92,12 @@ spec:
                       ExportBodies asks OBI to export HTTP body attributes on traces.
                       Namespaces still need SentinelPolicy capture.bodies to keep them.
                     type: boolean
+                  mitmEnabled:
+                    description: |-
+                      MitmEnabled runs the HTTPS CONNECT MITM that posts bodies for clients
+                      that trust the capture CA and set HTTPS_PROXY. Requires capture.mitm
+                      installed by Helm.
+                    type: boolean
                 type: object
               detection:
                 description: Detection thresholds and windows for the count detector.
@@ -216,6 +222,8 @@ spec:
                   actor:
                     type: boolean
                   capture:
+                    type: boolean
+                  captureMitm:
                     type: boolean
                   fixer:
                     type: boolean
