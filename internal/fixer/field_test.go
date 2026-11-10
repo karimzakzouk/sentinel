@@ -11,6 +11,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/karimzakzouk/sentinel/api/v1alpha1"
@@ -118,6 +119,11 @@ func TestContainerChangeFindsTheOneValue(t *testing.T) {
 		want      string
 	}{
 		{"arguments", func(c *corev1.Container) { c.Args = []string{"--no-such-flag"} }, nil, "args [--no-such-flag] -> not set"},
+		{"a readiness probe", func(c *corev1.Container) {
+			c.ReadinessProbe = &corev1.Probe{ProbeHandler: corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt32(9999)}}, PeriodSeconds: 2, FailureThreshold: 1}
+		}, func(c *corev1.Container) {
+			c.ReadinessProbe = &corev1.Probe{ProbeHandler: corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt32(9898)}}, PeriodSeconds: 10, FailureThreshold: 3}
+		}, "readinessProbe"},
 		{"an environment value", func(c *corev1.Container) { c.Env[0].Value = "debug" }, nil, "env:LEVEL debug -> info"},
 		{"two values", func(c *corev1.Container) { c.Image, c.Args = "podinfo:2", []string{"-v"} }, nil, "2 values changed"},
 		{"a value from a ConfigMap", fromConfigMap("settings"), nil, "literal values only"},
@@ -277,5 +283,83 @@ func TestLocateSetsALearnedCPULimit(t *testing.T) {
 	}
 	if want := podinfo("          resources:\n            limits: {cpu: 80m} # tight\n"); string(edit.After) != want || edit.Line != 16 {
 		t.Fatalf("line %d:\n%s\nwant:\n%s", edit.Line, edit.After, want)
+	}
+}
+
+// A readiness probe the blamed revision broke is put back where it is written.
+func TestLocateRestoresAReadinessProbe(t *testing.T) {
+	bad := "          readinessProbe:\n            tcpSocket:\n              port: 9999\n            periodSeconds: 2\n            failureThreshold: 1\n"
+	repo := repoOf(t, map[string]string{
+		"app/kustomization.yaml": "resources: [deployment.yaml]\n",
+		"app/deployment.yaml":    podinfo(bad),
+	})
+	edit, err := Locate(repo, "app", Target{Kind: "Deployment", Name: "podinfo"},
+		Change{Container: "podinfod", Field: "readinessProbe",
+			Bad:  map[string]any{"tcpSocket": map[string]any{"port": 9999}, "periodSeconds": 2, "failureThreshold": 1},
+			Good: map[string]any{"tcpSocket": map[string]any{"port": 9898}, "periodSeconds": 10, "failureThreshold": 3}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(edit.After), "port: 9999") || !strings.Contains(string(edit.After), "port: 9898") {
+		t.Fatalf("after the fix:\n%s", edit.After)
+	}
+	if edit.Line != 15 {
+		t.Fatalf("line %d, want 15", edit.Line)
+	}
+}
+
+// A readiness probe written on one line is restored the same way.
+func TestLocateRestoresAFlowReadinessProbe(t *testing.T) {
+	repo := repoOf(t, map[string]string{
+		"app/kustomization.yaml": "resources: [deployment.yaml]\n",
+		"app/deployment.yaml":    podinfo("          readinessProbe: {tcpSocket: {port: 9999}, periodSeconds: 2}\n"),
+	})
+	edit, err := Locate(repo, "app", Target{Kind: "Deployment", Name: "podinfo"},
+		Change{Container: "podinfod", Field: "readinessProbe",
+			Bad:  map[string]any{"tcpSocket": map[string]any{"port": 9999}, "periodSeconds": 2},
+			Good: map[string]any{"tcpSocket": map[string]any{"port": 9898}, "periodSeconds": 10}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(edit.After), "port: 9898") || strings.Contains(string(edit.After), "port: 9999") {
+		t.Fatalf("after the fix:\n%s", edit.After)
+	}
+}
+
+// A probe the bad revision added is removed.
+func TestLocateRemovesAnAddedReadinessProbe(t *testing.T) {
+	repo := repoOf(t, map[string]string{
+		"app/kustomization.yaml": "resources: [deployment.yaml]\n",
+		"app/deployment.yaml":    podinfo("          readinessProbe:\n            tcpSocket: {port: 9999}\n"),
+	})
+	edit, err := Locate(repo, "app", Target{Kind: "Deployment", Name: "podinfo"},
+		Change{Container: "podinfod", Field: "readinessProbe",
+			Bad: map[string]any{"tcpSocket": map[string]any{"port": 9999}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := podinfo(""); string(edit.After) != want {
+		t.Fatalf("after the fix:\n%s\nwant:\n%s", edit.After, want)
+	}
+}
+
+// A config.probe fault restores the probe and leaves an image change alone.
+func TestChangeForRestoresAProbeAndKeepsTheImage(t *testing.T) {
+	ctx := context.Background()
+	probe := func(image string, port int32) corev1.PodTemplateSpec {
+		c := corev1.Container{Name: "web", Image: image,
+			ReadinessProbe: &corev1.Probe{ProbeHandler: corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt32(port)}}, PeriodSeconds: 2, FailureThreshold: 1}}
+		return corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{c}}}
+	}
+	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "shop", UID: types.UID("dep")},
+		Spec: appsv1.DeploymentSpec{Template: probe("web:1", 8080)}}
+	rs := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Name: "web-bad", Namespace: "shop", Labels: map[string]string{"pod-template-hash": "bad"},
+		OwnerReferences: []metav1.OwnerReference{{UID: "dep"}}}, Spec: appsv1.ReplicaSetSpec{Template: probe("web:2", 9999)}}
+	c, kept, err := ChangeFor(ctx, fake.NewClientset(dep, rs), dep, v1alpha1.FixSpec{FromRevision: "bad", FaultClass: "config.probe"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Field != "readinessProbe" || listed(kept) != "web's image" {
+		t.Fatalf("got %s keeping %q", c.Field, listed(kept))
 	}
 }

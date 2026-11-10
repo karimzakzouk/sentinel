@@ -2,31 +2,42 @@ package fixer
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strings"
 
 	"go.yaml.in/yaml/v3"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 // Fields a fix restores beside the image: a container's command and
-// arguments, an environment variable's literal value ("env:NAME"), and its
+// arguments, an environment variable's literal value ("env:NAME"), its
+// readiness, liveness or startup probe (the whole object put back), and its
 // memory or CPU limit, which a fix sets to a learned value rather than
 // restores.
 const (
-	fieldImage       = "image"
-	fieldCommand     = "command"
-	fieldArgs        = "args"
-	fieldMemoryLimit = "limits.memory"
-	fieldCPULimit    = "limits.cpu"
-	envPrefix        = "env:"
+	fieldImage          = "image"
+	fieldCommand        = "command"
+	fieldArgs           = "args"
+	fieldReadinessProbe = "readinessProbe"
+	fieldLivenessProbe  = "livenessProbe"
+	fieldStartupProbe   = "startupProbe"
+	fieldMemoryLimit    = "limits.memory"
+	fieldCPULimit       = "limits.cpu"
+	envPrefix           = "env:"
 )
 
+func isProbeField(field string) bool {
+	return field == fieldReadinessProbe || field == fieldLivenessProbe || field == fieldStartupProbe
+}
+
 // valueIn reads a field of a container, as a map: a string for the image
-// and an environment variable, the list for command and arguments, nil
-// where it is not set. An environment variable taken from elsewhere
-// (valueFrom) reads as valueFromSet.
+// and an environment variable, the list for command and arguments, a map
+// for a probe, nil where it is not set. An environment variable taken from
+// elsewhere (valueFrom) reads as valueFromSet.
 func valueIn(container map[string]any, field string) any {
 	switch {
 	case field == fieldImage:
@@ -62,6 +73,12 @@ func valueIn(container map[string]any, field string) any {
 		if v, ok := limits[key]; ok && v != nil {
 			return fmt.Sprint(v)
 		}
+	case isProbeField(field):
+		m, _ := container[field].(map[string]any)
+		if m == nil {
+			return nil
+		}
+		return normalizeMap(m)
 	}
 	return nil
 }
@@ -132,25 +149,109 @@ func setValue(container map[string]any, field string, v any) {
 			res["limits"] = limits
 		}
 		limits[key] = v
+	case isProbeField(field):
+		if v == nil {
+			delete(container, field)
+			return
+		}
+		container[field] = v
 	}
 }
 
 func sameValue(a, b any) bool { return reflect.DeepEqual(a, b) }
 
 // same reports whether two values of the change's field are equal: memory
-// and CPU limits as quantities, since "64Mi" and "67108864" are one limit.
+// and CPU limits as quantities, since "64Mi" and "67108864" are one limit,
+// and probes with Kubernetes' defaults applied, since the API fills them
+// and a manifest often leaves them out.
 func (c Change) same(a, b any) bool {
-	if c.field() != fieldMemoryLimit && c.field() != fieldCPULimit {
-		return sameValue(a, b)
+	switch c.field() {
+	case fieldMemoryLimit, fieldCPULimit:
+		as, aok := a.(string)
+		bs, bok := b.(string)
+		if !aok || !bok {
+			return a == nil && b == nil
+		}
+		aq, aerr := resource.ParseQuantity(as)
+		bq, berr := resource.ParseQuantity(bs)
+		return aerr == nil && berr == nil && aq.Cmp(bq) == 0
 	}
-	as, aok := a.(string)
-	bs, bok := b.(string)
+	if isProbeField(c.field()) {
+		return sameProbe(a, b)
+	}
+	return sameValue(a, b)
+}
+
+// sameProbe reports whether two probe maps are the same probe once the
+// API's defaults are filled in.
+func sameProbe(a, b any) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	pa, aok := asProbe(a)
+	pb, bok := asProbe(b)
 	if !aok || !bok {
-		return a == nil && b == nil
+		return false
 	}
-	aq, aerr := resource.ParseQuantity(as)
-	bq, berr := resource.ParseQuantity(bs)
-	return aerr == nil && berr == nil && aq.Cmp(bq) == 0
+	applyProbeDefaults(pa)
+	applyProbeDefaults(pb)
+	return equality.Semantic.DeepEqual(pa, pb)
+}
+
+func asProbe(v any) (*corev1.Probe, bool) {
+	if v == nil {
+		return nil, false
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil, false
+	}
+	var p corev1.Probe
+	if err := json.Unmarshal(b, &p); err != nil {
+		return nil, false
+	}
+	return &p, true
+}
+
+func applyProbeDefaults(p *corev1.Probe) {
+	if p.TimeoutSeconds == 0 {
+		p.TimeoutSeconds = 1
+	}
+	if p.PeriodSeconds == 0 {
+		p.PeriodSeconds = 10
+	}
+	if p.SuccessThreshold == 0 {
+		p.SuccessThreshold = 1
+	}
+	if p.FailureThreshold == 0 {
+		p.FailureThreshold = 3
+	}
+}
+
+// normalizeMap makes a YAML- or JSON-decoded map comparable: whole-number
+// float64s become ints, as YAML writes them.
+func normalizeMap(v any) any {
+	switch x := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, val := range x {
+			out[k] = normalizeMap(val)
+		}
+		return out
+	case []any:
+		out := make([]any, len(x))
+		for i, val := range x {
+			out[i] = normalizeMap(val)
+		}
+		return out
+	case float64:
+		if x == float64(int(x)) {
+			return int(x)
+		}
+		return x
+	default:
+		return v
+	}
 }
 
 // shown is a value as a pull request or a log line says it.
@@ -160,16 +261,28 @@ func shown(v any) string {
 		return "not set"
 	case []string:
 		return "[" + strings.Join(v, ", ") + "]"
+	case map[string]any:
+		b, err := yaml.Marshal(v)
+		if err != nil {
+			return fmt.Sprint(v)
+		}
+		return strings.Join(strings.Fields(strings.TrimSpace(string(b))), " ")
 	}
 	return fmt.Sprint(v)
 }
 
 // what names a field for people: "image", "arguments", "environment
-// variable LEVEL".
+// variable LEVEL", "readiness probe".
 func what(field string) string {
 	switch {
 	case field == fieldArgs:
 		return "arguments"
+	case field == fieldReadinessProbe:
+		return "readiness probe"
+	case field == fieldLivenessProbe:
+		return "liveness probe"
+	case field == fieldStartupProbe:
+		return "startup probe"
 	case field == fieldMemoryLimit:
 		return "memory limit"
 	case field == fieldCPULimit:
@@ -182,8 +295,9 @@ func what(field string) string {
 
 // editField edits, in a file of YAML documents, one field of a workload's
 // container from the bad value to the good one: a scalar spliced in place, a
-// list rewritten in the style it was written in, a key or an environment
-// variable the bad change added removed with its lines. It says where.
+// list rewritten in the style it was written in, a probe mapping rewritten
+// the same way, a key or an environment variable the bad change added
+// removed with its lines. It says where.
 func editField(src []byte, kind, name string, c Change) ([]byte, int, error) {
 	container, err := containerNode(src, kind, name, c.Container)
 	if err != nil {
@@ -243,8 +357,94 @@ func editField(src []byte, kind, name string, c Change) ([]byte, int, error) {
 		}
 		out, err := splice(src, node, c.Good.(string))
 		return out, node.Line, err
+	case isProbeField(field):
+		key, value := keyOf(container, field)
+		if key == nil {
+			return nil, 0, fmt.Errorf("container %s sets no %s here", c.Container, what(field))
+		}
+		if c.Good == nil {
+			out, err := deleteLines(src, key.Line, blockEnd(src, key.Line, key.Column, false))
+			return out, key.Line, err
+		}
+		good, ok := c.Good.(map[string]any)
+		if !ok {
+			return nil, 0, fmt.Errorf("container %s's %s is not a mapping", c.Container, what(field))
+		}
+		out, err := replaceMap(src, key, value, good)
+		return out, key.Line, err
 	}
 	return nil, 0, fmt.Errorf("the Fixer does not restore %s", field)
+}
+
+// replaceMap writes a mapping in place of a key's mapping, in the mapping's
+// own style: on the key's line when it was written there, one key a line
+// otherwise, keeping a comment on the key's line.
+func replaceMap(src []byte, key, value *yaml.Node, good map[string]any) ([]byte, error) {
+	if value.Kind != yaml.MappingNode {
+		return nil, fmt.Errorf("line %d holds no mapping", key.Line)
+	}
+	lines := bytes.SplitAfter(src, []byte("\n"))
+	if value.Style&yaml.FlowStyle != 0 {
+		if value.Line != key.Line {
+			return nil, fmt.Errorf("the mapping on line %d spans lines", key.Line)
+		}
+		var node yaml.Node
+		if err := node.Encode(good); err != nil {
+			return nil, err
+		}
+		node.Style = yaml.FlowStyle
+		text, err := yaml.Marshal(&node)
+		if err != nil {
+			return nil, err
+		}
+		flow := strings.TrimSpace(string(text))
+		line := lines[key.Line-1]
+		start := byteOffset(line, value.Column-1)
+		if start < 0 || start >= len(line) || line[start] != '{' {
+			return nil, fmt.Errorf("line %d does not hold the mapping where the YAML parser places it", key.Line)
+		}
+		end, depth := -1, 0
+		for i := start; i < len(line); i++ {
+			switch line[i] {
+			case '{':
+				depth++
+			case '}':
+				depth--
+				if depth == 0 {
+					end = i + 1
+				}
+			}
+			if end >= 0 {
+				break
+			}
+		}
+		if end < 0 {
+			return nil, fmt.Errorf("line %d holds no closed mapping", key.Line)
+		}
+		replaced := string(line[:start]) + flow
+		if comment := value.LineComment + key.LineComment; comment != "" {
+			replaced += " " + comment
+			if bytes.HasSuffix(line, []byte("\n")) {
+				replaced += "\n"
+			}
+		} else {
+			replaced += string(line[end:])
+		}
+		return joinLines(lines, key.Line, key.Line+1, []string{replaced}), nil
+	}
+	if len(value.Content) == 0 {
+		return nil, fmt.Errorf("line %d holds an empty mapping", key.Line)
+	}
+	indent := strings.Repeat(" ", value.Content[0].Column-1)
+	body, err := yaml.Marshal(good)
+	if err != nil {
+		return nil, err
+	}
+	var block []string
+	for _, l := range strings.Split(strings.TrimSuffix(string(body), "\n"), "\n") {
+		block = append(block, indent+l+"\n")
+	}
+	return joinLines(lines, key.Line+1, blockEnd(src, key.Line, key.Column, false), block), nil
 }
 
 // documents decodes the YAML documents of a file to their top nodes, up to

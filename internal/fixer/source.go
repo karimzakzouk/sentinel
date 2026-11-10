@@ -2,6 +2,7 @@ package fixer
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"regexp"
@@ -172,8 +173,8 @@ func argoSource(ctx context.Context, dyn dynamic.Interface, ns, name string) (*S
 
 // ContainerChange finds the one value that differs between the revision a
 // Deployment was rolled back from and its current template, among those the
-// Fixer restores: a container's image, command and arguments, and its
-// environment variables' literal values.
+// Fixer restores: a container's image, command and arguments, its
+// environment variables' literal values, and its probes.
 func ContainerChange(ctx context.Context, client kubernetes.Interface, dep *appsv1.Deployment, fromRevision string) (Change, error) {
 	c, _, err := ChangeFor(ctx, client, dep, v1alpha1.FixSpec{FromRevision: fromRevision})
 	return c, err
@@ -191,7 +192,7 @@ func ChangeFor(ctx context.Context, client kubernetes.Interface, dep *appsv1.Dep
 	}
 	if len(changes) == 0 {
 		return Change{}, nil, fmt.Errorf("the revision %s was rolled back from differs from the current one in nothing the Fixer restores "+
-			"(images, commands, arguments, environment values, memory and CPU limits)", spec.FromRevision)
+			"(images, commands, arguments, environment values, probes, memory and CPU limits)", spec.FromRevision)
 	}
 	var blamed, kept []Change
 	for _, c := range changes {
@@ -244,9 +245,9 @@ func learnedLimit(spec v1alpha1.FixSpec, c Change) (string, bool) {
 }
 
 // blames reports whether a fault of a class is blamed on a field: a bad
-// image on the image, a memory or CPU limit on the limit, a crash or an
-// error on what the container runs. A class it does not know blames every
-// field.
+// image on the image, a memory or CPU limit on the limit, a broken probe on
+// the probe, a crash or an error on what the container runs. A class it
+// does not know blames every field.
 func blames(class, field string) bool {
 	switch class {
 	case "deploy.bad-image":
@@ -255,8 +256,10 @@ func blames(class, field string) bool {
 		return field == fieldMemoryLimit
 	case "resource.cpu-limit":
 		return field == fieldCPULimit
+	case "config.probe":
+		return isProbeField(field)
 	case "deploy.crash-on-start", "config.error", "deploy.new-errors", "runtime.crash":
-		return field != fieldMemoryLimit && field != fieldCPULimit
+		return field != fieldMemoryLimit && field != fieldCPULimit && !isProbeField(field)
 	}
 	return true
 }
@@ -320,10 +323,10 @@ func revisionChanges(ctx context.Context, client kubernetes.Interface, dep *apps
 }
 
 // containerFields lists the fields a fix may restore in two versions of a
-// container: image, command, arguments, memory and CPU limits, and every
-// environment variable either sets.
+// container: image, command, arguments, probes, memory and CPU limits, and
+// every environment variable either sets.
 func containerFields(a, b corev1.Container) []string {
-	fields := []string{fieldImage, fieldCommand, fieldArgs, fieldMemoryLimit, fieldCPULimit}
+	fields := []string{fieldImage, fieldCommand, fieldArgs, fieldReadinessProbe, fieldLivenessProbe, fieldStartupProbe, fieldMemoryLimit, fieldCPULimit}
 	seen := map[string]bool{}
 	for _, e := range append(a.Env, b.Env...) {
 		if !seen[e.Name] {
@@ -370,6 +373,29 @@ func fieldValue(c corev1.Container, field string) any {
 		if q, ok := c.Resources.Limits[corev1.ResourceCPU]; ok {
 			return q.String()
 		}
+	case field == fieldReadinessProbe:
+		return probeMap(c.ReadinessProbe)
+	case field == fieldLivenessProbe:
+		return probeMap(c.LivenessProbe)
+	case field == fieldStartupProbe:
+		return probeMap(c.StartupProbe)
 	}
 	return nil
+}
+
+// probeMap is a probe as valueIn reads one from YAML: a normalized map, or
+// nil when the probe is not set.
+func probeMap(p *corev1.Probe) any {
+	if p == nil {
+		return nil
+	}
+	b, err := json.Marshal(p)
+	if err != nil {
+		return nil
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil || len(m) == 0 {
+		return nil
+	}
+	return normalizeMap(m)
 }
