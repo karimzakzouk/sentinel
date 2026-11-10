@@ -86,10 +86,18 @@ type SentinelPolicySpec struct {
 // Capture says what traffic capture keeps of a namespace's requests.
 type Capture struct {
 	// Requests keeps the method, route, status and timing of the requests
-	// its workloads serve and make, never a body or a header, so the Lab
-	// can replay reads and stand in for what they call.
+	// its workloads serve and make, never a header, so the Lab can replay
+	// reads and stand in for what they call. Bodies stay out unless Bodies
+	// is also on.
 	// +optional
 	Requests bool `json:"requests,omitempty"`
+	// Bodies is an opt-in to also keep redacted request and response bodies
+	// (capped), only when Requests is on. Off by default. The body recorder
+	// is not fully live yet, so this field reserves the policy switch the
+	// console exposes; turning it on stores no bodies until the agent and
+	// controller keep them.
+	// +optional
+	Bodies bool `json:"bodies,omitempty"`
 }
 
 // SentinelPolicyStatus reports whether the policy is in effect.

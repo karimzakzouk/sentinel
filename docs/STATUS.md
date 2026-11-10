@@ -1,6 +1,6 @@
 # Status
 
-Last updated: Tuesday 10 November 2026, 06:50 Cairo time (UTC+2).
+Last updated: Tuesday 10 November 2026, 06:55 Cairo time (UTC+2).
 
 ## Where things stand
 
@@ -107,12 +107,13 @@ To look at it on a cluster where it runs:
 | High availability | Standby replicas for the actor, the Lab and the Fixer (decision 81) | On the development cluster with two of each: one Lease holder each, the fence allowed the Leases, a standby took over a second after the holder was deleted |
 | Console | Sign in with your own token, or through the cluster's identity provider (decision 89); approve, veto, resume, set policies, as yourself (decision 82) | Unit tests of sign-in, the person's own approval, refusals from another page, and of single sign-on's state, nonce and replay checks; on the development cluster a real token signed in, the cluster refused what it may not see, and a bad token got 401; `hack/oidc-live.sh` signs in through a real Dex as a browser would |
 | Fingerprints | fp2 for logged exceptions (decision 84) | One Redis outage logged with two messages is one exception |
-| Traffic capture | Built (decisions 85 and 86): an optional eBPF agent (OpenTelemetry's OBI), a switch per namespace in its SentinelPolicy and the console, request details only, and replay in the Lab | On the development cluster: the agent ran on both nodes with eBPF's capabilities, not privileged; Online Boutique's frontend's requests (`GET /cart`, `/product/<id>`, `POST /cart/checkout`) and its gRPC calls to seven services arrived with methods, paths, statuses and timings; Redis statements, which carry keys, stayed out; the incident page lists them |
+| Traffic capture | Built (decisions 85, 86 and 102): optional OBI agent, per-namespace `capture.requests`, Lab replay, and opt-in body capture (`capture.bodies` with requests): redacted ~4KiB Body/ResponseBody only when EnabledBodies is on | On the development cluster: the agent ran on both nodes with eBPF's capabilities, not privileged; Online Boutique's frontend's requests (`GET /cart`, `/product/<id>`, `POST /cart/checkout`) and its gRPC calls to seven services arrived with methods, paths, statuses and timings; Redis statements, which carry keys, stayed out; the incident page lists them |
 | Argo Rollouts abort | Built (decision 97): `rollouts.abort` sets `status.abort`; Flagger still deferred to its analysis | Unit tests in `internal/actor`, `internal/watcher`, `internal/brain` |
 | Honeytoken Secrets | Built: Lab env and named-key volumes get shape-preserving stand-ins; looking one up through Lab DNS fails the race | Unit tests in `internal/lab` |
 | Outbound call catalog | Built: `capture.Calls` lists distinct client calls for Lab fakes | Unit tests in `internal/capture` |
 | Frontier fakes (metadata HTTP) | Built (decision 100): outside hosts get a Lab Service + stub answering recorded statuses; DNS, Allow and world probes include them | Unit tests in `internal/lab` (`fake_test`, synthesis with `api.stripe.com`) |
-| Own faker, mined fix patterns | Metadata HTTP fakes built; full faker (bodies, gRPC, TLS) next. **Mined fix patterns: first cut built** (decision 101): `internal/mine` scans recent commits for fix-like subjects or a single function-body change, and the `mine` fixer applies matching before/after snippets after templates and before revert/llm | Unit tests with a planted git history in `internal/mine` and `internal/codefix` |
+| Own faker, mined fix patterns | Metadata HTTP fakes built; body capture foundation built (decision 102); full faker (gRPC, TLS MITM, body-filled stubs) next. **Mined fix patterns: first cut built** (decision 101) |
+| Tier-1 node agent | First cut (decision 102): optional DaemonSet tails `/var/log/pods`, redacts on the node, optional cgroup memory.peak/pressure, posts batches; controller stores and joins evidence to incidents | Unit tests in `internal/nodeagent` and `internal/cli` |
 
 ## Acting session
 
@@ -402,17 +403,24 @@ Full reasoning in [decisions.md](decisions.md).
 
 ## Next
 
-- **Lab realism:** frontier fakes from captured traffic are started/built
-  for metadata-only HTTP (decision 100); left: the Lab's certificate
-  authority, and an opt-in recorder of request and response bodies for
-  write replay, response comparison and filled databases. Honeytoken
-  Secrets that fail a race on DNS lookup are built.
+- **Lab realism:** frontier fakes from captured traffic are built for
+  metadata-only HTTP (decision 100); opt-in body capture foundation is
+  built (decision 102) for write replay, response comparison and filled
+  databases. Left: the Lab's certificate authority, TLS MITM, and an
+  agent that exports bodies. Honeytoken Secrets that fail a race on DNS
+  lookup are built.
 - **More rollback kinds:** DaemonSets, StatefulSets (with approval) and
   Argo Rollouts abort are built; Flagger stays deferred.
 - **Hardening:** baselines that survive restarts and dependency links from
-  error logs are built; left: the node agent. Standby for actor/Lab/Fixer
-  already exists.
-- **Settings:** every switch in the console as well as the YAML.
+  error logs are built; the tier-1 node agent has a first cut (decision 102).
+  Standby for actor/Lab/Fixer already exists.
+- **Settings:** policy autonomy actions (including `restart`, `helm.rollback`,
+  `rollouts.abort`, `fix.merge`) and capture toggles (`capture.requests`,
+  opt-in stub `capture.bodies`) are in the console via SentinelPolicy.
+  Chart-level Fixer knobs (`fixer.code.withoutRollback`, `fixer.code.fixers`,
+  `fixer.code.llm`) stay in Helm values; the Policies page links to them.
+  Decision: extend SentinelPolicy for capture bodies rather than a Settings
+  ConfigMap (no such pattern existed).
 - **CI:** with hosted Actions minutes spent and a $0 budget, CI and E2E
   run on the Azure self-hosted runner; wake may fail and the VM is
   started with `hack/azure-runner/wake.sh` when needed (decision 99).

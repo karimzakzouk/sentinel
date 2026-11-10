@@ -33,3 +33,17 @@ func TestBudgetSpentKnowsItsOwnMessage(t *testing.T) {
 		t.Fatal("BudgetSpent misread a message")
 	}
 }
+
+func TestCaptureAndBodies(t *testing.T) {
+	none := []v1alpha1.SentinelPolicy{{}}
+	requests := []v1alpha1.SentinelPolicy{{Spec: v1alpha1.SentinelPolicySpec{Capture: &v1alpha1.Capture{Requests: true}}}}
+	bodiesOnly := []v1alpha1.SentinelPolicy{{Spec: v1alpha1.SentinelPolicySpec{Capture: &v1alpha1.Capture{Bodies: true}}}}
+	both := []v1alpha1.SentinelPolicy{{Spec: v1alpha1.SentinelPolicySpec{Capture: &v1alpha1.Capture{Requests: true, Bodies: true}}}}
+	if Capture(none) || CaptureBodies(none) || CaptureBodies(requests) || Capture(bodiesOnly) || CaptureBodies(bodiesOnly) {
+		t.Fatal("empty or bodies-without-requests should stay off")
+	}
+	if !Capture(requests) || !Capture(both) || !CaptureBodies(both) {
+		t.Fatal("requests alone, or both flags, should turn on")
+	}
+}
+
