@@ -62,7 +62,11 @@ func sealChild(t *testing.T) {
 			t.Fatalf("read %s's flags: %v", name, err)
 		}
 		ifr.SetUint16(ifr.Uint16() | unix.IFF_UP)
-		if err := unix.IoctlIfreq(sock, unix.SIOCSIFFLAGS, ifr); err != nil {
+		if err := unix.IoctlIfreq(sock, unix.SIOCSIFFLAGS, ifr); errors.Is(err, unix.EPERM) {
+			// Some hosts, as Ubuntu's AppArmor does, grant an unprivileged
+			// user namespace no network administration.
+			t.Skipf("no network administration in this namespace: %v", err)
+		} else if err != nil {
 			t.Fatalf("bring %s up: %v", name, err)
 		}
 	}
