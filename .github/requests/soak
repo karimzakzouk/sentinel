@@ -2,4 +2,4 @@
 # self-hosted runner, as "Run workflow" does; hours is how long to watch,
 # 1 to 72. The soak holds the runner for that long.
 hours: 72
-requested: 2026-11-11, re-soak after RoleBinding SSA + Lab secrets RBAC fix
+requested: 2026-11-11, re-soak after Go 1.27.4 + RoleBinding label alignment
