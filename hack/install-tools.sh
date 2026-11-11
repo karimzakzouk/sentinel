@@ -3,7 +3,7 @@
 # Safe to rerun: each tool is skipped when the pinned version is already there.
 set -euo pipefail
 
-GO_VERSION=1.27.3
+GO_VERSION=1.27.4
 KUBECTL_VERSION=v1.37.2
 KIND_VERSION=v0.33.0
 HELM_VERSION=v4.3.1

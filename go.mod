@@ -1,6 +1,6 @@
 module github.com/karimzakzouk/sentinel
 
-go 1.27.3
+go 1.27.4
 
 require (
 	github.com/go-git/go-billy/v5 v5.9.2

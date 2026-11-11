@@ -209,13 +209,16 @@ func syncRoleBindings(ctx context.Context, client kubernetes.Interface, t Target
 }
 
 func ensureRoleBinding(ctx context.Context, client kubernetes.Interface, ns, name, clusterRole string, sa rbacv1.Subject) error {
+	// Labels must match the chart (app.kubernetes.io/name: sentinel). A
+	// different name value fights Helm's SSA on upgrade (soak) and leaves
+	// day-2 bindings looking foreign next to install-time ones.
 	want := &rbacv1.RoleBinding{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: ns,
 			Labels: map[string]string{
+				"app.kubernetes.io/name":               "sentinel",
 				"app.kubernetes.io/part-of":            "sentinel",
-				"app.kubernetes.io/name":               name,
 				"sentinel.karimzakzouk.github.io/rbac": name,
 			},
 		},
