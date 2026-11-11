@@ -250,6 +250,10 @@ rules:
   - apiGroups: [""]
     resources: [configmaps]
     verbs: [get, list, create, delete, deletecollection]
+  # Honeytoken Secrets the Lab mints in the pool (never production values).
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [get, list, create, update, delete, deletecollection]
   - apiGroups: [networking.k8s.io]
     resources: [networkpolicies]
     verbs: [get, list, create, delete]

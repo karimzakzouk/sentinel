@@ -489,8 +489,8 @@ func TestTheLabBuildsAWorkloadsStatelessWorld(t *testing.T) {
 	if !slices.Equal(copied, []string{"front", "backend"}) {
 		t.Fatalf("copied %v; want the front and the backend it calls", copied)
 	}
-	for _, want := range []string{"runs one replica instead of 2", "API_TOKEN holds a placeholder instead of secret front-secrets",
-		"names api.payments.example, which is outside the Lab"} {
+	for _, want := range []string{"runs one replica instead of 2", "API_TOKEN holds a honeytoken instead of secret front-secrets",
+		"api.payments.example is a Lab fake of the outside host"} {
 		if !slices.ContainsFunc(plan.Fidelity, func(f string) bool { return strings.Contains(f, want) }) {
 			t.Errorf("the fidelity list lacks %q: %v", want, plan.Fidelity)
 		}
@@ -692,8 +692,8 @@ func TestALabReproductionRunsTheWorldBehindAProvenSeal(t *testing.T) {
 	if phase != lab.PhaseNotSure || !strings.HasPrefix(msg, "the failure did not reproduce: the failing revision worked in") {
 		t.Fatalf("the reproduction ended %s: %s", phase, msg)
 	}
-	if !slices.ContainsFunc(fidelity, func(f string) bool { return strings.Contains(f, "API_TOKEN holds a placeholder") }) {
-		t.Fatalf("the fidelity list lacks the secret placeholder: %v", fidelity)
+	if !slices.ContainsFunc(fidelity, func(f string) bool { return strings.Contains(f, "API_TOKEN holds a honeytoken") }) {
+		t.Fatalf("the fidelity list lacks the secret honeytoken: %v", fidelity)
 	}
 	pods, err := clientAs(t, "").CoreV1().Pods(labNS).List(context.Background(), metav1.ListOptions{LabelSelector: lab.Label})
 	if err != nil || len(pods.Items) != 0 {
