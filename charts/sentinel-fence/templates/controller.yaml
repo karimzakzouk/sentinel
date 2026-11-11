@@ -20,6 +20,21 @@ spec:
   validations:
     - expression: >-
         request.resource.group in ['authorization.k8s.io', 'authentication.k8s.io'] ||
+        (request.resource.group == '' && request.resource.resource == 'configmaps' && variables.subResource == '' &&
+         request.operation in ['CREATE', 'UPDATE', 'DELETE'] &&
+         ((variables.requestNamespace == '{{ include "fence.controllerNamespace" . }}' &&
+           request.name in ['sentinel-config', 'sentinel-fixer-config', 'sentinel-lab-config']) ||
+          (variables.requestNamespace == '{{ .Values.actor.namespace }}' && request.name == 'sentinel-actor-config') ||
+          (variables.requestNamespace == 'sentinel-capture' &&
+           request.name in ['sentinel-capture', 'sentinel-capture-mitm-runtime']))) ||
+          (request.resource.group == 'sentinel.karimzakzouk.github.io' && request.resource.resource == 'sentinelsettings' &&
+           variables.subResource == 'status' && variables.requestNamespace == '{{ include "fence.controllerNamespace" . }}' &&
+           request.operation == 'UPDATE') ||
+        (request.resource.group == 'apps' && request.resource.resource == 'deployments' && variables.subResource == '' &&
+         request.operation in ['UPDATE', 'DELETE'] &&
+         ((variables.requestNamespace == '{{ include "fence.controllerNamespace" . }}' &&
+           request.name in ['sentinel', 'sentinel-fixer', 'sentinel-lab']) ||
+          (variables.requestNamespace == '{{ .Values.actor.namespace }}' && request.name == 'sentinel-actor'))) ||
         (request.resource.resource == 'pods' && variables.subResource == '' && request.operation == 'CREATE' && variables.dryRun) ||
         (request.resource.resource == 'namespaces' && request.operation == 'UPDATE' && variables.subResource == '') ||
         (request.resource.group == 'rbac.authorization.k8s.io' && request.resource.resource == 'rolebindings' &&
