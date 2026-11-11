@@ -192,6 +192,8 @@ func patchController(ctx context.Context, client kubernetes.Interface, t Targets
 		// SENTINEL_LOG_LEVEL up only after a chart change. Record it on the
 		// ConfigMap for status and future readers.
 		doc["logLevel"] = spec.LogLevel
+	} else {
+		delete(doc, "logLevel")
 	}
 	if d := spec.Detection; d.FalseAlarmsPerWeek != nil || d.Window != nil || d.Tick != nil || d.HalfLife != nil || d.IncidentGap != nil || d.WarmUp != nil {
 		det, _ := doc["detection"].(map[string]any)

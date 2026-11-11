@@ -17,7 +17,7 @@ func TestApplyUpdatesActorKillSwitchAndCaptureBodies(t *testing.T) {
 	client := fake.NewSimpleClientset(
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "shop"}},
 		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "sentinel-config", Namespace: "sentinel"},
-			Data: map[string]string{"config.yaml": "namespaces: [shop]\nledger:\n  path: /var/lib/sentinel/ledger.db\ndetection:\n  falseAlarmsPerWeek: 1\n"}},
+			Data: map[string]string{"config.yaml": "namespaces: [shop]\nledger:\n  path: /var/lib/sentinel/ledger.db\nlogLevel: info\ndetection:\n  falseAlarmsPerWeek: 1\n"}},
 		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "sentinel-actor-config", Namespace: "sentinel-actor"},
 			Data: map[string]string{"config.yaml": "namespaces: [shop]\nenabled: true\nperHour: 6\n"}},
 		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "sentinel-capture", Namespace: "sentinel-capture"},
@@ -52,6 +52,9 @@ func TestApplyUpdatesActorKillSwitchAndCaptureBodies(t *testing.T) {
 	}
 	if !strings.Contains(ctrl.Data["config.yaml"], "verifyRollbacks: false") {
 		t.Fatalf("controller config = %s", ctrl.Data["config.yaml"])
+	}
+	if strings.Contains(ctrl.Data["config.yaml"], "logLevel:") {
+		t.Fatalf("controller config retained removed logLevel: %s", ctrl.Data["config.yaml"])
 	}
 	cap, err := client.CoreV1().ConfigMaps("sentinel-capture").Get(ctx, "sentinel-capture", metav1.GetOptions{})
 	if err != nil {
