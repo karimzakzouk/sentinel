@@ -71,23 +71,9 @@ roleRef:
   name: {{ .Release.Name }}-cluster-read
 subjects:
   - {{ toJson $controller }}
-{{- range (include "sentinel.watchList" . | fromJsonArray) }}
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: {{ $.Release.Name }}-watch
-  namespace: {{ . }}
-  labels:
-    {{- $labels | nindent 4 }}
-    sentinel.karimzakzouk.github.io/rbac: {{ $.Release.Name }}-watch
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: {{ $.Release.Name }}-watch
-subjects:
-  - {{ toJson $controller }}
-{{- end }}
+{{- /* Watch RoleBindings in target namespaces are created by the controller
+     from SentinelSettings (day-2 UI / seed). Baking them here fights SSA
+     with fieldManager sentinel-settings on helm upgrade (soak). */ -}}
 {{- if .Values.capabilities.dryRunProbes }}
 {{- range concat (list .Release.Namespace) (include "sentinel.labNamespaces" . | fromJsonArray) }}
 ---
@@ -151,25 +137,7 @@ rules:
   - apiGroups: [sentinel.karimzakzouk.github.io]
     resources: [actionrequests/status]
     verbs: [update]
-{{- range (include "sentinel.watchList" . | fromJsonArray) }}
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: {{ $.Release.Name }}-act
-  namespace: {{ . }}
-  labels:
-    {{- $labels | nindent 4 }}
-    sentinel.karimzakzouk.github.io/rbac: {{ $.Release.Name }}-act
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: {{ $.Release.Name }}-act
-subjects:
-  - kind: ServiceAccount
-    name: {{ $.Values.actor.serviceAccount }}
-    namespace: {{ $.Values.actor.namespace }}
-{{- end }}
+{{- /* Act RoleBindings: same as watch — controller SyncWatch owns them. */ -}}
 {{- end }}
 {{- if and (or .Values.actor.enabled (eq .Values.profile "full")) .Values.owners.argocd.enabled }}
 ---
