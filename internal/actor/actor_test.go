@@ -138,6 +138,19 @@ func TestARollbackRestoresThePreviousRevisionsTemplate(t *testing.T) {
 	}
 }
 
+func TestARollbackFailsWhenTheUpdateIsNotPersisted(t *testing.T) {
+	a, client, _ := newActor(t, 3, sentinelPolicy(v1alpha1.AutonomyAutonomous, ActionRolloutUndo))
+	client.PrependReactor("update", "deployments", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		update := action.(k8stesting.UpdateActionImpl)
+		return true, update.Object, nil
+	})
+
+	phase, msg := a.Handle(ctx, request(ActionRolloutUndo, map[string]string{ParamFromTemplateHash: "bbb"}))
+	if phase != v1alpha1.ActionFailed || !strings.Contains(msg, "rollback of web was not persisted") {
+		t.Fatalf("%s: %s", phase, msg)
+	}
+}
+
 func TestARollbackOfAWorkloadThatChangedFails(t *testing.T) {
 	a, client, _ := newActor(t, 3, sentinelPolicy(v1alpha1.AutonomyAutonomous, ActionRolloutUndo))
 	phase, msg := a.Handle(ctx, request(ActionRolloutUndo, map[string]string{ParamFromTemplateHash: "aaa"}))

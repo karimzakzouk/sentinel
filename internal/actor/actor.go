@@ -19,6 +19,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv1 "k8s.io/api/autoscaling/v1"
 	corev1 "k8s.io/api/core/v1"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -457,6 +458,15 @@ func (a *Actor) undoTemplate(ctx context.Context, req *v1alpha1.ActionRequest, d
 	if _, err := a.Client.AppsV1().Deployments(t.Namespace).Update(ctx, updated, writeOptions(dryRun)); err != nil {
 		return "", err
 	}
+	if !dryRun {
+		persisted, err := a.Client.AppsV1().Deployments(t.Namespace).Get(ctx, t.Name, metav1.GetOptions{})
+		if err != nil {
+			return "", fmt.Errorf("verify rollback: %w", err)
+		}
+		if !apiequality.Semantic.DeepEqual(persisted.Spec.Template, updated.Spec.Template) {
+			return "", fmt.Errorf("rollback of %s was not persisted", t.Name)
+		}
+	}
 	return fmt.Sprintf("rolled %s back from revision %d to revision %d", t.Name, from, to), nil
 }
 
@@ -548,6 +558,15 @@ func (a *Actor) undoRevision(ctx context.Context, req *v1alpha1.ActionRequest, d
 		if err != nil {
 			return "", err
 		}
+		if !dryRun {
+			persisted, err := apps.StatefulSets(t.Namespace).Get(ctx, t.Name, metav1.GetOptions{})
+			if err != nil {
+				return "", fmt.Errorf("verify rollback: %w", err)
+			}
+			if !apiequality.Semantic.DeepEqual(persisted.Spec.Template, sts.Spec.Template) {
+				return "", fmt.Errorf("rollback of %s was not persisted", t.Name)
+			}
+		}
 	case "DaemonSet":
 		ds, err := apps.DaemonSets(t.Namespace).Get(ctx, t.Name, metav1.GetOptions{})
 		if err != nil {
@@ -556,6 +575,15 @@ func (a *Actor) undoRevision(ctx context.Context, req *v1alpha1.ActionRequest, d
 		ds.Spec.Template = *tmpl
 		if _, err := apps.DaemonSets(t.Namespace).Update(ctx, ds, writeOptions(dryRun)); err != nil {
 			return "", err
+		}
+		if !dryRun {
+			persisted, err := apps.DaemonSets(t.Namespace).Get(ctx, t.Name, metav1.GetOptions{})
+			if err != nil {
+				return "", fmt.Errorf("verify rollback: %w", err)
+			}
+			if !apiequality.Semantic.DeepEqual(persisted.Spec.Template, ds.Spec.Template) {
+				return "", fmt.Errorf("rollback of %s was not persisted", t.Name)
+			}
 		}
 	}
 	return fmt.Sprintf("rolled %s back from revision %d to revision %d", t.Name, from, to), nil
