@@ -1,12 +1,17 @@
 # Status
 
-Last updated: Tuesday 10 November 2026, 11:15 Cairo time (UTC+2).
+Last updated: Saturday 21 November 2026, 09:50 Cairo time (UTC+2).
 
 ## Where things stand
 
 **Phase 0 (Foundations) is done and tagged `v2.0.0-alpha.0`.** Phase 1
-(Observe) has all six slices built at least in their core; its gate still
-needs the 72-hour soak. **Phase 2 (Act) is done, its gate passed:** where a
+(Observe) has all six slices built, and its gate is closed. The scored
+fault pool below still stands (9 of 9, precision 1.00, root cause first
+every time), and soak run 8 measured the false alarms: 72 hours, green,
+ended 2026-11-14 04:17 UTC, one in-window incident across the 16 watched
+workloads, 0.15 per workload per week
+([the run](https://github.com/karimzakzouk/sentinel/actions/runs/42955246454),
+[the report](soak-run-8.md)). **Phase 2 (Act) is done, its gate passed:** where a
 namespace's SentinelPolicy allows it, Sentinel stops the bleeding itself. In the
 scored pool it rolled back or restored every fault, each verified, a
 median of 69 seconds after the fault appeared, with no wrong action
@@ -62,7 +67,7 @@ To look at it on a cluster where it runs:
 | 1. Kubernetes facts → signals → incidents | Done | Scored session below; `TestBadImageScenario` in CI |
 | 2. Logs: evidence, redaction, new errors after a deploy | Done | `TestLeakedSecretsNeverReachTheLedger` in CI; the frontend scenario below |
 | 3. Metrics, dependency map, localization | Done | The Redis and product-catalog memory scenarios below |
-| 4. Rate detectors | Error rates done; seasonal detectors wait for the soak | In the Redis scenario, the cart service's and the frontend's errors join Redis's incident |
+| 4. Rate detectors | Error rates done. Seasonal detectors stay unbuilt: soak run 8 showed no daily cycle the ratio floor missed (proposed decision 123) | In the Redis scenario, the cart service's and the frontend's errors join Redis's incident. In the soak, one `runtime.errors` on `boutique/paymentservice`, closed within 18 minutes, and no other in-window incident ([report](soak-run-8.md)) |
 | 5. Shadow report, CLI, read-only UI | Done | `TestTheUIAnswersThroughPortForward` in CI |
 | 6. Scoring (`harness score`) | Done | The sessions below |
 
@@ -85,7 +90,7 @@ To look at it on a cluster where it runs:
 | 2. Synthesize the stateless world | The world built and proven: synthesis, the Lab DNS (decision 51), production's images under the fence's bounds (decision 50), the seal proven before the world starts and again with it running; Online Boutique's frontend and the ten services it calls ran in a Lab on the development cluster, every copy ready within 95 seconds and answering by its production name, once copies were fitted to Pod Security `restricted` (decision 59) | `TestTheLabBuildsAWorkloadsStatelessWorld`, as the Lab's identity: a front and the backend it calls answer by their production names, the API server's name resolves to nothing, and a canary Secret never reaches the Lab. `TestALabReproductionRunsTheWorldBehindAProvenSeal` in CI's enforcing clusters |
 | 3. Reproduce and judge | Races and verdicts built (decisions 52 and 53): reproduce and verify-fix Experiments, the previous revision as the first candidate, a deletion control. The gate's repetitions passed on the self-hosted runner under Calico | `TestTheLabTellsAFixFromTheFailure` on the development cluster: against a front that crashes as it starts, its previous revision passed after 15 blocks (15 of 15 against 0 of 15), the deletion control failed. Through the Lab in CI, on Calico and Cilium: "the previous revision front-9964bb8bd fixes it: it worked in 15 of 15 runs where the failing revision failed in 15 of 15", and a healthy front's failure "did not reproduce"; kindnet and Flannel were refused. Unit simulations: 3.4% false PASS at the null's edge for α = 5%. The `Lab gate` workflow's first round, on the development cluster: the fix passed in 15 blocks, a revision that still crashes and a deletion-style candidate failed in 3, and a flaky revision raced against itself ran out of its 60 blocks, NOT SURE. The `Lab gate` workflow on the self-hosted runner, Calico, 10 races of each kind at α = 5%: a fix passed 10 of 10 (median 15 blocks); a revision that still crashes and a deletion that does nothing failed 10 of 10 (3 blocks); a flaky revision against itself failed 7 and was NOT SURE 3 (51 blocks). No false PASS in 30 races that must not pass. Beside it, Online Boutique's frontend and the ten services it calls were copied into a sealed world, every copy ready and every name the world asked for provided |
 | Verified rollbacks | The controller asks the Lab about each proposed rollback (decision 54); the verdict joins the incident and its notices; at `lab-verified` it carries the rollback out (decision 57) | On the development cluster a bad image on `web` opened an incident, the controller asked the Lab, and the Lab, refusing a cluster without enforcement, answered NOT SURE within 35 seconds; the verdict shows on the incident page. In CI on Calico and Cilium, a request at `lab-verified` waited while the Lab raced a crashing revision of the front against its predecessor (15 of 15 against 15 of 15), then the actor rolled the front back, approved by the Lab |
-| 4. Datastores and replay | Built through first-cut fidelity: datastores run empty (decision 78), secret placeholders, configuration-revert candidate (decision 77), read replay (decision 86), **write replay with status comparison** (decision 105), and **empty-datastore seeding from captured write bodies before write replay** for redis/valkey, postgres, mysql/mariadb, mongo, kafka and rabbitmq (decisions 112 and 118). **Outside fakes** use metadata HTTP and HTTPS with a Lab CA (decisions 100 and 111), **optional redacted response bodies** (decision 113), **gRPC status stubs** (decision 114), and **typed gRPC payloads when capture kept a ResponseBody** (decision 116) from `capture.Calls` | Unit tests for the call catalog, synthesis with an external API host, stub bodies and gRPC routes (including body-bearing vs empty), write replay and seed fidelity (per-engine detection and scripts); a race against a fake cluster where the deletion control stays ready but answers nothing and fails; the replay's script run in the probe image. The race and the Lab's end-to-end tests run on the self-hosted runner, which the soak holds until Thursday |
+| 4. Datastores and replay | Built through first-cut fidelity: datastores run empty (decision 78), secret placeholders, configuration-revert candidate (decision 77), read replay (decision 86), **write replay with status comparison** (decision 105), and **empty-datastore seeding from captured write bodies before write replay** for redis/valkey, postgres, mysql/mariadb, mongo, kafka and rabbitmq (decisions 112 and 118). **Outside fakes** use metadata HTTP and HTTPS with a Lab CA (decisions 100 and 111), **optional redacted response bodies** (decision 113), **gRPC status stubs** (decision 114), and **typed gRPC payloads when capture kept a ResponseBody** (decision 116) from `capture.Calls` | Unit tests for the call catalog, synthesis with an external API host, stub bodies and gRPC routes (including body-bearing vs empty), write replay and seed fidelity (per-engine detection and scripts); a race against a fake cluster where the deletion control stays ready but answers nothing and fails; the replay's script run in the probe image. The race and the Lab's end-to-end tests run on the self-hosted runner. Soak run 8, which had been holding the runner, finished on 14 November 2026 |
 
 ## Phase 4 progress
 
@@ -272,7 +277,7 @@ only where it also verifies rollbacks, so the image was never raced while
 the Fixer said it would be; a fix built before a restart was never asked
 about; and the bot's token could not comment, so the Fixer kept asking and
 the verdict never reached the fix's status. The race itself runs where
-NetworkPolicy is enforced, on the self-hosted runner after the soak.
+NetworkPolicy is enforced, on the self-hosted runner. The soak that was holding that runner finished on 14 November 2026.
 
 Tuesday, with each Lab pod sealing itself (decision 90), the same release
 ran again on the development cluster: the Fixer put `load` back, the
@@ -445,9 +450,25 @@ Full reasoning in [decisions.md](decisions.md).
   response bodies and gRPC with typed payloads when present (decisions 100,
   111, 113, 114 and 116); datastore seeding runs for redis/valkey, postgres,
   mysql/mariadb, mongo, kafka and rabbitmq (decisions 112 and 118).
-- **After the soak ends on Thursday:** its report, the network-plugin
-  matrix and the Lab's end-to-end tests on the runner, and whether daily
-  cycles call for seasonal baselines.
+- **Soak run 8 is in.** Green, 72 hours, ended 2026-11-14 04:17 UTC.
+  [Report](soak-run-8.md). One in-window false alarm
+  (`boutique/paymentservice`, `runtime.errors`, escalated, closed within
+  18 minutes of opening). Across the 16 watched workloads that is 0.15 false
+  alarms per workload per week. The load generator holds 10 users at one
+  spawn a second; worker CPU hourly means stay within 1.5× and the shape
+  does not repeat across the three days. Seasonal baselines are proposed
+  as not wanted yet (decision 123).
+- **Still to run on the self-hosted runner,** now that the soak has
+  released it: `E2E network plugins` (Calico, Cilium, Flannel, kindnet,
+  the Lab's tests included) and `Lab gate` (Calico, the repeated races).
+  Both are `workflow_dispatch` and both already use
+  `[self-hosted, sentinel-lab]`, so they do not spend GitHub-hosted
+  minutes (decision 99). They were not started with this update. The
+  token here can read Actions and the dispatch API answered 403,
+  `Resource not accessible by integration`, asking for `actions=write`.
+  `az` is not on this machine, so `hack/azure-runner/wake.sh` was not
+  run either; a deallocated runner stays down until someone with an
+  Azure session wakes it, and a dispatched job would queue until then.
 
 ## Blocked or flaky on the development VM
 
@@ -460,8 +481,14 @@ Full reasoning in [decisions.md](decisions.md).
 
 ## Waiting on you
 
-Nothing blocks the work. When you have time:
+Nothing blocks the build. When you have time:
 
+- **Accept or reject proposed decision 123** (no time-of-day baselines
+  on the evidence of soak run 8). It is not in force until you do.
+- **Dispatch `E2E network plugins` and `Lab gate`** from the Actions tab,
+  or with `gh workflow run` from a token that has `actions=write`, then
+  `hack/azure-runner/wake.sh` if `sentinel-azure-1` is deallocated. Both
+  workflows already target the self-hosted runner.
 - **Click Save on the Environment card** if it is still there. It makes
   future cloud agents start with the toolchain ready.
 - **Try it** with [the guide](guides/try-it.md), on a VM rather than your
@@ -477,11 +504,14 @@ Install UX (landed): one Helm release via `./hack/sentinel-install.sh` (CRDs +
 Sentinel + fence), `profile=observe|full`, and day-2 Settings for Slack/LLM
 secrets write-only. Forge tokens stay kubectl-only.
 
+The Phase 1 gate is closed: the scored fault pool was already recorded,
+and soak run 8 measured 0.15 false alarms per workload per week over 72
+hours ([report](soak-run-8.md)).
+
 Needed later (not more product code):
 
 | When | What |
 |---|---|
-| Phase 1 gate | The 72-hour soak itself, running on the self-hosted runner until Thursday (decision 58) |
 | Phase 6 and 7 | A fresh, empty, private GitHub organization and a GitHub App, so outside reviewers and the demo see the Fixer's pull requests on GitHub |
 | Phase 6 | Azure for Students credits (managed-cluster run) and outside human evaluators |
 
