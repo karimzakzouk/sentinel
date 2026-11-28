@@ -1,9 +1,7 @@
 # Decision log
 
-Each decision lists what was chosen, why, and what evidence would change it.
-The design canvases in `docs/plan/` hold the decisions made before code; this
-file records the ones made while building, including where building proved the
-plan wrong.
+Each decision lists what was chosen, why, and what evidence would change it,
+including where building proved the original design wrong.
 
 | # | Decision | Why | Revisit if |
 |---|---|---|---|

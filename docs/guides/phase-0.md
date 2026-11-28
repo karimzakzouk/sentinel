@@ -22,7 +22,7 @@ they are the hardest to change later: the **layout** and the **data model**.
 | `hack/` | Toolchain, Docker and kind scripts |
 
 The Watcher, Brain, Lab and Fixer get their own packages when their phase
-starts, so each teammate's module stays a separate, presentable unit.
+starts, so each module stays a separate unit.
 
 ## Data model
 

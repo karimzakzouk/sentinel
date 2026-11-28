@@ -13,8 +13,7 @@ a feature with the reason shown; it never weakens safety.
 
 v2 is being rebuilt from scratch, phase by phase. See
 [docs/STATUS.md](docs/STATUS.md) for where things stand,
-[docs/decisions.md](docs/decisions.md) for the decisions made while building,
-and [docs/plan/](docs/plan/) for the full design and build plan.
+and [docs/decisions.md](docs/decisions.md) for the decisions made while building.
 
 ## Install on a cluster
 
