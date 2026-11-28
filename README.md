@@ -1,19 +1,67 @@
 # Sentinel
 
-A self-hosted autonomous SRE for Kubernetes: it watches workloads, notices real
-incidents, stops the bleeding with reversible actions verified against
-user-facing signals, and proposes fixes that a sealed Lab has reproduced and
-judged with stated error bounds. Every decision is explained and recorded in a
-tamper-evident log, and Sentinel fails closed: a missing prerequisite disables
-a feature with the reason shown; it never weakens safety.
+A Kubernetes controller that notices when a change breaks a workload, undoes
+that change, and checks that the service actually recovered.
 
-"Sentinel" is a working name. v1 lives on the `archive/v1` branch.
+Most incidents start with a change someone made: a new image, a lower memory
+limit, a bad environment variable. Sentinel watches workloads, detects
+incidents from pod events and logs, ranks which recent change is to blame, and,
+where a namespace's policy allows it, rolls that change back and verifies that
+the incident's signals clear. Through Argo CD and Flux it first pauses the
+owner so the rollback isn't immediately re-applied, then proposes the fix in
+Git as a pull request. Without a policy it only records what it would have done.
+
+## How it works
+
+1. **Watch.** Pod states, events, Services and logs become per-workload
+   signals: crash loops, OOM kills, image-pull errors, probe failures,
+   not-ready pods, lost endpoints, error-rate jumps after a rollout.
+2. **Detect.** A Gamma-Poisson count detector compares each signal against its
+   learned baseline, with false alarms budgeted at one per week across all
+   series.
+3. **Blame.** Recent changes (rollouts, scaling, GitOps syncs) are ranked
+   against the incident's timing and signals.
+4. **Act.** Under a `SentinelPolicy`, Sentinel rolls back or restores the
+   blamed change, either on its own or after a person approves. StatefulSets
+   always wait for a person.
+5. **Verify.** The action only counts if every signal of the incident ends
+   within ten minutes; otherwise it is recorded as unverified and left to
+   people.
+6. **Fix.** The Fixer finds the bad value in the manifests the owner deploys
+   from and opens a pull request. For crashes in code it tries candidate fixes
+   one by one, each built by the repo's own pipeline and tested in the Lab, an
+   isolated copy of the workload, before it is proposed.
+
+Every decision and action is recorded with the reason for it, and shown in the
+UI.
+
+## Results
+
+On 12 fault scenarios on a kind cluster running a small test app and Online
+Boutique (9 faults, 3 where doing nothing is right):
+
+| | Result |
+|---|---|
+| Faults acted on and verified | 9 of 9 |
+| Wrong actions / false alarms | 0 / 0 |
+| Median time from fault to verified recovery | 69 s (59–104 s) |
+| GitOps faults through Argo CD and Flux | 4 of 4, median 66 s |
+
+I wrote these scenarios and tuned the detectors on them, so this shows the
+pipeline works end to end, not that it generalizes. Baselines against Argo
+Rollouts and a simple always-roll-back rule are planned but not yet run. Setup,
+per-scenario results, the baseline plan and known failures are in
+[docs/evaluation.md](docs/evaluation.md).
 
 ## Status
 
-v2 is being rebuilt from scratch, phase by phase. See
-[docs/STATUS.md](docs/STATUS.md) for where things stand,
-and [docs/decisions.md](docs/decisions.md) for the decisions made while building.
+Version 2, in active development. Detection, acting with verification, GitOps
+support (Argo CD, Flux Kustomizations and HelmReleases) and fixes through Git
+(GitHub, Gitea, GitLab, Bitbucket) work on the development cluster and in CI.
+Not done yet: a long-run soak to measure the real false-alarm rate, and the
+baselines. [docs/STATUS.md](docs/STATUS.md) has the detailed state and test
+sessions; [docs/decisions.md](docs/decisions.md) records the design decisions.
+Version 1 is on the `archive/v1` branch.
 
 ## Install on a cluster
 
